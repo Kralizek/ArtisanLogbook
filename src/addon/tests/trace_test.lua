@@ -1,4 +1,4 @@
-local root = arg[1] or "."
+local root = arg[1] or "src/ArtisanLogbook"
 local addon = {}
 assert(loadfile(root .. "/Capture/Trace.lua"))("ArtisanLogbook", addon)
 local Trace = addon.Trace
