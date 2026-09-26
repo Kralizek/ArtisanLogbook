@@ -106,6 +106,9 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
   local function isGameId(value)
     return type(value) == "number" and value >= 0 and value < math.huge and value % 1 == 0
   end
+  local function isPositiveInteger(value)
+    return type(value) == "number" and value > 0 and value < math.huge and value % 1 == 0
+  end
   local function snapshotSelections(selections)
     if type(selections) ~= "table" then return nil end
     local snapshot = {}
@@ -114,9 +117,8 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
       local copied = copyCraftingReagentInfo(selection)
       if copied then
         snapshot[#snapshot + 1] = copied
-        if isGameId(copied.dataSlotIndex) and type(copied.quantity) == "number" and
-            copied.quantity > 0 and copied.quantity < math.huge and copied.quantity % 1 == 0 and
-            copied.reagent and isGameId(copied.reagent.itemID) then
+        if isPositiveInteger(copied.dataSlotIndex) and isPositiveInteger(copied.quantity) and
+            copied.reagent and isPositiveInteger(copied.reagent.itemID) then
           hasPositiveAllocation = true
         end
       end
