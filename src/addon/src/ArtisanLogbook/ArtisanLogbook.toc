@@ -1,0 +1,12 @@
+## Interface: 120100
+## Title: Artisan Logbook
+## Notes: Passively records observed crafting results.
+## Version: 0.2.0-ledger
+## SavedVariables: ArtisanLogbookDB, ArtisanLogbookTraceDB
+
+Capture/Trace.lua
+Storage/Ledger.lua
+Flavors/Registry.lua
+Flavors/Retail/Adapter.lua
+UI/TraceWindow.lua
+Core/Bootstrap.lua
