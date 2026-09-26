@@ -1,4 +1,4 @@
-local root = arg[1] or "."
+local root = arg[1] or "src/ArtisanLogbook"
 local addon = {}
 assert(loadfile(root .. "/Flavors/Registry.lua"))("ArtisanLogbook", addon)
 assert(loadfile(root .. "/Flavors/Retail/Adapter.lua"))("ArtisanLogbook", addon)
