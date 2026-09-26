@@ -439,6 +439,25 @@ test("one submission snapshot links only its observed batch results", function()
   assert(assert(ledger:RecordResult({ operationID = 4 })).requestId == nil)
 end)
 
+test("allocation snapshots reject zero slot and item IDs", function()
+  local ledger = newLedger()
+  local request = assert(ledger:SubmitCraft(456, 1, false, nil, {
+    { dataSlotIndex = 0, quantity = 1, reagent = { itemID = 101 } },
+    { dataSlotIndex = 1, quantity = 1, reagent = { itemID = 0 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 102 } },
+  }))
+  assert(request.allocations and #request.allocations == 1)
+  assert(request.allocations[1].dataSlotIndex == 2)
+  local item = ledger.dimensionRows.item[request.allocations[1].itemDimensionId]
+  assert(item.gameItemId == 102)
+
+  local unknown = assert(ledger:SubmitCraft(457, 1, false, nil, {
+    { dataSlotIndex = 0, quantity = 1, reagent = { itemID = 103 } },
+    { dataSlotIndex = 1, quantity = 1, reagent = { itemID = 0 } },
+  }))
+  assert(unknown.allocations == nil)
+end)
+
 test("sanitized personal craft replay preserves quote, allocation, returns, and partial batch", function()
   local ledger = newLedger()
   assert(personalFixture.build == fixture.build and personalFixture.version == fixture.version)
