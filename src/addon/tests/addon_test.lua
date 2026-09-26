@@ -61,6 +61,8 @@ environment.GetLocale = function() return "enUS" end
 environment.UnitName = function() return "TestCrafter" end
 environment.UnitGUID = function() return "Player-1-123" end
 environment.GetRealmName = function() return "TestRealm" end
+environment.GetRealmID = function() return 12 end
+environment.GetCurrentRegion = function() return 3 end
 environment.C_AddOns = { GetAddOnMetadata = function() return "0.1.0-tracer" end }
 environment.WOW_PROJECT_ID = 1
 environment.WOW_PROJECT_MAINLINE = 1
@@ -83,6 +85,7 @@ assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
 assert(#addon.ledger.database.dimensions.sessions == 1)
+assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
 assert(addon.window and not addon.window:IsShown())
 environment.SlashCmdList.ARTISANLOGBOOK("")
 assert(addon.window:IsShown())
@@ -139,3 +142,50 @@ click("Stop")
 assert(addon.recorder.database.records[1].sequence == 6)
 addon.window.scripts.OnUpdate(addon.window, 0.6)
 print("PASS TOC load order, lifecycle, slash commands, and debug UI controls (mocked)")
+
+local function reload(database)
+  environment.ArtisanLogbookDB = database
+  local reloaded = {}
+  local frameStart = #frames
+  for line in io.lines(root .. "/ArtisanLogbook.toc") do
+    if line:match("%.lua$") then
+      local chunk = assert(loadfile(root .. "/" .. line))
+      setfenv(chunk, environment)
+      chunk("ArtisanLogbook", reloaded)
+    end
+  end
+  local frame = frames[frameStart + 1]
+  frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
+  return reloaded
+end
+
+local saved = addon.ledger.database
+local reloaded = reload(saved)
+assert(reloaded.ledger and not reloaded.recorder.recording)
+assert(#reloaded.ledger.database.dimensions.sessions == 2)
+assert(#reloaded.ledger.database.dimensions.realms == 1)
+assert(#reloaded.ledger.database.dimensions.characters == 1)
+reloaded.HandleRetailEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-Test", 999)
+reloaded.HandleRetailEvent("CRAFTING_DETAILS_UPDATE")
+assert(#reloaded.ledger.database.crafts == 1)
+reloaded.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 456)
+reloaded.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, quantity = 1 })
+assert(#reloaded.ledger.database.crafts == 2 and reloaded.ledger.database.crafts[2].id == 2)
+assert(#saved.crafts == 1)
+
+local invalid = { schemaVersion = 999, marker = "preserved" }
+assert(reload(invalid).ledger == nil and environment.ArtisanLogbookDB == invalid)
+assert(invalid.marker == "preserved")
+local conflicting = reloaded.ledger.database
+environment.GetRealmName = function() return "Conflicting Display Name" end
+local refused = reload(conflicting)
+assert(refused.ledger == nil and refused.ledgerError:find("conflicting", 1, true))
+assert(environment.ArtisanLogbookDB == conflicting and #conflicting.dimensions.sessions == 2)
+
+environment.GetCurrentRegion = function() error("unavailable") end
+environment.GetRealmID = nil
+local unknown = reload(nil)
+assert(unknown.ledger)
+local realm = unknown.ledger.database.dimensions.realms[1]
+assert(realm.regionId == nil and realm.gameRealmId == nil and realm.identityScope == "session")
+print("PASS passive ledger capture, reload, identity fallback, and SavedVariables failure safety")

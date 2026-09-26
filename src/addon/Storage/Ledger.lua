@@ -25,19 +25,27 @@ local function isGameId(value)
     value ~= -math.huge and value >= 0 and value % 1 == 0
 end
 
-local function copyValue(value, copies)
+local function copyValue(value, copies, depth)
+  local kind = type(value)
+  if kind ~= "table" and kind ~= "nil" and kind ~= "string" and kind ~= "boolean" and
+      kind ~= "number" then error("unsupported persisted value") end
+  if kind == "number" and (value ~= value or value == math.huge or value == -math.huge) then
+    error("non-finite persisted value")
+  end
   if type(value) ~= "table" then
     return value
   end
+  depth = (depth or 0) + 1
+  if depth > 32 or getmetatable(value) ~= nil then error("invalid persisted table") end
   copies = copies or {}
-  if copies[value] then
-    return copies[value]
-  end
+  if copies[value] then error("cyclic persisted table") end
   local result = {}
-  copies[value] = result
+  copies[value] = true
   for key, child in pairs(value) do
-    result[copyValue(key, copies)] = copyValue(child, copies)
+    if type(key) ~= "string" and type(key) ~= "number" then error("invalid persisted key") end
+    result[copyValue(key)] = copyValue(child, copies, depth)
   end
+  copies[value] = nil
   return result
 end
 
@@ -59,13 +67,17 @@ local function emptyDatabase()
   return data
 end
 
-local function ensureTable(parent, key, label)
-  if parent[key] == nil then
-    parent[key] = {}
-  elseif type(parent[key]) ~= "table" then
-    return nil, label .. " must be a table"
+local function isArray(rows)
+  if type(rows) ~= "table" then return false end
+  local count = 0
+  for key in pairs(rows) do
+    if not isInteger(key) then return false end
+    count = count + 1
   end
-  return parent[key]
+  for index = 1, count do
+    if type(rows[index]) ~= "table" then return false end
+  end
+  return true
 end
 
 local function maximumId(rows, field)
@@ -79,45 +91,43 @@ local function maximumId(rows, field)
 end
 
 local function migrateZero(data)
-  local crafts, reason = ensureTable(data, "crafts", "crafts")
-  if not crafts then return nil, reason end
-  local reagents
-  reagents, reason = ensureTable(data, "reagents", "reagents")
-  if not reagents then return nil, reason end
-  local allDimensions
-  allDimensions, reason = ensureTable(data, "dimensions", "dimensions")
-  if not allDimensions then return nil, reason end
-  local counters
-  counters, reason = ensureTable(data, "nextDimensionId", "nextDimensionId")
-  if not counters then return nil, reason end
-
-  for kind, collection in pairs(dimensions) do
-    local rows
-    rows, reason = ensureTable(allDimensions, collection, "dimensions." .. collection)
-    if not rows then return nil, reason end
-    local nextId = counters[kind]
-    if nextId == nil then
-      counters[kind] = maximumId(rows, "id") + 1
-    elseif not isInteger(nextId) then
-      return nil, "nextDimensionId." .. kind .. " must be a positive integer"
-    end
-  end
-
-  if data.nextCraftId == nil then
-    data.nextCraftId = maximumId(crafts, "id") + 1
-  elseif not isInteger(data.nextCraftId) then
-    return nil, "nextCraftId must be a positive integer"
-  end
-  data.retentionDays = data.retentionDays or Ledger.retentionDays
-  data.maxCrafts = data.maxCrafts or Ledger.maxCrafts
+  if data.retentionDays == nil then data.retentionDays = Ledger.retentionDays end
+  if data.maxCrafts == nil then data.maxCrafts = Ledger.maxCrafts end
   data.schemaVersion = 1
   return data
 end
 
 local migrations = { [0] = migrateZero }
 
+local references = {
+  craft = { sessionDimensionId = "session", recipeDimensionId = "recipe",
+    outputItemDimensionId = "item", professionDimensionId = "profession" },
+  reagent = { craftId = "craft", itemDimensionId = "item" },
+  character = { realmDimensionId = "realm" },
+  session = { characterDimensionId = "character", realmDimensionId = "realm" },
+  recipe = { expansionDimensionId = "expansion", professionDimensionId = "profession" },
+  item = { expansionDimensionId = "expansion" },
+  profession = { expansionDimensionId = "expansion" },
+}
+
+local function validateReferences(kind, row, ids)
+  for field in pairs(row) do
+    if type(field) == "string" and (field:match("DimensionId$") or field == "introducedInExpansionId") and
+        not (references[kind] or {})[field] then
+      return nil, "unsupported reference: " .. kind .. "." .. field
+    end
+  end
+  for field, target in pairs(references[kind] or {}) do
+    local value = row[field]
+    if value ~= nil and (not isInteger(value) or not ids[target][value]) then
+      return nil, kind .. "." .. field .. " references a missing " .. target
+    end
+  end
+  return true
+end
+
 local function validateDatabase(data)
-  if type(data.crafts) ~= "table" or type(data.reagents) ~= "table" or
+  if not isArray(data.crafts) or not isArray(data.reagents) or
       type(data.dimensions) ~= "table" or type(data.nextDimensionId) ~= "table" then
     return nil, "ledger collections are invalid"
   end
@@ -132,26 +142,23 @@ local function validateDatabase(data)
     return nil, "maxCrafts must be a positive integer"
   end
 
-  local craftIds = {}
+  local ids = { craft = {} }
   for _, craft in ipairs(data.crafts) do
-    if type(craft) ~= "table" or not isInteger(craft.id) or craftIds[craft.id] then
+    if not isInteger(craft.id) or ids.craft[craft.id] or type(craft.timestamp) ~= "number" or
+        craft.sessionDimensionId == nil then
       return nil, "craft facts contain an invalid or duplicate ID"
     end
-    craftIds[craft.id] = true
-  end
-  for _, reagent in ipairs(data.reagents) do
-    if type(reagent) ~= "table" or not isInteger(reagent.craftId) or not craftIds[reagent.craftId] then
-      return nil, "reagent fact references a missing craft"
-    end
+    ids.craft[craft.id] = true
   end
 
   for kind, collection in pairs(dimensions) do
     local rows = data.dimensions[collection]
-    if type(rows) ~= "table" or not isInteger(data.nextDimensionId[kind]) or
+    if not isArray(rows) or not isInteger(data.nextDimensionId[kind]) or
         data.nextDimensionId[kind] <= maximumId(rows, "id") then
       return nil, "dimension collection or counter is invalid for " .. kind
     end
     local seenIds, seenKeys = {}, {}
+    ids[kind] = seenIds
     for _, row in ipairs(rows) do
       if type(row) ~= "table" or not isInteger(row.id) or type(row.key) ~= "string" or
           seenIds[row.id] or seenKeys[row.key] then
@@ -159,6 +166,23 @@ local function validateDatabase(data)
       end
       seenIds[row.id] = true
       seenKeys[row.key] = true
+    end
+  end
+  for _, craft in ipairs(data.crafts) do
+    local ok, reason = validateReferences("craft", craft, ids)
+    if not ok then return nil, reason end
+  end
+  for _, reagent in ipairs(data.reagents) do
+    if reagent.craftId == nil or reagent.itemDimensionId == nil then
+      return nil, "reagent fact requires craft and item references"
+    end
+    local ok, reason = validateReferences("reagent", reagent, ids)
+    if not ok then return nil, reason end
+  end
+  for kind, collection in pairs(dimensions) do
+    for _, row in ipairs(data.dimensions[collection]) do
+      local ok, reason = validateReferences(kind, row, ids)
+      if not ok then return nil, reason end
     end
   end
   return true
@@ -171,7 +195,7 @@ local function nowFunction(clock)
   if type(time) == "function" then
     return time
   end
-  return function() return 0 end
+  return function() return nil end
 end
 
 local function adjustOperationIndex(ledger, craft, change)
@@ -196,7 +220,7 @@ local function adjustOperationIndex(ledger, craft, change)
   end
 end
 
-function Ledger.New(database, clock, options)
+local function openDatabase(database, clock, options)
   local data
   if database == nil then
     data = emptyDatabase()
@@ -242,6 +266,7 @@ function Ledger.New(database, clock, options)
     database = data,
     wall = nowFunction(clock),
     dimensionIndex = {},
+    dimensionRows = {},
     operationIndex = {},
   }, {
     __index = Ledger,
@@ -249,8 +274,10 @@ function Ledger.New(database, clock, options)
   for kind, collection in pairs(dimensions) do
     local index = {}
     self.dimensionIndex[kind] = index
+    self.dimensionRows[kind] = {}
     for _, row in ipairs(data.dimensions[collection]) do
       index[row.key] = row.id
+      self.dimensionRows[kind][row.id] = row
     end
   end
   for _, craft in ipairs(data.crafts) do
@@ -258,6 +285,26 @@ function Ledger.New(database, clock, options)
   end
   self:Prune(self.wall())
   return self
+end
+
+function Ledger.New(database, clock, options)
+  local ok, ledger, reason = pcall(openDatabase, database, clock, options)
+  if not ok then return nil, "ledger data refused: " .. tostring(ledger) end
+  return ledger, reason
+end
+
+local function enrich(target, attributes)
+  for field, value in pairs(attributes) do
+    if target[field] == nil then
+      target[field] = copyValue(value)
+    elseif type(target[field]) == "table" and type(value) == "table" then
+      local ok, reason = enrich(target[field], value)
+      if not ok then return nil, reason end
+    elseif target[field] ~= value then
+      return nil, "conflicting dimension attribute: " .. tostring(field)
+    end
+  end
+  return true
 end
 
 function Ledger:AddDimension(kind, key, attributes)
@@ -268,54 +315,63 @@ function Ledger:AddDimension(kind, key, attributes)
   if attributes ~= nil and type(attributes) ~= "table" then
     return nil, "dimension attributes must be a table"
   end
+  local copied, safeAttributes = pcall(copyValue, attributes or {})
+  if not copied then return nil, tostring(safeAttributes) end
   key = tostring(key)
-  local existing = self.dimensionIndex[kind][key]
+  local existingId = self.dimensionIndex[kind][key]
+  local existing = self.dimensionRows[kind][existingId]
+  local row = existing and copyValue(existing) or {
+    id = self.database.nextDimensionId[kind], key = key,
+  }
+  local ok, reason = enrich(row, safeAttributes)
+  if not ok then return nil, reason end
+  ok, reason = validateReferences(kind, row, self.dimensionRows)
+  if not ok then return nil, reason end
+
   if existing then
-    return existing
+    for field, value in pairs(row) do existing[field] = value end
+    return existing.id
   end
-
-  local expansionId = attributes and attributes.expansionDimensionId
-  if expansionId ~= nil then
-    if kind ~= "profession" and kind ~= "recipe" and kind ~= "item" then
-      return nil, "this dimension cannot reference an expansion"
-    end
-    local found = false
-    for _, row in ipairs(self.database.dimensions.expansions) do
-      if row.id == expansionId then found = true; break end
-    end
-    if not isInteger(expansionId) or not found then
-      return nil, "expansion reference does not exist"
-    end
-  end
-
-  local row = copyValue(attributes or {})
-  row.id = self.database.nextDimensionId[kind]
-  row.key = key
   self.database.nextDimensionId[kind] = row.id + 1
   self.database.dimensions[collection][#self.database.dimensions[collection] + 1] = row
   self.dimensionIndex[kind][key] = row.id
+  self.dimensionRows[kind][row.id] = row
   return row.id
 end
 
 function Ledger:CreateSession(metadata)
   metadata = metadata or {}
+  local nextId = self.database.nextDimensionId.session
+  local realmKey = "unresolved:session:" .. tostring(nextId)
+  local identityScope = "session"
+  if isInteger(metadata.projectId) and isInteger(metadata.regionId) and isInteger(metadata.gameRealmId) then
+    realmKey = string.format("project:%d:region:%d:realm:%d",
+      metadata.projectId, metadata.regionId, metadata.gameRealmId)
+    identityScope = "runtime"
+  end
   local realmId
-  if metadata.realmName ~= nil then
-    realmId = self:AddDimension("realm", metadata.realmName, { name = metadata.realmName })
+  local reason
+  if metadata.realmName ~= nil or metadata.gameRealmId ~= nil then
+    realmId, reason = self:AddDimension("realm", realmKey, {
+      name = metadata.realmName, gameRealmId = metadata.gameRealmId,
+      regionId = metadata.regionId, projectId = metadata.projectId, identityScope = identityScope,
+    })
+    if not realmId then return nil, reason end
   end
   local characterId
   if metadata.characterGUID ~= nil or metadata.characterName ~= nil then
-    local characterKey = metadata.characterGUID or
-      tostring(metadata.characterName) .. "@" .. tostring(metadata.realmName or "")
-    characterId = self:AddDimension("character", characterKey, {
+    local characterKey = realmKey .. (metadata.characterGUID and ":guid:" .. metadata.characterGUID or
+      ":name:" .. metadata.characterName)
+    characterId, reason = self:AddDimension("character", characterKey, {
       guid = metadata.characterGUID,
       name = metadata.characterName,
       realmDimensionId = realmId,
     })
+    if not characterId then return nil, reason end
   end
 
-  local nextId = self.database.nextDimensionId.session
-  local sessionId = self:AddDimension("session", "session-" .. tostring(nextId), {
+  local sessionId
+  sessionId, reason = self:AddDimension("session", "session-" .. tostring(nextId), {
     startedAt = metadata.startedAt or self.wall(),
     addonVersion = metadata.addonVersion,
     wowVersion = metadata.wowVersion,
@@ -328,6 +384,7 @@ function Ledger:CreateSession(metadata)
     realmDimensionId = realmId,
     capabilities = copyValue(metadata.capabilities or {}),
   })
+  if not sessionId then return nil, reason end
   self.currentSessionId = sessionId
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
@@ -376,11 +433,18 @@ function Ledger:RecordResult(result)
     self.ambiguousRecipe = nil
     return nil, "no ledger session is active"
   end
+  local copied, snapshot = pcall(copyValue, result)
+  local timestamp = observedNumber(self.wall())
+  if not copied or timestamp == nil then
+    self.pendingRecipeId, self.ambiguousRecipe = nil, nil
+    return nil, "result snapshot or timestamp is unavailable"
+  end
+  result = snapshot
 
   local data = self.database
   local craft = {
     id = data.nextCraftId,
-    timestamp = self.wall(),
+    timestamp = timestamp,
     sessionDimensionId = self.currentSessionId,
     gameOperationId = observedNumber(result.operationID),
     outputQuality = observedNumber(result.craftingQuality),
@@ -399,26 +463,28 @@ function Ledger:RecordResult(result)
   self.pendingRecipeId = nil
   local ambiguousRecipe = self.ambiguousRecipe
   self.ambiguousRecipe = nil
+  local reason
   if recipeId and not ambiguousRecipe and craft.gameOperationId and craft.gameOperationId > 0 and
       not operationIdSeen(self, craft.gameOperationId) then
-    craft.recipeDimensionId = self:AddDimension("recipe", recipeId, { gameRecipeId = recipeId })
+    craft.recipeDimensionId, reason = self:AddDimension("recipe", recipeId, { gameRecipeId = recipeId })
+    if not craft.recipeDimensionId then return nil, reason end
   end
   if isGameId(result.itemID) then
-    craft.outputItemDimensionId = self:AddDimension("item", result.itemID, { gameItemId = result.itemID })
+    craft.outputItemDimensionId, reason = self:AddDimension("item", result.itemID, { gameItemId = result.itemID })
+    if not craft.outputItemDimensionId then return nil, reason end
   end
 
-  data.nextCraftId = craft.id + 1
-  data.crafts[#data.crafts + 1] = craft
-  adjustOperationIndex(self, craft, 1)
-
+  local reagentFacts = {}
   if type(result.resourcesReturned) == "table" then
     for _, returned in ipairs(result.resourcesReturned) do
       local reagent = type(returned) == "table" and returned.reagent or nil
       local itemId = type(reagent) == "table" and reagent.itemID or nil
       local quantity = type(returned) == "table" and observedNumber(returned.quantity) or nil
       if isGameId(itemId) and quantity ~= nil then
-        local itemDimensionId = self:AddDimension("item", itemId, { gameItemId = itemId })
-        data.reagents[#data.reagents + 1] = {
+        local itemDimensionId
+        itemDimensionId, reason = self:AddDimension("item", itemId, { gameItemId = itemId })
+        if not itemDimensionId then return nil, reason end
+        reagentFacts[#reagentFacts + 1] = {
           craftId = craft.id,
           itemDimensionId = itemDimensionId,
           returnedQuantity = quantity,
@@ -427,12 +493,17 @@ function Ledger:RecordResult(result)
     end
   end
 
+  data.nextCraftId = craft.id + 1
+  data.crafts[#data.crafts + 1] = craft
+  adjustOperationIndex(self, craft, 1)
+  for _, reagent in ipairs(reagentFacts) do data.reagents[#data.reagents + 1] = reagent end
   self:Prune(craft.timestamp)
   return craft
 end
 
 function Ledger:Prune(now)
-  now = observedNumber(now) or self.wall()
+  now = observedNumber(now) or observedNumber(self.wall())
+  if now == nil then return {} end
   local data = self.database
   local cutoff = now - data.retentionDays * 86400
   local removed = {}
@@ -455,11 +526,17 @@ function Ledger:Prune(now)
       if leftTime == rightTime then return left.id < right.id end
       return leftTime < rightTime
     end)
-    while #data.crafts > data.maxCrafts do
-      local craft = table.remove(data.crafts, 1)
-      removed[craft.id] = true
-      removedCrafts[craft.id] = craft
+    local excess = #data.crafts - data.maxCrafts
+    local kept = {}
+    for index, craft in ipairs(data.crafts) do
+      if index <= excess then
+        removed[craft.id] = true
+        removedCrafts[craft.id] = craft
+      else
+        kept[#kept + 1] = craft
+      end
     end
+    data.crafts = kept
     table.sort(data.crafts, function(left, right) return left.id < right.id end)
   end
 

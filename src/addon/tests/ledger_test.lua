@@ -198,19 +198,18 @@ test("unsupported flavor measurements remain absent", function()
 end)
 
 test("schema zero migrates without recycling IDs", function()
-  local legacy = {
-    schemaVersion = 0,
-    nextCraftId = 6,
-    crafts = { { id = 5 } },
-    reagents = {},
-    dimensions = {},
-    nextDimensionId = {},
-  }
+  local ledger = newLedger()
+  ledger.database.nextCraftId = 5
+  assert(ledger:RecordResult({}))
+  local legacy = ledger.database
+  legacy.schemaVersion = 0
+  legacy.retentionDays, legacy.maxCrafts = nil, nil
   local migrated = assert(Ledger.New(legacy, { wall = function() return 1800000000 end }))
   assert(migrated.database.schemaVersion == Ledger.schemaVersion)
   assert(migrated.database.crafts[1].id == 5 and migrated.database.nextCraftId == 6)
   migrated:CreateSession({})
   assert(assert(migrated:RecordResult({})).id == 6)
+  assert(legacy.schemaVersion == 0 and legacy.retentionDays == nil and legacy.nextCraftId == 6)
 end)
 
 test("newer and failed schemas are refused without changing saved data", function()
@@ -230,6 +229,183 @@ test("newer and failed schemas are refused without changing saved data", functio
   }
   malformedDimensions.nextDimensionId.item = 3
   assert(Ledger.New(malformedDimensions) == nil)
+end)
+
+test("dimension enrichment is monotonic, atomic, and includes expansion metadata", function()
+  local ledger = newLedger()
+  for _, kind in ipairs({ "realm", "character", "profession", "recipe", "item", "session", "expansion" }) do
+    local id = assert(ledger:AddDimension(kind, "sparse"))
+    assert(ledger:AddDimension(kind, "sparse", { name = "Known" }) == id)
+    assert(ledger:AddDimension(kind, "sparse", { name = "Known" }) == id)
+    local failed, reason = ledger:AddDimension(kind, "sparse", { name = "Conflict", extra = "no" })
+    assert(failed == nil and reason:find("conflicting", 1, true))
+    assert(ledger:AddDimension(kind, "sparse", { extra = "yes" }) == id)
+    assert(ledger:AddDimension(kind, "sparse", { id = id + 1 }) == nil)
+  end
+  local expansion = assert(ledger:AddDimension("expansion", "era", {
+    displayName = "Observed Era", chronologicalOrder = 0,
+  }))
+  for _, kind in ipairs({ "recipe", "item", "profession" }) do
+    local id = assert(ledger:AddDimension(kind, "sparse", { expansionDimensionId = expansion }))
+    assert(ledger.dimensionRows[kind][id].expansionDimensionId == expansion)
+    assert(ledger:AddDimension(kind, "sparse", { expansionDimensionId = expansion }) == id)
+    assert(ledger:AddDimension(kind, "sparse", { expansionDimensionId = 999 }) == nil)
+  end
+  local metadata = { capabilities = { measurements = { available = false } } }
+  local session = assert(ledger:AddDimension("session", "nested", metadata))
+  metadata.capabilities.measurements.available = true
+  assert(ledger.dimensionRows.session[session].capabilities.measurements.available == false)
+  assert(ledger:AddDimension("session", "nested", metadata) == nil)
+  assert(ledger:AddDimension("session", "nested", { capabilities = { flavor = "retail" } }) == session)
+  assert(ledger.dimensionRows.session[session].capabilities.flavor == "retail")
+  assert(Ledger.New(ledger.database))
+end)
+
+test("every persisted reference is validated before load or migration can prune", function()
+  local cases = {
+    { "crafts", "sessionDimensionId" }, { "crafts", "recipeDimensionId" },
+    { "crafts", "outputItemDimensionId" }, { "crafts", "professionDimensionId" },
+    { "reagents", "craftId" }, { "reagents", "itemDimensionId" },
+    { "characters", "realmDimensionId" }, { "sessions", "characterDimensionId" },
+    { "sessions", "realmDimensionId" }, { "recipes", "expansionDimensionId" },
+    { "items", "expansionDimensionId" }, { "professions", "expansionDimensionId" },
+    { "recipes", "professionDimensionId" },
+  }
+  for _, version in ipairs({ 0, 1 }) do
+    for _, reference in ipairs(cases) do
+      local ledger, clock = newLedger()
+      replay(ledger, fixture.cases)
+      ledger:AddDimension("profession", "test")
+      local data = ledger.database
+      data.schemaVersion = version
+      local rows = data[reference[1]] or data.dimensions[reference[1]]
+      rows[1][reference[2]] = 999
+      clock.current = clock.current + 200 * 86400
+      local refused, reason = Ledger.New(data, clock)
+      assert(refused == nil and reason:find(reference[2], 1, true), reference[2])
+      assert(data.schemaVersion == version and #data.crafts == 7 and #data.reagents == 9)
+      assert(rows[1][reference[2]] == 999)
+    end
+  end
+end)
+
+test("sparse collections and missing counters cannot be silently repaired", function()
+  for _, version in ipairs({ 0, 1 }) do
+    for _, collection in ipairs({ "crafts", "reagents", "items" }) do
+      local ledger = newLedger()
+      replay(ledger, fixture.cases)
+      local data = ledger.database
+      data.schemaVersion = version
+      local rows = data[collection] or data.dimensions[collection]
+      rows[2] = nil
+      assert(Ledger.New(data) == nil)
+      assert(rows[3] ~= nil and data.schemaVersion == version)
+    end
+    local ledger = newLedger()
+    local data = ledger.database
+    data.schemaVersion, data.nextCraftId = version, nil
+    assert(Ledger.New(data) == nil and data.nextCraftId == nil)
+    data.nextCraftId = 100
+    data.nextDimensionId.item = nil
+    assert(Ledger.New(data) == nil and data.nextDimensionId.item == nil)
+    data.nextDimensionId.item = 100
+    data.retentionDays = false
+    assert(Ledger.New(data) == nil and data.retentionDays == false)
+    data.retentionDays = 180
+    data.loop = data
+    assert(Ledger.New(data) == nil and data.loop == data)
+  end
+end)
+
+test("dimension reference validation also rejects live invalid enrichment", function()
+  local ledger = newLedger()
+  for _, kind in ipairs({ "character", "session", "recipe", "item", "profession" }) do
+    local id = assert(ledger:AddDimension(kind, "target"))
+    local field = (kind == "character" or kind == "session") and "realmDimensionId" or "expansionDimensionId"
+    local counter = ledger.database.nextDimensionId[kind]
+    assert(ledger:AddDimension(kind, "target", { [field] = 999, name = "Must not stick" }) == nil)
+    assert(ledger:AddDimension(kind, "target", { name = "Valid" }) == id)
+    assert(ledger.database.nextDimensionId[kind] == counter)
+  end
+end)
+
+test("realm identities are scoped by runtime IDs, never inferred from names", function()
+  local ledger = newLedger()
+  local metadata = { projectId = 1, regionId = 1, gameRealmId = 12,
+    realmName = "Shared Name", characterGUID = "Player-Test", characterName = "Crafter" }
+  local first = assert(ledger:CreateSession(metadata))
+  local firstRow = ledger.dimensionRows.session[first]
+  local realmId = firstRow.realmDimensionId
+  local characterId = firstRow.characterDimensionId
+  local same = assert(ledger:CreateSession(metadata))
+  assert(ledger.dimensionRows.session[same].realmDimensionId == realmId)
+  assert(ledger.dimensionRows.session[same].characterDimensionId == characterId)
+  metadata.regionId = 3
+  local other = assert(ledger:CreateSession(metadata))
+  assert(ledger.dimensionRows.session[other].realmDimensionId ~= realmId)
+  assert(ledger.dimensionRows.session[other].characterDimensionId ~= characterId)
+  metadata.projectId = 2
+  local otherProject = assert(ledger:CreateSession(metadata))
+  assert(ledger.dimensionRows.session[otherProject].realmDimensionId ~= ledger.dimensionRows.session[other].realmDimensionId)
+  metadata.regionId = nil
+  local unknown = assert(ledger:CreateSession(metadata))
+  local unknownAgain = assert(ledger:CreateSession(metadata))
+  local unresolved = ledger.dimensionRows.realm[ledger.dimensionRows.session[unknown].realmDimensionId]
+  assert(unresolved.regionId == nil and unresolved.identityScope == "session")
+  assert(ledger.dimensionRows.session[unknown].realmDimensionId ~= ledger.dimensionRows.session[unknownAgain].realmDimensionId)
+  assert(Ledger.New(ledger.database))
+end)
+
+test("invalid result snapshots cannot partially persist a craft", function()
+  local ledger = newLedger()
+  local result = { operationID = 51, itemID = 100, resourcesReturned = {} }
+  result.resourcesReturned[1] = result
+  assert(ledger:RecordResult(result) == nil)
+  assert(#ledger.database.crafts == 0 and #ledger.database.reagents == 0)
+  assert(ledger.database.nextCraftId == 1 and #ledger.database.dimensions.items == 0)
+  ledger:AddDimension("item", 100, { gameItemId = 101 })
+  assert(ledger:RecordResult({ itemID = 200, resourcesReturned = {
+    { reagent = { itemID = 100 }, quantity = 1 },
+  } }) == nil)
+  assert(#ledger.database.crafts == 0 and #ledger.database.reagents == 0)
+  assert(ledger.database.nextCraftId == 1 and next(ledger.operationIndex) == nil)
+  ledger.wall = function() return nil end
+  assert(ledger:RecordResult({}) == nil)
+  assert(ledger.database.nextCraftId == 1)
+end)
+
+test("pruning is deterministic at age boundaries and count ties with consistent indexes", function()
+  local ledger, clock, sessionId = newLedger({ retentionDays = 1, maxCrafts = 10 })
+  local first = assert(ledger:RecordResult({ operationID = 10, quantity = 1 }))
+  local second = assert(ledger:RecordResult({ operationID = 10, quantity = 1,
+    resourcesReturned = { { reagent = { itemID = 100 }, quantity = 0 } } }))
+  clock.current = clock.current + 86400
+  ledger:Prune(clock.current)
+  assert(#ledger.database.crafts == 2)
+  ledger.database.crafts[1], ledger.database.crafts[2] = second, first
+  ledger.database.maxCrafts = 1
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  assert(#reloaded.database.crafts == 1 and reloaded.database.crafts[1].id == second.id)
+  assert(#reloaded.database.reagents == 1 and reloaded.database.reagents[1].returnedQuantity == 0)
+  assert(reloaded.operationIndex[sessionId][10] == 1)
+  clock.current = clock.current + 1
+  reloaded:Prune(clock.current)
+  assert(#reloaded.database.crafts == 0 and #reloaded.database.reagents == 0)
+  assert(reloaded.operationIndex[sessionId] == nil and reloaded.database.nextCraftId == 3)
+  assert(#reloaded.database.dimensions.items == 1)
+end)
+
+test("real concentration batch retains separate results with intentionally absent recipe attribution", function()
+  local ledger = newLedger()
+  replay(ledger, { fixture.cases[2] })
+  assert(#ledger.database.crafts == 2)
+  local first, second = ledger.database.crafts[1], ledger.database.crafts[2]
+  assert(first.id ~= second.id and first.gameOperationId ~= second.gameOperationId)
+  for _, craft in ipairs(ledger.database.crafts) do
+    assert(craft.recipeDimensionId == nil)
+    assert(craft.concentrationSpent == 185 and craft.hasIngenuityProc == false and craft.ingenuityRefund == 93)
+    assert(craft.netConcentration == nil and craft.actualRefund == nil)
+  end
 end)
 
 print(string.format("%d ledger tests passed", passed))

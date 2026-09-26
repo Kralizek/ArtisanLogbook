@@ -17,7 +17,7 @@ The current durable schema is version 1:
 
 - `crafts` stores one row per observed Retail result callback, with a monotonic
   local `id`, timestamp, session/recipe/output dimension IDs, raw game
-  `operationID`, observed output quality/item level/quantity,
+  `gameOperationId` (the raw `operationID`), observed output quality/item level/quantity,
   Multicraft bonus, concentration spent/currency, Ingenuity proc flag, and
   refund field. Unsupported values are absent.
 - `reagents` stores one row per returned item entry observed in
@@ -27,20 +27,55 @@ The current durable schema is version 1:
 - `dimensions` contains append-only numeric collections for realm, character,
   profession, recipe, item, session, and expansion. Each collection has an
   independent monotonic ID counter. Repeated stable keys reuse their existing
-  dimension; rows are never updated or removed by pruning.
+  dimension. Identity and IDs never change; pruning never removes dimensions.
+  Metadata supports monotonic enrichment as described below.
 - `nextCraftId` is independent of retained rows, so pruning never makes a craft
   ID available again. Retention settings are stored as `retentionDays` and
   `maxCrafts`.
 
 Session dimensions capture session start, addon version, WoW version/build/date,
 interface, project, locale, character and realm references, and the flavor
-capability snapshot. Character identity uses the character GUID when available,
-otherwise character name plus realm. Profession/skill-line and recipe metadata
+capability snapshot. Character and realm identities use the runtime context
+described below. Profession/skill-line and recipe metadata
 not present in the observed callbacks stays absent. Expansion rows use a stable
 caller-supplied key, display name, and chronological order. Recipe/item/
 profession dimensions may refer to an expansion only when that metadata is
 known; a craft obtains expansion through its recipe, and a reagent through its
 item. The consuming craft's expansion is never used to classify an item.
+The canonical reference field for recipe, item, and profession is
+`expansionDimensionId`; on an item it describes that item's own introduction or
+ownership expansion, not consumption context. No alternate expansion-reference
+spelling or guessed expansion mapping is accepted.
+
+## Dimension Identity and Enrichment
+
+Dimension IDs and keys are immutable. `AddDimension` is an internal storage
+method, not a public Lua API. For the same key, a nil attribute may become known;
+repeating a known value is a no-op. Conflicting known values return `nil, reason`
+and reject the entire update, including other new attributes. Nested metadata
+follows the same rule. Callers cannot change `id` or `key`, and valid expansion
+references may be added after sparse item/recipe/profession creation. Input
+tables are copied, so subsequent caller mutations cannot change stored metadata.
+
+Runtime realm keys use `project:<WOW_PROJECT_ID>:region:<GetCurrentRegion()>:`
+`realm:<GetRealmID()>` only when all three identifiers are available and positive.
+The name is display metadata, never the identity. The two optional API calls are
+guarded; failures, missing functions, or invalid identifiers do not invent a
+region or realm. Without complete context, the key is `unresolved:session:<id>`
+and `identityScope = "session"`. This deliberately sacrifices cross-load
+deduplication rather than merge same-name realms. Character keys use this realm
+scope plus GUID (or name when the GUID is absent). No GUID parsing, locale-to-
+region mapping, connected-realm inference, or external catalog is used.
+
+Earlier PR #10 name-only realm rows and their references remain unchanged when
+loaded; new scoped identities are not merged with them. Region/environment
+history cannot be reconstructed from a name. Schema 1 is retained because the
+row shape is compatible and no existing identity is rewritten. Cross-client
+SavedVariables import, PTR/live identity unification, and character transfers
+are not supported. Conflicting display-name changes require explicit future
+handling; currently session initialization is refused with a diagnostic rather
+than silently overwriting known metadata. These are reviewable conservative
+identity choices, not claims of universal API uniqueness.
 
 ## Capture and Correlation
 
@@ -53,8 +88,7 @@ result callbacks and two distinct, non-zero operation IDs.
 not used to deduplicate or merge rows. Its uniqueness scope is not proven. A
 repeated ID therefore remains a separate fact with a separate local ID and is
 not attached to a pending recipe. This avoids losing a real craft if the game
-reuses an ID; until duplicate/late
-callbacks are traced, an actual repeated callback can likewise remain as an
+reuses an ID; until duplicate/late callbacks are traced, an actual repeated callback can remain as an
 extra fact. The callback is not rewritten based on `itemGUID`, spellcast events,
 or `CRAFTING_DETAILS_UPDATE`.
 
@@ -67,6 +101,15 @@ duplicated on each craft. If another begin arrives before a result, attribution
 is ambiguous and omitted for the next result rather than overwriting or
 guessing. There is no time-window grouping, request-count expansion, or
 spellcast-based completion inference.
+
+This is an intentional loss-of-attribution policy, not a WoW API requirement.
+In the real count-2 concentration fixture, both begins precede the first result:
+both result facts survive, but neither receives a recipe reference. A novel late
+ID cannot universally be recognized as late. Repeat detection only covers
+retained facts within a session; reload starts a new session and pruning forgets
+evicted IDs. No universal duplicate/late protection is claimed. The runtime
+operation-count index is rebuilt from validated facts and updated by pruning;
+it is not a persisted aggregate.
 
 This deliberately differs from the broader assumptions in issue #2: one result
 callback is one fact based on PR #3 evidence; the implementation does not infer
@@ -91,8 +134,10 @@ from the recipe consuming it. No separate Resourcefulness fact or derived
 aggregate is persisted.
 
 The current Retail hooks do not establish pre-craft skill/difficulty/expected
-quality, profession/skill-line, output item level, crafting context, order,
-recraft, reagent allocation, or source. Those fields remain absent. Other
+quality, profession/skill-line, crafting context, order,
+recraft, reagent allocation, or source. Those fields remain absent. The optional
+`itemLevel` result field is copied only if observed; the real fixtures do not
+verify its applicability. Other
 flavors receive an empty capability map and do not acquire Retail-only values.
 
 ## Retention and Migration
@@ -103,13 +148,42 @@ cutoff, then removes the oldest timestamp/ID rows if the count limit is still
 exceeded. Reagent facts for removed crafts are removed together. Dimensions and
 ID counters are retained; there are no rollups or dimension garbage collection.
 
-Schema version 0 migrates to version 1 on a cloned table, preserving recognized
-facts and counters while filling the version-1 collections/counters. A missing
-database initializes a new version-1 store. A missing/invalid schema version,
-failed migration, malformed collections, or newer schema is refused. Bootstrap
-only replaces `ArtisanLogbookDB` after successful validation/migration, so
-unsupported or failed data is left untouched for recovery. There is no
-conversion from the unrelated debug trace database.
+The age boundary is exclusive: exactly 180 days old survives until it is older.
+Count ties break on craft ID, independent of input array order. A single
+compaction removes excess rows; dimensions and counters never reset, including
+when all facts expire. No clear command or UI is added in this slice.
+
+Schema 0 is explicitly migration-test scaffolding, not a released legacy addon
+format. It has the same fact/dimension/reference/counter shape as schema 1 but
+may omit retention settings. Its only migration fills nil retention settings
+and advances the version. It never infers missing counters from retained facts,
+creates missing collections, supplies measured zeroes, or repairs references.
+Even an empty retained collection cannot prove the historical next ID.
+
+All migrations run on a deep copy inside a protected load path. Missing/invalid
+versions, newer versions, cyclic/non-serializable data, non-finite numbers,
+sparse/non-array collections, duplicate IDs/keys, invalid counters, or broken
+references refuse the database before pruning or index construction. Craft
+timestamps and session references, and reagent craft/item references, are
+required. Other unknown dimension references remain absent, but if present
+must resolve to positive local IDs in the correct collection:
+
+- Craft: `sessionDimensionId`, `recipeDimensionId`, `outputItemDimensionId`,
+  `professionDimensionId`.
+- Reagent: `craftId`, `itemDimensionId`.
+- Character: `realmDimensionId`.
+- Session: `characterDimensionId`, `realmDimensionId`.
+- Recipe: `professionDimensionId`, `expansionDimensionId`.
+- Item and profession: `expansionDimensionId`.
+
+The same reference checks run before live dimension creation/enrichment.
+Unsupported reference fields are refused rather than silently treated as absent.
+Bootstrap replaces `ArtisanLogbookDB` only after successful migration,
+validation, and session initialization. A failed load leaves the original
+SavedVariables intact and tracing independent. A missing database creates schema
+1; the unrelated trace database is never imported. Malformed result snapshots
+are rejected before craft/reagent facts are committed; timestamps are never
+fabricated as zero when the clock is unavailable.
 
 ## Regression Coverage and Limits
 
@@ -118,8 +192,13 @@ covers basic results, concentration without Ingenuity, Multicraft,
 multi-reagent Resourcefulness, separate batch results/operation IDs, unknown
 versus zero/false, reload IDs, age/count pruning, append-only dimensions,
 ambiguous/repeated results, unsupported flavor capabilities, and migration
-success/refusal safety. The mocked TOC test also verifies SavedVariables
-initialization and that clearing debug traces does not clear ledger facts.
+success/refusal safety. Hardening tests cover every reference path for both
+versions, sparse collections, missing counters, atomic enrichment/conflicts,
+expansion enrichment, runtime realm collisions/fallback, and deterministic
+pruning/index reconstruction. The mocked TOC test covers passive capture while
+tracing is paused, reload identity, missing identity APIs, initialization refusal,
+and debug-trace clear isolation. Run `bash src/addon/scripts/package.sh` from
+the repository root to test and validate `src/addon/dist/ArtisanLogbook.zip`.
 
 Remaining evidence gaps include operation-ID reuse scope, true duplicate/late
 callback behavior, successful Ingenuity/refund semantics, cancellation,

@@ -73,6 +73,14 @@ function addon.HandleRetailEvent(event, ...)
   addon.Emit(event, ...)
 end
 
+local function optionalIdentity(api)
+  if type(api) ~= "function" then return nil end
+  local ok, value = pcall(api)
+  if ok and type(value) == "number" and value > 0 and value < math.huge and value % 1 == 0 then
+    return value
+  end
+end
+
 lifecycle:RegisterEvent("ADDON_LOADED")
 lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   if loadedName ~= addonName then
@@ -82,13 +90,10 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   addon.ledger, addon.ledgerError = addon.Ledger.New(ArtisanLogbookDB, {
     wall = GetServerTime,
   })
-  if addon.ledger then
-    ArtisanLogbookDB = addon.ledger.database
-  end
   addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent)
   local version, build, buildDate, interface = GetBuildInfo()
   if addon.ledger then
-    addon.ledger:CreateSession({
+    local ok, sessionId, reason = pcall(addon.ledger.CreateSession, addon.ledger, {
       addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version"),
       wowVersion = version,
       wowBuild = build,
@@ -99,9 +104,17 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
       characterName = UnitName("player"),
       characterGUID = UnitGUID("player"),
       realmName = GetRealmName(),
+      regionId = optionalIdentity(GetCurrentRegion),
+      gameRealmId = optionalIdentity(GetRealmID),
       startedAt = loginStartedAt,
       capabilities = addon.adapter.capabilities,
     })
+    if ok and sessionId then
+      ArtisanLogbookDB = addon.ledger.database
+    else
+      addon.ledgerError = tostring(ok and reason or sessionId)
+      addon.ledger = nil
+    end
   end
   addon.recorder, addon.loadError = addon.Trace.New(ArtisanLogbookTraceDB, {
     wall = GetServerTime,

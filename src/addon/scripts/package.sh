@@ -19,11 +19,11 @@ cp ArtisanLogbook.toc "$staging/ArtisanLogbook/"
 cp -R Capture Core Flavors Storage UI docs "$staging/ArtisanLogbook/"
 
 pushd "$staging" >/dev/null
-zip -qr ArtisanLogbook-ledger.zip ArtisanLogbook
-unzip -tq ArtisanLogbook-ledger.zip
-unzip -q ArtisanLogbook-ledger.zip -d extracted
+zip -qr ArtisanLogbook.zip ArtisanLogbook
+unzip -tq ArtisanLogbook.zip
+unzip -q ArtisanLogbook.zip -d extracted
 popd >/dev/null
 
 "$lua_bin" tests/addon_test.lua "$staging/extracted/ArtisanLogbook"
-mv "$staging/ArtisanLogbook-ledger.zip" dist/ArtisanLogbook-ledger.zip
-printf 'Package: %s/dist/ArtisanLogbook-ledger.zip\n' "$addon_root"
+mv "$staging/ArtisanLogbook.zip" dist/ArtisanLogbook.zip
+printf 'Package: %s/dist/ArtisanLogbook.zip\n' "$addon_root"

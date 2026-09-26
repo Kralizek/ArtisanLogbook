@@ -16,7 +16,7 @@ bash src/addon/scripts/package.sh
 ```
 
 This runs the addon tests and produces
-`src/addon/dist/ArtisanLogbook-ledger.zip`. Extract its
+`src/addon/dist/ArtisanLogbook.zip`. Extract its
 `ArtisanLogbook` folder into the live client's `_retail_/Interface/AddOns/`.
 The resulting path must be `Interface/AddOns/ArtisanLogbook/ArtisanLogbook.toc`,
 not an extra nested directory. Restart the client after the first installation.
@@ -197,7 +197,7 @@ schema and debug export versions (both initially 1), and `totalRecords` for
 checking page completeness. This is **not** the final `AL1` ledger contract.
 There is no importer and no `loadstring` in the addon.
 
-Expansion/era dimensions and their references belong to the future durable
+Expansion/era dimensions and their references belong to the separate durable
 ledger schema, not this debug format. The tracer does not capture or infer item
 or recipe expansion metadata; in particular, an item's metadata must not be
 derived from a craft that consumes it. See

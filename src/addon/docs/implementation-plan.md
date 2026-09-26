@@ -79,7 +79,7 @@ Tests and documentation accompany each slice rather than being deferred.
   A positive refund field alone is not evidence of an Ingenuity proc. Derive
   Resourcefulness from returned reagent quantities. The debug tracer retains
   raw API values and flags for contract inspection.
-  Live build-69933 traces make `operationID` the leading candidate for
+- Live build-69933 traces make `operationID` the leading candidate for
   per-actual-operation identity: one count-2 request produced two result
   callbacks with distinct non-zero IDs. This is current-trace evidence, not a
   universal guarantee. A craft fact represents an actual operation/result
@@ -113,10 +113,12 @@ dimensions rather than duplicating it across craft or reagent facts:
   expansions; never assign an item's expansion from a consuming craft.
 - Leave unavailable or unknown dimension references absent. Do not infer them
   from recipe use, current client expansion, labels, or other indirect context.
+- Dimension identities and IDs are append-only, not all metadata. Nil-to-known
+  enrichment is allowed atomically; conflicting known metadata is rejected.
 
-The exact source fields, stable keys, and era/expansion catalog remain subject
-to the future schema review and available game data. This direction does not
-relax the live-trace review gate for implementing the durable ledger.
+The storage contract defines current keys and validates references. The actual
+era/expansion catalog and runtime enrichment sources still need verified game
+data. No guessed mapping is populated by the storage slice.
 
 ## API Direction
 
