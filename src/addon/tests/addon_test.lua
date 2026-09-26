@@ -12,9 +12,14 @@ for _, name in ipairs({
   methods[name] = function() end
 end
 function methods:SetText(value) assert(type(value) == "string"); self.text = value end
+function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
 function methods:GetWidth() return 1024 end
-function methods:GetHeight() return 768 end
+function methods:GetHeight() return self.height or (self.kind == "ScrollFrame" and 300 or 768) end
+function methods:GetStringHeight()
+  local _, lineCount = (self.text or ""):gsub("\n", "")
+  return math.max(14, (lineCount + 1) * 14)
+end
 function methods:SetScript(name, callback) self.scripts[name] = callback end
 function methods:RegisterEvent(event) self.events[event] = true end
 function methods:UnregisterEvent(event) self.events[event] = nil end
@@ -108,6 +113,18 @@ assert(environment.popup == "ARTISANLOGBOOK_CLEAR_TRACE")
 assert(#addon.recorder.database.records == 5)
 environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE.OnAccept()
 assert(#addon.recorder.database.records == 0)
+local textEditBox, scrollFrame
+for _, frame in ipairs(frames) do
+  if frame.kind == "EditBox" and frame.parent and frame.parent.kind == "ScrollFrame" then textEditBox = frame end
+  if frame.kind == "ScrollFrame" then scrollFrame = frame end
+end
+assert(textEditBox and scrollFrame)
+textEditBox:SetText("short export")
+textEditBox.scripts.OnTextChanged()
+assert(textEditBox.height == scrollFrame:GetHeight())
+textEditBox:SetText(string.rep("long line\n", 100))
+textEditBox.scripts.OnTextChanged()
+assert(textEditBox.height > scrollFrame:GetHeight())
 click("Start")
 click("Clear")
 assert(#addon.recorder.database.records == 1)
