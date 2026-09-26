@@ -67,7 +67,7 @@ environment.C_AddOns = { GetAddOnMetadata = function() return "0.1.0-tracer" end
 environment.WOW_PROJECT_ID = 1
 environment.WOW_PROJECT_MAINLINE = 1
 
-local root = arg[1] or "."
+local root = arg[1] or "src/ArtisanLogbook"
 local addon = {}
 for line in io.lines(root .. "/ArtisanLogbook.toc") do
   if line:match("%.lua$") then
