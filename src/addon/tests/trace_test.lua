@@ -1,4 +1,5 @@
 local root = arg[1] or "src/ArtisanLogbook"
+local testsRoot = arg[2] or "tests"
 local addon = {}
 assert(loadfile(root .. "/Capture/Trace.lua"))("ArtisanLogbook", addon)
 local Trace = addon.Trace
@@ -136,7 +137,7 @@ test("unsupported table keys cannot bypass the traversal budget", function()
 end)
 
 test("sanitized Retail build 69933 evidence replays without identity inference", function()
-  local fixture = dofile(root .. "/tests/fixtures/retail-build-69933.lua")
+  local fixture = dofile(testsRoot .. "/fixtures/retail-build-69933.lua")
   assert(fixture.build == "69933" and fixture.version == "12.1.0")
   local cases = {}
 
@@ -218,7 +219,7 @@ test("sanitized Retail build 69933 evidence replays without identity inference",
 end)
 
 test("synthetic Retail scenarios preserve every supplied result field", function()
-  local scenarios = dofile(root .. "/tests/fixtures/retail-synthetic.lua")
+  local scenarios = dofile(testsRoot .. "/fixtures/retail-synthetic.lua")
   for _, scenario in ipairs(scenarios) do
     local recorder = assert(Trace.New(nil, clock))
     recorder:Start({ fixture = scenario.name, synthetic = true })
