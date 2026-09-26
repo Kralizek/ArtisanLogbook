@@ -90,7 +90,9 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   addon.ledger, addon.ledgerError = addon.Ledger.New(ArtisanLogbookDB, {
     wall = GetServerTime,
   })
-  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent)
+  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent, function()
+    return addon.recorder ~= nil and addon.recorder.recording
+  end)
   local version, build, buildDate, interface = GetBuildInfo()
   if addon.ledger then
     local ok, sessionId, reason = pcall(addon.ledger.CreateSession, addon.ledger, {

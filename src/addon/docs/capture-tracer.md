@@ -104,6 +104,26 @@ reduce accidental publication. Do not execute trace files received from others.
   if available. `CALL_POST:` records contain arguments only, not return values.
   Hooks may run after synchronous events and are **not** pre-craft snapshots,
   success signals, or necessarily one invocation per individual batch operation.
+- While recording, `QUOTE_CALL_POST:` records the arguments to
+  `GetCraftingOperationInfo` and `GetCraftingOperationInfoForOrder` when the
+  client invokes them. `QUOTE_PROBE:` re-queries the same read-only API with
+  those arguments immediately afterward, recording `status` (`ok`, `nil`, or
+  `error`) and a nullable `info`. The secure post-hook cannot read the
+  original return value. Re-querying may fail or differ from the UI's return;
+  neither record proves which quote was displayed or accepted.
+- While recording, each craft post-hook also emits a `REQUEST_PROBE:` record.
+  For recipe/enchant/salvage calls with a supplied reagent table and explicit
+  concentration boolean, this attempts `GetCraftingOperationInfo` (or
+  `GetCraftingOperationInfoForOrder` for a supplied order ID) with the
+  submitted arguments. The observation includes query status (`ok`, `nil`,
+  `error`, `unavailable`, or `not-queried`) and the nullable `info`. Per-entry
+  `reagentQuality` is queried by selected item ID when the API is present;
+  nil quality is not zero quality. For an order ID, `GetClaimedOrder` is
+  recorded only when its returned ID matches the submitted ID. Recraft calls
+  have no recipe ID in their submitted arguments, so their operation quote is
+  labeled `no-recipe-id-in-call`. These observations occur **after** the
+  craft function; a synchronous result can precede them. They are diagnostic
+  only and never update the ledger.
 - Explicit `TRACE_START`, `TRACE_MARK`, and `TRACE_STOP` markers.
 
 No operation IDs, cast GUIDs, recipe IDs, or callback payloads are rewritten.
@@ -287,3 +307,94 @@ For future capture-contract changes, reviewers should continue to verify:
 If the raw tracer is insufficient, extend this debug slice and collect another
 controlled trace. Do not implement the durable ledger to paper over uncertainty.
 The approved later work is recorded in [implementation-plan.md](implementation-plan.md).
+
+## Issue #12: Request-side investigation (not yet live-verified)
+
+The current [Retail API declarations](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUIDocumentation.lua)
+and [data types](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUITypesDocumentation.lua)
+(mirror build 69933) identify `CraftingReagentInfo` as
+`{ reagent = { itemID? / currencyID? }, dataSlotIndex, quantity }`. Submitted
+items and amounts are directly observable **as call arguments**, but it is
+not yet established that this list covers mandatory/default or
+customer-provided reagents. Quality can be queried with
+`GetItemReagentQualityByItemInfo(itemID)`; a schematic's slot list and
+`orderSource` are recipe definitions, **not** proof of selected input or
+ownership. `CraftingOperationInfo` declares base/bonus skill and difficulty,
+`craftingQuality`, `guaranteedCraftingQualityID`, `concentrationCost`, and
+`concentrationCurrencyID`. Their live availability, exact meaning, and
+relationship to the submitted request/result remain to be checked. Do not
+sum or reinterpret them as durable facts yet.
+
+[Blizzard's transaction code](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_ProfessionsTransaction.lua)
+builds quote inputs from positive allocations with `dataSlotIndex` (not
+`slotIndex`); the
+[order UI](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_Professions/Blizzard_ProfessionsCrafterOrderView.lua)
+can quote with customer-provided reagents but submit only non-customer
+reagents. `GetClaimedOrder()` is a candidate source of order ID,
+`customerName`, `tipAmount` (candidate commission), `minQuality`, and
+per-reagent `source` (see
+[order types](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_APIDocumentationGenerated/CraftingOrderUISharedDocumentation.lua)).
+Order source enum values, claimed-order availability, and whether the
+selected crafter inputs combine correctly with customer inputs remain
+unverified. Personal recraft arguments include an item GUID, modifications,
+and reagent list but no recipe ID; order recraft adds order ID. The
+`GetItemSlotModifications` / `GetItemSlotModificationsForOrder` APIs may
+explain prior item state; these are untested. No guessed provenance or
+correlation is persisted.
+
+**Review gate:** Existing build-69933 real fixtures verify results and batch
+cardinality only, not the new quote/request probes. Mocked tests establish
+boundary behavior, not game semantics. The ledger remains schema 1 and
+legacy reagent rows remain Resourcefulness returns only. No pre-craft fields,
+allocation matching, migration, or universal request/result link are
+implemented. A count-2 request may yield multiple operations; its selected
+reagents and concentration toggle *may* be shared, while actual spend,
+returns, and output remain per result. Whether inputs are consumed or
+recomputed between operations, and whether `operationID` relates to a
+quote, remain unknown. Do not attach a quote to a result by nearest event,
+recipe ID alone, spellcast, or elapsed-time window.
+
+### Controlled live traces required
+
+Install the instrumented ZIP as above. Back up the raw SavedVariables
+privately, disable unrelated addons, work out of combat, and use a fresh
+recording **per scenario**. Open the recipe first, then `/al start`, mark
+`scenario-before`, choose reagents and concentration, wait for the quote,
+mark `scenario-click`, craft normally, mark `scenario-after`, and `/al stop`.
+If quote activity fills the 2,000-record / 2 MiB budget, clear and restart
+immediately before selection; report any capacity or payload warnings.
+Preserve every export page or the raw SavedVariables after a normal logout,
+including `TRACE_START` and build information. Note the UI-displayed
+allocation/quality, concentration quote, batch count, result/procs, and
+the sequence ranges of `QUOTE_CALL_POST`, `QUOTE_PROBE`, `CALL_POST`,
+`REQUEST_PROBE`, craft begins, and individual results. Never share raw
+order names, item GUIDs, cast tokens, or hyperlinks publicly.
+The optional claimed-order probe stores the matching **entire** order table
+locally, including customer identifiers and notes; this is intentionally raw
+debug evidence, not an anonymized export. Remove those fields from any
+shared copy and do not publish the raw SavedVariables file.
+
+1. Personal craft with explicit selected item IDs/quantities; repeat the
+   **same recipe** using a different reagent-quality mix, with a new marker.
+   Include at least one case with concentration off and one with it on;
+   record the displayed quote and actual per-result spend independently.
+2. Resourcefulness on a known allocation (including, if possible, multiple
+   returned reagent types); keep the entire sequence until a natural proc.
+   Compare returned item IDs against selected slots without bag-delta
+   inference. Include a normal no-return result to distinguish absent
+   returns from zero.
+3. A count-2 or larger batch of the same recipe with a single click; mark
+   before/after and retain **every** begin and result. If practical repeat
+   with a changed allocation between separate requests. This is needed to
+   test shared versus per-operation inputs and overlapping callbacks.
+4. If available, a claimed crafting order with both customer and crafter
+   supplies: privately retain the order UI's ID, requester, minimum quality,
+   commission, and allocation/source display; capture quote and craft call
+   separately, then sanitize stable placeholders before sharing. A personal
+   recraft and an order recraft are separate optional runs; record item and
+   modification context privately and sanitize GUIDs.
+
+Do not turn a probe's `nil`/`error`, a secret/limit warning, or a missing
+post-hook into an observed zero. Only after reviewing the complete live
+sequences can request/result attribution, return matching, and a schema
+migration be specified.
