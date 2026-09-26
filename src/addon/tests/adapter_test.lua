@@ -100,7 +100,22 @@ test("order queries and recraft gaps remain diagnostic, without guessed values",
   local received = {}
   api.C_TradeSkillUI.RecraftRecipeForOrder = function() end
   api.C_CraftingOrders = { GetClaimedOrder = function()
-    return { orderID = 77, minQuality = 3, reagents = { { source = 1 } } }
+    return {
+      orderID = 77,
+      customerName = "other-player",
+      customerNotes = "secret",
+      minQuality = 3,
+      tipAmount = 500,
+      crafterGuid = "Player-1",
+      reagents = {
+        {
+          source = 1,
+          slotIndex = 2,
+          isBasicReagent = true,
+          reagentInfo = { dataSlotIndex = 5, quantity = 3, reagent = { itemID = 190311 } },
+        },
+      },
+    }
   end }
   api.C_TradeSkillUI.GetCraftingOperationInfoForOrder = function(recipe, reagents, order, concentrate)
     assert(recipe == 456 and order == 77 and concentrate == false)
@@ -113,6 +128,11 @@ test("order queries and recraft gaps remain diagnostic, without guessed values",
   assert(received[2][1].operation == "ok" and received[2][1].info.concentrationCost == 0)
   assert(received[2][1].claimedOrderStatus == "matched")
   assert(received[2][1].claimedOrder.minQuality == 3)
+  assert(received[2][1].claimedOrder.tipAmount == 500)
+  assert(received[2][1].claimedOrder.customerName == nil and received[2][1].claimedOrder.customerNotes == nil)
+  assert(received[2][1].claimedOrder.crafterGuid == nil)
+  assert(received[2][1].claimedOrder.reagents[1].source == 1)
+  assert(received[2][1].claimedOrder.reagents[1].reagentInfo.reagent.itemID == 190311)
   hooks.CraftRecipe(456, 1, {}, nil, nil, nil)
   assert(received[4][1].operation == "not-queried" and received[4][1].info == nil)
   hooks.RecraftRecipeForOrder(77, "private-guid", {}, nil, true)
@@ -181,21 +201,21 @@ test("query failures do not prevent later craft results", function()
   assert(received[3].event == "TRADE_SKILL_ITEM_CRAFTED_RESULT")
 end)
 
-test("salvage uses documented argument positions and quote hook errors stay contained", function()
+test("target-dependent quotes stay unavailable and quote hook errors stay contained", function()
   local api, _, hooks = environment()
   local received = {}
   api.C_TradeSkillUI.CraftSalvage = function() end
-  api.C_TradeSkillUI.GetCraftingOperationInfo = function(recipe, reagents, guid, concentrate)
-    assert(recipe == 456 and reagents[1].quantity == 1 and guid == nil and concentrate == false)
-    return { concentrationCost = 0 }
-  end
+  api.C_TradeSkillUI.CraftEnchant = function() end
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function() error("should not query target-dependent quote") end
   addon.CreateFlavorAdapter(api, function(event, ...)
     received[#received + 1] = { event = event, ... }
   end, function() return true end)
+  hooks.CraftEnchant(456, 1, { { quantity = 2 } }, "target", false)
+  assert(received[2][1].operation == "unavailable")
   hooks.CraftSalvage(456, 1, "target", { { quantity = 1 } }, false)
-  assert(received[2][1].operation == "ok")
+  assert(received[4][1].operation == "unavailable")
   hooks.GetCraftingOperationInfo(456, {}, nil, false)
-  assert(received[4][1].status == "error")
+  assert(received[6][1].status == "error")
 end)
 
 test("capture failures cannot propagate through a craft hook", function()

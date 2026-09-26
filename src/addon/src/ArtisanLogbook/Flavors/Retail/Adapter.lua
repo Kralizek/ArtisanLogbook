@@ -33,6 +33,61 @@ local craftFunctions = {
 
 local quoteFunctions = { "GetCraftingOperationInfo", "GetCraftingOperationInfoForOrder" }
 
+local function copyCraftingReagent(reagent)
+  if type(reagent) ~= "table" then return nil end
+  local snapshot = {}
+  if type(reagent.itemID) == "number" then snapshot.itemID = reagent.itemID end
+  if type(reagent.currencyID) == "number" then snapshot.currencyID = reagent.currencyID end
+  return next(snapshot) ~= nil and snapshot or nil
+end
+
+local function copyCraftingReagentInfo(info)
+  if type(info) ~= "table" then return nil end
+  local snapshot = {}
+  if type(info.dataSlotIndex) == "number" then snapshot.dataSlotIndex = info.dataSlotIndex end
+  if type(info.quantity) == "number" then snapshot.quantity = info.quantity end
+  local reagent = copyCraftingReagent(info.reagent)
+  if reagent ~= nil then snapshot.reagent = reagent end
+  return next(snapshot) ~= nil and snapshot or nil
+end
+
+local function copyClaimedOrderReagents(reagents)
+  if type(reagents) ~= "table" then return nil end
+  local snapshot = {}
+  for index, reagent in ipairs(reagents) do
+    if type(reagent) == "table" then
+      local copied = {}
+      if type(reagent.slotIndex) == "number" then copied.slotIndex = reagent.slotIndex end
+      if type(reagent.source) == "number" then copied.source = reagent.source end
+      if type(reagent.isBasicReagent) == "boolean" then copied.isBasicReagent = reagent.isBasicReagent end
+      local reagentInfo = copyCraftingReagentInfo(reagent.reagentInfo)
+      if reagentInfo ~= nil then copied.reagentInfo = reagentInfo end
+      if next(copied) ~= nil then snapshot[index] = copied end
+    end
+  end
+  return next(snapshot) ~= nil and snapshot or nil
+end
+
+local function copyClaimedOrder(order)
+  if type(order) ~= "table" then return nil end
+  local snapshot = {}
+  local numberFields = {
+    "orderID", "itemID", "spellID", "skillLineAbilityID", "orderType", "orderState",
+    "expirationTime", "claimEndTime", "minQuality", "tipAmount", "consortiumCut",
+    "reagentState", "npcCustomerCreatureID", "npcCraftingOrderSetID", "npcTreasureID",
+  }
+  for _, field in ipairs(numberFields) do
+    if type(order[field]) == "number" then snapshot[field] = order[field] end
+  end
+  local booleanFields = { "isRecraft", "isFulfillable" }
+  for _, field in ipairs(booleanFields) do
+    if type(order[field]) == "boolean" then snapshot[field] = order[field] end
+  end
+  local reagents = copyClaimedOrderReagents(order.reagents)
+  if reagents ~= nil then snapshot.reagents = reagents end
+  return next(snapshot) ~= nil and snapshot or nil
+end
+
 local function createRetailAdapter(api, emit, isRecording)
   local capabilities = { events = {}, hooks = {}, quoteHooks = {}, measurements = {} }
   local adapter = { capabilities = capabilities }
@@ -56,20 +111,22 @@ local function createRetailAdapter(api, emit, isRecording)
     observation.claimedOrderStatus = ok and (order == nil and "nil" or "other-order") or "error"
     if ok and type(order) == "table" and order.orderID == orderID then
       observation.claimedOrderStatus = "matched"
-      observation.claimedOrder = order
+      observation.claimedOrder = copyClaimedOrder(order)
     end
   end
 
   local function probe(name, ...)
     if not isRecording or not isRecording() then return end
     local arguments = { ... }
-    local recipeID, reagents, orderID, concentration
+    local recipeID, reagents, orderID, concentration, targetDependent
     if name == "CraftRecipe" then
       recipeID, reagents, orderID, concentration = arguments[1], arguments[3], arguments[5], arguments[6]
     elseif name == "CraftEnchant" then
       recipeID, reagents, concentration = arguments[1], arguments[3], arguments[5]
+      targetDependent = true
     elseif name == "CraftSalvage" then
       recipeID, reagents, concentration = arguments[1], arguments[4], arguments[5]
+      targetDependent = true
     else
       local observation = { operation = "no-recipe-id-in-call" }
       if name == "RecraftRecipeForOrder" then observeClaimedOrder(arguments[1], observation) end
@@ -88,6 +145,11 @@ local function createRetailAdapter(api, emit, isRecording)
           observation.reagentQuality[index] = { status = ok and "ok" or "error", quality = ok and quality or nil }
         end
       end
+    end
+    if targetDependent then
+      observation.operation = "unavailable"
+      forward("REQUEST_PROBE:C_TradeSkillUI." .. name, observation)
+      return
     end
     if type(recipeID) == "number" and type(reagents) == "table" and type(concentration) == "boolean" then
       local method = orderID ~= nil and "GetCraftingOperationInfoForOrder" or "GetCraftingOperationInfo"

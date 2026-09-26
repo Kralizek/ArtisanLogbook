@@ -87,9 +87,11 @@ The file is under
 `_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook.lua` and contains
 `ArtisanLogbookTraceDB`. This is account-wide, not a per-character file. Raw traces
 can include character names, GUIDs, targets, hyperlinks, and order identifiers.
-Review them before sharing. Preserve originals privately; label any sanitized
-copy and keep ID substitutions consistent. Local `src/addon/traces/` is gitignored to
-reduce accidental publication. Do not execute trace files received from others.
+The claimed-order probe stores only an allowlisted diagnostic snapshot, not
+full order names, GUIDs, notes, or hyperlinks. Review traces before sharing.
+Preserve originals privately; label any sanitized copy and keep ID substitutions
+consistent. Local `src/addon/traces/` is gitignored to reduce accidental
+publication. Do not execute trace files received from others.
 
 ## What Is Captured
 
@@ -112,18 +114,22 @@ reduce accidental publication. Do not execute trace files received from others.
   original return value. Re-querying may fail or differ from the UI's return;
   neither record proves which quote was displayed or accepted.
 - While recording, each craft post-hook also emits a `REQUEST_PROBE:` record.
-  For recipe/enchant/salvage calls with a supplied reagent table and explicit
+  For `CraftRecipe` calls with a supplied reagent table and explicit
   concentration boolean, this attempts `GetCraftingOperationInfo` (or
   `GetCraftingOperationInfoForOrder` for a supplied order ID) with the
-  submitted arguments. The observation includes query status (`ok`, `nil`,
-  `error`, `unavailable`, or `not-queried`) and the nullable `info`. Per-entry
-  `reagentQuality` is queried by selected item ID when the API is present;
-  nil quality is not zero quality. For an order ID, `GetClaimedOrder` is
-  recorded only when its returned ID matches the submitted ID. Recraft calls
-  have no recipe ID in their submitted arguments, so their operation quote is
-  labeled `no-recipe-id-in-call`. These observations occur **after** the
-  craft function; a synchronous result can precede them. They are diagnostic
-  only and never update the ledger.
+  submitted arguments. `CraftEnchant` and `CraftSalvage` remain `unavailable`
+  here until target-item GUID conversion is verified, to avoid capturing a
+  misleading quote for the wrong target. The observation includes query status
+  (`ok`, `nil`, `error`, `unavailable`, or `not-queried`) and the nullable
+  `info`. Per-entry `reagentQuality` is queried by selected item ID when the
+  API is present; nil quality is not zero quality. For an order ID,
+  `GetClaimedOrder` is recorded only when its returned ID matches the submitted
+  ID, and then only as an allowlisted snapshot of order ID, quality/commission,
+  and reagent allocation/source data. Recraft calls have no recipe ID in their
+  submitted arguments, so their operation quote is labeled
+  `no-recipe-id-in-call`. These observations occur **after** the craft
+  function; a synchronous result can precede them. They are diagnostic only and
+  never update the ledger.
 - Explicit `TRACE_START`, `TRACE_MARK`, and `TRACE_STOP` markers.
 
 No operation IDs, cast GUIDs, recipe IDs, or callback payloads are rewritten.
@@ -369,10 +375,11 @@ allocation/quality, concentration quote, batch count, result/procs, and
 the sequence ranges of `QUOTE_CALL_POST`, `QUOTE_PROBE`, `CALL_POST`,
 `REQUEST_PROBE`, craft begins, and individual results. Never share raw
 order names, item GUIDs, cast tokens, or hyperlinks publicly.
-The optional claimed-order probe stores the matching **entire** order table
-locally, including customer identifiers and notes; this is intentionally raw
-debug evidence, not an anonymized export. Remove those fields from any
-shared copy and do not publish the raw SavedVariables file.
+The optional claimed-order probe stores only an allowlisted order snapshot
+(for example ID, minimum quality, commission, and reagent source/allocation),
+not customer/crafter names, GUIDs, notes, or item hyperlinks. Do not publish
+the raw SavedVariables file anyway; other trace records can still contain
+identifiers that require review before sharing.
 
 1. Personal craft with explicit selected item IDs/quantities; repeat the
    **same recipe** using a different reagent-quality mix, with a new marker.
