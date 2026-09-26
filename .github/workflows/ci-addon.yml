@@ -28,5 +28,5 @@ jobs:
         if: github.event_name == 'push'
         with:
           name: ArtisanLogbook-addon
-          path: src/addon/dist/ArtisanLogbook-tracer.zip
+          path: src/addon/dist/ArtisanLogbook-ledger.zip
           if-no-files-found: error

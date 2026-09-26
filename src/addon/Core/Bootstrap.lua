@@ -60,24 +60,67 @@ function addon.Emit(event, ...)
   end
 end
 
+function addon.HandleRetailEvent(event, ...)
+  if addon.ledger then
+    if event == "TRADE_SKILL_CRAFT_BEGIN" then
+      local ok = pcall(addon.ledger.BeginCraft, addon.ledger, select(1, ...))
+      if not ok then addon.ledgerCaptureError = true end
+    elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
+      local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, select(1, ...))
+      if not ok or not fact then addon.ledgerCaptureError = true end
+    end
+  end
+  addon.Emit(event, ...)
+end
+
 lifecycle:RegisterEvent("ADDON_LOADED")
 lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   if loadedName ~= addonName then
     return
   end
   lifecycle:UnregisterEvent("ADDON_LOADED")
+  addon.ledger, addon.ledgerError = addon.Ledger.New(ArtisanLogbookDB, {
+    wall = GetServerTime,
+  })
+  if addon.ledger then
+    ArtisanLogbookDB = addon.ledger.database
+  end
+  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent)
+  local version, build, buildDate, interface = GetBuildInfo()
+  if addon.ledger then
+    addon.ledger:CreateSession({
+      addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version"),
+      wowVersion = version,
+      wowBuild = build,
+      wowBuildDate = buildDate,
+      interface = interface,
+      projectId = WOW_PROJECT_ID,
+      locale = GetLocale(),
+      characterName = UnitName("player"),
+      characterGUID = UnitGUID("player"),
+      realmName = GetRealmName(),
+      startedAt = loginStartedAt,
+      capabilities = addon.adapter.capabilities,
+    })
+  end
   addon.recorder, addon.loadError = addon.Trace.New(ArtisanLogbookTraceDB, {
     wall = GetServerTime,
     elapsed = GetTimePreciseSec,
   }, issecretvalue)
   if not addon.recorder then
     addon.Notify(addon.loadError)
+    if addon.ledgerError then
+      addon.Notify("Ledger disabled: " .. addon.ledgerError)
+    end
     return
   end
   ArtisanLogbookTraceDB = addon.recorder.database
-  addon.adapter = addon.CreateFlavorAdapter(_G, addon.Emit)
   addon.CreateTraceWindow()
-  addon.Notify("Tracer ready (paused). Open it with the book button or /al.")
+  if addon.ledgerError then
+    addon.Notify("Ledger disabled: " .. addon.ledgerError)
+  else
+    addon.Notify("Ledger ready. Open the debug tracer with the book button or /al.")
+  end
 end)
 
 SLASH_ARTISANLOGBOOK1 = "/al"

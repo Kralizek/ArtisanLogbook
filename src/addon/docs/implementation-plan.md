@@ -16,13 +16,15 @@ user's 2026-09-26 decisions below taking precedence over its suggestions.
 4. Document verified behavior, field availability, limitations, and proposed
    correlation rules against the actual client build.
 5. Have the user and original agent review that contract.
-6. Only after approval, implement the durable ledger against that evidence.
+6. Implement the durable ledger against the reviewed evidence (completed in
+  issue #4).
 7. Continue through API/export, minimal UI, optional enrichment, and packaging.
 
-Current boundary: tracer implementation only. Packaging and mocked tests are
-not in-game installation, verification, or approval. Tests, packaging, and
-product documentation live beneath `src/addon/`. See
-[capture-tracer.md](capture-tracer.md) for installation and the evidence register.
+Completed slices: installable tracer/evidence review and durable versioned
+storage. Packaging and mocked tests are not in-game installation or verification.
+Tests, packaging, and product documentation live beneath `src/addon/`. See
+[capture-tracer.md](capture-tracer.md) for the PR #3 evidence register and
+[storage-ledger.md](storage-ledger.md) for the issue #4 storage contract.
 
 ## Reviewable Slices
 
@@ -32,12 +34,13 @@ product documentation live beneath `src/addon/`. See
 2. **Addon foundation:** evolve the tracer lifecycle into passive product
    capture. Preserve separate Core, Capture, Storage, Integrations, Flavors, and
    UI responsibilities without adding empty speculative modules.
-3. **Durable storage:** evidence-backed craft/reagent schema, dimension registry,
-   monotonic identities, independent versioning, migrations, and safe retention.
-   Test migration failures and reload/prune behavior before depending on storage.
-4. **Retail capture:** implement and replay-test the approved operation state
-   machine, pre-craft facts, result merging, reagent attribution, procs, and
-   order/recraft context. Never infer API-provided results from bag deltas.
+3. **Durable storage (issue #4):** evidence-backed craft/reagent schema,
+   dimension registry, monotonic identities, independent versioning, migrations,
+   and safe retention. Implemented; see [storage-ledger.md](storage-ledger.md).
+4. **Additional Retail capture:** implement pre-craft facts, verified reagent
+  allocation, successful proc behavior, and order/recraft context as evidence
+  becomes available. Issue #4 ingests result callbacks only; never infer
+  API-provided results from bag deltas.
 5. **API and export:** bounded/filterable read access, isolated callback delivery,
    externally parseable versioned export, and golden round-trip fixtures.
 6. **Minimal UI:** Recent, Stats, Data; bounded rendering and explicit destructive
@@ -76,23 +79,23 @@ Tests and documentation accompany each slice rather than being deferred.
   A positive refund field alone is not evidence of an Ingenuity proc. Derive
   Resourcefulness from returned reagent quantities. The debug tracer retains
   raw API values and flags for contract inspection.
-- Live build-69933 traces make `operationID` the leading candidate for
+  Live build-69933 traces make `operationID` the leading candidate for
   per-actual-operation identity: one count-2 request produced two result
   callbacks with distinct non-zero IDs. This is current-trace evidence, not a
-  universal guarantee. A future craft fact represents an actual operation/
-  result rather than a request; spellcast events remain supporting evidence,
-  and `itemGUID` is not craft identity. Keep these conclusions behind the
-  capture-contract review before durable implementation.
+  universal guarantee. A craft fact represents an actual operation/result
+  rather than a request; spellcast events remain supporting evidence, and
+  `itemGUID` is not craft identity. The issue #4 store follows these findings
+  without treating `operationID` as a universal uniqueness guarantee.
 - Attach Resourcefulness returns to input reagent rows where attribution is
   unambiguous. A separate representation requires actual API evidence that
   reagent-level attribution is impossible. Never invent commodity provenance
   after stacks merge.
 
-## Planned Dimension Model
+## Dimension Model
 
-This is schema direction for the future durable-storage slice, not an
-implementation in the tracer. Keep expansion/era classification on dimensions
-rather than duplicating it across craft or reagent facts:
+The durable storage slice implements this model in
+[storage-ledger.md](storage-ledger.md). Keep expansion/era classification on
+dimensions rather than duplicating it across craft or reagent facts:
 
 - Add an append-only `ExpansionDimension` (or equivalent era dimension) with
   an ID, stable key/slug, display name, and chronological order value. Keep

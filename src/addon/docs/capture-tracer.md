@@ -1,10 +1,11 @@
-# Capture Tracer: First Review Gate
+# Retail Capture Evidence (PR #3)
 
-Status: installable debug slice; selected capture-contract behavior is verified
-against user-supplied live Retail traces from build 69933 (12.1.0). Other cases
-and universal correlation guarantees remain unverified. No durable craft ledger,
-correlation implementation, public ledger API, or integrations are implemented.
-Keep those out of this tracer validation slice.
+This document preserves the capture evidence verified in merged PR #3 against
+user-supplied live Retail traces from build 69933 (12.1.0). It is the historical
+tracer review record, not the durable storage contract. The issue #4 ledger
+implementation and its conservative correlation behavior are documented in
+[storage-ledger.md](storage-ledger.md). Other cases and universal correlation
+guarantees remain unverified.
 
 ## Build and Install
 
@@ -15,11 +16,11 @@ bash src/addon/scripts/package.sh
 ```
 
 This runs the addon tests and produces
-`src/addon/dist/ArtisanLogbook-tracer.zip`. Extract its
+`src/addon/dist/ArtisanLogbook-ledger.zip`. Extract its
 `ArtisanLogbook` folder into the live client's `_retail_/Interface/AddOns/`.
 The resulting path must be `Interface/AddOns/ArtisanLogbook/ArtisanLogbook.toc`,
 not an extra nested directory. Restart the client after the first installation.
-Enable **Artisan Logbook - Capture Tracer** in the addon list.
+Enable **Artisan Logbook** in the addon list.
 
 The TOC targets interface `120100`, based on the live UI source mirror reporting
 12.1.0 (69933) on 2026-09-26. Confirm the actual client using
@@ -126,8 +127,8 @@ operation IDs are retained as representative game data.
    `TRADE_SKILL_ITEM_CRAFTED_RESULT` callback describes one actual result. A
    single `CraftEnchant` post-hook call with `count = 2` was followed by two
    `TRADE_SKILL_CRAFT_BEGIN` events and two result callbacks with distinct,
-   non-zero `operationID` values. A future craft fact should represent one
-   actual operation/result, not one button click or API request. In this build's
+   non-zero `operationID` values. A durable craft fact represents one actual
+   operation/result, not one button click or API request. In this build's
    traces, `operationID` is the leading identity/correlation candidate, not a
    universal guarantee: its scope, uniqueness duration, and behavior in other
    batch, late-callback, cancellation, and client-version cases remain unverified.
@@ -217,8 +218,8 @@ warning-bearing trace must not be used as complete evidence of absence.
 The initial debug schema has no migrations. Unsupported schema/export versions
 or invalid top-level shapes are refused without overwriting the existing data.
 Export/back up the SavedVariables file outside the game before resetting an
-incompatible debug database. The eventual craft schema and migrations remain
-undecided; debug records will not silently become ledger entries.
+incompatible debug database. The durable ledger has its own versioned schema
+and migration path; debug records still do not silently become ledger entries.
 
 ## Source Findings, Not Runtime Verification
 
@@ -271,7 +272,7 @@ warnings. Continue checking repeated/late results, ID scope or reuse, and
 batch/cancel interactions. Do not equate spellcast stop with success or assume
 a fixed timing window.
 
-Before approving the ledger, reviewers must agree on:
+For future capture-contract changes, reviewers should continue to verify:
 
 1. The evidence-backed operation identity and completion rule, including
    `operationID` scope/uniqueness, repeated/late callbacks, and why distinct
