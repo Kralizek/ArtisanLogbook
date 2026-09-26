@@ -73,6 +73,33 @@ Tests and documentation accompany each slice rather than being deferred.
   reagent-level attribution is impossible. Never invent commodity provenance
   after stacks merge.
 
+## Planned Dimension Model
+
+This is schema direction for the future durable-storage slice, not an
+implementation in the tracer. Keep expansion/era classification on dimensions
+rather than duplicating it across craft or reagent facts:
+
+- Add an append-only `ExpansionDimension` (or equivalent era dimension) with
+  an ID, stable key/slug, display name, and chronological order value. Keep
+  stable identity separate from display naming; do not recycle dimension IDs.
+- `ItemDimension` may reference its own expansion through a nullable
+  `introducedInExpansionId` (or equivalent ownership/introduction metadata).
+  This describes the item itself, not the expansion of any craft that uses it.
+- `RecipeDimension` may reference its expansion through a nullable
+  `expansionId`. A craft's expansion is normally derived by joining its recipe
+  dimension, not by storing a second expansion value on each craft fact.
+- Profession/skill-line dimensions may have a nullable expansion reference
+  where the WoW API models that profession or skill line as expansion-specific.
+- Reagent facts normally obtain expansion context through their item dimension.
+  Generic, vendor, and reused materials can be used by recipes from multiple
+  expansions; never assign an item's expansion from a consuming craft.
+- Leave unavailable or unknown dimension references absent. Do not infer them
+  from recipe use, current client expansion, labels, or other indirect context.
+
+The exact source fields, stable keys, and era/expansion catalog remain subject
+to the future schema review and available game data. This direction does not
+relax the live-trace review gate for implementing the durable ledger.
+
 ## API Direction
 
 The initial public surface is expected to include:

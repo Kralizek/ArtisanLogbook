@@ -132,6 +132,14 @@ schema and debug export versions (both initially 1), and `totalRecords` for
 checking page completeness. This is **not** the final `AL1` ledger contract.
 There is no importer and no `loadstring` in the addon.
 
+Expansion/era dimensions and their references belong to the future durable
+ledger schema, not this debug format. The tracer does not capture or infer item
+or recipe expansion metadata; in particular, an item's metadata must not be
+derived from a craft that consumes it. See
+[implementation-plan.md](implementation-plan.md) for the planned dimension
+direction. Unknown metadata remains absent until supported by game data and the
+schema review.
+
 Capture stops at 2,000 records or a conservative 2 MiB payload-plus-overhead
 budget, whichever is reached first, without evicting earlier evidence. This
 budget is not an exact measurement of Lua heap or SavedVariables file size.
