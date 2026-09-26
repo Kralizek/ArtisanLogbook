@@ -168,6 +168,32 @@ test("UI quote arguments are observed separately before batch request and result
   assert(received[8][1].operationID == 10)
 end)
 
+test("personal submission freezes quote allocations while diagnostic tracing is paused", function()
+  local api, _, hooks = environment()
+  local submissions, invalidations = {}, 0
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function(recipe, reagents, order, concentration)
+    assert(recipe == 456 and order == nil and concentration == true)
+    assert(reagents[1].reagent.itemID == 101)
+    return { concentrationCost = 81, baseSkill = 120 }
+  end
+  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    function(recipe, count, concentration, quote, selections)
+      submissions[#submissions + 1] = { recipe, count, concentration, quote, selections }
+    end, function() invalidations = invalidations + 1 end)
+  local selected = { { dataSlotIndex = 2, quantity = 3, reagent = { itemID = 101 } },
+    { dataSlotIndex = 2, quantity = 0, reagent = { itemID = 102 } } }
+  hooks.GetCraftingOperationInfo(456, selected, nil, true)
+  hooks.CraftRecipe(456, 3, {}, nil, nil, true)
+  selected[1].quantity = 99
+  assert(#submissions == 1 and submissions[1][2] == 3)
+  assert(submissions[1][4].concentrationCost == 81)
+  assert(submissions[1][5][1].quantity == 3 and submissions[1][5][2].quantity == 0)
+  hooks.CraftRecipe(456, 1, {}, nil, 77, true)
+  assert(#submissions == 1 and invalidations == 1)
+  hooks.CraftEnchant(456, 1, {}, nil, true)
+  assert(invalidations == 2)
+end)
+
 test("quote probe suppresses its own nested hook and stays idle while paused", function()
   local api, _, hooks = environment()
   local received, calls = {}, 0

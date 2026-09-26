@@ -1,7 +1,7 @@
 local _, addon = ...
 
 local Ledger = {}
-Ledger.schemaVersion = 1
+Ledger.schemaVersion = 2
 Ledger.retentionDays = 180
 Ledger.maxCrafts = 50000
 
@@ -53,7 +53,9 @@ local function emptyDatabase()
   local data = {
     schemaVersion = Ledger.schemaVersion,
     nextCraftId = 1,
+    nextRequestId = 1,
     crafts = {},
+    requests = {},
     reagents = {},
     dimensions = {},
     nextDimensionId = {},
@@ -97,11 +99,23 @@ local function migrateZero(data)
   return data
 end
 
-local migrations = { [0] = migrateZero }
+local function migrateOne(data)
+  if data.requests ~= nil or data.nextRequestId ~= nil then
+    return nil, "schema 1 contains unexpected request data"
+  end
+  data.requests = {}
+  data.nextRequestId = 1
+  data.schemaVersion = 2
+  return data
+end
+
+local migrations = { [0] = migrateZero, [1] = migrateOne }
 
 local references = {
-  craft = { sessionDimensionId = "session", recipeDimensionId = "recipe",
+  craft = { sessionDimensionId = "session", recipeDimensionId = "recipe", requestId = "request",
     outputItemDimensionId = "item", professionDimensionId = "profession" },
+  request = { sessionDimensionId = "session", recipeDimensionId = "recipe" },
+  allocation = { itemDimensionId = "item" },
   reagent = { craftId = "craft", itemDimensionId = "item" },
   character = { realmDimensionId = "realm" },
   session = { characterDimensionId = "character", realmDimensionId = "realm" },
@@ -127,12 +141,15 @@ local function validateReferences(kind, row, ids)
 end
 
 local function validateDatabase(data)
-  if not isArray(data.crafts) or not isArray(data.reagents) or
+  if not isArray(data.crafts) or not isArray(data.reagents) or not isArray(data.requests) or
       type(data.dimensions) ~= "table" or type(data.nextDimensionId) ~= "table" then
     return nil, "ledger collections are invalid"
   end
   if not isInteger(data.nextCraftId) or data.nextCraftId <= maximumId(data.crafts, "id") then
     return nil, "nextCraftId would reuse an existing craft ID"
+  end
+  if not isInteger(data.nextRequestId) or data.nextRequestId <= maximumId(data.requests, "id") then
+    return nil, "nextRequestId would reuse an existing request ID"
   end
   if type(data.retentionDays) ~= "number" or data.retentionDays < 1 or
       data.retentionDays % 1 ~= 0 then
@@ -142,7 +159,7 @@ local function validateDatabase(data)
     return nil, "maxCrafts must be a positive integer"
   end
 
-  local ids = { craft = {} }
+  local ids = { craft = {}, request = {} }
   for _, craft in ipairs(data.crafts) do
     if not isInteger(craft.id) or ids.craft[craft.id] or type(craft.timestamp) ~= "number" or
         craft.sessionDimensionId == nil then
@@ -168,9 +185,50 @@ local function validateDatabase(data)
       seenKeys[row.key] = true
     end
   end
+  for _, request in ipairs(data.requests) do
+    if not isInteger(request.id) or ids.request[request.id] or type(request.timestamp) ~= "number" or
+        request.sessionDimensionId == nil or request.recipeDimensionId == nil or
+        not isInteger(request.requestedCount) or type(request.useConcentration) ~= "boolean" then
+      return nil, "request facts contain an invalid or duplicate ID"
+    end
+    ids.request[request.id] = request
+    for _, field in ipairs({ "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" }) do
+      if request[field] ~= nil and type(request[field]) ~= "number" then
+        return nil, "invalid request quote: " .. field
+      end
+    end
+    if request.allocations ~= nil and not isArray(request.allocations) then
+      return nil, "request allocations are invalid"
+    end
+  end
+  for _, request in ipairs(data.requests) do
+    local ok, reason = validateReferences("request", request, ids)
+    if not ok then return nil, reason end
+    for _, allocation in ipairs(request.allocations or {}) do
+      if not isGameId(allocation.dataSlotIndex) or not isInteger(allocation.allocatedQuantity) or
+          allocation.itemDimensionId == nil or
+          (allocation.quality ~= nil and not isGameId(allocation.quality)) then
+        return nil, "request allocation is invalid"
+      end
+      ok, reason = validateReferences("allocation", allocation, ids)
+      if not ok then return nil, reason end
+    end
+  end
+  local linkedCounts = {}
   for _, craft in ipairs(data.crafts) do
     local ok, reason = validateReferences("craft", craft, ids)
     if not ok then return nil, reason end
+    if craft.requestId then
+      local request = ids.request[craft.requestId]
+      if request.sessionDimensionId ~= craft.sessionDimensionId or
+          request.recipeDimensionId ~= craft.recipeDimensionId then
+        return nil, "craft.requestId conflicts with request context"
+      end
+      linkedCounts[request.id] = (linkedCounts[request.id] or 0) + 1
+      if linkedCounts[request.id] > request.requestedCount then
+        return nil, "craft.requestId exceeds requested count"
+      end
+    end
   end
   for _, reagent in ipairs(data.reagents) do
     if reagent.craftId == nil or reagent.itemDimensionId == nil then
@@ -388,6 +446,8 @@ function Ledger:CreateSession(metadata)
   self.currentSessionId = sessionId
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
+  self.pendingRequest = nil
+  self.requestAmbiguous = nil
   return sessionId
 end
 
@@ -412,6 +472,79 @@ local function observedNumber(value)
     return value
   end
   return nil
+end
+
+function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, selections)
+  if not self.currentSessionId or not isGameId(recipeId) or not isInteger(requestedCount) or
+      type(useConcentration) ~= "boolean" then
+    return nil, "personal craft submission is incomplete"
+  end
+  if quote ~= nil and type(quote) ~= "table" then return nil, "quote is invalid" end
+  if selections ~= nil and not isArray(selections) then return nil, "allocations are invalid" end
+  local copied, snapshot = pcall(copyValue, { selections = selections })
+  local timestamp = observedNumber(self.wall())
+  if not copied or timestamp == nil then return nil, "request snapshot or timestamp is unavailable" end
+  for _, selection in ipairs(snapshot.selections or {}) do
+    local itemId = type(selection.reagent) == "table" and selection.reagent.itemID or nil
+    if isGameId(selection.dataSlotIndex) and isGameId(itemId) and isInteger(selection.quantity) then
+      local existingId = self.dimensionIndex.item[tostring(itemId)]
+      local existing = self.dimensionRows.item[existingId]
+      if existing and existing.gameItemId ~= nil and existing.gameItemId ~= itemId then
+        return nil, "conflicting item dimension"
+      end
+    end
+  end
+  local recipeDimensionId, reason = self:AddDimension("recipe", recipeId, { gameRecipeId = recipeId })
+  if not recipeDimensionId then return nil, reason end
+  local request = {
+    id = self.database.nextRequestId,
+    timestamp = timestamp,
+    sessionDimensionId = self.currentSessionId,
+    recipeDimensionId = recipeDimensionId,
+    requestedCount = requestedCount,
+    useConcentration = useConcentration,
+  }
+  for _, field in ipairs({ "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" }) do
+    request[field] = quote and observedNumber(quote[field]) or nil
+  end
+  if snapshot.selections then
+    request.allocations = {}
+    for _, selection in ipairs(snapshot.selections) do
+      local itemId = type(selection.reagent) == "table" and selection.reagent.itemID or nil
+      if isGameId(selection.dataSlotIndex) and isGameId(itemId) and
+          isInteger(selection.quantity) then
+        local itemDimensionId
+        itemDimensionId, reason = self:AddDimension("item", itemId, { gameItemId = itemId })
+        if not itemDimensionId then return nil, reason end
+        request.allocations[#request.allocations + 1] = {
+          dataSlotIndex = selection.dataSlotIndex,
+          itemDimensionId = itemDimensionId,
+          allocatedQuantity = selection.quantity,
+          quality = isGameId(selection.quality) and selection.quality or nil,
+        }
+      end
+    end
+  end
+  self.database.nextRequestId = request.id + 1
+  self.database.requests[#self.database.requests + 1] = request
+  if self.pendingRequest then self.requestAmbiguous = true end
+  self.pendingRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
+  self:Prune(timestamp)
+  return request
+end
+
+function Ledger:CancelCraft()
+  self.pendingRequest = nil
+  self.requestAmbiguous = nil
+  self.pendingRecipeId = nil
+  self.ambiguousRecipe = nil
+end
+
+function Ledger:InvalidateCraft()
+  if self.pendingRequest then
+    self.pendingRequest = nil
+    self.requestAmbiguous = true
+  end
 end
 
 local function operationIdSeen(ledger, operationId)
@@ -459,12 +592,25 @@ function Ledger:RecordResult(result)
     craft.hasIngenuityProc = result.hasIngenuityProc
   end
 
+  local pending = self.pendingRequest
+  local request
+  if pending and not self.requestAmbiguous then
+    for _, candidate in ipairs(data.requests) do
+      if candidate.id == pending.id then request = candidate; break end
+    end
+    if request then
+      craft.requestId = request.id
+      craft.recipeDimensionId = request.recipeDimensionId
+    end
+  end
+
   local recipeId = self.pendingRecipeId
   self.pendingRecipeId = nil
   local ambiguousRecipe = self.ambiguousRecipe
   self.ambiguousRecipe = nil
   local reason
-  if recipeId and not ambiguousRecipe and craft.gameOperationId and craft.gameOperationId > 0 and
+  if not craft.recipeDimensionId and not self.requestAmbiguous and recipeId and not ambiguousRecipe and
+      craft.gameOperationId and craft.gameOperationId > 0 and
       not operationIdSeen(self, craft.gameOperationId) then
     craft.recipeDimensionId, reason = self:AddDimension("recipe", recipeId, { gameRecipeId = recipeId })
     if not craft.recipeDimensionId then return nil, reason end
@@ -475,6 +621,28 @@ function Ledger:RecordResult(result)
   end
 
   local reagentFacts = {}
+  local allocationsByItem = {}
+  local allocatedFactsByItem = {}
+  if request and request.allocations then
+    for _, allocation in ipairs(request.allocations) do
+      reagentFacts[#reagentFacts + 1] = {
+        craftId = craft.id,
+        itemDimensionId = allocation.itemDimensionId,
+        dataSlotIndex = allocation.dataSlotIndex,
+        quality = allocation.quality,
+        allocatedQuantity = allocation.allocatedQuantity,
+        returnedQuantity = type(result.resourcesReturned) == "table" and 0 or nil,
+      }
+      local itemId = allocation.itemDimensionId
+      allocatedFactsByItem[itemId] = allocatedFactsByItem[itemId] or {}
+      allocatedFactsByItem[itemId][#allocatedFactsByItem[itemId] + 1] = reagentFacts[#reagentFacts]
+      if allocationsByItem[itemId] == nil then
+        allocationsByItem[itemId] = reagentFacts[#reagentFacts]
+      else
+        allocationsByItem[itemId] = false
+      end
+    end
+  end
   if type(result.resourcesReturned) == "table" then
     for _, returned in ipairs(result.resourcesReturned) do
       local reagent = type(returned) == "table" and returned.reagent or nil
@@ -484,17 +652,31 @@ function Ledger:RecordResult(result)
         local itemDimensionId
         itemDimensionId, reason = self:AddDimension("item", itemId, { gameItemId = itemId })
         if not itemDimensionId then return nil, reason end
-        reagentFacts[#reagentFacts + 1] = {
-          craftId = craft.id,
-          itemDimensionId = itemDimensionId,
-          returnedQuantity = quantity,
-        }
+        local matched = allocationsByItem[itemDimensionId]
+        if matched then
+          matched.returnedQuantity = matched.returnedQuantity + quantity
+        else
+          if allocatedFactsByItem[itemDimensionId] then
+            for _, allocated in ipairs(allocatedFactsByItem[itemDimensionId]) do
+              allocated.returnedQuantity = nil
+            end
+          end
+          reagentFacts[#reagentFacts + 1] = {
+            craftId = craft.id,
+            itemDimensionId = itemDimensionId,
+            returnedQuantity = quantity,
+          }
+        end
       end
     end
   end
 
   data.nextCraftId = craft.id + 1
   data.crafts[#data.crafts + 1] = craft
+  if pending and request then
+    pending.remaining = pending.remaining - 1
+    if pending.remaining == 0 then self.pendingRequest = nil end
+  end
   adjustOperationIndex(self, craft, 1)
   for _, reagent in ipairs(reagentFacts) do data.reagents[#data.reagents + 1] = reagent end
   self:Prune(craft.timestamp)
@@ -552,6 +734,22 @@ function Ledger:Prune(now)
     end
     data.reagents = keptReagents
   end
+  local referenced = {}
+  for _, craft in ipairs(data.crafts) do
+    if craft.requestId then referenced[craft.requestId] = true end
+  end
+  local removedRequestCandidate = {}
+  for _, craft in pairs(removedCrafts) do
+    if craft.requestId then removedRequestCandidate[craft.requestId] = true end
+  end
+  local keptRequests = {}
+  for _, request in ipairs(data.requests) do
+    if referenced[request.id] or
+        (request.timestamp >= cutoff and not removedRequestCandidate[request.id]) then
+      keptRequests[#keptRequests + 1] = request
+    end
+  end
+  data.requests = keptRequests
   return removed
 end
 

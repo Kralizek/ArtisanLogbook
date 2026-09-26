@@ -66,6 +66,13 @@ environment.GetCurrentRegion = function() return 3 end
 environment.C_AddOns = { GetAddOnMetadata = function() return "0.1.0-tracer" end }
 environment.WOW_PROJECT_ID = 1
 environment.WOW_PROJECT_MAINLINE = 1
+local hooks = {}
+environment.C_TradeSkillUI = {
+  CraftRecipe = function() end,
+  GetCraftingOperationInfo = function() return { concentrationCost = 81, baseSkill = 120 } end,
+  GetItemReagentQualityByItemInfo = function() return 2 end,
+}
+environment.hooksecurefunc = function(_, name, callback) hooks[name] = callback end
 
 local root = arg[1] or "src/ArtisanLogbook"
 local addon = {}
@@ -189,3 +196,20 @@ assert(unknown.ledger)
 local realm = unknown.ledger.database.dimensions.realms[1]
 assert(realm.regionId == nil and realm.gameRealmId == nil and realm.identityScope == "session")
 print("PASS passive ledger capture, reload, identity fallback, and SavedVariables failure safety")
+
+hooks.GetCraftingOperationInfo(456, {
+  { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
+}, nil, true)
+hooks.CraftRecipe(456, 2, {}, nil, nil, true)
+assert(not unknown.recorder.recording and #unknown.ledger.database.requests == 1)
+unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1,
+  concentrationSpent = 80, resourcesReturned = { { reagent = { itemID = 101 }, quantity = 1 } } })
+unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2,
+  concentrationSpent = 80, resourcesReturned = {} })
+assert(#unknown.ledger.database.crafts == 2 and #unknown.ledger.database.reagents == 2)
+assert(unknown.ledger.database.crafts[1].requestId == unknown.ledger.database.crafts[2].requestId)
+assert(unknown.ledger.database.requests[1].concentrationCost == 81)
+assert(unknown.ledger.database.reagents[1].allocatedQuantity == 2)
+assert(unknown.ledger.database.reagents[1].quality == 2)
+assert(unknown.ledger.database.reagents[1].returnedQuantity == 1)
+print("PASS passive personal request capture and shared batch allocation")

@@ -314,22 +314,23 @@ If the raw tracer is insufficient, extend this debug slice and collect another
 controlled trace. Do not implement the durable ledger to paper over uncertainty.
 The approved later work is recorded in [implementation-plan.md](implementation-plan.md).
 
-## Issue #12: Request-side investigation (not yet live-verified)
+## Issue #12: Request-side investigation and personal-craft evidence
 
 The current [Retail API declarations](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUIDocumentation.lua)
 and [data types](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUITypesDocumentation.lua)
 (mirror build 69933) identify `CraftingReagentInfo` as
-`{ reagent = { itemID? / currencyID? }, dataSlotIndex, quantity }`. Submitted
-items and amounts are directly observable **as call arguments**, but it is
-not yet established that this list covers mandatory/default or
-customer-provided reagents. Quality can be queried with
+`{ reagent = { itemID? / currencyID? }, dataSlotIndex, quantity }`. For personal
+crafts, selected items and amounts are observed in quote-call arguments, while
+the craft post-hook reagent table may be empty. Coverage of mandatory/default
+and customer-provided order reagents is not established. Quality can be queried with
 `GetItemReagentQualityByItemInfo(itemID)`; a schematic's slot list and
 `orderSource` are recipe definitions, **not** proof of selected input or
 ownership. `CraftingOperationInfo` declares base/bonus skill and difficulty,
 `craftingQuality`, `guaranteedCraftingQualityID`, `concentrationCost`, and
-`concentrationCurrencyID`. Their live availability, exact meaning, and
-relationship to the submitted request/result remain to be checked. Do not
-sum or reinterpret them as durable facts yet.
+`concentrationCurrencyID`. For verified personal crafts, only observed
+`baseSkill`, `baseDifficulty`, `craftingQuality`, and `concentrationCost` are
+stored as optional request-side quotes; other fields and order/recraft meaning
+remain unverified. None is substituted for actual result-side spend.
 
 [Blizzard's transaction code](https://github.com/Gethe/wow-ui-source/blob/09b9db7948abc9b9648dedaab51eb0cf3ee67b31/Interface/AddOns/Blizzard_ProfessionsTemplates/Blizzard_ProfessionsTransaction.lua)
 builds quote inputs from positive allocations with `dataSlotIndex` (not
@@ -348,19 +349,21 @@ and reagent list but no recipe ID; order recraft adds order ID. The
 explain prior item state; these are untested. No guessed provenance or
 correlation is persisted.
 
-**Review gate:** Existing build-69933 real fixtures verify results and batch
-cardinality only, not the new quote/request probes. Mocked tests establish
-boundary behavior, not game semantics. The ledger remains schema 1 and
-legacy reagent rows remain Resourcefulness returns only. No pre-craft fields,
-allocation matching, migration, or universal request/result link are
-implemented. A count-2 request may yield multiple operations; its selected
-reagents and concentration toggle *may* be shared, while actual spend,
-returns, and output remain per result. Whether inputs are consumed or
-recomputed between operations, and whether `operationID` relates to a
-quote, remain unknown. Do not attach a quote to a result by nearest event,
-recipe ID alone, spellcast, or elapsed-time window.
+**Personal-craft evidence gate completed (build 69933 / 12.1.0):** Quote-call
+arguments expose positive selected allocations with slot, quantity, and item ID;
+the `CraftRecipe` post-hook reagent table may be empty. A submitted count can
+produce multiple result operations, or fewer results after a queued failure.
+Quote concentration cost and actual spend may differ by one; `useConcentration`
+is request intent, not spend. `resourcesReturned` item IDs matched selected
+personal-craft inputs, but only unambiguous item mappings can be attributed.
+The ledger is now schema 2: it captures a personal submission snapshot and
+links only reliably correlated successful result callbacks. Older schema 1
+return-only rows remain partial. `operationID` is not assumed to identify a
+request, and no nearest-event/time-window correlation is used. Order/recraft
+semantics and target-item GUID conversion still require live evidence; see
+`storage-ledger.md` for the precise storage and migration contract.
 
-### Controlled live traces required
+### Controlled live traces for remaining gaps
 
 Install the instrumented ZIP as above. Back up the raw SavedVariables
 privately, disable unrelated addons, work out of combat, and use a fresh

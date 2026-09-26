@@ -74,9 +74,24 @@ function addon.HandleRetailEvent(event, ...)
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
       local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, select(1, ...))
       if not ok or not fact then addon.ledgerCaptureError = true end
+    elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" or
+        event == "UNIT_SPELLCAST_INTERRUPTED" or event == "TRADE_SKILL_CLOSE" then
+      addon.ledger:CancelCraft()
     end
   end
   addon.Emit(event, ...)
+end
+
+function addon.SubmitCraft(recipeId, count, concentration, quote, selections)
+  if addon.ledger then
+    local ok, request = pcall(addon.ledger.SubmitCraft, addon.ledger,
+      recipeId, count, concentration, quote, selections)
+    if not ok or not request then addon.ledgerCaptureError = true end
+  end
+end
+
+function addon.InvalidateCraft()
+  if addon.ledger then addon.ledger:InvalidateCraft() end
 end
 
 local function optionalIdentity(api)
@@ -98,7 +113,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   })
   addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent, function()
     return addon.recorder ~= nil and addon.recorder.recording
-  end)
+  end, addon.SubmitCraft, addon.InvalidateCraft)
   local version, build, buildDate, interface = GetBuildInfo()
   if addon.ledger then
     local ok, sessionId, reason = pcall(addon.ledger.CreateSession, addon.ledger, {

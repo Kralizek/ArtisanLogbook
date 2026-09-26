@@ -88,7 +88,7 @@ local function copyClaimedOrder(order)
   return next(snapshot) ~= nil and snapshot or nil
 end
 
-local function createRetailAdapter(api, emit, isRecording)
+local function createRetailAdapter(api, emit, isRecording, submitCraft, invalidateCraft)
   local capabilities = { events = {}, hooks = {}, quoteHooks = {}, measurements = {} }
   local adapter = { capabilities = capabilities }
   capabilities.flavor = "retail"
@@ -102,6 +102,43 @@ local function createRetailAdapter(api, emit, isRecording)
   end
 
   local probingQuote = false
+  local latestPersonalQuote
+  local function snapshotSelections(selections)
+    if type(selections) ~= "table" then return nil end
+    local snapshot = {}
+    for _, selection in ipairs(selections) do
+      snapshot[#snapshot + 1] = copyCraftingReagentInfo(selection)
+    end
+    return snapshot
+  end
+
+  local function submitPersonalCraft(recipeId, count, orderId, concentration)
+    if orderId ~= nil or type(submitCraft) ~= "function" then return end
+    local cached = latestPersonalQuote
+    latestPersonalQuote = nil
+    local selections
+    if cached and cached.recipeId == recipeId and cached.concentration == concentration then
+      selections = cached.selections
+    end
+    local quote
+    local tradeSkill = api.C_TradeSkillUI
+    if selections and type(tradeSkill.GetCraftingOperationInfo) == "function" then
+      probingQuote = true
+      local ok, info = pcall(tradeSkill.GetCraftingOperationInfo, recipeId, selections, nil, concentration)
+      probingQuote = false
+      if ok and type(info) == "table" then quote = info end
+    end
+    if selections and type(tradeSkill.GetItemReagentQualityByItemInfo) == "function" then
+      for _, selection in ipairs(selections) do
+        local itemId = selection and selection.reagent and selection.reagent.itemID
+        if itemId and type(selection.quantity) == "number" and selection.quantity > 0 then
+          local qualityOk, quality = pcall(tradeSkill.GetItemReagentQualityByItemInfo, itemId)
+          if qualityOk and type(quality) == "number" then selection.quality = quality end
+        end
+      end
+    end
+    submitCraft(recipeId, count, concentration, quote, selections)
+  end
   local function observeClaimedOrder(orderID, observation)
     local orders = api.C_CraftingOrders
     if orderID == nil or type(orders) ~= "table" or type(orders.GetClaimedOrder) ~= "function" then
@@ -191,6 +228,14 @@ local function createRetailAdapter(api, emit, isRecording)
     if type(api.hooksecurefunc) == "function" and type(api.C_TradeSkillUI) == "table" and
         type(api.C_TradeSkillUI[name]) == "function" then
       capabilities.hooks[name] = pcall(api.hooksecurefunc, api.C_TradeSkillUI, name, function(...)
+        if hookedName == "CraftRecipe" and select(5, ...) == nil then
+          local ok = pcall(submitPersonalCraft, select(1, ...), select(2, ...),
+            select(5, ...), select(6, ...))
+          if not ok then capabilities.captureError = true end
+        elseif type(invalidateCraft) == "function" then
+          local ok = pcall(invalidateCraft)
+          if not ok then capabilities.captureError = true end
+        end
         forward("CALL_POST:C_TradeSkillUI." .. hookedName, ...)
         local ok = pcall(probe, hookedName, ...)
         if not ok then
@@ -207,6 +252,18 @@ local function createRetailAdapter(api, emit, isRecording)
         type(api.C_TradeSkillUI[name]) == "function" then
       capabilities.quoteHooks[name] = pcall(api.hooksecurefunc, api.C_TradeSkillUI, name, function(...)
         local ok = pcall(function(...)
+          if not probingQuote then
+            latestPersonalQuote = nil
+            local recipeId, selections, orderId, concentration = ...
+            if hookedName == "GetCraftingOperationInfo" and orderId == nil and
+                type(recipeId) == "number" and type(concentration) == "boolean" then
+              latestPersonalQuote = {
+                recipeId = recipeId,
+                concentration = concentration,
+                selections = snapshotSelections(selections),
+              }
+            end
+          end
           if not probingQuote and isRecording and isRecording() then
             forward("QUOTE_CALL_POST:C_TradeSkillUI." .. hookedName, ...)
             probingQuote = true
