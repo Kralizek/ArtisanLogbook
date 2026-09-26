@@ -1,5 +1,7 @@
+local root = arg[1] or "."
 local addon = {}
-assert(loadfile("src/addon/Flavors/Retail/Adapter.lua"))("ArtisanLogbook", addon)
+assert(loadfile(root .. "/Flavors/Registry.lua"))("ArtisanLogbook", addon)
+assert(loadfile(root .. "/Flavors/Retail/Adapter.lua"))("ArtisanLogbook", addon)
 local passed = 0
 
 local function test(name, callback)
@@ -81,8 +83,17 @@ end)
 
 test("unsupported flavors never touch Retail APIs", function()
   local adapter = addon.CreateFlavorAdapter({ WOW_PROJECT_ID = 2, WOW_PROJECT_MAINLINE = 1 }, function() end)
-  assert(adapter.capabilities.flavor == "unsupported" and adapter.frame == nil)
+  assert(adapter.capabilities.flavor == "other" and adapter.frame == nil)
   assert(next(adapter.capabilities.measurements) == nil)
+end)
+
+test("known non-Retail clients get an explicit empty flavor boundary", function()
+  local api = { WOW_PROJECT_ID = 2, WOW_PROJECT_CLASSIC = 2 }
+  local name, projectID = addon.DetectFlavor(api)
+  local adapter = addon.CreateFlavorAdapter(api, function() end)
+  assert(name == "classic" and projectID == 2)
+  assert(adapter.capabilities.flavor == "classic")
+  assert(next(adapter.capabilities.events) == nil and next(adapter.capabilities.measurements) == nil)
 end)
 
 print(string.format("%d adapter tests passed", passed))

@@ -9,10 +9,11 @@ are implemented. Do not start those slices until the evidence below is reviewed.
 From the repository root, with Lua 5.1, ZIP, and unzip available:
 
 ```sh
-bash scripts/package.sh
+bash src/addon/scripts/package.sh
 ```
 
-This runs the tests and produces `dist/ArtisanLogbook-tracer.zip`. Extract its
+This runs the addon tests and produces
+`src/addon/dist/ArtisanLogbook-tracer.zip`. Extract its
 `ArtisanLogbook` folder into the live client's `_retail_/Interface/AddOns/`.
 The resulting path must be `Interface/AddOns/ArtisanLogbook/ArtisanLogbook.toc`,
 not an extra nested directory. Restart the client after the first installation.
@@ -83,7 +84,7 @@ The file is under
 `ArtisanLogbookTraceDB`. This is account-wide, not a per-character file. Raw traces
 can include character names, GUIDs, targets, hyperlinks, and order identifiers.
 Review them before sharing. Preserve originals privately; label any sanitized
-copy and keep ID substitutions consistent. Local `traces/` is gitignored to
+copy and keep ID substitutions consistent. Local `src/addon/traces/` is gitignored to
 reduce accidental publication. Do not execute trace files received from others.
 
 ## What Is Captured
@@ -165,15 +166,18 @@ Research baseline: [live UI mirror commit 09b9db7](https://github.com/Gethe/wow-
   include optional `castBarID` and conditional secret payloads. The tracer uses
   `issecretvalue` where available and never attempts to bypass restrictions.
 
-The flavor boundary currently reports event registration and hook availability,
-not verified measurement support. Its `measurements` map remains empty.
-Non-Retail clients receive an unsupported adapter; no Forever implementation is
-present. CraftSim and TSM are neither read nor required.
+The shared flavor registry identifies known client families and dispatches a
+registered adapter by project ID. It provides an empty capability fallback for
+other clients, so core loading, manual markers, and saved evidence do not require
+Retail. The Retail event/call adapter is the only implementation in this slice;
+the capability `measurements` map remains empty because runtime support has not
+been verified. Forever remains deferred until its exact client/API is known.
+CraftSim and TSM are neither read nor required.
 
 ## Evidence Register and Gate
 
 No real in-game traces have been collected in this development environment.
-All fixtures under `tests/fixtures/` are explicitly synthetic; their order and
+All fixtures under `src/addon/tests/fixtures/` are explicitly synthetic; their order and
 numbers are illustrative and do not establish real event semantics.
 
 | Scenario | Trace/build reference | Verified behavior |

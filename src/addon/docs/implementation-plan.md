@@ -17,7 +17,8 @@ user's 2026-09-26 decisions below taking precedence over its suggestions.
 7. Continue through API/export, minimal UI, optional enrichment, and packaging.
 
 Current boundary: tracer implementation only. Packaging and mocked tests are
-not in-game installation, verification, or approval. See
+not in-game installation, verification, or approval. Tests, packaging, and
+product documentation live beneath `src/addon/`. See
 [capture-tracer.md](capture-tracer.md) for installation and the evidence register.
 
 ## Reviewable Slices
@@ -45,8 +46,11 @@ Tests and documentation accompany each slice rather than being deferred.
 
 ## Fixed Decisions
 
-- Live Retail/Midnight is authoritative for v1. Capability detection is defined
-  now; Forever does not block v1 and no speculative adapter is implemented.
+- Live Retail/Midnight is authoritative for v1. A shared flavor registry and
+   capability boundary dispatch by client project ID; Retail is currently the
+   only implemented adapter. Other flavors remain loadable with explicit empty
+   capabilities. Forever does not block v1 and its API-specific adapter remains
+   deferred until the exact client/API is verified.
 - Unknown/unavailable measurements remain absent/nil, never fabricated zeroes.
   Capability availability alone does not prove a measurement's semantics.
 - Use account-wide SavedVariables. Character identity belongs in dimensions,

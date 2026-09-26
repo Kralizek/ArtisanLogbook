@@ -31,13 +31,9 @@ local craftFunctions = {
   "RecraftRecipeForOrder",
 }
 
-function addon.CreateFlavorAdapter(api, emit)
+local function createRetailAdapter(api, emit)
   local capabilities = { events = {}, hooks = {}, measurements = {} }
   local adapter = { capabilities = capabilities }
-  if api.WOW_PROJECT_ID ~= api.WOW_PROJECT_MAINLINE or api.WOW_PROJECT_MAINLINE == nil then
-    capabilities.flavor = "unsupported"
-    return adapter
-  end
   capabilities.flavor = "retail"
   capabilities.secretValueDetection = type(api.issecretvalue) == "function"
 
@@ -75,4 +71,11 @@ function addon.CreateFlavorAdapter(api, emit)
     end
   end
   return adapter
+end
+
+function addon.RegisterRetailAdapter(api)
+  if addon.RegisterFlavorAdapter and api.WOW_PROJECT_MAINLINE ~= nil and
+      api.WOW_PROJECT_ID == api.WOW_PROJECT_MAINLINE then
+    addon.RegisterFlavorAdapter(api.WOW_PROJECT_MAINLINE, "retail", createRetailAdapter)
+  end
 end

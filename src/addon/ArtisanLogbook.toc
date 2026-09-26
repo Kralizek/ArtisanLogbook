@@ -5,6 +5,7 @@
 ## SavedVariables: ArtisanLogbookTraceDB
 
 Capture/Trace.lua
+Flavors/Registry.lua
 Flavors/Retail/Adapter.lua
 UI/TraceWindow.lua
 Core/Bootstrap.lua

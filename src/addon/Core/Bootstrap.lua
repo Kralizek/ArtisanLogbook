@@ -12,10 +12,6 @@ function addon.Start()
     addon.Notify(addon.loadError or "Tracer is not initialized.")
     return
   end
-  if addon.adapter.capabilities.flavor ~= "retail" then
-    addon.Notify("This tracer targets Retail only; this client is not supported.")
-    return
-  end
   local version, build, buildDate, interface = GetBuildInfo()
   local ok, reason = addon.recorder:Start({
     addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version"),

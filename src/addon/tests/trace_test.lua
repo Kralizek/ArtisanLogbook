@@ -1,5 +1,6 @@
+local root = arg[1] or "."
 local addon = {}
-assert(loadfile("src/addon/Capture/Trace.lua"))("ArtisanLogbook", addon)
+assert(loadfile(root .. "/Capture/Trace.lua"))("ArtisanLogbook", addon)
 local Trace = addon.Trace
 local elapsed = 0
 local clock = {
@@ -135,7 +136,7 @@ test("unsupported table keys cannot bypass the traversal budget", function()
 end)
 
 test("synthetic Retail scenarios preserve every supplied result field", function()
-  local scenarios = dofile("tests/fixtures/retail-synthetic.lua")
+  local scenarios = dofile(root .. "/tests/fixtures/retail-synthetic.lua")
   for _, scenario in ipairs(scenarios) do
     local recorder = assert(Trace.New(nil, clock))
     recorder:Start({ fixture = scenario.name, synthetic = true })
