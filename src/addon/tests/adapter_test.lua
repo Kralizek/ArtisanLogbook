@@ -210,6 +210,10 @@ test("only newer positive matching quotes replace a personal allocation snapshot
   hooks.GetCraftingOperationInfo(456, {}, nil, false)
   hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 0,
     reagent = { itemID = 103 } } }, nil, false)
+  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 0, quantity = 1,
+    reagent = { itemID = 106 } } }, nil, false)
+  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 1,
+    reagent = { itemID = 0 } } }, nil, false)
   hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 4,
     reagent = { itemID = 104 } } }, 77, false)
   hooks.GetCraftingOperationInfo(456, { { quantity = 1, reagent = { itemID = 105 } } }, nil, false)
