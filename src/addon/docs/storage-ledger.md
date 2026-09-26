@@ -100,10 +100,14 @@ reuses an ID; until duplicate/late callbacks are traced, an actual repeated call
 extra fact. The callback is not rewritten based on `itemGUID`, spellcast events,
 or `CRAFTING_DETAILS_UPDATE`.
 
-For personal `CraftRecipe`, the latest personal `GetCraftingOperationInfo` call
-supplies the selected reagent arguments. A matching recipe and concentration
-choice are required before they are frozen at the craft post-hook; the hook's
-own reagent table can be empty. A guarded operation query supplies optional
+For personal `CraftRecipe`, positive-allocation `GetCraftingOperationInfo` calls
+provide selected reagent arguments. Quote candidates are keyed by recipe and
+concentration choice: a newer positive selection replaces its matching entry,
+but empty, all-zero, malformed, or unrelated quotes cannot erase it. Only the
+matching entry is consumed at the craft post-hook, and unsubmitted entries are
+discarded when the trade skill closes. Without a positive matching quote,
+allocations remain absent; the hook's own reagent table can be empty and is not
+used as a fallback. A guarded operation query supplies optional
 quote measurements, and an optional item-quality lookup supplies observed
 reagent quality. This passive path does not depend on `/al start`. Later UI
 quotes cannot mutate an already submitted request. Missing/mismatched quote
@@ -112,9 +116,16 @@ target-dependent operations do not create request rows.
 
 The sole active submitted request can be referenced by up to `requestedCount`
 successful result callbacks. A second submission before that count is reached
-makes attribution ambiguous until a failed/interrupted cast or trade skill close
-clears it. Failure and stop callbacks never create CRAFT rows; a failure after
-one success leaves a request with fewer crafts than requested. Neither operation
+makes attribution ambiguous until trade skill close (or a new session) clears it.
+Generic `UNIT_SPELLCAST_FAILED`, `FAILED_QUIET`, and `INTERRUPTED` are player-wide;
+their current verified payload does not establish a safe request/recipe match,
+so they do not clear correlation. `UPDATE_TRADESKILL_CAST_STOPPED(false)` was
+observed before a later successful batch result and cannot safely clear it
+either. Failure and stop callbacks never create CRAFT rows; a failure after
+one success leaves a request with fewer crafts than requested. Correlation can
+remain pending until close or the requested count is reached after a partial
+failure; distinguishing a subsequent unrelated result requires stronger evidence.
+Neither operation
 ID nor a timing window is used to join results to requests. Repeated, zero, and
 missing operation IDs still create separate result facts. Pending attribution
 is not resumed across reloads. Late callbacks cannot always be distinguished

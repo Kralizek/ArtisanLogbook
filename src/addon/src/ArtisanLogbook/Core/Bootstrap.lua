@@ -74,8 +74,7 @@ function addon.HandleRetailEvent(event, ...)
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
       local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, select(1, ...))
       if not ok or not fact then addon.ledgerCaptureError = true end
-    elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" or
-        event == "UNIT_SPELLCAST_INTERRUPTED" or event == "TRADE_SKILL_CLOSE" then
+    elseif event == "TRADE_SKILL_CLOSE" then
       addon.ledger:CancelCraft()
     end
   end

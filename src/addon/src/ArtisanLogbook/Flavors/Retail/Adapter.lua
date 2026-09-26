@@ -102,23 +102,35 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
   end
 
   local probingQuote = false
-  local latestPersonalQuote
+  local personalQuotes = {}
+  local function isGameId(value)
+    return type(value) == "number" and value >= 0 and value < math.huge and value % 1 == 0
+  end
   local function snapshotSelections(selections)
     if type(selections) ~= "table" then return nil end
     local snapshot = {}
+    local hasPositiveAllocation = false
     for _, selection in ipairs(selections) do
-      snapshot[#snapshot + 1] = copyCraftingReagentInfo(selection)
+      local copied = copyCraftingReagentInfo(selection)
+      if copied then
+        snapshot[#snapshot + 1] = copied
+        if isGameId(copied.dataSlotIndex) and type(copied.quantity) == "number" and
+            copied.quantity > 0 and copied.quantity < math.huge and copied.quantity % 1 == 0 and
+            copied.reagent and isGameId(copied.reagent.itemID) then
+          hasPositiveAllocation = true
+        end
+      end
     end
-    return snapshot
+    return hasPositiveAllocation and snapshot or nil
   end
 
   local function submitPersonalCraft(recipeId, count, orderId, concentration)
     if orderId ~= nil or type(submitCraft) ~= "function" then return end
-    local cached = latestPersonalQuote
-    latestPersonalQuote = nil
-    local selections
-    if cached and cached.recipeId == recipeId and cached.concentration == concentration then
-      selections = cached.selections
+    local quotes = personalQuotes[recipeId]
+    local selections = quotes and quotes[concentration] or nil
+    if selections then
+      quotes[concentration] = nil
+      if next(quotes) == nil then personalQuotes[recipeId] = nil end
     end
     local quote
     local tradeSkill = api.C_TradeSkillUI
@@ -220,6 +232,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     capabilities.events[event] = ok and frame:IsEventRegistered(event) == true
   end
   frame:SetScript("OnEvent", function(_, event, ...)
+    if event == "TRADE_SKILL_CLOSE" then personalQuotes = {} end
     forward(event, ...)
   end)
 
@@ -252,16 +265,15 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         type(api.C_TradeSkillUI[name]) == "function" then
       capabilities.quoteHooks[name] = pcall(api.hooksecurefunc, api.C_TradeSkillUI, name, function(...)
         local ok = pcall(function(...)
-          if not probingQuote then
-            latestPersonalQuote = nil
+          if not probingQuote and hookedName == "GetCraftingOperationInfo" then
             local recipeId, selections, orderId, concentration = ...
-            if hookedName == "GetCraftingOperationInfo" and orderId == nil and
-                type(recipeId) == "number" and type(concentration) == "boolean" then
-              latestPersonalQuote = {
-                recipeId = recipeId,
-                concentration = concentration,
-                selections = snapshotSelections(selections),
-              }
+            if orderId == nil and isGameId(recipeId) and type(concentration) == "boolean" then
+              local snapshot = snapshotSelections(selections)
+              if snapshot then
+                local quotes = personalQuotes[recipeId] or {}
+                quotes[concentration] = snapshot
+                personalQuotes[recipeId] = quotes
+              end
             end
           end
           if not probingQuote and isRecording and isRecording() then

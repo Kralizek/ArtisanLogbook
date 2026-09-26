@@ -194,6 +194,69 @@ test("personal submission freezes quote allocations while diagnostic tracing is 
   assert(invalidations == 2)
 end)
 
+test("only newer positive matching quotes replace a personal allocation snapshot", function()
+  local api, _, hooks = environment()
+  local submissions = {}
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function()
+    return { concentrationCost = 80 }
+  end
+  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    function(recipe, count, concentration, quote, selections)
+      submissions[#submissions + 1] = { recipe = recipe, quote = quote, selections = selections }
+    end)
+  local first = { { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 101 } } }
+  local newer = { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 102 } } }
+  hooks.GetCraftingOperationInfo(456, first, nil, false)
+  hooks.GetCraftingOperationInfo(456, {}, nil, false)
+  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 0,
+    reagent = { itemID = 103 } } }, nil, false)
+  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 4,
+    reagent = { itemID = 104 } } }, 77, false)
+  hooks.GetCraftingOperationInfo(456, { { quantity = 1, reagent = { itemID = 105 } } }, nil, false)
+  hooks.GetCraftingOperationInfo(789, newer, nil, false)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(submissions[1].selections[1].reagent.itemID == 101)
+  assert(submissions[1].selections[1].quantity == 3)
+  hooks.GetCraftingOperationInfo(456, first, nil, false)
+  hooks.GetCraftingOperationInfo(456, newer, nil, false)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(submissions[2].selections[1].reagent.itemID == 102)
+end)
+
+test("quote caches are scoped by recipe and concentration and consumed independently", function()
+  local api, frame, hooks = environment()
+  local submissions = {}
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function() return {} end
+  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    function(recipe, count, concentration, quote, selections)
+      submissions[#submissions + 1] = { recipe = recipe, concentration = concentration,
+        selections = selections }
+    end)
+  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 1,
+    reagent = { itemID = 101 } } }, nil, false)
+  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 2,
+    reagent = { itemID = 102 } } }, nil, true)
+  hooks.GetCraftingOperationInfo(789, { { dataSlotIndex = 1, quantity = 3,
+    reagent = { itemID = 103 } } }, nil, false)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, true)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, true)
+  hooks.CraftRecipe(789, 1, {}, nil, nil, false)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(submissions[1].selections[1].reagent.itemID == 102)
+  assert(submissions[2].selections == nil)
+  assert(submissions[3].selections[1].reagent.itemID == 103)
+  assert(submissions[4].selections[1].reagent.itemID == 101)
+  hooks.GetCraftingOperationInfo(456, {}, nil, false)
+  hooks.CraftRecipe(456, 1, { { dataSlotIndex = 1, quantity = 7,
+    reagent = { itemID = 999 } } }, nil, nil, false)
+  assert(submissions[5].selections == nil)
+  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 2,
+    reagent = { itemID = 101 } } }, nil, false)
+  frame.onEvent(frame, "TRADE_SKILL_CLOSE")
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(submissions[6].selections == nil)
+end)
+
 test("quote probe suppresses its own nested hook and stays idle while paused", function()
   local api, _, hooks = environment()
   local received, calls = {}, 0
