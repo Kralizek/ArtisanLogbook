@@ -1,8 +1,9 @@
 local root = arg[1] or "src/ArtisanLogbook"
+local testsRoot = arg[2] or "tests"
 local addon = {}
 assert(loadfile(root .. "/Storage/Ledger.lua"))("ArtisanLogbook", addon)
 local Ledger = addon.Ledger
-local fixture = assert(loadfile(root .. "/tests/fixtures/retail-build-69933.lua"))()
+local fixture = assert(loadfile(testsRoot .. "/fixtures/retail-build-69933.lua"))()
 local passed = 0
 
 local function test(name, callback)
