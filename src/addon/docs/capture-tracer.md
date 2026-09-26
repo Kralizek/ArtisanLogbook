@@ -201,7 +201,7 @@ operation IDs are retained as representative game data.
 
 ## Debug Format and Limits
 
-`ArtisanLogbookTraceDB` holds `traceSchemaVersion`, `exportContractVersion`,
+`ArtisanLogbookTraceDB` holds `traceSchemaVersion`, `traceExportVersion`,
 `nextSequence`, `records`, `bytes`, and optional `stoppedReason`.
 
 Each record contains a monotonic observation `sequence`, server `timestamp`,
@@ -219,7 +219,7 @@ the original argument order.
 
 The debug export is a Lua table literal preceded by `return`, with argument
 tables exposed as `arguments` rather than strings. It has independent trace
-schema and debug export versions (both initially 1), and `totalRecords` for
+schema and debug export versions. The current trace schema is 2 and the current debug export version is 2; `totalRecords` is included for
 checking page completeness. This is **not** the final `AL1` ledger contract.
 There is no importer and no `loadstring` in the addon.
 
@@ -241,7 +241,10 @@ through `warnings` and `traceOmitted`/`traceRemainder` markers. These are debug
 annotations, not measured values or substitutes for unknown craft facts. A
 warning-bearing trace must not be used as complete evidence of absence.
 
-The initial debug schema has no migrations. Unsupported schema/export versions
+Trace schema 1 used the older `exportContractVersion` name. Schema 2 renames it to
+`traceExportVersion`; the loader migrates that exact schema-1 shape on a copy so
+existing diagnostic records survive while the original SavedVariables table is
+left untouched until initialization succeeds. Unsupported schema/export versions
 or invalid top-level shapes are refused without overwriting the existing data.
 Export/back up the SavedVariables file outside the game before resetting an
 incompatible debug database. The durable ledger has its own versioned schema
