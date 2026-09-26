@@ -43,21 +43,27 @@ function addon.Mark(label)
     addon.Notify("Start recording before adding a marker.")
     return
   end
-  addon.Emit("TRACE_MARK", label:sub(1, 240))
+  local marker = label:sub(1, 240)
+  if addon.Emit("TRACE_MARK", marker) then
+    addon.Notify("Marker: " .. marker)
+  end
 end
 
 function addon.Emit(event, ...)
   if not addon.recorder or not addon.recorder.recording then
-    return
+    return false
   end
   local ok, captured, reason = pcall(addon.recorder.Capture, addon.recorder, event, ...)
   if not ok then
     addon.recorder.recording = false
     addon.recorder.database.stoppedReason = "capture-error"
     addon.Notify("Capture stopped after an error; earlier evidence is preserved.")
-  elseif not captured and reason then
-    addon.Notify(reason)
+    return false
+  elseif not captured then
+    if reason then addon.Notify(reason) end
+    return false
   end
+  return true
 end
 
 function addon.HandleRetailEvent(event, ...)
