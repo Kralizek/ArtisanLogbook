@@ -205,7 +205,7 @@ local function validateDatabase(data)
     local ok, reason = validateReferences("request", request, ids)
     if not ok then return nil, reason end
     for _, allocation in ipairs(request.allocations or {}) do
-      if not isGameId(allocation.dataSlotIndex) or not isInteger(allocation.allocatedQuantity) or
+      if not isInteger(allocation.dataSlotIndex) or not isInteger(allocation.allocatedQuantity) or
           allocation.itemDimensionId == nil or
           (allocation.quality ~= nil and not isGameId(allocation.quality)) then
         return nil, "request allocation is invalid"
@@ -486,7 +486,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   if not copied or timestamp == nil then return nil, "request snapshot or timestamp is unavailable" end
   for _, selection in ipairs(snapshot.selections or {}) do
     local itemId = type(selection.reagent) == "table" and selection.reagent.itemID or nil
-    if isGameId(selection.dataSlotIndex) and isGameId(itemId) and isInteger(selection.quantity) then
+    if isInteger(selection.dataSlotIndex) and isInteger(itemId) and isInteger(selection.quantity) then
       local existingId = self.dimensionIndex.item[tostring(itemId)]
       local existing = self.dimensionRows.item[existingId]
       if existing and existing.gameItemId ~= nil and existing.gameItemId ~= itemId then
@@ -508,15 +508,15 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
     request[field] = quote and observedNumber(quote[field]) or nil
   end
   if snapshot.selections then
-    request.allocations = {}
+    local allocations = {}
     for _, selection in ipairs(snapshot.selections) do
       local itemId = type(selection.reagent) == "table" and selection.reagent.itemID or nil
-      if isGameId(selection.dataSlotIndex) and isGameId(itemId) and
+      if isInteger(selection.dataSlotIndex) and isInteger(itemId) and
           isInteger(selection.quantity) then
         local itemDimensionId
         itemDimensionId, reason = self:AddDimension("item", itemId, { gameItemId = itemId })
         if not itemDimensionId then return nil, reason end
-        request.allocations[#request.allocations + 1] = {
+        allocations[#allocations + 1] = {
           dataSlotIndex = selection.dataSlotIndex,
           itemDimensionId = itemDimensionId,
           allocatedQuantity = selection.quantity,
@@ -524,6 +524,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
         }
       end
     end
+    if #allocations > 0 then request.allocations = allocations end
   end
   self.database.nextRequestId = request.id + 1
   self.database.requests[#self.database.requests + 1] = request
