@@ -135,6 +135,88 @@ test("unsupported table keys cannot bypass the traversal budget", function()
   assert(inspected < 600 and warnings:find("table-limit", 1, true))
 end)
 
+test("sanitized Retail build 69933 evidence replays without identity inference", function()
+  local fixture = dofile(root .. "/tests/fixtures/retail-build-69933.lua")
+  assert(fixture.build == "69933" and fixture.version == "12.1.0")
+  local cases = {}
+
+  for _, scenario in ipairs(fixture.cases) do
+    cases[scenario.name] = scenario
+    local recorder = assert(Trace.New(nil, clock))
+    recorder:Start({ fixture = scenario.name, build = fixture.build })
+    for _, observedEvent in ipairs(scenario.events) do
+      recorder:Capture(observedEvent.name, unpack(observedEvent.arguments, 1, observedEvent.arguments.n))
+    end
+    local records = decode(recorder:Export(2, #scenario.events)).records
+    assert(#records == #scenario.events)
+    for index, observedEvent in ipairs(scenario.events) do
+      assert(records[index].event == observedEvent.name)
+      assert(Trace.Serialize(records[index].arguments) == Trace.Serialize(observedEvent.arguments))
+      assert(records[index].warnings == nil)
+    end
+  end
+
+  local function recordsNamed(scenario, eventName)
+    local matching = {}
+    for _, observedEvent in ipairs(scenario.events) do
+      if observedEvent.name == eventName then matching[#matching + 1] = observedEvent end
+    end
+    return matching
+  end
+
+  local basicResults = recordsNamed(cases["basic-and-multicraft"], "TRADE_SKILL_ITEM_CRAFTED_RESULT")
+  assert(#basicResults == 2)
+  local firstBasic = basicResults[1].arguments[1]
+  local multicraft = basicResults[2].arguments[1]
+  assert(firstBasic.operationID ~= multicraft.operationID)
+  assert(firstBasic.itemID == multicraft.itemID)
+  assert(firstBasic.itemGUID == nil and multicraft.itemGUID == nil)
+  assert(multicraft.multicraft == 10 and multicraft.quantity == 15)
+
+  local batch = cases["concentration-batch-two"]
+  local enchantCalls = recordsNamed(batch, "CALL_POST:C_TradeSkillUI.CraftEnchant")
+  local batchResults = recordsNamed(batch, "TRADE_SKILL_ITEM_CRAFTED_RESULT")
+  assert(#enchantCalls == 1 and enchantCalls[1].arguments[2] == 2)
+  assert(#recordsNamed(batch, "TRADE_SKILL_CRAFT_BEGIN") == 2 and #batchResults == 2)
+  local firstBatchResult = batchResults[1].arguments[1]
+  local secondBatchResult = batchResults[2].arguments[1]
+  assert(firstBatchResult.operationID ~= secondBatchResult.operationID)
+  assert(firstBatchResult.concentrationSpent == 185 and firstBatchResult.hasIngenuityProc == false)
+  assert(firstBatchResult.ingenuityRefund == 93)
+  assert(secondBatchResult.concentrationSpent == 185 and secondBatchResult.hasIngenuityProc == false)
+  assert(secondBatchResult.ingenuityRefund == 93)
+  local currencyUpdates = recordsNamed(batch, "CURRENCY_DISPLAY_UPDATE")
+  assert(#currencyUpdates == 2 and currencyUpdates[1].arguments[3] == -185)
+  assert(currencyUpdates[2].arguments[3] == -185)
+
+  local starts = recordsNamed(batch, "UNIT_SPELLCAST_START")
+  local hasStartWithoutCastGUID, hasStartWithCastGUID = false, false
+  for _, start in ipairs(starts) do
+    if start.arguments[2] == nil then hasStartWithoutCastGUID = true else hasStartWithCastGUID = true end
+  end
+  assert(hasStartWithoutCastGUID and hasStartWithCastGUID)
+
+  local resourceResults = recordsNamed(cases["resource-returns"], "TRADE_SKILL_ITEM_CRAFTED_RESULT")
+  assert(#resourceResults == 3)
+  local returned = resourceResults[1].arguments[1].resourcesReturned
+  assert(#returned == 3)
+  assert(returned[1].reagent.itemID == 236761 and returned[1].quantity == 4)
+  assert(returned[2].reagent.itemID == 238511 and returned[2].quantity == 5)
+  assert(returned[3].reagent.itemID == 238513 and returned[3].quantity == 6)
+  assert(#resourceResults[3].arguments[1].resourcesReturned == 3)
+
+  local detailsUpdates = recordsNamed(cases["crafting-details-update-burst"], "CRAFTING_DETAILS_UPDATE")
+  assert(#detailsUpdates == 127)
+  local serializedFixture = Trace.Serialize(fixture)
+  assert(not serializedFixture:find("Player%-1309"))
+  assert(not serializedFixture:find("Item%-1309"))
+  assert(not serializedFixture:find("Cast%-3%-3890"))
+  assert(not serializedFixture:find("Pozzo"))
+  assert(not serializedFixture:find("Kral"))
+  assert(not serializedFixture:find("hyperlink"))
+  assert(not serializedFixture:find("itemGUID"))
+end)
+
 test("synthetic Retail scenarios preserve every supplied result field", function()
   local scenarios = dofile(root .. "/tests/fixtures/retail-synthetic.lua")
   for _, scenario in ipairs(scenarios) do

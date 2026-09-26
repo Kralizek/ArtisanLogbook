@@ -1,8 +1,10 @@
 # Capture Tracer: First Review Gate
 
-Status: installable debug slice; the live capture contract is **not verified**.
-No durable craft ledger, craft correlation, public ledger API, or integrations
-are implemented. Do not start those slices until the evidence below is reviewed.
+Status: installable debug slice; selected capture-contract behavior is verified
+against user-supplied live Retail traces from build 69933 (12.1.0). Other cases
+and universal correlation guarantees remain unverified. No durable craft ledger,
+correlation implementation, public ledger API, or integrations are implemented.
+Keep those out of this tracer validation slice.
 
 ## Build and Install
 
@@ -65,14 +67,15 @@ independently of rendering.
 5. Export every page, including the first page with `TRACE_START`, or preferably
    preserve the entire account-wide SavedVariables file after a normal logout.
    Keep separate evidence copies for each controlled run before clearing.
-6. Repeat for concentration without a refund, an observed Ingenuity proc,
-   Multicraft, and Resourcefulness. A proc may require multiple attempts: retain
-   the whole attempt sequence and annotate the observed proc; do not fabricate
-   or manually inject it. Prefer isolated procs initially, then combinations.
-7. Also record a small same-recipe batch, two consecutive same-recipe single
-   crafts, an interrupted craft (movement), a cancelled batch, and a craft after
-   cancellation. Keep recording between operations and after the final result.
-   Orders and recrafts may follow after the first five required cases.
+6. Build 69933 traces now cover a basic result flow, concentration spend with
+   `hasIngenuityProc = false`, Multicraft, and Resourcefulness (including
+   multiple returned item IDs in one result). A successful Ingenuity proc and
+   applied refund are still unverified. Capture the full attempt sequence if
+   testing this; do not fabricate or manually inject a proc.
+7. The supplied traces also cover consecutive same-recipe crafts and a
+   two-operation concentration batch. Cancellation/interruption remains to be
+   traced. Orders and actual recraft operations remain unverified and can be
+   handled separately.
 
 Normal logout or `/reload` writes WoW SavedVariables. A crash or forced kill can
 lose the current session; this addon cannot force a disk flush. Reload pauses
@@ -107,6 +110,67 @@ Nothing is merged or deduplicated. Trace sequence numbers identify observations,
 not crafts. Unrelated player spells remain visible during recording to avoid
 filtering out evidence based on an unverified correlation rule. Recording does
 not stop when the profession window closes or a cast ends.
+
+## Runtime Findings: Retail Build 69933
+
+The findings below come from the user's live Retail traces, with build `69933`
+and version `12.1.0` in trace metadata. The raw SavedVariables attachment is not
+committed because it includes personal and instance identifiers. The selected,
+sanitized callback sequences are replayed by
+[`tests/fixtures/retail-build-69933.lua`](../tests/fixtures/retail-build-69933.lua).
+Cast tokens are replaced with fixture-local placeholders; character/account
+metadata, item-instance GUIDs, and hyperlinks are omitted. Recipe/item IDs and
+operation IDs are retained as representative game data.
+
+- **Result and request cardinality:** In the observed operations, one
+   `TRADE_SKILL_ITEM_CRAFTED_RESULT` callback describes one actual result. A
+   single `CraftEnchant` post-hook call with `count = 2` was followed by two
+   `TRADE_SKILL_CRAFT_BEGIN` events and two result callbacks with distinct,
+   non-zero `operationID` values. A future craft fact should represent one
+   actual operation/result, not one button click or API request. In this build's
+   traces, `operationID` is the leading identity/correlation candidate, not a
+   universal guarantee: its scope, uniqueness duration, and behavior in other
+   batch, late-callback, cancellation, and client-version cases remain unverified.
+- **`itemGUID`:** The same output `itemGUID` appeared on two separate result
+   callbacks for the same output item while their `operationID` values differed.
+   Do not use `itemGUID` as craft identity or a uniqueness key. Keep it only as
+   optional observed result metadata if a later use is established.
+- **Spellcasts:** Spellcast events provide supporting timing/correlation
+   evidence, but observed `UNIT_SPELLCAST_START` payloads differ: some contain a
+   cast GUID in argument 2 and another observed shape omits it. The batch trace
+   also shows why a spellcast token must not be the sole durable craft key.
+   Preserve these callbacks as raw supporting signals; do not assume a stable
+   one-to-one mapping to logical crafts.
+- **`CRAFTING_DETAILS_UPDATE`:** One burst contained 127 consecutive events with
+   no arguments (records 9-135) and no craft result in that interval. This event
+   is too noisy for completion or craft correlation. It may later be used only
+   to trigger a refresh of pre-craft state.
+- **Concentration and Ingenuity:** In the observed two-operation batch, each
+   result reported `concentrationSpent = 185`, `hasIngenuityProc = false`, and
+   `ingenuityRefund = 93`. Currency updates showed a full 185 decrease for each
+   operation. A positive `ingenuityRefund` is therefore not evidence that a
+   refund was applied; it appears to be the amount available if Ingenuity
+   procs. Never infer a proc from `ingenuityRefund > 0`. For future derivation,
+   use `ingenuityRefund` as the applied refund only when `hasIngenuityProc` is
+   explicitly true; use zero only when the flag is explicitly false. If the flag
+   is absent/unknown, applied refund is unknown. Net concentration is
+   `concentrationSpent - actualRefund` only when both inputs are known. A
+   successful Ingenuity proc/refund is still unverified.
+- **Multicraft:** A real result showed a normal output of 5 in one separate
+   result and a Multicraft result with `multicraft = 10` and `quantity = 15`.
+   The result payload directly exposes the Multicraft bonus and total output;
+   bag-delta inference is unnecessary.
+- **Resourcefulness:** Several result payloads contained `resourcesReturned`,
+   including one result with three different item IDs and quantities. Treat
+   those returned IDs and quantities as the authoritative observed return data.
+   Attach each return to its reagent fact only when the input allocation makes
+   attribution unambiguous. A craft may return multiple reagent types; no
+   separate Resourcefulness fact is needed if reagent-level attribution remains
+   sufficient. The fixture does not invent missing input-allocation facts.
+- **Unknown versus zero:** Preserve observed zeroes as zero and unsupported or
+   unavailable values as absent. Do not assign semantics to defaulted API values
+   without runtime evidence. In particular, an absent proc flag is not the same
+   as an observed false flag.
 
 ## Debug Format and Limits
 
@@ -178,38 +242,40 @@ The shared flavor registry identifies known client families and dispatches a
 registered adapter by project ID. It provides an empty capability fallback for
 other clients, so core loading, manual markers, and saved evidence do not require
 Retail. The Retail event/call adapter is the only implementation in this slice;
-the capability `measurements` map remains empty because runtime support has not
-been verified. Forever remains deferred until its exact client/API is known.
-CraftSim and TSM are neither read nor required.
+the capability `measurements` map remains empty because evidence findings have
+not been turned into product capability declarations. Forever remains deferred
+until its exact client/API is known. CraftSim and TSM are neither read nor
+required.
 
 ## Evidence Register and Gate
 
-No real in-game traces have been collected in this development environment.
-All fixtures under `src/addon/tests/fixtures/` are explicitly synthetic; their order and
-numbers are illustrative and do not establish real event semantics.
+`retail-build-69933.lua` is a sanitized replay fixture derived from the
+user-supplied live trace. `retail-synthetic.lua` remains explicitly synthetic;
+its example ordering and values do not establish game behavior.
 
 | Scenario | Trace/build reference | Verified behavior |
 | --- | --- | --- |
-| Basic craft | Pending | Unverified |
-| Concentration craft | Pending | Unverified |
-| Ingenuity proc | Pending | Unverified |
-| Multicraft proc | Pending | Unverified |
-| Resourcefulness proc | Pending | Unverified |
-| Consecutive crafts / batch | Pending | Unverified |
-| Cancellation / interruption | Pending | Unverified |
-| Crafting order / recraft | Follow-up allowed | Unverified |
+| Basic craft result flow | Build 69933, records 149-157 | Craft begin, call post-hook, spellcast callbacks, and result callback observed |
+| Concentration without Ingenuity | Build 69933, records 168-184 | Two result callbacks with distinct non-zero operation IDs; spent 185 each, proc false, refund field 93, full currency decrease |
+| Successful Ingenuity proc/refund | Not captured | Unverified |
+| Multicraft | Build 69933, records 158-164 | `multicraft = 10`, total `quantity = 15`; result field is directly available |
+| Resourcefulness returns | Build 69933, records 195-236 | Returned reagent IDs and quantities observed, including three reagent types in one result |
+| Consecutive crafts / batch | Build 69933, records 149-164 and 168-183 | Separate results have distinct operation IDs; one count-2 request produced two actual results |
+| `CRAFTING_DETAILS_UPDATE` burst | Build 69933, records 9-135 | 127 empty-argument updates; not a completion/correlation signal |
+| Cancellation / interruption | Not captured | Unverified |
+| Crafting orders / actual recraft | Not captured | Unverified |
 
-For each supplied trace, record build, scenario/recipe, marker and sequence
+For each additional trace, record build, scenario/recipe, marker and sequence
 ranges, observed outcome, identifier changes, callback ordering, and any loss
-warnings. Check whether one operation emits several item/currency callbacks,
-whether quantities/proc values are per callback or repeated totals, whether IDs
-are absent/zero/reused, and how batch/cancel/late results interact. Do not equate
-spellcast stop with success or assume a fixed timing window.
+warnings. Continue checking repeated/late results, ID scope or reuse, and
+batch/cancel interactions. Do not equate spellcast stop with success or assume
+a fixed timing window.
 
 Before approving the ledger, reviewers must agree on:
 
-1. The evidence-backed operation identity and completion rule, including scope
-   of IDs, repeated/late callbacks, and why distinct crafts cannot be merged.
+1. The evidence-backed operation identity and completion rule, including
+   `operationID` scope/uniqueness, repeated/late callbacks, and why distinct
+   crafts cannot be merged.
 2. Field sources, units, applicability, and unknown-versus-zero handling, with
    explicit limitations for any unavailable data.
 3. How allocated reagents and returned reagents can be attributed, or what

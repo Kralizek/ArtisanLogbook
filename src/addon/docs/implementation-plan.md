@@ -8,8 +8,11 @@ user's 2026-09-26 decisions below taking precedence over its suggestions.
 1. Build and test a small installable raw capture tracer.
 2. Package it and install it in the actual live Retail/Midnight client.
 3. Collect controlled basic, concentration, Ingenuity, Multicraft, and
-   Resourcefulness traces. Include batch, duplicate/late callback, and
-   cancellation/interruption observations. Orders may follow if inconvenient.
+  Resourcefulness traces. The supplied Retail build-69933 evidence now covers
+  basic results, concentration without Ingenuity, Multicraft, Resourcefulness,
+  and a two-operation batch; successful Ingenuity and cancellation/interruption
+  remain outstanding. Include duplicate/late callback observations. Orders
+  and actual recrafts remain follow-up evidence.
 4. Document verified behavior, field availability, limitations, and proposed
    correlation rules against the actual client build.
 5. Have the user and original agent review that contract.
@@ -24,7 +27,8 @@ product documentation live beneath `src/addon/`. See
 ## Reviewable Slices
 
 1. **Tracer and capture contract:** raw event/call observations, bounded debug
-   persistence, installable ZIP, synthetic harness, real traces, and review gate.
+  persistence, installable ZIP, synthetic and sanitized real-trace replay,
+  verified capture findings, and review gate.
 2. **Addon foundation:** evolve the tracer lifecycle into passive product
    capture. Preserve separate Core, Capture, Storage, Integrations, Flavors, and
    UI responsibilities without adding empty speculative modules.
@@ -64,10 +68,21 @@ Tests and documentation accompany each slice rather than being deferred.
   facts together. Leave dimensions append-only. No dimension garbage collection
   or rollups in v1 unless later measurements justify a reviewed change. These
   defaults do not apply to the intentionally smaller temporary trace buffer.
-- Store underlying facts, not derivable totals or proc flags: net concentration
-  derives from spent/refund; Ingenuity from refund; Resourcefulness from returned
-  quantities. Derivations must remain unknown when required inputs are unknown.
-  The debug tracer deliberately retains raw API flags for contract inspection.
+- Store source measurements and flags needed for derivation; do not persist
+  duplicated derived totals. Apply `ingenuityRefund` only when
+  `hasIngenuityProc` is explicitly true; an explicit false means applied refund
+  zero, while an absent/unknown flag leaves applied refund unknown. Derive net
+  concentration as spent minus applied refund only when both inputs are known.
+  A positive refund field alone is not evidence of an Ingenuity proc. Derive
+  Resourcefulness from returned reagent quantities. The debug tracer retains
+  raw API values and flags for contract inspection.
+- Live build-69933 traces make `operationID` the leading candidate for
+  per-actual-operation identity: one count-2 request produced two result
+  callbacks with distinct non-zero IDs. This is current-trace evidence, not a
+  universal guarantee. A future craft fact represents an actual operation/
+  result rather than a request; spellcast events remain supporting evidence,
+  and `itemGUID` is not craft identity. Keep these conclusions behind the
+  capture-contract review before durable implementation.
 - Attach Resourcefulness returns to input reagent rows where attribution is
   unambiguous. A separate representation requires actual API evidence that
   reagent-level attribution is impossible. Never invent commodity provenance
