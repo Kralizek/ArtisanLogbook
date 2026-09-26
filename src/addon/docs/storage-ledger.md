@@ -1,6 +1,7 @@
 # Durable Ledger
 
-This document describes the storage slice implemented for issue #4. The raw
+This document describes the storage slice from issue #4 and personal-craft
+requests from issue #12. The raw
 capture tracer remains a separate diagnostic store and is not imported into the
 ledger.
 
@@ -13,25 +14,33 @@ the ledger and migrates independently. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-The current durable schema is version 1:
+The current durable schema is version 2:
 
 - `crafts` stores one row per observed Retail result callback, with a monotonic
-  local `id`, timestamp, session/recipe/output dimension IDs, raw game
+  local `id`, timestamp, optional request ID, session/recipe/output dimension IDs, raw game
   `gameOperationId` (the raw `operationID`), observed output quality/item level/quantity,
   Multicraft bonus, concentration spent/currency, Ingenuity proc flag, and
   refund field. Unsupported values are absent.
-- `reagents` stores one row per returned item entry observed in
-  `resourcesReturned`, linked to its craft and item dimension. Returned quantity
-  is retained as observed; allocated quantity, reagent quality, and source are
-  absent unless later capture evidence supports them.
+- `requests` stores submitted personal `CraftRecipe` snapshots with separate
+  monotonic IDs, timestamps, session/recipe references, `requestedCount`, and
+  `useConcentration`. Optional quote fields are `concentrationCost`, `baseSkill`,
+  `baseDifficulty`, and `craftingQuality`. Optional `allocations` contain
+  positive-quantity quote selections: `dataSlotIndex`, item reference,
+  `allocatedQuantity`, and observed `quality` when available. An absent
+  allocations list means no supported quote selection was captured.
+- `reagents` stores craft/item-linked allocations for correlated results and
+  return-only rows for legacy or unmatched results. `allocatedQuantity` is
+  absent on return-only rows. `returnedQuantity` is absent without a return
+  list or when return attribution is ambiguous; it is zero only when a return
+  list establishes that this allocated item was not returned. Ownership/source
+  and commodity lot provenance are never inferred.
 - `dimensions` contains append-only numeric collections for realm, character,
   profession, recipe, item, session, and expansion. Each collection has an
   independent monotonic ID counter. Repeated stable keys reuse their existing
   dimension. Identity and IDs never change; pruning never removes dimensions.
   Metadata supports monotonic enrichment as described below.
-- `nextCraftId` is independent of retained rows, so pruning never makes a craft
-  ID available again. Retention settings are stored as `retentionDays` and
-  `maxCrafts`.
+- `nextCraftId` and `nextRequestId` are independent of retained rows, so pruning
+  never reuses either ID. Retention settings are `retentionDays` and `maxCrafts`.
 
 Session dimensions capture session start, addon version, WoW version/build/date,
 interface, project, locale, character and realm references, and the flavor
@@ -69,8 +78,7 @@ region mapping, connected-realm inference, or external catalog is used.
 
 Earlier PR #10 name-only realm rows and their references remain unchanged when
 loaded; new scoped identities are not merged with them. Region/environment
-history cannot be reconstructed from a name. Schema 1 is retained because the
-row shape is compatible and no existing identity is rewritten. Cross-client
+history cannot be reconstructed from a name. Cross-client
 SavedVariables import, PTR/live identity unification, and character transfers
 are not supported. Conflicting display-name changes require explicit future
 handling; currently session initialization is refused with a diagnostic rather
@@ -87,24 +95,56 @@ result callbacks and two distinct, non-zero operation IDs.
 `operationID` is stored exactly when present, including an observed zero, but is
 not used to deduplicate or merge rows. Its uniqueness scope is not proven. A
 repeated ID therefore remains a separate fact with a separate local ID and is
-not attached to a pending recipe. This avoids losing a real craft if the game
+not attached to a pending begin-only recipe. This avoids losing a real craft if the game
 reuses an ID; until duplicate/late callbacks are traced, an actual repeated callback can remain as an
 extra fact. The callback is not rewritten based on `itemGUID`, spellcast events,
 or `CRAFTING_DETAILS_UPDATE`.
 
-`TRADE_SKILL_CRAFT_BEGIN` supplies a recipe candidate. Recipe attribution is
+For personal `CraftRecipe`, positive-allocation `GetCraftingOperationInfo` calls
+provide selected reagent arguments. Quote candidates are keyed by recipe and
+concentration choice: a newer positive selection replaces its matching entry,
+but empty, all-zero, malformed, or unrelated quotes cannot erase it. Only the
+matching entry is consumed at the craft post-hook, and unsubmitted entries are
+discarded when the trade skill closes. Without a positive matching quote,
+allocations remain absent; the hook's own reagent table can be empty and is not
+used as a fallback. A guarded operation query supplies optional
+quote measurements, and an optional item-quality lookup supplies observed
+reagent quality. This passive path does not depend on `/al start`. Later UI
+quotes cannot mutate an already submitted request. Missing/mismatched quote
+arguments leave selections and quote values absent. Orders, recrafts, and
+target-dependent operations do not create request rows.
+
+The sole active submitted request can be referenced by up to `requestedCount`
+successful result callbacks. A second submission before that count is reached
+makes attribution ambiguous until trade skill close (or a new session) clears it.
+Generic `UNIT_SPELLCAST_FAILED`, `FAILED_QUIET`, and `INTERRUPTED` are player-wide;
+their current verified payload does not establish a safe request/recipe match,
+so they do not clear correlation. `UPDATE_TRADESKILL_CAST_STOPPED(false)` was
+observed before a later successful batch result and cannot safely clear it
+either. Failure and stop callbacks never create CRAFT rows; a failure after
+one success leaves a request with fewer crafts than requested. Correlation can
+remain pending until close or the requested count is reached after a partial
+failure; distinguishing a subsequent unrelated result requires stronger evidence.
+Neither operation
+ID nor a timing window is used to join results to requests. Repeated, zero, and
+missing operation IDs still create separate result facts. Pending attribution
+is not resumed across reloads. Late callbacks cannot always be distinguished
+from current results; overlapping submissions are deliberately left unlinked.
+
+Without a request link, `TRADE_SKILL_CRAFT_BEGIN` supplies a recipe candidate. Recipe attribution is
 made only when exactly one begin is pending and the result has a positive
 `operationID` not already present in the retained facts for that session.
 Missing/zero/repeated operation IDs still produce craft facts, but no recipe
 reference. Character and realm are reached through the session dimension, not
 duplicated on each craft. If another begin arrives before a result, attribution
 is ambiguous and omitted for the next result rather than overwriting or
-guessing. There is no time-window grouping, request-count expansion, or
+guessing. There is no time-window grouping or
 spellcast-based completion inference.
 
 This is an intentional loss-of-attribution policy, not a WoW API requirement.
-In the real count-2 concentration fixture, both begins precede the first result:
-both result facts survive, but neither receives a recipe reference. A novel late
+In the older count-2 concentration fixture without request evidence, both begins
+precede the first result: both result facts survive, but neither receives a
+recipe reference. A novel late
 ID cannot universally be recognized as late. Repeat detection only covers
 retained facts within a session; reload starts a new session and pruning forgets
 evicted IDs. No universal duplicate/late protection is claimed. The runtime
@@ -127,15 +167,19 @@ as an applied refund. A future derivation may apply it only when the flag is
 explicitly true. Successful Ingenuity behavior remains unverified.
 
 `resourcesReturned` is authoritative for returned item IDs and quantities. One
-result may create several reagent rows. The replay traces do not establish
-allocated inputs, quality, or ownership/source, so those fields are not
-fabricated. Reagent item expansion comes only from its own item dimension, not
+result may create several reagent rows. A return attaches to a selected input
+only if exactly one allocation uses that item ID. With duplicate allocations
+of the same item, the return stays in a separate return-only row and the input
+rows have unknown return quantities. Net consumption can be derived only for
+unambiguous rows with both quantities. Old schema 1 return-only rows stay
+partial. Reagent item expansion comes only from its own item dimension, not
 from the recipe consuming it. No separate Resourcefulness fact or derived
 aggregate is persisted.
 
-The current Retail hooks do not establish pre-craft skill/difficulty/expected
-quality, profession/skill-line, crafting context, order,
-recraft, reagent allocation, or source. Those fields remain absent. The optional
+Quoted skill/difficulty/expected quality are only available on personal requests
+when the operation query supplies them. No order/recraft allocation,
+ownership/source, profession/skill-line, or target-GUID semantics have been
+verified. The optional
 `itemLevel` result field is copied only if observed; the real fixtures do not
 verify its applicability. Other
 flavors receive an empty capability map and do not acquire Retail-only values.
@@ -143,9 +187,12 @@ flavors receive an empty capability map and do not acquire Retail-only values.
 ## Retention and Migration
 
 Defaults are `retentionDays = 180` and `maxCrafts = 50000`. Pruning runs when the
-ledger loads and after each result. It first removes facts older than the age
+ledger loads, after submissions, and after each result. It first removes facts older than the age
 cutoff, then removes the oldest timestamp/ID rows if the count limit is still
-exceeded. Reagent facts for removed crafts are removed together. Dimensions and
+exceeded. Reagent facts for removed crafts are removed together. Requests age
+out with the same cutoff unless a retained craft still references them; when
+count pruning removes their final linked craft, they are removed as well.
+Zero-result requests remain until age expiry. Dimensions and
 ID counters are retained; there are no rollups or dimension garbage collection.
 
 The age boundary is exclusive: exactly 180 days old survives until it is older.
@@ -160,6 +207,12 @@ and advances the version. It never infers missing counters from retained facts,
 creates missing collections, supplies measured zeroes, or repairs references.
 Even an empty retained collection cannot prove the historical next ID.
 
+The explicit schema 1 to 2 migration adds an empty `requests` collection and
+`nextRequestId = 1` without changing old crafts, reagents, or dimensions.
+Schema 1 data unexpectedly containing request fields is refused. Migration and
+reference validation operate together on a copy; failed validation never
+publishes or partially mutates SavedVariables.
+
 All migrations run on a deep copy inside a protected load path. Missing/invalid
 versions, newer versions, cyclic/non-serializable data, non-finite numbers,
 sparse/non-array collections, duplicate IDs/keys, invalid counters, or broken
@@ -169,7 +222,8 @@ required. Other unknown dimension references remain absent, but if present
 must resolve to positive local IDs in the correct collection:
 
 - Craft: `sessionDimensionId`, `recipeDimensionId`, `outputItemDimensionId`,
-  `professionDimensionId`.
+  `professionDimensionId`, `requestId` (same session).
+- Request: `sessionDimensionId`, `recipeDimensionId`; allocation: `itemDimensionId`.
 - Reagent: `craftId`, `itemDimensionId`.
 - Character: `realmDimensionId`.
 - Session: `characterDimensionId`, `realmDimensionId`.
@@ -181,7 +235,7 @@ Unsupported reference fields are refused rather than silently treated as absent.
 Bootstrap replaces `ArtisanLogbookDB` only after successful migration,
 validation, and session initialization. A failed load leaves the original
 SavedVariables intact and tracing independent. A missing database creates schema
-1; the unrelated trace database is never imported. Malformed result snapshots
+2; the unrelated trace database is never imported. Malformed result snapshots
 are rejected before craft/reagent facts are committed; timestamps are never
 fabricated as zero when the clock is unavailable.
 
@@ -197,12 +251,14 @@ versions, sparse collections, missing counters, atomic enrichment/conflicts,
 expansion enrichment, runtime realm collisions/fallback, and deterministic
 pruning/index reconstruction. The mocked TOC test covers passive capture while
 tracing is paused, reload identity, missing identity APIs, initialization refusal,
-and debug-trace clear isolation. Run `bash src/addon/scripts/package.sh` from
+and debug-trace clear isolation. Sanitized personal build-69933 replay covers
+two quality mixes, off/on concentration and quote/spend differences, mapped
+multi-item returns, three-result batches, partial failure, ambiguous attribution,
+migration, and pruning. Run `bash src/addon/scripts/package.sh` from
 the repository root to test and validate `src/addon/dist/ArtisanLogbook.zip`.
 
 Remaining evidence gaps include operation-ID reuse scope, true duplicate/late
-callback behavior, successful Ingenuity/refund semantics, cancellation,
-crafting-order/recraft context, pre-craft measurements, and unambiguous reagent
-allocation/source. This PR does not add the public Lua API, AL1 export, Recent/
+callback behavior, successful Ingenuity/refund semantics, crafting-order/recraft
+context, and reagent ownership/source. This PR does not add the public Lua API, AL1 export, Recent/
 Stats/Data product UI, CraftSim/TSM integration, Forever support, costing,
 inventory/sales accounting, or release publishing; those remain later work.

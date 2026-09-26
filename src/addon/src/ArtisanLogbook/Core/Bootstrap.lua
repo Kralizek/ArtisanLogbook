@@ -43,21 +43,27 @@ function addon.Mark(label)
     addon.Notify("Start recording before adding a marker.")
     return
   end
-  addon.Emit("TRACE_MARK", label:sub(1, 240))
+  local marker = label:sub(1, 240)
+  if addon.Emit("TRACE_MARK", marker) then
+    addon.Notify("Marker: " .. marker)
+  end
 end
 
 function addon.Emit(event, ...)
   if not addon.recorder or not addon.recorder.recording then
-    return
+    return false
   end
   local ok, captured, reason = pcall(addon.recorder.Capture, addon.recorder, event, ...)
   if not ok then
     addon.recorder.recording = false
     addon.recorder.database.stoppedReason = "capture-error"
     addon.Notify("Capture stopped after an error; earlier evidence is preserved.")
-  elseif not captured and reason then
-    addon.Notify(reason)
+    return false
+  elseif not captured then
+    if reason then addon.Notify(reason) end
+    return false
   end
+  return true
 end
 
 function addon.HandleRetailEvent(event, ...)
@@ -68,9 +74,23 @@ function addon.HandleRetailEvent(event, ...)
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
       local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, select(1, ...))
       if not ok or not fact then addon.ledgerCaptureError = true end
+    elseif event == "TRADE_SKILL_CLOSE" then
+      addon.ledger:CancelCraft()
     end
   end
   addon.Emit(event, ...)
+end
+
+function addon.SubmitCraft(recipeId, count, concentration, quote, selections)
+  if addon.ledger then
+    local ok, request = pcall(addon.ledger.SubmitCraft, addon.ledger,
+      recipeId, count, concentration, quote, selections)
+    if not ok or not request then addon.ledgerCaptureError = true end
+  end
+end
+
+function addon.InvalidateCraft()
+  if addon.ledger then addon.ledger:InvalidateCraft() end
 end
 
 local function optionalIdentity(api)
@@ -90,7 +110,9 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   addon.ledger, addon.ledgerError = addon.Ledger.New(ArtisanLogbookDB, {
     wall = GetServerTime,
   })
-  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent)
+  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent, function()
+    return addon.recorder ~= nil and addon.recorder.recording
+  end, addon.SubmitCraft, addon.InvalidateCraft)
   local version, build, buildDate, interface = GetBuildInfo()
   if addon.ledger then
     local ok, sessionId, reason = pcall(addon.ledger.CreateSession, addon.ledger, {

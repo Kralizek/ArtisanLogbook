@@ -26,14 +26,14 @@ function addon.DetectFlavor(api)
   return "other", api.WOW_PROJECT_ID
 end
 
-function addon.CreateFlavorAdapter(api, emit)
+function addon.CreateFlavorAdapter(api, emit, isRecording, submitCraft, invalidateCraft)
   if addon.RegisterRetailAdapter then
     addon.RegisterRetailAdapter(api)
   end
   local flavor, projectID = addon.DetectFlavor(api)
   local registered = adapters[projectID]
   if registered then
-    return registered.factory(api, emit)
+    return registered.factory(api, emit, isRecording, submitCraft, invalidateCraft)
   end
   return {
     capabilities = {

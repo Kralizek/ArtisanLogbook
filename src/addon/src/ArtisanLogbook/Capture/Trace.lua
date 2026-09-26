@@ -3,8 +3,8 @@ local _, addon = ...
 local Trace = {}
 addon.Trace = Trace
 
-Trace.schemaVersion = 1
-Trace.exportVersion = 1
+Trace.schemaVersion = 2
+Trace.exportVersion = 2
 Trace.maxRecords = 2000
 Trace.maxBytes = 2 * 1024 * 1024
 Trace.maxPayloadBytes = 16384
@@ -91,14 +91,23 @@ function Trace.New(database, clock, isSecret)
   if database == nil then
     database = {
       traceSchemaVersion = Trace.schemaVersion,
-      exportContractVersion = Trace.exportVersion,
+      traceExportVersion = Trace.exportVersion,
       nextSequence = 1,
       records = {},
       bytes = 0,
     }
+  elseif type(database) == "table" and database.traceSchemaVersion == 1 and
+      database.exportContractVersion == 1 and type(database.records) == "table" and
+      type(database.nextSequence) == "number" and type(database.bytes) == "number" then
+    local migrated = {}
+    for key, value in pairs(database) do migrated[key] = value end
+    migrated.traceSchemaVersion = Trace.schemaVersion
+    migrated.traceExportVersion = Trace.exportVersion
+    migrated.exportContractVersion = nil
+    database = migrated
   end
   if type(database) ~= "table" or database.traceSchemaVersion ~= Trace.schemaVersion or
-      database.exportContractVersion ~= Trace.exportVersion or type(database.records) ~= "table" or
+      database.traceExportVersion ~= Trace.exportVersion or type(database.records) ~= "table" or
       type(database.nextSequence) ~= "number" or type(database.bytes) ~= "number" then
     return nil, "Unsupported or invalid trace database; existing data was left untouched."
   end
@@ -162,7 +171,7 @@ function Trace.New(database, clock, isSecret)
     local lines = {
       "return {",
       "traceSchemaVersion=" .. Trace.schemaVersion .. ",",
-      "exportContractVersion=" .. Trace.exportVersion .. ",",
+      "traceExportVersion=" .. Trace.exportVersion .. ",",
       "totalRecords=" .. #database.records .. ",",
       "records={",
     }

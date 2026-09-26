@@ -100,6 +100,23 @@ test("reload is paused and clear does not reuse event sequence numbers", functio
   assert(reloaded.database.records[1].sequence == 3)
 end)
 
+test("legacy trace contract names migrate without mutating the source table", function()
+  local legacy = {
+    traceSchemaVersion = 1,
+    exportContractVersion = 1,
+    nextSequence = 4,
+    records = { { sequence = 3, event = "OLD", payload = "{}", timestamp = 1, elapsed = 1 } },
+    bytes = 10,
+  }
+  local recorder = assert(Trace.New(legacy, clock))
+  assert(recorder.database.traceSchemaVersion == Trace.schemaVersion)
+  assert(recorder.database.traceExportVersion == Trace.exportVersion)
+  assert(recorder.database.exportContractVersion == nil)
+  assert(recorder.database.records[1].event == "OLD" and recorder.database.nextSequence == 4)
+  assert(legacy.traceSchemaVersion == 1 and legacy.exportContractVersion == 1)
+  assert(legacy.traceExportVersion == nil)
+end)
+
 test("unknown schemas are not overwritten", function()
   local database = { traceSchemaVersion = 99, evidence = "keep" }
   local recorder, reason = Trace.New(database, clock)
@@ -126,7 +143,11 @@ test("exports are deterministic and preserve control characters", function()
   recorder:Capture("TEXT", "quote\"\nline\000end\\")
   local exported = recorder:Export(1, 2)
   assert(exported == recorder:Export(1, 2))
-  assert(decode(exported).records[2].arguments[1] == "quote\"\nline\000end\\")
+  local decoded = decode(exported)
+  assert(decoded.traceSchemaVersion == Trace.schemaVersion)
+  assert(decoded.traceExportVersion == Trace.exportVersion)
+  assert(decoded.exportContractVersion == nil)
+  assert(decoded.records[2].arguments[1] == "quote\"\nline\000end\\")
 end)
 
 test("unsupported table keys cannot bypass the traversal budget", function()
