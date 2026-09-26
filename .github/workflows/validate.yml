@@ -1,0 +1,23 @@
+name: Validate Tracer
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tracer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua and packaging tools
+        run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip
+      - name: Test and package
+        run: bash scripts/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ArtisanLogbook-tracer
+          path: dist/ArtisanLogbook-tracer.zip
+          if-no-files-found: error

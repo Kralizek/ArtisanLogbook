@@ -7,3 +7,7 @@ Thumbs.db
 .idea/
 *.user
 *.suo
+
+# Generated packages and private in-game evidence
+/dist/
+/traces/
