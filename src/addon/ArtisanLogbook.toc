@@ -1,0 +1,11 @@
+## Interface: 120100
+## Title: Artisan Logbook - Capture Tracer
+## Notes: Temporary raw crafting-event tracer. No craft ledger yet.
+## Version: 0.1.0-tracer
+## SavedVariables: ArtisanLogbookTraceDB
+
+Capture/Trace.lua
+Flavors/Registry.lua
+Flavors/Retail/Adapter.lua
+UI/TraceWindow.lua
+Core/Bootstrap.lua
