@@ -25,6 +25,7 @@ jobs:
       - name: Test and package
         run: bash src/addon/scripts/package.sh
       - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push'
         with:
           name: ArtisanLogbook-addon
           path: src/addon/dist/ArtisanLogbook-tracer.zip
