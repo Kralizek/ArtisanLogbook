@@ -1,8 +1,14 @@
 local _, addon = ...
 
 local Ledger = {}
-Ledger.schemaVersion = 3
-Ledger.retentionDays = 180
+Ledger.schemaVersion = 4
+Ledger.retentionDays = 60
+
+local seriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent" }
+
+local function isFinite(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
 
 local dimensions = {
   realm = "realms",
@@ -60,6 +66,7 @@ local function emptyDatabase()
     nextCraftId = 1,
     nextRequestId = 1,
     crafts = {},
+    craftSeries = {},
     requests = {},
     reagents = {},
     dimensions = {},
@@ -122,9 +129,8 @@ local function migrateTwo(data)
   return data
 end
 
-local migrations = { [0] = migrateZero, [1] = migrateOne, [2] = migrateTwo }
-
 local references = {
+  series = { characterDimensionId = "character", recipeDimensionId = "recipe" },
   craft = { sessionDimensionId = "session", recipeDimensionId = "recipe", requestId = "request",
     outputItemDimensionId = "item", professionDimensionId = "profession" },
   request = { sessionDimensionId = "session", recipeDimensionId = "recipe" },
@@ -153,7 +159,52 @@ local function validateReferences(kind, row, ids)
   return true
 end
 
-local function validateDatabase(data)
+local function seriesGroup(index, bucketStart, characterId)
+  local bucket = index[bucketStart]
+  if not bucket then
+    bucket = {}
+    index[bucketStart] = bucket
+  end
+  local key = characterId or 0
+  if not bucket[key] then bucket[key] = {} end
+  return bucket[key]
+end
+
+local function accumulateSeries(data, index, sessions, craft)
+  local bucketStart = math.floor(craft.timestamp / 86400) * 86400
+  if not isFinite(bucketStart) then return nil, "invalid craft series bucket" end
+  local session = sessions[craft.sessionDimensionId]
+  local characterId = session and session.characterDimensionId
+  local group = seriesGroup(index, bucketStart, characterId)
+  local key = craft.recipeDimensionId or 0
+  local existing = group[key]
+  local row = {
+    bucketStart = bucketStart,
+    characterDimensionId = characterId,
+    recipeDimensionId = craft.recipeDimensionId,
+    craftCount = (existing and existing.craftCount or 0) + 1,
+  }
+  for _, metric in ipairs(seriesMetrics) do
+    local coverage = metric .. "ObservedCount"
+    row[coverage] = existing and existing[coverage] or 0
+    row[metric] = existing and existing[metric] or nil
+    if craft[metric] ~= nil then
+      if not isFinite(craft[metric]) then return nil, "invalid craft metric: " .. metric end
+      row[metric] = (row[metric] or 0) + craft[metric]
+      row[coverage] = row[coverage] + 1
+      if not isFinite(row[metric]) then return nil, "craft series sum overflow: " .. metric end
+    end
+  end
+  if existing then
+    for field, value in pairs(row) do existing[field] = value end
+  else
+    data.craftSeries[#data.craftSeries + 1] = row
+    group[key] = row
+  end
+  return true
+end
+
+local function validateDatabase(data, legacy)
   if not isArray(data.crafts) or not isArray(data.reagents) or not isArray(data.requests) or
       type(data.dimensions) ~= "table" or type(data.nextDimensionId) ~= "table" then
     return nil, "ledger collections are invalid"
@@ -169,7 +220,7 @@ local function validateDatabase(data)
     return nil, "retentionDays must be a positive integer"
   end
   if data.maxCrafts ~= nil then
-    return nil, "schema 3 does not support maxCrafts"
+    return nil, "schema 4 does not support maxCrafts"
   end
 
   local ids = { craft = {}, request = {} }
@@ -256,8 +307,52 @@ local function validateDatabase(data)
       if not ok then return nil, reason end
     end
   end
+  if not legacy then
+    if not isArray(data.craftSeries) then return nil, "craftSeries must be a dense array" end
+    local seen = {}
+    for _, row in ipairs(data.craftSeries) do
+      local ok, reason = validateReferences("series", row, ids)
+      if not ok then return nil, reason end
+      if not isFinite(row.bucketStart) or row.bucketStart % 86400 ~= 0 or
+          not isInteger(row.craftCount) then
+        return nil, "invalid craft series bucket or count"
+      end
+      local group = seriesGroup(seen, row.bucketStart, row.characterDimensionId)
+      local key = row.recipeDimensionId or 0
+      if group[key] then return nil, "duplicate craft series grain" end
+      group[key] = true
+      for _, metric in ipairs(seriesMetrics) do
+        local count = row[metric .. "ObservedCount"]
+        if not isGameId(count) or count > row.craftCount or
+            (count == 0 and row[metric] ~= nil) or
+            (count > 0 and not isFinite(row[metric])) then
+          return nil, "invalid craft series coverage or sum: " .. metric
+        end
+      end
+    end
+  end
   return true
 end
+
+local function migrateThree(data)
+  if data.craftSeries ~= nil then return nil, "old schema contains unexpected craftSeries" end
+  local valid, reason = validateDatabase(data, true)
+  if not valid then return nil, reason end
+  local sessions, index = {}, {}
+  for _, session in ipairs(data.dimensions.sessions) do sessions[session.id] = session end
+  data.craftSeries = {}
+  for _, craft in ipairs(data.crafts) do
+    local ok
+    ok, reason = accumulateSeries(data, index, sessions, craft)
+    if not ok then return nil, reason end
+  end
+  -- Schema 3 did not distinguish its default from an explicit 180-day choice.
+  if data.retentionDays == 180 then data.retentionDays = Ledger.retentionDays end
+  data.schemaVersion = 4
+  return data
+end
+
+local migrations = { [0] = migrateZero, [1] = migrateOne, [2] = migrateTwo, [3] = migrateThree }
 
 local function nowFunction(clock)
   if clock and type(clock.wall) == "function" then
@@ -345,6 +440,11 @@ function Ledger:RebuildIndexes()
       self.dimensionRows[kind][row.id] = row
     end
   end
+  self.seriesByKey = {}
+  for _, row in ipairs(self.database.craftSeries) do
+    local group = seriesGroup(self.seriesByKey, row.bucketStart, row.characterDimensionId)
+    group[row.recipeDimensionId or 0] = row
+  end
   self.craftById, self.requestById, self.reagentsByCraftId = {}, {}, {}
   self.craftIds, self.craftIdsByTime, self.operationIndex = {}, {}, {}
   for _, request in ipairs(self.database.requests) do self.requestById[request.id] = request end
@@ -419,7 +519,7 @@ local function openDatabase(database, clock, options)
   end
   if options then
     if options.maxCrafts ~= nil then
-      return nil, "ledger options refused: schema 3 does not support maxCrafts"
+      return nil, "ledger options refused: schema 4 does not support maxCrafts"
     end
     if options.retentionDays ~= nil then data.retentionDays = options.retentionDays end
     valid, reason = validateDatabase(data)
@@ -774,6 +874,9 @@ function Ledger:RecordResult(result)
     end
   end
 
+  local aggregated
+  aggregated, reason = accumulateSeries(data, self.seriesByKey, self.dimensionRows.session, craft)
+  if not aggregated then return nil, reason end
   data.nextCraftId = craft.id + 1
   data.crafts[#data.crafts + 1] = craft
   if pending and request then

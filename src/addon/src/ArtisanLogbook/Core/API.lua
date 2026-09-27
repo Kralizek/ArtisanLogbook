@@ -345,19 +345,96 @@ function API.GetCrafts(filter, options)
   return page
 end
 
+local function seriesRelated(ledger, row)
+  local characterRow = dimension(ledger, "character", row.characterDimensionId)
+  local recipeRow = dimension(ledger, "recipe", row.recipeDimensionId)
+  return {
+    characters = characterRow,
+    realms = characterRow and dimension(ledger, "realm", characterRow.realmDimensionId),
+    recipes = recipeRow,
+    professions = recipeRow and dimension(ledger, "profession", recipeRow.professionDimensionId),
+    expansions = recipeRow and dimension(ledger, "expansion", recipeRow.expansionDimensionId),
+  }
+end
+
+function API.GetCraftSeries(filter, options)
+  local normalized, reason = normalizeFilter(filter)
+  if not normalized then return nil, reason end
+  local time = normalized.time
+  if time and ((time.from and time.from % 86400 ~= 0) or (time.to and time.to % 86400 ~= 0)) then
+    return nil, "invalid-filter"
+  end
+  if options == nil then options = {} end
+  if not keysAllowed(options, {}) then return nil, "invalid-options" end
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  local selected = {}
+  for _, row in ipairs(ledger.database.craftSeries) do
+    if matches({ timestamp = row.bucketStart }, seriesRelated(ledger, row), normalized) then
+      selected[#selected + 1] = row
+    end
+  end
+  table.sort(selected, function(left, right)
+    if left.bucketStart ~= right.bucketStart then return left.bucketStart < right.bucketStart end
+    local leftCharacter = dimension(ledger, "character", left.characterDimensionId)
+    local rightCharacter = dimension(ledger, "character", right.characterDimensionId)
+    local leftKey, rightKey = leftCharacter and leftCharacter.key or "", rightCharacter and rightCharacter.key or ""
+    if leftKey ~= rightKey then return leftKey < rightKey end
+    local leftRecipe = dimension(ledger, "recipe", left.recipeDimensionId)
+    local rightRecipe = dimension(ledger, "recipe", right.recipeDimensionId)
+    local leftId = identity("recipes", leftRecipe) or -1
+    local rightId = identity("recipes", rightRecipe) or -1
+    if leftId ~= rightId then return leftId < rightId end
+    return (left.recipeDimensionId or 0) < (right.recipeDimensionId or 0)
+  end)
+  local result = { series = {} }
+  for _, row in ipairs(selected) do
+    local projected = fields(row, { "bucketStart", "craftCount", "outputQuantity", "multicraftBonus",
+      "concentrationSpent", "outputQuantityObservedCount", "multicraftBonusObservedCount",
+      "concentrationSpentObservedCount" })
+    local rows = seriesRelated(ledger, row)
+    projected.character = character(ledger, rows.characters)
+    projected.realm = realm(ledger, rows.realms)
+    projected.recipe = recipe(ledger, rows.recipes)
+    projected.profession = profession(ledger, rows.professions)
+    projected.expansion = expansion(ledger, rows.expansions)
+    result.series[#result.series + 1] = projected
+  end
+  return result
+end
+
+local function requestedFacets(value)
+  if value == nil then return facets end
+  if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end
+  local count, seen = 0, {}
+  for key, name in pairs(value) do
+    if not integer(key, 1) or type(name) ~= "string" or not projectors[name] then return nil end
+    count = count + 1
+    seen[name] = true
+  end
+  for index = 1, count do if value[index] == nil then return nil end end
+  local requested = {}
+  for _, name in ipairs(facets) do
+    if seen[name] then requested[#requested + 1] = name end
+  end
+  return requested
+end
+
 function API.GetFacets(filter, options)
   local normalized, reason = normalizeFilter(filter)
   if not normalized then return nil, reason end
   if options == nil then options = {} end
-  if not keysAllowed(options, { mode = true }) then return nil, "invalid-options" end
+  if not keysAllowed(options, { mode = true, facets = true }) then return nil, "invalid-options" end
+  local requested = requestedFacets(options.facets)
+  if not requested then return nil, "invalid-options" end
   local mode = options.mode
   if mode == nil then mode = "self-excluding" end
   if mode ~= "self-excluding" and mode ~= "strict" then return nil, "invalid-options" end
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
   local result, seen = {}, {}
-  for _, facet in ipairs(facets) do result[facet] = {}; seen[facet] = {} end
-  for _, facet in ipairs(facets) do
+  for _, facet in ipairs(requested) do result[facet] = {}; seen[facet] = {} end
+  for _, facet in ipairs(requested) do
     local excluded = mode == "self-excluding" and facet or nil
     for _, id in ipairs(candidateIds(ledger, normalized, excluded)) do
       local craft = ledger.craftById[id]
@@ -374,7 +451,7 @@ function API.GetFacets(filter, options)
       end
     end
   end
-  for _, facet in ipairs(facets) do
+  for _, facet in ipairs(requested) do
     table.sort(result[facet], function(left, right) return left.value < right.value end)
   end
   return result

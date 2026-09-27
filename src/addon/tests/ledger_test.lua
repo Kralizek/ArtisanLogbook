@@ -205,6 +205,7 @@ test("schema zero migrates without recycling IDs", function()
   assert(ledger:RecordResult({}))
   local legacy = ledger.database
   legacy.schemaVersion = 0
+  legacy.craftSeries = nil
   legacy.requests, legacy.nextRequestId = nil, nil
   legacy.retentionDays, legacy.maxCrafts = nil, nil
   local migrated = assert(Ledger.New(legacy, { wall = function() return 1800000000 end }))
@@ -274,13 +275,14 @@ test("every persisted reference is validated before load or migration can prune"
     { "items", "expansionDimensionId" }, { "professions", "expansionDimensionId" },
     { "recipes", "professionDimensionId" },
   }
-  for _, version in ipairs({ 0, 1, 2, 3 }) do
+  for _, version in ipairs({ 0, 1, 2, 3, 4 }) do
     for _, reference in ipairs(cases) do
       local ledger, clock = newLedger()
       replay(ledger, fixture.cases)
       ledger:AddDimension("profession", "test")
       local data = ledger.database
       data.schemaVersion = version
+      if version < 4 then data.craftSeries = nil end
       if version < 3 then data.maxCrafts = 50000 end
       if version < 2 then data.requests, data.nextRequestId = nil, nil end
       local rows = data[reference[1]] or data.dimensions[reference[1]]
@@ -301,6 +303,7 @@ test("sparse collections and missing counters cannot be silently repaired", func
       replay(ledger, fixture.cases)
       local data = ledger.database
       data.schemaVersion = version
+      data.craftSeries = nil
       data.maxCrafts = 50000
       data.requests, data.nextRequestId = nil, nil
       local rows = data[collection] or data.dimensions[collection]
@@ -311,6 +314,7 @@ test("sparse collections and missing counters cannot be silently repaired", func
     local ledger = newLedger()
     local data = ledger.database
     data.schemaVersion, data.nextCraftId = version, nil
+    data.craftSeries = nil
     data.maxCrafts = 50000
     data.requests, data.nextRequestId = nil, nil
     assert(Ledger.New(data) == nil and data.nextCraftId == nil)
@@ -539,9 +543,10 @@ test("schema 1 migration preserves partial returns and refuses invalid new refer
   } }))
   local old = ledger.database
   old.schemaVersion, old.nextRequestId, old.requests = 1, nil, nil
+  old.craftSeries = nil
   old.maxCrafts = 50000
   local migrated = assert(Ledger.New(old, clock))
-  assert(migrated.database.schemaVersion == 3 and migrated.database.nextRequestId == 1)
+  assert(migrated.database.schemaVersion == 4 and migrated.database.nextRequestId == 1)
   assert(#migrated.database.requests == 0 and migrated.database.crafts[1].id == result.id)
   assert(migrated.database.reagents[1].allocatedQuantity == nil)
   assert(old.schemaVersion == 1 and old.requests == nil)
@@ -562,7 +567,7 @@ test("schema 1 migration preserves partial returns and refuses invalid new refer
       row[field] = 999
     end
     local refused = Ledger.New(copied)
-    assert(refused == nil and copied.schemaVersion == 3 and copied.requests[1].id == 1, field)
+    assert(refused == nil and copied.schemaVersion == 4 and copied.requests[1].id == 1, field)
   end
   local mismatched = assert(Ledger.New(migrated.database)).database
   mismatched.crafts[2].recipeDimensionId = mismatched.crafts[1].recipeDimensionId
@@ -603,10 +608,11 @@ test("schema 2 migration removes the count cap without mutating saved data", fun
   assert(ledger:RecordResult({}))
   assert(ledger:RecordResult({}))
   ledger.database.schemaVersion = 2
+  ledger.database.craftSeries = nil
   ledger.database.maxCrafts = 1
   local migrated = assert(Ledger.New(ledger.database, clock))
-  assert(migrated.database.schemaVersion == 3 and migrated.database.maxCrafts == nil)
-  assert(Ledger.maxCrafts == nil and migrated.database.retentionDays == 180)
+  assert(migrated.database.schemaVersion == 4 and migrated.database.maxCrafts == nil)
+  assert(Ledger.maxCrafts == nil and migrated.database.retentionDays == 60)
   assert(#migrated.database.crafts == 2 and #migrated.craftIds == 2)
   assert(ledger.database.schemaVersion == 2 and ledger.database.maxCrafts == 1)
   for _, invalid in ipairs({ false, 0, -1, 1.5, "50000" }) do
@@ -618,7 +624,7 @@ test("schema 2 migration removes the count cap without mutating saved data", fun
   assert(Ledger.New(ledger.database, clock) == nil)
 end)
 
-test("schema 3 refuses persisted and configured count caps", function()
+test("schema 4 refuses persisted and configured count caps", function()
   local ledger, clock = newLedger()
   for _, cap in ipairs({ false, 0, 1, 50000 }) do
     local refused, reason = Ledger.New(ledger.database, clock, { maxCrafts = cap })
@@ -627,7 +633,7 @@ test("schema 3 refuses persisted and configured count caps", function()
     ledger.database.maxCrafts = cap
     refused, reason = Ledger.New(ledger.database, clock)
     assert(refused == nil and reason:find("maxCrafts", 1, true))
-    assert(ledger.database.schemaVersion == 3 and ledger.database.maxCrafts == cap)
+    assert(ledger.database.schemaVersion == 4 and ledger.database.maxCrafts == cap)
     ledger.database.maxCrafts = nil
   end
 end)
@@ -638,7 +644,7 @@ test("startup prunes before building runtime indexes once", function()
     { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 100 } },
   }))
   local old = assert(ledger:RecordResult({ operationID = 10 }))
-  clock.current = clock.current + 180 * 86400 + 1
+  clock.current = clock.current + 60 * 86400 + 1
   local retained = assert(ledger:RecordResult({ operationID = 11 }))
   assert(#ledger.database.crafts == 2 and #ledger.database.reagents == 2)
   local orphan = assert(ledger:SubmitCraft(13, 1, false))
@@ -796,6 +802,11 @@ test("incremental indexes are complete before the committed callback", function(
     assert(self.craftIds[1] == craft.id and self.craftIdsByTime[1] == craft.id)
     assert(self.craftIdsByRecipe[12][1] == craft.id)
     assert(self.operationIndex[craft.sessionDimensionId][10] == 1)
+    local series = self.database.craftSeries[1]
+    local characterId = self.dimensionRows.session[craft.sessionDimensionId].characterDimensionId
+    assert(series.craftCount == 1 and series.recipeDimensionId == request.recipeDimensionId)
+    assert(series.characterDimensionId == characterId)
+    assert(self.seriesByKey[series.bucketStart][characterId][request.recipeDimensionId] == series)
     callbackCompleted = true
   end
   assert(ledger:RecordResult({ operationID = 10, resourcesReturned = {} }))
@@ -812,11 +823,13 @@ test("more than 50000 crafts survive capture and reload without historical scans
   end
   assert(#ledger.database.crafts == 50001 and #ledger.database.requests == 50001)
   assert(#ledger.database.reagents == 50001 and #ledger.craftIdsByRecipe[12] == 50001)
+  assert(#ledger.database.craftSeries == 1 and ledger.database.craftSeries[1].craftCount == 50001)
   local oldIpairs, oldPairs, oldSort, oldInsert = ipairs, pairs, table.sort, table.insert
   local forbidden = {
     [ledger.database.crafts] = true, [ledger.database.requests] = true,
     [ledger.database.reagents] = true, [ledger.craftIds] = true, [ledger.craftIdsByTime] = true,
     [ledger.craftById] = true, [ledger.requestById] = true, [ledger.reagentsByCraftId] = true,
+    [ledger.database.craftSeries] = true, [ledger.seriesByKey] = true,
   }
   local function noScan() error("capture scanned or rebuilt historical state") end
   ipairs = function(rows)
@@ -851,6 +864,202 @@ test("more than 50000 crafts survive capture and reload without historical scans
   assert(reloaded.craftById[50003] == reloaded.database.crafts[50003])
   assert(reloaded.requestById[50003] == reloaded.database.requests[50003])
   assert(reloaded.reagentsByCraftId[50002][1] == reloaded.database.reagents[50002])
+  assert(#reloaded.database.craftSeries == 2 and reloaded.database.craftSeries[1].craftCount == 50002)
+  assert(reloaded.database.craftSeries[2].craftCount == 1)
+end)
+
+test("daily series distinguish observed zero from unavailable metrics", function()
+  local ledger = newLedger()
+  assert(ledger:RecordResult({}))
+  local series = ledger.database.craftSeries[1]
+  assert(series.craftCount == 1 and series.recipeDimensionId == nil)
+  for _, metric in ipairs({ "outputQuantity", "multicraftBonus", "concentrationSpent" }) do
+    assert(series[metric] == nil and series[metric .. "ObservedCount"] == 0)
+  end
+  assert(ledger:RecordResult({ quantity = 0, multicraft = 0, concentrationSpent = 0 }))
+  assert(series.craftCount == 2)
+  for _, metric in ipairs({ "outputQuantity", "multicraftBonus", "concentrationSpent" }) do
+    assert(series[metric] == 0 and series[metric .. "ObservedCount"] == 1)
+  end
+  assert(ledger:RecordResult({ quantity = 5, concentrationSpent = 7, ingenuityRefund = 3,
+    resourcesReturned = { { reagent = { itemID = 100 }, quantity = 2 } } }))
+  assert(series.craftCount == 3 and series.outputQuantity == 5 and series.concentrationSpent == 7)
+  assert(series.outputQuantityObservedCount == 2 and series.concentrationSpentObservedCount == 2)
+  assert(series.multicraftBonusObservedCount == 1 and series.ingenuityRefund == nil)
+  assert(series.resourcesReturned == nil and #ledger.database.craftSeries == 1)
+end)
+
+test("daily series grain uses UTC day character and optional recipe across sessions", function()
+  local ledger, clock = newLedger()
+  clock.current = 1800000000 - 1800000000 % 86400
+  local metadata = { projectId = 1, regionId = 1, gameRealmId = 12,
+    realmName = "Realm", characterGUID = "Player-Test" }
+  ledger:CreateSession(metadata)
+  local request = assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({ quantity = 1 }))
+  local first = ledger.database.craftSeries[1]
+  ledger:CreateSession(metadata)
+  assert(ledger:SubmitCraft(12, 1, false))
+  clock.current = clock.current + 86399
+  assert(ledger:RecordResult({ quantity = 2 }))
+  assert(#ledger.database.craftSeries == 1 and first.craftCount == 2 and first.outputQuantity == 3)
+  clock.current = clock.current + 1
+  assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({}))
+  assert(#ledger.database.craftSeries == 2)
+  assert(ledger.database.craftSeries[2].bucketStart == first.bucketStart + 86400)
+  ledger:CreateSession({})
+  assert(ledger:RecordResult({}))
+  ledger:CreateSession({})
+  assert(ledger:RecordResult({}))
+  local unknown = ledger.database.craftSeries[3]
+  assert(unknown.characterDimensionId == nil and unknown.recipeDimensionId == nil)
+  assert(unknown.craftCount == 2 and ledger.seriesByKey[unknown.bucketStart][0][0] == unknown)
+  assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({}))
+  assert(ledger.database.craftSeries[4].characterDimensionId == nil)
+  assert(ledger.database.craftSeries[4].recipeDimensionId == request.recipeDimensionId)
+  metadata.characterGUID = "Player-Other"
+  ledger:CreateSession(metadata)
+  assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({}))
+  assert(#ledger.database.craftSeries == 5)
+  assert(ledger.database.craftSeries[5].characterDimensionId ~= first.characterDimensionId)
+end)
+
+test("schema 3 backfills all surviving history before 60 day pruning exactly once", function()
+  local ledger, clock = newLedger()
+  local originalTime = clock.current
+  for _, age in ipairs({ 200, 61, 60, 0 }) do
+    clock.current = originalTime - age * 86400
+    assert(ledger:RecordResult({ quantity = age, multicraft = 0 }))
+  end
+  clock.current = originalTime
+  local legacy = ledger.database
+  legacy.schemaVersion, legacy.craftSeries, legacy.retentionDays = 3, nil, 180
+  local migrated = assert(Ledger.New(legacy, clock))
+  assert(migrated.database.schemaVersion == 4 and migrated.database.retentionDays == 60)
+  assert(#migrated.database.crafts == 2 and #migrated.database.craftSeries == 4)
+  assert(migrated.database.craftSeries[1].outputQuantity == 200)
+  assert(migrated.database.craftSeries[2].outputQuantity == 61)
+  assert(legacy.schemaVersion == 3 and legacy.craftSeries == nil and legacy.retentionDays == 180)
+  assert(#legacy.crafts == 4)
+  local reloaded = assert(Ledger.New(migrated.database, clock))
+  assert(#reloaded.database.craftSeries == 4)
+  for _, row in ipairs(reloaded.database.craftSeries) do
+    assert(row.craftCount == 1 and row.outputQuantityObservedCount == 1)
+    assert(row.multicraftBonus == 0 and row.multicraftBonusObservedCount == 1)
+    assert(row.concentrationSpent == nil and row.concentrationSpentObservedCount == 0)
+  end
+  reloaded:CreateSession({})
+  assert(reloaded:RecordResult({ quantity = 2 }))
+  assert(#reloaded.database.craftSeries == 5)
+end)
+
+test("migration preserves nondefault retention and honors an explicit 180 day override", function()
+  for _, retention in ipairs({ 1, 90, 365 }) do
+    local ledger, clock = newLedger({ retentionDays = retention })
+    ledger.database.schemaVersion, ledger.database.craftSeries = 3, nil
+    assert(assert(Ledger.New(ledger.database, clock)).database.retentionDays == retention)
+  end
+  local ledger, clock = newLedger()
+  ledger.database.schemaVersion, ledger.database.craftSeries, ledger.database.retentionDays = 3, nil, 180
+  local migrated = assert(Ledger.New(ledger.database, clock, { retentionDays = 180 }))
+  assert(migrated.database.retentionDays == 180)
+  assert(assert(Ledger.New(migrated.database, clock)).database.retentionDays == 180)
+end)
+
+test("old schemas refuse unexpected series without mutating saved data", function()
+  for version = 0, 3 do
+    for _, unexpected in ipairs({ false, {}, { { craftCount = 1 } } }) do
+      local ledger, clock = newLedger()
+      local data = ledger.database
+      data.schemaVersion, data.craftSeries = version, unexpected
+      if version < 3 then data.maxCrafts = 50000 end
+      if version < 2 then data.requests, data.nextRequestId = nil, nil end
+      local refused, reason = Ledger.New(data, clock)
+      assert(refused == nil and reason:find("unexpected craftSeries", 1, true))
+      assert(data.schemaVersion == version and data.craftSeries == unexpected)
+    end
+  end
+end)
+
+test("series keep dimensions and enrichable metadata after all detailed facts expire", function()
+  local ledger, clock = newLedger()
+  local request = assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({ quantity = 2 }))
+  local row = ledger.database.craftSeries[1]
+  clock.current = clock.current + 61 * 86400
+  assert(#ledger.database.crafts == 1)
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  assert(#reloaded.database.crafts == 0 and #reloaded.database.requests == 0)
+  local series = reloaded.database.craftSeries[1]
+  assert(series.craftCount == 1 and series.outputQuantity == 2)
+  assert(reloaded.dimensionRows.character[row.characterDimensionId])
+  local profession = assert(reloaded:AddDimension("profession", "profession", { skillLineId = 164 }))
+  local expansion = assert(reloaded:AddDimension("expansion", "era", {}))
+  assert(reloaded:AddDimension("recipe", 12, {
+    professionDimensionId = profession, expansionDimensionId = expansion, name = "Enriched",
+  }) == request.recipeDimensionId)
+  assert(series.recipeDimensionId == request.recipeDimensionId)
+  assert(series.professionDimensionId == nil and series.expansionDimensionId == nil)
+  assert(reloaded.dimensionRows.recipe[series.recipeDimensionId].professionDimensionId == profession)
+  reloaded:Prune(clock.current + 1000 * 86400)
+  assert(reloaded.database.craftSeries[1] == series and series.outputQuantity == 2)
+  assert(reloaded.seriesByKey[series.bucketStart][series.characterDimensionId][series.recipeDimensionId] == series)
+  assert(#assert(Ledger.New(reloaded.database, clock)).database.craftSeries == 1)
+end)
+
+test("series validation rejects malformed grains references coverage and sums atomically", function()
+  local mutations = {
+    function(data) data.craftSeries = nil end,
+    function(data) data.craftSeries[3] = data.craftSeries[1] end,
+    function(data) data.craftSeries[2] = data.craftSeries[1] end,
+    function(data) data.craftSeries[1].bucketStart = 1 end,
+    function(data) data.craftSeries[1].bucketStart = math.huge end,
+    function(data) data.craftSeries[1].characterDimensionId = 999 end,
+    function(data) data.craftSeries[1].recipeDimensionId = 999 end,
+    function(data) data.craftSeries[1].realmDimensionId = 1 end,
+    function(data) data.craftSeries[1].craftCount = 0 end,
+    function(data) data.craftSeries[1].craftCount = 1.5 end,
+    function(data) data.craftSeries[1].outputQuantityObservedCount = nil end,
+    function(data) data.craftSeries[1].outputQuantityObservedCount = -1 end,
+    function(data) data.craftSeries[1].outputQuantityObservedCount = 0.5 end,
+    function(data) data.craftSeries[1].outputQuantityObservedCount = 2 end,
+    function(data) data.craftSeries[1].outputQuantityObservedCount = 0 end,
+    function(data) data.craftSeries[1].outputQuantity = nil end,
+    function(data) data.craftSeries[1].outputQuantity = "1" end,
+    function(data) data.craftSeries[1].outputQuantity = math.huge end,
+    function(data) data.craftSeries[1].outputQuantity = 0 / 0 end,
+    function(data) data.craftSeries[1].multicraftBonus = 0 end,
+  }
+  for index, mutate in ipairs(mutations) do
+    local ledger, clock = newLedger()
+    assert(ledger:RecordResult({ quantity = 1 }))
+    mutate(ledger.database)
+    clock.current = clock.current + 61 * 86400
+    assert(Ledger.New(ledger.database, clock) == nil, tostring(index))
+    assert(#ledger.database.crafts == 1 and ledger.database.schemaVersion == 4)
+  end
+end)
+
+test("series overflow cannot partially commit facts or increment aggregate coverage", function()
+  local ledger, clock = newLedger()
+  assert(ledger:RecordResult({ quantity = 1e308 }))
+  local callbackCalled = false
+  ledger.onCraftCommitted = function() callbackCalled = true end
+  local rejected, reason = ledger:RecordResult({ quantity = 1e308 })
+  assert(rejected == nil and reason:find("overflow", 1, true))
+  assert(#ledger.database.crafts == 1 and ledger.database.nextCraftId == 2 and not callbackCalled)
+  local row = ledger.database.craftSeries[1]
+  assert(row.craftCount == 1 and row.outputQuantityObservedCount == 1 and row.outputQuantity == 1e308)
+  assert(Ledger.New(ledger.database, clock))
+  ledger.database.schemaVersion, ledger.database.craftSeries = 3, nil
+  ledger.database.crafts[2] = { id = 2, timestamp = clock.current,
+    sessionDimensionId = ledger.currentSessionId, outputQuantity = 1e308 }
+  ledger.database.nextCraftId = 3
+  assert(Ledger.New(ledger.database, clock) == nil)
+  assert(ledger.database.schemaVersion == 3 and ledger.database.craftSeries == nil)
 end)
 
 print(string.format("%d ledger tests passed", passed))

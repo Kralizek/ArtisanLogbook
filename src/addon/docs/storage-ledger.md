@@ -16,7 +16,7 @@ the ledger and migrates independently. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-The current durable schema is version 3:
+The current durable schema is version 4:
 
 - `crafts` stores one row per observed Retail result callback, with a monotonic
   local `id`, timestamp, optional request ID, session/recipe/output dimension IDs, raw game
@@ -44,6 +44,8 @@ The current durable schema is version 3:
 - `nextCraftId` and `nextRequestId` are independent of retained rows, so pruning
   never reuses either ID. The retention setting is `retentionDays`; there is no
   craft-count ceiling.
+- `craftSeries` contains durable daily rows at UTC day × character × recipe
+  grain. Unlike detailed crafts/requests/reagents, these rows do not age out.
 
 Session dimensions capture session start, addon version, WoW version/build/date,
 interface, project, locale, character and realm references, and the flavor
@@ -189,16 +191,16 @@ flavors receive an empty capability map and do not acquire Retail-only values.
 
 ## Retention and Migration
 
-The default is `retentionDays = 180`, with **no fixed craft-count threshold**.
+The default is `retentionDays = 60`, with **no fixed craft-count threshold**.
 The issue #5 indexing/retention decision supersedes the original 50,000-craft cap.
 Pruning runs once when the ledger loads, after migration/reference validation and
 **before runtime indexes are built**. It removes craft facts older than the age
 cutoff together with their reagent facts. Requests age out with the same cutoff
 unless a retained craft still references them; zero-result requests remain until
-age expiry. Dimensions and ID counters are retained; there are no rollups or
-dimension garbage collection.
+age expiry. Dimensions, ID counters, and daily craft series are retained;
+there is no dimension garbage collection or reagent-level historical rollup.
 
-The age boundary is exclusive: exactly 180 days old survives until it is older.
+The age boundary is exclusive: exactly 60 days old survives until it is older.
 No automatic pruning occurs on submissions or results. Facts that age out during
 gameplay remain queryable until next startup, and backdated results are not
 immediately deleted. The private explicit `Prune` maintenance method rebuilds
@@ -235,6 +237,45 @@ Indexes never enter SavedVariables and never cache denormalized projections.
 Large histories above 50,000 crafts remain supported within the time window;
 initialization and explicit analytics may do history-sized work. Detailed query
 selection and paging behavior is described in [lua-api.md](lua-api.md).
+
+### Durable daily aggregates
+
+Schema 4 adds `craftSeries`, a dense collection of rows keyed by `bucketStart`,
+optional `characterDimensionId`, and optional `recipeDimensionId`. `bucketStart`
+is `floor(craft.timestamp / 86400) * 86400` (Unix UTC midnight). Character derives
+through the craft session; unknown character/recipe references form unknown
+groups rather than guessed identities. Dimension references remain resolvable
+after detail pruning. Realm derives through character and profession/expansion
+through recipe at query time, so enrichment requires no duplicate aggregate store.
+
+Each row stores `craftCount` plus optional sums `outputQuantity`, `multicraftBonus`,
+and `concentrationSpent`. Each sum has an always-present
+`<metric>ObservedCount`: absent evidence contributes neither a value nor coverage;
+observed zero contributes coverage and a zero sum. Zero coverage requires an absent
+sum, positive coverage requires a sum, and coverage cannot exceed `craftCount`.
+No Resourcefulness/reagent totals, Ingenuity rollups, or derived measurements are
+persisted.
+
+A runtime keyed aggregate lookup is rebuilt from these rows once at startup.
+Every successful commit updates exactly its aggregate grain before callback
+delivery, using constant-time lookup and fixed metric work. It never scans
+history or waits for pruning. Detail pruning never removes aggregate rows.
+Queries read this store for all days, including recent days; they never combine
+recent facts with old aggregates. The factual APIs remain detail-only.
+
+Migration from schema 3 backfills all still-persisted facts once before startup
+age pruning; a subsequent reload never replays them into the aggregate store.
+Already-pruned history cannot be recovered. Unexpected aggregate data in an old
+schema is refused rather than overwritten or double-counted. Existing reference
+validation gates backfill. Schema 4 validates aggregate collection shape, unique
+grain, UTC-day alignment, references, counts, metric coverage and finite sums.
+Migration works on a copy and cannot publish partial changes on failure.
+
+The old default retention setting of 180 becomes 60 during migration; other
+configured retention values are preserved. An explicitly configured 180 is
+indistinguishable from the old stored default and also becomes 60. Consumers may
+still configure a different positive retention value through the internal ledger
+settings; public APIs expose no retention setter.
 
 Schema 0 is explicitly migration-test scaffolding, not a released legacy addon
 format. It has the same fact/dimension/reference/counter shape as schema 1 but
@@ -277,7 +318,7 @@ Unsupported reference fields are refused rather than silently treated as absent.
 Bootstrap replaces `ArtisanLogbookDB` only after successful migration,
 validation, and session initialization. A failed load leaves the original
 SavedVariables intact and tracing independent. A missing database creates schema
-3; the unrelated trace database is never imported. Malformed result snapshots
+4; the unrelated trace database is never imported. Malformed result snapshots
 are rejected before craft/reagent facts are committed; timestamps are never
 fabricated as zero when the clock is unavailable.
 
@@ -309,3 +350,8 @@ supported by this ledger; see [lua-api.md](lua-api.md). This slice does not add
 AL1 export, Recent/
 Stats/Data product UI, CraftSim/TSM integration, Forever support, costing,
 inventory/sales accounting, or release publishing; those remain later work.
+
+Series tests cover backfill before pruning, repeated reload, coverage and observed
+zero, unknown dimensions, commit visibility, UTC boundaries, and durable queries
+on both sides of the detail cutoff. Facet tests cover requested subsets without
+unused population traversal.

@@ -12,13 +12,15 @@ dimension rows, or the private addon namespace. The API is loaded before
 `ADDON_LOADED`; queries become available after Artisan Logbook initializes.
 Consumers should declare an addon dependency or wait for its load event.
 This contract is independent of the persistence schema and any future AL1
-portable export. No export, statistics, costing, or UI is implemented here.
+portable export. No export, ad-hoc statistics beyond daily series, costing, or UI
+is implemented here.
 
 All calls use **dot syntax**, not colon syntax:
 
 ```lua
 local craft, reason = ArtisanLogbookAPI.GetCraft(id)
 local page, reason = ArtisanLogbookAPI.GetCrafts(filter, options)
+local series, reason = ArtisanLogbookAPI.GetCraftSeries(filter, options)
 local facets, reason = ArtisanLogbookAPI.GetFacets(filter, options)
 local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
@@ -147,6 +149,12 @@ paging/sorting fields in a filter are intentionally rejected, not ignored.
 
 ### Craft ordering and paging
 
+`GetCraft` and `GetCrafts` are factual-only: one returned craft is one observed
+result, never a daily summary or a reconstructed expired craft. Default detailed
+retention is **60 days**, with startup-only pruning and no count ceiling. Use the
+separate daily series API for long-range history; it never substitutes rows into
+the factual APIs.
+
 `GetCrafts(filter, { limit = 50, direction = "desc", cursor = nil })` returns
 `{ crafts = { ... }, nextCursor = "..." }`. `nextCursor` is absent on the final
 page (including an empty dataset). The default limit is 50; the **hard maximum
@@ -185,6 +193,65 @@ self-exclusion; their counts may require traversing the full retained population
 Indexes are runtime-only and rebuilt after startup retention, never persisted
 as another ledger. See [storage-ledger.md](storage-ledger.md) for details.
 
+### Durable daily craft series
+
+`GetCraftSeries(filter, options)` returns `{ series = { ... } }`. `options` may
+be omitted or `{}`; other fields/non-tables return `"invalid-options"`. This is an
+explicit analytical query over durable aggregates, not cursor-paged craft access.
+It returns every matching occupied grain, ordered ascending by UTC bucket start,
+character key, then recipe ID (unknown identities first, stable internal
+tie-breaking for sparse recipe metadata). Empty results contain an empty array.
+No empty days or unknown measurements are filled with zero.
+
+The grain is **UTC calendar day × character × recipe**, continuously updated
+at successful craft commit time. The same aggregate store supplies both recent
+and old days; there is no query-time switch at the detail cutoff, and pruning
+details never removes these daily rows.
+
+```lua
+{
+  bucketStart = 1800057600, -- Unix timestamp at UTC midnight
+  character = character, realm = realm,
+  recipe = recipe, profession = profession, expansion = expansion,
+  craftCount = 4,
+  outputQuantity = 12, outputQuantityObservedCount = 3,
+  multicraftBonus = 0, multicraftBonusObservedCount = 2,
+  concentrationSpentObservedCount = 0, -- concentrationSpent absent, not zero
+}
+```
+
+Related objects use the same detached domain shapes as craft projections.
+Unknown character/recipe identities remain absent and are grouped separately,
+not guessed into known categories. Realm derives **only through character**;
+profession/expansion derive **only through recipe**. A craft's explicit profession
+or session-only realm cannot override the specified series grain. Enriched
+dimension metadata is resolved on read even after detailed facts expire.
+
+`craftCount` counts all committed facts in that grain. Each of `outputQuantity`,
+`multicraftBonus`, and `concentrationSpent` sums only crafts where that measurement
+was observed. Its corresponding `...ObservedCount` is always present, from zero
+through `craftCount`. A sum is absent when coverage is zero; observed zero produces
+a present zero sum and positive coverage. A sum covers all crafts only when its
+observed count equals `craftCount`; missing evidence must not be interpreted as
+zero. There are no reagent totals, Ingenuity measures, output-item grouping,
+request counts, or derived net/profit measures.
+
+The shared dimensional filter has the same OR-within/AND-across semantics.
+For this API alone, supplied `time.from`/`time.to` **must be UTC-midnight-aligned**
+Unix timestamps (multiples of 86,400). The interval is half-open:
+`from <= bucketStart < to`. Non-aligned bounds return `"invalid-filter"`; they are
+not rounded, overlapped, or partially evaluated using recent details. Either bound
+may be absent; equal bounds return no rows. UTC buckets are computed from the
+observed timestamp, independent of locale, daylight saving, or login time.
+`GetCrafts` and factual facets continue to accept arbitrary timestamp bounds.
+
+Migration initializes series once from every still-persisted craft **before**
+the new startup retention pass. Previously pruned history is unrecoverable and
+is not invented. Per-metric coverage describes observed facts within a stored
+grain, not a guarantee that the addon observed every craft ever made that day.
+Successful future commits update series before callbacks; querying from a
+callback sees the new counts. Queries return copies and cannot mutate storage.
+
 ### Facets
 
 `GetFacets(filter, { mode = "self-excluding" })` returns five arrays:
@@ -193,13 +260,20 @@ as another ledger. See [storage-ledger.md](storage-ledger.md) for details.
 sorted ascending by identity (numeric for recipes/professions, lexical for keys).
 Each craft counts once per known identity; requests and reagent quantities do not
 inflate counts. Unknown identities and unreferenced dimensions are omitted.
+Facets describe retained factual crafts, not durable-series-only history.
+
+Supply `facets = { "recipes", "professions" }` to compute and return only those
+facets. Omission returns all five. An empty array returns `{}` without traversing
+craft populations. Duplicates are deduplicated; invalid names, sparse arrays,
+non-arrays, or metatables return `"invalid-options"`. Unrequested facet populations
+are not computed. Active filters still apply even when their facet is not requested.
 
 Default `"self-excluding"` computes each facet with every active constraint
 **except that facet's selection**. Midnight + Alchemy therefore lists all
 professions available in Midnight, while recipe choices still require Alchemy.
 `"strict"` applies the complete filter to every facet. Values always come from
 the retained population, never current-flavor support or an expansion catalog.
-Only `mode` is accepted: paging, cursors, craft sort directions, and invalid modes
+Only `mode` and `facets` are accepted: paging, cursors, craft sort directions, and invalid modes
 return `"invalid-options"`.
 
 ### Runtime capabilities

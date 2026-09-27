@@ -70,7 +70,9 @@ Tests and documentation accompany each slice rather than being deferred.
   version are separate boundaries. Monotonic craft IDs are never reused,
   including after prune/clear. Dimension IDs are also never recycled.
 - Updated by the issue #5 runtime indexing/retention decision: default
-  `retentionDays = 180`, with no `maxCrafts` threshold. Prune at startup before
+  `retentionDays = 60`, with no `maxCrafts` threshold. Maintain durable daily
+  craft-count/output/Multicraft/concentration series with metric coverage.
+  Prune detailed facts at startup before
   building runtime indexes, not on submissions/results; remove craft facts and their reagent
   facts together. Leave dimensions append-only. No dimension garbage collection
   or rollups in v1 unless later measurements justify a reviewed change. These

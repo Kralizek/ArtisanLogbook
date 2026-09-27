@@ -357,7 +357,7 @@ test("GetCraft and callbacks use direct lookups without traversing history", fun
   local expected = api.GetCraft(1)
   local rawIpairs = ipairs
   local history = { [ledger.database.crafts] = true, [ledger.database.requests] = true,
-    [ledger.database.reagents] = true }
+    [ledger.database.reagents] = true, [ledger.database.craftSeries] = true }
   local visits, callbacks = 0, 0
   ipairs = function(rows)
     if history[rows] then visits = visits + 1; error("history traversal") end
@@ -481,10 +481,161 @@ test("unavailable ledger has explicit errors without hiding runtime capabilities
   errorIs("not-ready", api.GetCraft(1))
   errorIs("not-ready", api.GetCrafts())
   errorIs("not-ready", api.GetFacets())
+  errorIs("not-ready", api.GetCraftSeries())
   assert(api.GetCapabilities().craftResults)
   addon.adapter = nil
   errorIs("not-ready", api.GetCapabilities())
   assert(api.RegisterCallback("CRAFT_COMMITTED", function() end))
+end)
+
+test("requested facets return only requested results and avoid unused traversals", function()
+  local ledger, api = fixture()
+  local filter = { expansions = { "midnight" }, professions = { 171 } }
+  for _, mode in ipairs({ "strict", "self-excluding" }) do
+    local all = api.GetFacets(filter, { mode = mode })
+    equal(api.GetFacets(filter, { mode = mode, facets = { "professions", "recipes", "recipes" } }),
+      { professions = all.professions, recipes = all.recipes })
+  end
+  local original, visits = ledger.craftById, 0
+  ledger.craftById = setmetatable({}, { __index = function(_, id)
+    visits = visits + 1
+    return original[id]
+  end })
+  equal(api.GetFacets(nil, { facets = {} }), {})
+  assert(visits == 0)
+  assert(api.GetFacets(nil, { facets = { "recipes" } }).recipes)
+  assert(visits == #ledger.craftIds, "traversed unrequested facet populations")
+  ledger.craftById = original
+  for _, value in ipairs({ false, 1, "recipes", { "items" }, { [2] = "recipes" },
+    { recipes = true }, { false }, setmetatable({}, {}) }) do
+    errorIs("invalid-options", api.GetFacets(nil, { facets = value }))
+  end
+end)
+
+test("series use UTC days and only the specified additive metrics with observation coverage", function()
+  local ledger, api, clock = fixture()
+  local start = math.floor(clock.current / 86400) * 86400
+  local result = api.GetCraftSeries({ recipes = { 101 } }).series
+  assert(#result == 1)
+  local row = result[1]
+  assert(row.bucketStart == start and row.craftCount == 2)
+  assert(row.outputQuantity == 5 and row.outputQuantityObservedCount == 1)
+  assert(row.multicraftBonus == 0 and row.multicraftBonusObservedCount == 1)
+  assert(row.concentrationSpent == 0 and row.concentrationSpentObservedCount == 1)
+  assert(row.recipe.id == 101 and row.character.name == "A" and row.realm.name == "Realm 1")
+  assert(row.expansion.key == "midnight" and row.profession.skillLineId == 171)
+  assert(row.reagents == nil and row.ingenuityRefund == nil and row.hasIngenuityProc == nil)
+  assert(row.id == nil and row.recipeDimensionId == nil and row.characterDimensionId == nil)
+  local absent = api.GetCraftSeries({ recipes = { 104 } }).series[1]
+  assert(absent.outputQuantity == nil and absent.outputQuantityObservedCount == 0)
+  assert(absent.concentrationSpent == nil and absent.concentrationSpentObservedCount == 0)
+  local original = api.GetCraftSeries()
+  row.recipe.name = "Changed"
+  row.character.realm.name = "Changed"
+  row.outputQuantityObservedCount = 999
+  equal(api.GetCraftSeries(), original)
+  assert(ledger.database.craftSeries[1].craftCount == 2)
+end)
+
+test("series require aligned half-open day bounds; factual queries allow arbitrary timestamps", function()
+  local ledger, api, clock = newLedger()
+  clock.current = 1800057600
+  assert(clock.current % 86400 == 0)
+  local start = clock.current
+  session(ledger, "A", 1)
+  for _, offset in ipairs({ -1, 0, 86399, 86400 }) do
+    clock.current = start + offset
+    ledger:BeginCraft(101)
+    assert(ledger:RecordResult({ operationID = offset + 2, quantity = 0 }))
+  end
+  local all = api.GetCraftSeries().series
+  assert(#all == 3 and all[1].bucketStart == start - 86400 and all[3].bucketStart == start + 86400)
+  local day = api.GetCraftSeries({ time = { from = start, to = start + 86400 } }).series
+  assert(#day == 1 and day[1].craftCount == 2 and day[1].outputQuantityObservedCount == 2)
+  equal(api.GetCraftSeries({ time = { from = start, to = start } }), { series = {} })
+  assert(#api.GetCraftSeries({ time = { to = start } }).series == 1)
+  assert(#api.GetCraftSeries({ time = { from = start } }).series == 2)
+  for _, time in ipairs({ { from = start + 1 }, { to = start + 86399 },
+    { from = start + 0.5 }, { from = start + 86400, to = start },
+    { from = math.huge }, { to = false } }) do
+    errorIs("invalid-filter", api.GetCraftSeries({ time = time }))
+  end
+  assert(#api.GetCrafts({ time = { from = start + 1, to = start + 86400 } }).crafts == 1)
+  for _, options in ipairs({ false, { limit = 1 }, { direction = "desc" }, { mode = "strict" },
+    { cursor = "cursor" }, { facets = {} } }) do
+    errorIs("invalid-options", api.GetCraftSeries(nil, options))
+  end
+  errorIs("invalid-filter", api.GetCraftSeries({ context = "personal" }))
+end)
+
+test("series dimensional filters preserve OR/AND and use recipe rather than output attribution", function()
+  local _, api = fixture()
+  local a, b, c = api.GetCraft(1), api.GetCraft(2), api.GetCraft(3)
+  assert(#api.GetCraftSeries({ characters = { a.character.key } }).series == 3)
+  assert(#api.GetCraftSeries({ realms = { c.realm.key } }).series == 1)
+  assert(#api.GetCraftSeries({ expansions = { "midnight" } }).series == 2)
+  local old = api.GetCraftSeries({ expansions = { "legion" } }).series
+  assert(#old == 1 and old[1].recipe.id == 103)
+  assert(#api.GetCraftSeries({ professions = { 171 } }).series == 2)
+  assert(#api.GetCraftSeries({ characters = { a.character.key, b.character.key },
+    expansions = { "midnight" }, professions = { 171, 333 } }).series == 2)
+  equal(api.GetCraftSeries({ recipes = {} }), { series = {} })
+  equal(api.GetCraftSeries({ characters = { c.character.key }, expansions = { "midnight" } }), { series = {} })
+end)
+
+test("series remain identical across 60-day detail pruning and are visible during callbacks", function()
+  local ledger, api, clock, addon = fixture()
+  assert(ledger.database.retentionDays == 60)
+  local delivered = 0
+  api.RegisterCallback("CRAFT_COMMITTED", function(craft)
+    local series = api.GetCraftSeries({ recipes = { craft.recipe.id } }).series
+    assert(#series == 2 and series[2].craftCount == 1 and series[2].outputQuantity == 7)
+    delivered = delivered + 1
+  end)
+  clock.current = clock.current + 61 * 86400
+  ledger:BeginCraft(101)
+  local recent = assert(ledger:RecordResult({ operationID = 99, quantity = 7 }))
+  assert(delivered == 1)
+  local before = api.GetCraftSeries()
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  equal(api.GetCraftSeries(), before)
+  equal(ids(api.GetCrafts()), { recent.id })
+  errorIs("not-found", api.GetCraft(1))
+  assert(#api.GetFacets().recipes == 1)
+  assert(#api.GetCraftSeries({ recipes = { 103 } }).series == 1)
+  clock.current = clock.current + 61 * 86400
+  addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
+  equal(api.GetCraftSeries(), before)
+  equal(api.GetCrafts(), { crafts = {} })
+  equal(api.GetFacets(), { characters = {}, realms = {}, expansions = {}, professions = {}, recipes = {} })
+end)
+
+test("unknown series identities are not inferred and durable metadata enrichment remains visible", function()
+  local ledger, api, clock, addon = newLedger()
+  clock.current = -1
+  assert(ledger:CreateSession({ startedAt = -1, realmName = "Known session realm" }))
+  assert(ledger:RecordResult({ quantity = 0 }))
+  local unknown = api.GetCraftSeries().series[1]
+  assert(unknown.bucketStart == -86400 and unknown.craftCount == 1)
+  assert(unknown.character == nil and unknown.realm == nil and unknown.recipe == nil)
+  assert(unknown.outputQuantity == 0 and unknown.outputQuantityObservedCount == 1)
+  equal(api.GetCraftSeries({ recipes = { 101 } }), { series = {} })
+  equal(api.GetCraftSeries({ time = { from = 0 } }), { series = {} })
+  errorIs("invalid-filter", api.GetCraftSeries({ time = { from = -1 } }))
+  clock.current = 0
+  session(ledger, "A", 1)
+  ledger:BeginCraft(101)
+  assert(ledger:RecordResult({ operationID = 1 }))
+  clock.current = 61 * 86400
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  ledger = addon.ledger
+  equal(api.GetCrafts(), { crafts = {} })
+  local expansion = assert(ledger:AddDimension("expansion", "known", { name = "Known" }))
+  local profession = assert(ledger:AddDimension("profession", "171", { skillLineId = 171 }))
+  assert(ledger:AddDimension("recipe", 101,
+    { name = "Enriched", professionDimensionId = profession, expansionDimensionId = expansion }))
+  local row = api.GetCraftSeries({ expansions = { "known" }, professions = { 171 } }).series[1]
+  assert(row.recipe.name == "Enriched" and row.bucketStart == 0 and row.craftCount == 1)
 end)
 
 print(string.format("%d API tests passed", passed))
