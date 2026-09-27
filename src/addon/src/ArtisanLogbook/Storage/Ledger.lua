@@ -203,9 +203,10 @@ local function stageSeries(index, sessions, craft, metrics)
   if not isFinite(bucketStart) then return nil, "invalid craft series bucket" end
   local session = sessions[craft.sessionDimensionId]
   local characterId = session and session.characterDimensionId
-  local group = seriesGroup(index, bucketStart, characterId)
+  local bucket = index[bucketStart]
+  local group = bucket and bucket[characterId or 0]
   local key = craft.recipeDimensionId or 0
-  local existing = group[key]
+  local existing = group and group[key]
   local row = {
     bucketStart = bucketStart,
     characterDimensionId = characterId,
@@ -214,23 +215,27 @@ local function stageSeries(index, sessions, craft, metrics)
   }
   local ok, reason = accumulateMetrics(row, existing, craft, metrics or seriesMetrics)
   if not ok then return nil, reason end
-  return { row = row, existing = existing, group = group, key = key }
+  return {
+    row = row, existing = existing, bucketStart = bucketStart,
+    characterDimensionId = characterId, key = key,
+  }
 end
 
-local function commitStagedSeries(data, staged)
+local function commitStagedSeries(data, index, staged)
   if staged.existing then
     for field in pairs(staged.existing) do staged.existing[field] = nil end
     for field, value in pairs(staged.row) do staged.existing[field] = value end
   else
+    local group = seriesGroup(index, staged.bucketStart, staged.characterDimensionId)
     data.craftSeries[#data.craftSeries + 1] = staged.row
-    staged.group[staged.key] = staged.row
+    group[staged.key] = staged.row
   end
 end
 
 local function accumulateSeries(data, index, sessions, craft, metrics)
   local staged, reason = stageSeries(index, sessions, craft, metrics)
   if not staged then return nil, reason end
-  commitStagedSeries(data, staged)
+  commitStagedSeries(data, index, staged)
   return true
 end
 
@@ -1008,7 +1013,7 @@ function Ledger:RecordResult(result)
     end
   end
 
-  commitStagedSeries(data, stagedSeries)
+  commitStagedSeries(data, self.seriesByKey, stagedSeries)
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
   data.nextCraftId = craft.id + 1
