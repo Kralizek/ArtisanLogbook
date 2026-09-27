@@ -18,13 +18,14 @@ user's 2026-09-26 decisions below taking precedence over its suggestions.
 5. Have the user and original agent review that contract.
 6. Implement the durable ledger against the reviewed evidence (completed in
   issue #4).
-7. Continue through API/export, minimal UI, optional enrichment, and packaging.
+7. Continue through the stable Lua API, minimal UI, optional enrichment, and packaging. Portable export remains a separate later concern.
 
 Completed slices: installable tracer/evidence review and durable versioned
 storage. Packaging and mocked tests are not in-game installation or verification.
 Tests, packaging, and product documentation live beneath `src/addon/`. See
 [capture-tracer.md](capture-tracer.md) for the PR #3 evidence register and
-[storage-ledger.md](storage-ledger.md) for the issue #4 storage contract.
+[storage-ledger.md](storage-ledger.md) for the issue #4/#12 storage contract and
+[lua-api.md](lua-api.md) for the issue #5 public consumer contract.
 
 ## Reviewable Slices
 
@@ -41,8 +42,10 @@ Tests, packaging, and product documentation live beneath `src/addon/`. See
   allocation, successful proc behavior, and order/recraft context as evidence
   becomes available. Issue #4 ingests result callbacks only; never infer
   API-provided results from bag deltas.
-5. **API and export:** bounded/filterable read access, isolated callback delivery,
-   externally parseable versioned export, and golden round-trip fixtures.
+5. **Stable Lua API (issue #5):** denormalized read projections, shared
+   dimension filters, bounded cursor paging, strict/self-excluding facets,
+   runtime capabilities, and isolated callback delivery. Portable export is a
+   separate later concern.
 6. **Minimal UI:** Recent, Stats, Data; bounded rendering and explicit destructive
    action confirmation. Validate live captured results against the game UI.
 7. **Enrichment and distribution:** supported CraftSim/TSM snapshots with fault
@@ -63,9 +66,9 @@ Tests and documentation accompany each slice rather than being deferred.
 - Use account-wide SavedVariables. Character identity belongs in dimensions,
   not separate per-character databases. Raw debug metadata is not the final
   dimension or craft schema.
-- Persistence-schema, export-contract, and addon versions are independent.
-  Monotonic craft IDs are never reused, including after prune/clear. Dimension
-  IDs are also never recycled.
+- Persistence schema, public Lua API, portable export contract, and addon
+  version are separate boundaries. Monotonic craft IDs are never reused,
+  including after prune/clear. Dimension IDs are also never recycled.
 - Default detailed-ledger retention: `retentionDays = 180`, `maxCrafts = 50000`.
   Prune when either limit is exceeded; remove craft facts and their reagent
   facts together. Leave dimensions append-only. No dimension garbage collection
@@ -122,20 +125,28 @@ data. No guessed mapping is populated by the storage slice.
 
 ## API Direction
 
-The initial public surface is expected to include:
+The stable public surface from issue #5 is:
 
 ```text
-ArtisanLogbookAPI.GetCrafts(filter)
 ArtisanLogbookAPI.GetCraft(id)
-ArtisanLogbookAPI.GetRecipeStats(recipeID)
-ArtisanLogbookAPI.RegisterCallback(event, callback)
+ArtisanLogbookAPI.GetCrafts(filter, options)
+ArtisanLogbookAPI.GetFacets(filter, options)
 ArtisanLogbookAPI.GetCapabilities()
+ArtisanLogbookAPI.RegisterCallback(event, callback)
 ```
 
-Signatures may be refined with a documented reason. Consumers must not access
-or mutate SavedVariables/internal tables, and integrations must not depend on
-UI code. Do not implement `GetObservedCost`; valuation, material provenance,
-intermediate crafts, and inventory accounting are deliberately unresolved.
+Consumers receive denormalized domain projections and must not access or mutate
+SavedVariables/internal dimension rows. The initial shared filter covers absolute
+time, character, realm, expansion, profession, and recipe. Craft context and
+flavor-/result-specific properties such as concentration remain deliberately
+deferred. Paging/sorting belongs to `GetCrafts`; facet computation supports
+self-excluding and strict modes through `GetFacets`.
+
+Do not add `GetRecipeStats` or `GetObservedCost` to the first stable contract.
+Derived analytics, valuation, material provenance, intermediate crafts, and
+inventory accounting remain deliberately unresolved.
+
+See [lua-api.md](lua-api.md) for the exact v1 contract.
 
 ## UI and Integrations
 
@@ -154,8 +165,9 @@ their databases, accounting, inventories, optimizers, or other responsibilities.
 
 Use Lua 5.1-compatible tests with mocked WoW boundaries; turn reviewed live
 traces into clearly attributed fixtures. Verify reloads, migrations, both
-retention limits, dimension integrity, unknowns, callback correlation, export
-round-trips, and provider failure modes as the relevant slices are introduced.
+retention limits, dimension integrity, unknowns, callback correlation, API
+filtering/paging/facets, and provider failure modes as the relevant slices are introduced.
+Portable-export round trips belong to the later export-format work.
 In-game traces remain the authority, not mocks or source declarations.
 
 Document the verified event contract, supported-field/capability matrix, API
