@@ -133,6 +133,7 @@ The stable public surface from issue #5 is:
 ```text
 ArtisanLogbookAPI.GetCraft(id)
 ArtisanLogbookAPI.GetCrafts(filter, options)
+ArtisanLogbookAPI.GetCraftSeries(filter, options)
 ArtisanLogbookAPI.GetFacets(filter, options)
 ArtisanLogbookAPI.GetCapabilities()
 ArtisanLogbookAPI.RegisterCallback(event, callback)
@@ -167,8 +168,8 @@ their databases, accounting, inventories, optimizers, or other responsibilities.
 ## Validation and Documentation
 
 Use Lua 5.1-compatible tests with mocked WoW boundaries; turn reviewed live
-traces into clearly attributed fixtures. Verify reloads, migrations, both
-retention limits, dimension integrity, unknowns, callback correlation, API
+traces into clearly attributed fixtures. Verify reloads, migrations, time-based
+retention, dimension integrity, unknowns, callback correlation, API
 filtering/paging/facets, and provider failure modes as the relevant slices are introduced.
 Portable-export round trips belong to the later export-format work.
 In-game traces remain the authority, not mocks or source declarations.
