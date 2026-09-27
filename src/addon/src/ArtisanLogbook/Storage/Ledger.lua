@@ -198,7 +198,7 @@ local function accumulateMetrics(row, existing, craft, metrics)
   return true
 end
 
-local function accumulateSeries(data, index, sessions, craft, metrics)
+local function stageSeries(index, sessions, craft, metrics)
   local bucketStart = math.floor(craft.timestamp / 86400) * 86400
   if not isFinite(bucketStart) then return nil, "invalid craft series bucket" end
   local session = sessions[craft.sessionDimensionId]
@@ -214,12 +214,23 @@ local function accumulateSeries(data, index, sessions, craft, metrics)
   }
   local ok, reason = accumulateMetrics(row, existing, craft, metrics or seriesMetrics)
   if not ok then return nil, reason end
-  if existing then
-    for field, value in pairs(row) do existing[field] = value end
+  return { row = row, existing = existing, group = group, key = key }
+end
+
+local function commitStagedSeries(data, staged)
+  if staged.existing then
+    for field in pairs(staged.existing) do staged.existing[field] = nil end
+    for field, value in pairs(staged.row) do staged.existing[field] = value end
   else
-    data.craftSeries[#data.craftSeries + 1] = row
-    group[key] = row
+    data.craftSeries[#data.craftSeries + 1] = staged.row
+    staged.group[staged.key] = staged.row
   end
+end
+
+local function accumulateSeries(data, index, sessions, craft, metrics)
+  local staged, reason = stageSeries(index, sessions, craft, metrics)
+  if not staged then return nil, reason end
+  commitStagedSeries(data, staged)
   return true
 end
 
@@ -412,8 +423,18 @@ local function migrateFour(data)
     local bucketStart = math.floor(craft.timestamp / 86400) * 86400
     if not isFinite(bucketStart) then return nil, "invalid craft series bucket" end
     local session = sessions[craft.sessionDimensionId]
-    local group = seriesGroup(index, bucketStart, session and session.characterDimensionId)
-    local row = group[craft.recipeDimensionId or 0]
+    local characterId = session and session.characterDimensionId
+    local bucket = index[bucketStart]
+    local key = craft.recipeDimensionId or 0
+    local group = bucket and bucket[characterId or 0]
+    local row = group and group[key]
+    -- Schema 4 could persist an unknown-character grain and later enrich the
+    -- session from nil to a character. Preserve that historical grain when
+    -- matching retained detail during the schema 4 -> 5 backfill.
+    if not row and characterId ~= nil and bucket then
+      local unknownGroup = bucket[0]
+      row = unknownGroup and unknownGroup[key]
+    end
     if not row then return nil, "retained craft has no craft series grain" end
     retainedCounts[row] = (retainedCounts[row] or 0) + 1
     if retainedCounts[row] > row.craftCount then
@@ -884,15 +905,52 @@ function Ledger:RecordResult(result)
   end
 
   local recipeId = self.pendingRecipeId
-  self.pendingRecipeId = nil
   local ambiguousRecipe = self.ambiguousRecipe
-  self.ambiguousRecipe = nil
   local reason
+  local recipeNeedsCommit = false
   if not craft.recipeDimensionId and not self.requestAmbiguous and recipeId and not ambiguousRecipe and
       craft.gameOperationId and craft.gameOperationId > 0 and
       not operationIdSeen(self, craft.gameOperationId) then
-    craft.recipeDimensionId, reason = self:AddDimension("recipe", recipeId, { gameRecipeId = recipeId })
-    if not craft.recipeDimensionId then return nil, reason end
+    local key = tostring(recipeId)
+    local existingId = self.dimensionIndex.recipe[key]
+    local existing = self.dimensionRows.recipe[existingId]
+    if existing and existing.gameRecipeId ~= nil and existing.gameRecipeId ~= recipeId then
+      return nil, "conflicting dimension attribute: gameRecipeId"
+    end
+    craft.recipeDimensionId = existingId or data.nextDimensionId.recipe
+    recipeNeedsCommit = true
+  end
+
+  local itemIds = {}
+  if isGameId(result.itemID) then itemIds[result.itemID] = true end
+  if type(result.resourcesReturned) == "table" then
+    for _, returned in ipairs(result.resourcesReturned) do
+      local reagent = type(returned) == "table" and returned.reagent or nil
+      local itemId = type(reagent) == "table" and reagent.itemID or nil
+      if isGameId(itemId) then itemIds[itemId] = true end
+    end
+  end
+  for itemId in pairs(itemIds) do
+    local existingId = self.dimensionIndex.item[tostring(itemId)]
+    local existing = self.dimensionRows.item[existingId]
+    if existing and existing.gameItemId ~= nil and existing.gameItemId ~= itemId then
+      return nil, "conflicting dimension attribute: gameItemId"
+    end
+  end
+
+  -- Stage the aggregate first. Any handled failure must leave correlation,
+  -- dimensions, facts, and the persisted series untouched.
+  local stagedSeries
+  stagedSeries, reason = stageSeries(self.seriesByKey, self.dimensionRows.session, craft)
+  if not stagedSeries then return nil, reason end
+
+  if recipeNeedsCommit then
+    local committedRecipeId
+    committedRecipeId, reason = self:AddDimension("recipe", recipeId, { gameRecipeId = recipeId })
+    if not committedRecipeId then return nil, reason end
+    if committedRecipeId ~= craft.recipeDimensionId then
+      return nil, "recipe dimension identity changed during result commit"
+    end
   end
   if isGameId(result.itemID) then
     craft.outputItemDimensionId, reason = self:AddDimension("item", result.itemID, { gameItemId = result.itemID })
@@ -950,9 +1008,9 @@ function Ledger:RecordResult(result)
     end
   end
 
-  local aggregated
-  aggregated, reason = accumulateSeries(data, self.seriesByKey, self.dimensionRows.session, craft)
-  if not aggregated then return nil, reason end
+  commitStagedSeries(data, stagedSeries)
+  self.pendingRecipeId = nil
+  self.ambiguousRecipe = nil
   data.nextCraftId = craft.id + 1
   data.crafts[#data.crafts + 1] = craft
   if pending and request then
