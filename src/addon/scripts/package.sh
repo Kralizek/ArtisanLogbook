@@ -13,6 +13,7 @@ cd "$addon_root"
 "$lua_bin" tests/trace_test.lua "$source_root" "$addon_root/tests"
 "$lua_bin" tests/adapter_test.lua "$source_root"
 "$lua_bin" tests/ledger_test.lua "$source_root" "$addon_root/tests"
+"$lua_bin" tests/api_test.lua "$source_root" "$addon_root/tests"
 
 staging="$(mktemp -d)"
 trap 'rm -rf -- "$staging"' EXIT

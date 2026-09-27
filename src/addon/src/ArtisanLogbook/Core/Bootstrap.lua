@@ -133,6 +133,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
     })
     if ok and sessionId then
       ArtisanLogbookDB = addon.ledger.database
+      addon.ledger.onCraftCommitted = addon.PublishCraftCommitted
     else
       addon.ledgerError = tostring(ok and reason or sessionId)
       addon.ledger = nil

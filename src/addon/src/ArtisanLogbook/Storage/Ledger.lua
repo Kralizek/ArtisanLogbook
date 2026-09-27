@@ -680,6 +680,7 @@ function Ledger:RecordResult(result)
   end
   adjustOperationIndex(self, craft, 1)
   for _, reagent in ipairs(reagentFacts) do data.reagents[#data.reagents + 1] = reagent end
+  if self.onCraftCommitted then pcall(self.onCraftCommitted, self, craft) end
   self:Prune(craft.timestamp)
   return craft
 end
