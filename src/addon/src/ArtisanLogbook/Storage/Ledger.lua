@@ -592,7 +592,7 @@ local function stageDimension(staged, kind, key, attributes)
   end
   local copied, safeAttributes = pcall(copyValue, attributes or {})
   if not copied then return nil, tostring(safeAttributes) end
-  key = tostring(key)
+  key = isFinite(key) and key % 1 == 0 and string.format("%.0f", key) or tostring(key)
   local existingId = staged.keys[kind][key]
   local existing = staged.rows[kind][existingId]
   if not existing and not canAllocate(staged.nextIds[kind]) then

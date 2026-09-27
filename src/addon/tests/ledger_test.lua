@@ -1558,6 +1558,33 @@ test("native game IDs and finite signed fractional measurements are not safe-cou
   assert(reloaded.database.craftSeries[1].ingenuityRefund == -0.75)
 end)
 
+test("adjacent near-limit numeric dimension identities remain distinct across capture and reload", function()
+  local ledger, clock = newLedger()
+  local lower, upper = maxInteger - 1, maxInteger
+  local request = assert(ledger:SubmitCraft(lower, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 1, reagent = { itemID = lower } },
+    { dataSlotIndex = 2, quantity = 1, reagent = { itemID = upper } },
+  }))
+  local craft = assert(ledger:RecordResult({ itemID = upper, operationID = upper }))
+  assert(request.allocations[1].itemDimensionId ~= request.allocations[2].itemDimensionId)
+  assert(craft.outputItemDimensionId == request.allocations[2].itemDimensionId)
+  ledger:BeginCraft(upper)
+  local nextCraft = assert(ledger:RecordResult({ itemID = lower, operationID = lower }))
+  assert(nextCraft.recipeDimensionId ~= request.recipeDimensionId)
+  assert(nextCraft.outputItemDimensionId == request.allocations[1].itemDimensionId)
+  for _, kind in ipairs({ "recipe", "item" }) do
+    assert(ledger.dimensionIndex[kind]["9007199254740990"])
+    assert(ledger.dimensionIndex[kind]["9007199254740991"])
+    assert(ledger.dimensionIndex[kind]["9007199254740990"] ~=
+      ledger.dimensionIndex[kind]["9007199254740991"])
+  end
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  assert(reloaded.operationIndex[craft.sessionDimensionId][upper] == 1)
+  assert(reloaded.operationIndex[craft.sessionDimensionId][lower] == 1)
+  assert(reloaded:AddDimension("recipe", upper, { gameRecipeId = upper }) == nextCraft.recipeDimensionId)
+  assert(reloaded:AddDimension("item", lower, { gameItemId = lower }) == nextCraft.outputItemDimensionId)
+end)
+
 test("reagent return sum overflow does not commit staged dimensions or request changes", function()
   local ledger = newLedger()
   assert(ledger:SubmitCraft(12, 1, false, nil, {
