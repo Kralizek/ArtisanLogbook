@@ -23,7 +23,9 @@ user's 2026-09-26 decisions below taking precedence over its suggestions.
 
 Completed slices: installable tracer/evidence review and durable versioned
 storage. Packaging and mocked tests are not in-game installation or verification.
-Tests, packaging, and product documentation live beneath `src/addon/`. See
+Addon implementation/tests live beneath `src/addon/`; shared product documentation
+lives under the repository-level `docs/` directory so addon, exporter, and web
+documentation can coexist. See
 [capture-tracer.md](capture-tracer.md) for the PR #3 evidence register and
 [storage-ledger.md](storage-ledger.md) for the issue #4/#12 storage contract and
 [lua-api.md](lua-api.md) for the issue #5 public consumer contract.
@@ -40,8 +42,9 @@ Tests, packaging, and product documentation live beneath `src/addon/`. See
    dimension registry, monotonic identities, independent versioning, migrations,
    and safe retention. Implemented; see [storage-ledger.md](storage-ledger.md).
 4. **Additional Retail capture:** implement pre-craft facts, verified reagent
-  allocation, successful proc behavior, and order/recraft context as evidence
-  becomes available. Issue #4 ingests result callbacks only; never infer
+  allocation, and order/recraft context as evidence becomes available. Successful
+  Ingenuity proc/refund behavior is now verified from the Ogrim export and is used
+  by the daily-series contract. Issue #4 ingests result callbacks only; never infer
   API-provided results from bag deltas.
 5. **Stable Lua API (issue #5):** denormalized read projections, shared
    dimension filters, bounded cursor paging, strict/self-excluding facets,
@@ -156,8 +159,10 @@ See [lua-api.md](lua-api.md) for the exact v1 contract.
 
 ## UI and Integrations
 
-Recent is primarily a craft-verification surface. Stats derives values from
-persisted facts rather than persisting aggregates. Data contains retention,
+Recent is primarily a craft-verification surface. Stats should consume the
+appropriate persisted source for its question: detailed retained craft facts for
+drill-down and the durable daily craft series for long-range trends. Do not create
+additional ad-hoc aggregate stores without a reviewed contract. Data contains retention,
 export, integration status, diagnostics, prune, and clear. Large histories must
 not trigger unbounded rendering. The first-slice debug window is not a premature
 implementation of these ledger views.
