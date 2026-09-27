@@ -84,6 +84,13 @@ for line in io.lines(root .. "/ArtisanLogbook.toc") do
   end
 end
 local lifecycle = frames[1]
+local api = environment.ArtisanLogbookAPI
+assert(type(api) == "table")
+local unavailable, reason = api.GetCrafts()
+assert(unavailable == nil and reason == "not-ready")
+local committed = {}
+api.RegisterCallback("CRAFT_COMMITTED", function() error("consumer failure") end)
+api.RegisterCallback("CRAFT_COMMITTED", function(craft) committed[#committed + 1] = craft end)
 lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "OtherAddon")
 assert(addon.recorder == nil)
 lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook")
@@ -91,6 +98,8 @@ assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
+assert(addon.ledger.database.schemaVersion == 1)
+assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
 assert(addon.window and not addon.window:IsShown())
@@ -104,6 +113,17 @@ addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_ITEM_CRAFT
 assert(#addon.ledger.database.crafts == 1)
 assert(addon.ledger.database.crafts[1].gameOperationId == 1)
 assert(addon.ledger.database.crafts[1].recipeDimensionId ~= nil)
+assert(#committed == 1 and committed[1].recipe.id == 456)
+assert(api.GetCraft(1).recipe.id == 456 and api.GetCrafts().crafts[1].id == 1)
+assert(api.GetCraftSeries().series[1].craftCount == 1)
+assert(api.GetCraftSeries().series[1].recipe.id == 456)
+assert(addon.ledger.database.retentionDays == 60)
+local recipeFacets = api.GetFacets(nil, { facets = { "recipes" } })
+assert(recipeFacets.recipes[1].value == 456 and recipeFacets.characters == nil)
+assert(api.GetCapabilities().personalRequests == true)
+assert(not addon.ledgerCaptureError and not addon.adapter.capabilities.captureError)
+committed[1].recipe.id = 999
+assert(api.GetCraft(1).recipe.id == 456)
 environment.SlashCmdList.ARTISANLOGBOOK("stop")
 assert(#addon.recorder.database.records == 5)
 assert(addon.recorder.database.records[2].event == "TRACE_MARK")
@@ -183,6 +203,15 @@ assert(#saved.crafts == 1)
 
 local invalid = { schemaVersion = 999, marker = "preserved" }
 assert(reload(invalid).ledger == nil and environment.ArtisanLogbookDB == invalid)
+for version = 0, 5 do
+  local experimental = { schemaVersion = version, marker = "experimental" }
+  local rejected = reload(experimental)
+  assert(rejected.ledger == nil and environment.ArtisanLogbookDB == experimental)
+  assert(experimental.schemaVersion == version and experimental.marker == "experimental")
+  assert(rejected.ledgerError:find("unsupported", 1, true))
+end
+local missing, missingReason = environment.ArtisanLogbookAPI.GetCrafts()
+assert(missing == nil and missingReason == "not-ready")
 assert(invalid.marker == "preserved")
 local conflicting = reloaded.ledger.database
 environment.GetRealmName = function() return "Conflicting Display Name" end
@@ -196,6 +225,10 @@ local unknown = reload(nil)
 assert(unknown.ledger)
 local realm = unknown.ledger.database.dimensions.realms[1]
 assert(realm.regionId == nil and realm.gameRealmId == nil and realm.identityScope == "session")
+local batchPayloads = {}
+environment.ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
+  batchPayloads[#batchPayloads + 1] = craft
+end)
 print("PASS passive ledger capture, reload, identity fallback, and SavedVariables failure safety")
 
 hooks.GetCraftingOperationInfo(456, {
@@ -213,6 +246,15 @@ assert(unknown.ledger.database.requests[1].concentrationCost == 81)
 assert(unknown.ledger.database.reagents[1].allocatedQuantity == 2)
 assert(unknown.ledger.database.reagents[1].quality == 2)
 assert(unknown.ledger.database.reagents[1].returnedQuantity == 1)
+assert(#batchPayloads == 2 and batchPayloads[1].request.id == batchPayloads[2].request.id)
+assert(batchPayloads[1].reagents[1].item.id == 101 and batchPayloads[1].reagents[1].returnedQuantity == 1)
+assert(batchPayloads[2].reagents[1].returnedQuantity == 0)
+local daily = environment.ArtisanLogbookAPI.GetCraftSeries().series
+assert(#daily == 1 and daily[1].craftCount == 2)
+assert(daily[1].concentrationSpent == 160 and daily[1].concentrationSpentObservedCount == 2)
+assert(batchPayloads[1].realm.identityScope == "session")
+batchPayloads[1].request.allocations[1].allocatedQuantity = 999
+assert(batchPayloads[2].request.allocations[1].allocatedQuantity == 2)
 print("PASS passive personal request capture and shared batch allocation")
 
 hooks.GetCraftingOperationInfo(456, {

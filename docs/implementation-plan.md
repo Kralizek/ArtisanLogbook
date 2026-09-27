@@ -10,21 +10,25 @@ user's 2026-09-26 decisions below taking precedence over its suggestions.
 3. Collect controlled basic, concentration, Ingenuity, Multicraft, and
   Resourcefulness traces. The supplied Retail build-69933 evidence now covers
   basic results, concentration without Ingenuity, Multicraft, Resourcefulness,
-  and a two-operation batch; successful Ingenuity and cancellation/interruption
-  remain outstanding. Include duplicate/late callback observations. Orders
+  and a two-operation batch. The newly verified Ogrim export establishes successful
+  Ingenuity (`hasIngenuityProc=true`, spend 323, refund 162).
+  Cancellation/interruption remains outstanding. Include duplicate/late callback observations. Orders
   and actual recrafts remain follow-up evidence.
 4. Document verified behavior, field availability, limitations, and proposed
    correlation rules against the actual client build.
 5. Have the user and original agent review that contract.
 6. Implement the durable ledger against the reviewed evidence (completed in
   issue #4).
-7. Continue through API/export, minimal UI, optional enrichment, and packaging.
+7. Continue through the stable Lua API, minimal UI, optional enrichment, and packaging. Portable export remains a separate later concern.
 
 Completed slices: installable tracer/evidence review and durable versioned
 storage. Packaging and mocked tests are not in-game installation or verification.
-Tests, packaging, and product documentation live beneath `src/addon/`. See
+Addon implementation/tests live beneath `src/addon/`; shared product documentation
+lives under the repository-level `docs/` directory so addon, exporter, and web
+documentation can coexist. See
 [capture-tracer.md](capture-tracer.md) for the PR #3 evidence register and
-[storage-ledger.md](storage-ledger.md) for the issue #4 storage contract.
+[storage-ledger.md](storage-ledger.md) for the issue #4/#12 storage contract and
+[lua-api.md](lua-api.md) for the issue #5 public consumer contract.
 
 ## Reviewable Slices
 
@@ -35,14 +39,17 @@ Tests, packaging, and product documentation live beneath `src/addon/`. See
    capture. Preserve separate Core, Capture, Storage, Integrations, Flavors, and
    UI responsibilities without adding empty speculative modules.
 3. **Durable storage (issue #4):** evidence-backed craft/reagent schema,
-   dimension registry, monotonic identities, independent versioning, migrations,
+   dimension registry, monotonic identities, independent versioning, validated loading,
    and safe retention. Implemented; see [storage-ledger.md](storage-ledger.md).
 4. **Additional Retail capture:** implement pre-craft facts, verified reagent
-  allocation, successful proc behavior, and order/recraft context as evidence
-  becomes available. Issue #4 ingests result callbacks only; never infer
+  allocation, and order/recraft context as evidence becomes available. Successful
+  Ingenuity proc/refund behavior is now verified from the Ogrim export and is used
+  by the daily-series contract. Issue #4 ingests result callbacks only; never infer
   API-provided results from bag deltas.
-5. **API and export:** bounded/filterable read access, isolated callback delivery,
-   externally parseable versioned export, and golden round-trip fixtures.
+5. **Stable Lua API (issue #5):** denormalized read projections, shared
+   dimension filters, bounded cursor paging, strict/self-excluding facets,
+   durable daily craft series, runtime capabilities, and isolated callback delivery. Portable export is a
+   separate later concern.
 6. **Minimal UI:** Recent, Stats, Data; bounded rendering and explicit destructive
    action confirmation. Validate live captured results against the game UI.
 7. **Enrichment and distribution:** supported CraftSim/TSM snapshots with fault
@@ -63,13 +70,25 @@ Tests and documentation accompany each slice rather than being deferred.
 - Use account-wide SavedVariables. Character identity belongs in dimensions,
   not separate per-character databases. Raw debug metadata is not the final
   dimension or craft schema.
-- Persistence-schema, export-contract, and addon versions are independent.
-  Monotonic craft IDs are never reused, including after prune/clear. Dimension
-  IDs are also never recycled.
-- Default detailed-ledger retention: `retentionDays = 180`, `maxCrafts = 50000`.
-  Prune when either limit is exceeded; remove craft facts and their reagent
+- Persistence schema, public Lua API, portable export contract, and addon
+  version are separate boundaries. Monotonic craft IDs are never reused,
+  including after prune/clear. Dimension IDs are also never recycled.
+- Before the first supported release, squish the experimental ledger formats
+  into **schema 1**, distinguished by `schemaIdentity = "ArtisanLogbookLedger"`.
+  Prerelease schemas 0–5 (including the experimental schema 1) are not supported
+  upgrade sources. Remove their migration/backfill chain rather than guessing
+  historical grain from enriched dimensions. Development users may need to back
+  up and reset SavedVariables; unsupported data is refused without mutation.
+  Keep current atomic capture, finite measurement checks, aggregate consistency,
+  and exact-integer counter exhaustion safeguards. See [storage-ledger.md](storage-ledger.md).
+- Updated by the issue #5 runtime indexing/retention decision: default
+  `retentionDays = 60`, with no `maxCrafts` threshold. Maintain durable daily
+  craft-count/output/Multicraft/concentration and verified Ingenuity proc/applied-refund
+  series with metric coverage.
+  Prune detailed facts at startup before
+  building runtime indexes, not on submissions/results; remove craft facts and their reagent
   facts together. Leave dimensions append-only. No dimension garbage collection
-  or rollups in v1 unless later measurements justify a reviewed change. These
+  or reagent-level rollups in v1; durable daily craft series are approved in issue #5. These
   defaults do not apply to the intentionally smaller temporary trace buffer.
 - Store source measurements and flags needed for derivation; do not persist
   duplicated derived totals. Apply `ingenuityRefund` only when
@@ -122,25 +141,36 @@ data. No guessed mapping is populated by the storage slice.
 
 ## API Direction
 
-The initial public surface is expected to include:
+The stable public surface from issue #5 is:
 
 ```text
-ArtisanLogbookAPI.GetCrafts(filter)
 ArtisanLogbookAPI.GetCraft(id)
-ArtisanLogbookAPI.GetRecipeStats(recipeID)
-ArtisanLogbookAPI.RegisterCallback(event, callback)
+ArtisanLogbookAPI.GetCrafts(filter, options)
+ArtisanLogbookAPI.GetCraftSeries(filter, options)
+ArtisanLogbookAPI.GetFacets(filter, options)
 ArtisanLogbookAPI.GetCapabilities()
+ArtisanLogbookAPI.RegisterCallback(event, callback)
 ```
 
-Signatures may be refined with a documented reason. Consumers must not access
-or mutate SavedVariables/internal tables, and integrations must not depend on
-UI code. Do not implement `GetObservedCost`; valuation, material provenance,
-intermediate crafts, and inventory accounting are deliberately unresolved.
+Consumers receive denormalized domain projections and must not access or mutate
+SavedVariables/internal dimension rows. The initial shared filter covers absolute
+time, character, realm, expansion, profession, and recipe. Craft context and
+flavor-/result-specific properties such as concentration remain deliberately
+deferred. Paging/sorting belongs to `GetCrafts`; facet computation supports
+self-excluding and strict modes through `GetFacets`.
+
+Do not add `GetRecipeStats` or `GetObservedCost` to the first stable contract.
+Derived analytics, valuation, material provenance, intermediate crafts, and
+inventory accounting remain deliberately unresolved.
+
+See [lua-api.md](lua-api.md) for the exact v1 contract.
 
 ## UI and Integrations
 
-Recent is primarily a craft-verification surface. Stats derives values from
-persisted facts rather than persisting aggregates. Data contains retention,
+Recent is primarily a craft-verification surface. Stats should consume the
+appropriate persisted source for its question: detailed retained craft facts for
+drill-down and the durable daily craft series for long-range trends. Do not create
+additional ad-hoc aggregate stores without a reviewed contract. Data contains retention,
 export, integration status, diagnostics, prune, and clear. Large histories must
 not trigger unbounded rendering. The first-slice debug window is not a premature
 implementation of these ledger views.
@@ -153,13 +183,14 @@ their databases, accounting, inventories, optimizers, or other responsibilities.
 ## Validation and Documentation
 
 Use Lua 5.1-compatible tests with mocked WoW boundaries; turn reviewed live
-traces into clearly attributed fixtures. Verify reloads, migrations, both
-retention limits, dimension integrity, unknowns, callback correlation, export
-round-trips, and provider failure modes as the relevant slices are introduced.
+traces into clearly attributed fixtures. Verify reloads, unsupported-format refusal, time-based
+retention, dimension integrity, unknowns, callback correlation, API
+filtering/paging/facets, and provider failure modes as the relevant slices are introduced.
+Portable-export round trips belong to the later export-format work.
 In-game traces remain the authority, not mocks or source declarations.
 
 Document the verified event contract, supported-field/capability matrix, API
-limitations, chosen architecture, storage schema, migration behavior, and
+limitations, chosen architecture, storage schema, supported-format loading, and
 in-game checklist near the addon or under `docs/`. Keep the root README minimal.
 Each implementation PR should explain its completed slice, evidence, tests,
 limitations, divergences from the issue, and what remains behind the gate.

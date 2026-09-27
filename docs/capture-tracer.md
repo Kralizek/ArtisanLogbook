@@ -70,9 +70,10 @@ independently of rendering.
    Keep separate evidence copies for each controlled run before clearing.
 6. Build 69933 traces now cover a basic result flow, concentration spend with
    `hasIngenuityProc = false`, Multicraft, and Resourcefulness (including
-   multiple returned item IDs in one result). A successful Ingenuity proc and
-   applied refund are still unverified. Capture the full attempt sequence if
-   testing this; do not fabricate or manually inject a proc.
+   multiple returned item IDs in one result). The newly verified Ogrim export
+   supplies a successful Ingenuity result: proc true, concentration spent 323,
+   refund 162. Preserve full attempt sequences for further testing; do not
+   fabricate or manually inject a proc.
 7. The supplied traces also cover consecutive same-recipe crafts and a
    two-operation concentration batch. Cancellation/interruption remains to be
    traced. Orders and actual recraft operations remain unverified and can be
@@ -144,7 +145,7 @@ The findings below come from the user's live Retail traces, with build `69933`
 and version `12.1.0` in trace metadata. The raw SavedVariables attachment is not
 committed because it includes personal and instance identifiers. The selected,
 sanitized callback sequences are replayed by
-[`tests/fixtures/retail-build-69933.lua`](../tests/fixtures/retail-build-69933.lua).
+[`tests/fixtures/retail-build-69933.lua`](../src/addon/tests/fixtures/retail-build-69933.lua).
 Cast tokens are replaced with fixture-local placeholders; character/account
 metadata, item-instance GUIDs, and hyperlinks are omitted. Recipe/item IDs and
 operation IDs are retained as representative game data.
@@ -177,12 +178,15 @@ operation IDs are retained as representative game data.
    `ingenuityRefund = 93`. Currency updates showed a full 185 decrease for each
    operation. A positive `ingenuityRefund` is therefore not evidence that a
    refund was applied; it appears to be the amount available if Ingenuity
-   procs. Never infer a proc from `ingenuityRefund > 0`. For future derivation,
+   procs. Never infer a proc from `ingenuityRefund > 0`. For applied-refund aggregation,
    use `ingenuityRefund` as the applied refund only when `hasIngenuityProc` is
    explicitly true; use zero only when the flag is explicitly false. If the flag
    is absent/unknown, applied refund is unknown. Net concentration is
-   `concentrationSpent - actualRefund` only when both inputs are known. A
-   successful Ingenuity proc/refund is still unverified.
+   `concentrationSpent - actualRefund` only when both inputs are known. The
+   newly verified Ogrim export supplies `hasIngenuityProc=true`,
+   `concentrationSpent=323`, and `ingenuityRefund=162`, establishing a successful
+   proc with an applied refund. A true flag without an observed refund amount
+   counts as a proc but leaves applied-refund coverage unknown.
 - **Multicraft:** A real result showed a normal output of 5 in one separate
    result and a Multicraft result with `multicraft = 10` and `quantity = 15`.
    The result payload directly exposes the Multicraft bonus and total output;
@@ -248,7 +252,7 @@ left untouched until initialization succeeds. Unsupported schema/export versions
 or invalid top-level shapes are refused without overwriting the existing data.
 Export/back up the SavedVariables file outside the game before resetting an
 incompatible debug database. The durable ledger has its own versioned schema
-and migration path; debug records still do not silently become ledger entries.
+and load contract; debug records still do not silently become ledger entries.
 
 ## Source Findings, Not Runtime Verification
 
@@ -287,7 +291,7 @@ its example ordering and values do not establish game behavior.
 | --- | --- | --- |
 | Basic craft result flow | Build 69933, records 149-157 | Craft begin, call post-hook, spellcast callbacks, and result callback observed |
 | Concentration without Ingenuity | Build 69933, records 168-184 | Two result callbacks with distinct non-zero operation IDs; spent 185 each, proc false, refund field 93, full currency decrease |
-| Successful Ingenuity proc/refund | Not captured | Unverified |
+| Successful Ingenuity proc/refund | User-supplied Ogrim export findings | Proc true, spent 323, applied refund 162; non-proc positive refund remains potential only |
 | Multicraft | Build 69933, records 158-164 | `multicraft = 10`, total `quantity = 15`; result field is directly available |
 | Resourcefulness returns | Build 69933, records 195-236 | Returned reagent IDs and quantities observed, including three reagent types in one result |
 | Consecutive crafts / batch | Build 69933, records 149-164 and 168-183 | Separate results have distinct operation IDs; one count-2 request produced two actual results |
@@ -359,12 +363,13 @@ produce multiple result operations, or fewer results after a queued failure.
 Quote concentration cost and actual spend may differ by one; `useConcentration`
 is request intent, not spend. `resourcesReturned` item IDs matched selected
 personal-craft inputs, but only unambiguous item mappings can be attributed.
-The ledger is now schema 2: it captures a personal submission snapshot and
-links only reliably correlated successful result callbacks. Older schema 1
-return-only rows remain partial. `operationID` is not assumed to identify a
+The ledger (first supported schema 1, with its format identity marker) captures a
+personal submission snapshot and links only reliably correlated successful
+result callbacks. Return-only rows remain partial. `operationID` is not assumed to identify a
 request, and no nearest-event/time-window correlation is used. Order/recraft
 semantics and target-item GUID conversion still require live evidence; see
-`storage-ledger.md` for the precise storage and migration contract.
+`storage-ledger.md` for the precise storage contract and experimental-format reset
+requirements. The trace schema's own migration is independent and unchanged.
 
 ### Controlled live traces for remaining gaps
 

@@ -9,4 +9,5 @@ Storage/Ledger.lua
 Flavors/Registry.lua
 Flavors/Retail/Adapter.lua
 UI/TraceWindow.lua
+Core/API.lua
 Core/Bootstrap.lua
