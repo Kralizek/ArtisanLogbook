@@ -1,9 +1,8 @@
 local _, addon = ...
 
 local Ledger = {}
-Ledger.schemaVersion = 2
+Ledger.schemaVersion = 3
 Ledger.retentionDays = 180
-Ledger.maxCrafts = 50000
 
 local dimensions = {
   realm = "realms",
@@ -13,6 +12,12 @@ local dimensions = {
   item = "items",
   session = "sessions",
   expansion = "expansions",
+}
+
+local filterAttributes = {
+  session = { "characterDimensionId", "realmDimensionId" },
+  recipe = { "gameRecipeId", "professionDimensionId", "expansionDimensionId" },
+  profession = { "skillLineId" },
 }
 
 local function isInteger(value)
@@ -60,7 +65,6 @@ local function emptyDatabase()
     dimensions = {},
     nextDimensionId = {},
     retentionDays = Ledger.retentionDays,
-    maxCrafts = Ledger.maxCrafts,
   }
   for kind, collection in pairs(dimensions) do
     data.dimensions[collection] = {}
@@ -94,7 +98,7 @@ end
 
 local function migrateZero(data)
   if data.retentionDays == nil then data.retentionDays = Ledger.retentionDays end
-  if data.maxCrafts == nil then data.maxCrafts = Ledger.maxCrafts end
+  if data.maxCrafts == nil then data.maxCrafts = 50000 end
   data.schemaVersion = 1
   return data
 end
@@ -109,7 +113,16 @@ local function migrateOne(data)
   return data
 end
 
-local migrations = { [0] = migrateZero, [1] = migrateOne }
+local function migrateTwo(data)
+  if not isInteger(data.maxCrafts) then
+    return nil, "maxCrafts must be a positive integer"
+  end
+  data.maxCrafts = nil
+  data.schemaVersion = 3
+  return data
+end
+
+local migrations = { [0] = migrateZero, [1] = migrateOne, [2] = migrateTwo }
 
 local references = {
   craft = { sessionDimensionId = "session", recipeDimensionId = "recipe", requestId = "request",
@@ -155,8 +168,8 @@ local function validateDatabase(data)
       data.retentionDays % 1 ~= 0 then
     return nil, "retentionDays must be a positive integer"
   end
-  if not isInteger(data.maxCrafts) then
-    return nil, "maxCrafts must be a positive integer"
+  if data.maxCrafts ~= nil then
+    return nil, "schema 3 does not support maxCrafts"
   end
 
   local ids = { craft = {}, request = {} }
@@ -278,6 +291,99 @@ local function adjustOperationIndex(ledger, craft, change)
   end
 end
 
+local function appendIdentity(index, identity, craftId)
+  if identity == nil then return end
+  local ids = index[identity]
+  if not ids then
+    ids = {}
+    index[identity] = ids
+  end
+  ids[#ids + 1] = craftId
+end
+
+local function indexCraftDimensions(ledger, craft)
+  local rows = ledger.dimensionRows
+  local session = rows.session[craft.sessionDimensionId]
+  local character = session and rows.character[session.characterDimensionId]
+  local realm = session and rows.realm[session.realmDimensionId]
+  local recipe = rows.recipe[craft.recipeDimensionId]
+  local profession = rows.profession[craft.professionDimensionId or
+    (recipe and recipe.professionDimensionId)]
+  local expansion = recipe and rows.expansion[recipe.expansionDimensionId]
+  appendIdentity(ledger.craftIdsByCharacter, character and character.key, craft.id)
+  appendIdentity(ledger.craftIdsByRealm, realm and realm.key, craft.id)
+  appendIdentity(ledger.craftIdsByRecipe,
+    recipe and type(recipe.gameRecipeId) == "number" and recipe.gameRecipeId or nil, craft.id)
+  appendIdentity(ledger.craftIdsByProfession,
+    profession and type(profession.skillLineId) == "number" and profession.skillLineId or nil, craft.id)
+  appendIdentity(ledger.craftIdsByExpansion, expansion and expansion.key, craft.id)
+end
+
+function Ledger:RebuildFilterIndexes()
+  self.craftIdsByCharacter = {}
+  self.craftIdsByRealm = {}
+  self.craftIdsByRecipe = {}
+  self.craftIdsByProfession = {}
+  self.craftIdsByExpansion = {}
+  for _, id in ipairs(self.craftIds) do
+    indexCraftDimensions(self, self.craftById[id])
+  end
+end
+
+local function earlierCraft(ledger, leftId, rightId)
+  local left, right = ledger.craftById[leftId], ledger.craftById[rightId]
+  if left.timestamp == right.timestamp then return leftId < rightId end
+  return left.timestamp < right.timestamp
+end
+
+function Ledger:RebuildIndexes()
+  self.dimensionIndex, self.dimensionRows = {}, {}
+  for kind, collection in pairs(dimensions) do
+    self.dimensionIndex[kind], self.dimensionRows[kind] = {}, {}
+    for _, row in ipairs(self.database.dimensions[collection]) do
+      self.dimensionIndex[kind][row.key] = row.id
+      self.dimensionRows[kind][row.id] = row
+    end
+  end
+  self.craftById, self.requestById, self.reagentsByCraftId = {}, {}, {}
+  self.craftIds, self.craftIdsByTime, self.operationIndex = {}, {}, {}
+  for _, request in ipairs(self.database.requests) do self.requestById[request.id] = request end
+  for _, craft in ipairs(self.database.crafts) do
+    self.craftById[craft.id] = craft
+    self.reagentsByCraftId[craft.id] = {}
+    self.craftIds[#self.craftIds + 1] = craft.id
+    self.craftIdsByTime[#self.craftIdsByTime + 1] = craft.id
+    adjustOperationIndex(self, craft, 1)
+  end
+  for _, reagent in ipairs(self.database.reagents) do
+    local rows = self.reagentsByCraftId[reagent.craftId]
+    rows[#rows + 1] = reagent
+  end
+  table.sort(self.craftIds)
+  table.sort(self.craftIdsByTime, function(left, right) return earlierCraft(self, left, right) end)
+  self:RebuildFilterIndexes()
+end
+
+local function appendCraftIndexes(ledger, craft, reagents)
+  ledger.craftById[craft.id] = craft
+  ledger.reagentsByCraftId[craft.id] = reagents
+  ledger.craftIds[#ledger.craftIds + 1] = craft.id
+  local times = ledger.craftIdsByTime
+  if #times == 0 or earlierCraft(ledger, times[#times], craft.id) then
+    times[#times + 1] = craft.id
+  else
+    local low, high = 1, #times
+    while low <= high do
+      local middle = math.floor((low + high) / 2)
+      if earlierCraft(ledger, times[middle], craft.id) then low = middle + 1
+      else high = middle - 1 end
+    end
+    table.insert(times, low, craft.id)
+  end
+  indexCraftDimensions(ledger, craft)
+  adjustOperationIndex(ledger, craft, 1)
+end
+
 local function openDatabase(database, clock, options)
   local data
   if database == nil then
@@ -312,8 +418,10 @@ local function openDatabase(database, clock, options)
     return nil, "ledger data refused: " .. reason
   end
   if options then
+    if options.maxCrafts ~= nil then
+      return nil, "ledger options refused: schema 3 does not support maxCrafts"
+    end
     if options.retentionDays ~= nil then data.retentionDays = options.retentionDays end
-    if options.maxCrafts ~= nil then data.maxCrafts = options.maxCrafts end
     valid, reason = validateDatabase(data)
     if not valid then
       return nil, "ledger options refused: " .. reason
@@ -323,25 +431,11 @@ local function openDatabase(database, clock, options)
   local self = setmetatable({
     database = data,
     wall = nowFunction(clock),
-    dimensionIndex = {},
-    dimensionRows = {},
-    operationIndex = {},
   }, {
     __index = Ledger,
   })
-  for kind, collection in pairs(dimensions) do
-    local index = {}
-    self.dimensionIndex[kind] = index
-    self.dimensionRows[kind] = {}
-    for _, row in ipairs(data.dimensions[collection]) do
-      index[row.key] = row.id
-      self.dimensionRows[kind][row.id] = row
-    end
-  end
-  for _, craft in ipairs(data.crafts) do
-    adjustOperationIndex(self, craft, 1)
-  end
   self:Prune(self.wall())
+  self:RebuildIndexes()
   return self
 end
 
@@ -352,17 +446,20 @@ function Ledger.New(database, clock, options)
 end
 
 local function enrich(target, attributes)
+  local changed = false
   for field, value in pairs(attributes) do
     if target[field] == nil then
       target[field] = copyValue(value)
+      changed = true
     elseif type(target[field]) == "table" and type(value) == "table" then
-      local ok, reason = enrich(target[field], value)
+      local ok, reason, nestedChanged = enrich(target[field], value)
       if not ok then return nil, reason end
+      changed = changed or nestedChanged
     elseif target[field] ~= value then
       return nil, "conflicting dimension attribute: " .. tostring(field)
     end
   end
-  return true
+  return true, nil, changed
 end
 
 function Ledger:AddDimension(kind, key, attributes)
@@ -381,13 +478,20 @@ function Ledger:AddDimension(kind, key, attributes)
   local row = existing and copyValue(existing) or {
     id = self.database.nextDimensionId[kind], key = key,
   }
-  local ok, reason = enrich(row, safeAttributes)
+  local ok, reason, changed = enrich(row, safeAttributes)
   if not ok then return nil, reason end
   ok, reason = validateReferences(kind, row, self.dimensionRows)
   if not ok then return nil, reason end
 
   if existing then
-    for field, value in pairs(row) do existing[field] = value end
+    if changed then
+      local filtersChanged = false
+      for _, field in ipairs(filterAttributes[kind] or {}) do
+        if existing[field] ~= row[field] then filtersChanged = true end
+      end
+      for field, value in pairs(row) do existing[field] = value end
+      if filtersChanged then self:RebuildFilterIndexes() end
+    end
     return existing.id
   end
   self.database.nextDimensionId[kind] = row.id + 1
@@ -528,9 +632,9 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   end
   self.database.nextRequestId = request.id + 1
   self.database.requests[#self.database.requests + 1] = request
+  self.requestById[request.id] = request
   if self.pendingRequest then self.requestAmbiguous = true end
   self.pendingRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
-  self:Prune(timestamp)
   return request
 end
 
@@ -596,9 +700,7 @@ function Ledger:RecordResult(result)
   local pending = self.pendingRequest
   local request
   if pending and not self.requestAmbiguous then
-    for _, candidate in ipairs(data.requests) do
-      if candidate.id == pending.id then request = candidate; break end
-    end
+    request = self.requestById[pending.id]
     if request then
       craft.requestId = request.id
       craft.recipeDimensionId = request.recipeDimensionId
@@ -678,10 +780,9 @@ function Ledger:RecordResult(result)
     pending.remaining = pending.remaining - 1
     if pending.remaining == 0 then self.pendingRequest = nil end
   end
-  adjustOperationIndex(self, craft, 1)
   for _, reagent in ipairs(reagentFacts) do data.reagents[#data.reagents + 1] = reagent end
+  appendCraftIndexes(self, craft, reagentFacts)
   if self.onCraftCommitted then pcall(self.onCraftCommitted, self, craft) end
-  self:Prune(craft.timestamp)
   return craft
 end
 
@@ -691,43 +792,17 @@ function Ledger:Prune(now)
   local data = self.database
   local cutoff = now - data.retentionDays * 86400
   local removed = {}
-  local removedCrafts = {}
   local retained = {}
   for _, craft in ipairs(data.crafts) do
     if type(craft.timestamp) == "number" and craft.timestamp < cutoff then
       removed[craft.id] = true
-      removedCrafts[craft.id] = craft
     else
       retained[#retained + 1] = craft
     end
   end
   data.crafts = retained
 
-  if #data.crafts > data.maxCrafts then
-    table.sort(data.crafts, function(left, right)
-      local leftTime = observedNumber(left.timestamp) or -math.huge
-      local rightTime = observedNumber(right.timestamp) or -math.huge
-      if leftTime == rightTime then return left.id < right.id end
-      return leftTime < rightTime
-    end)
-    local excess = #data.crafts - data.maxCrafts
-    local kept = {}
-    for index, craft in ipairs(data.crafts) do
-      if index <= excess then
-        removed[craft.id] = true
-        removedCrafts[craft.id] = craft
-      else
-        kept[#kept + 1] = craft
-      end
-    end
-    data.crafts = kept
-    table.sort(data.crafts, function(left, right) return left.id < right.id end)
-  end
-
   if next(removed) then
-    for _, craft in pairs(removedCrafts) do
-      adjustOperationIndex(self, craft, -1)
-    end
     local keptReagents = {}
     for _, reagent in ipairs(data.reagents) do
       if not removed[reagent.craftId] then
@@ -740,18 +815,14 @@ function Ledger:Prune(now)
   for _, craft in ipairs(data.crafts) do
     if craft.requestId then referenced[craft.requestId] = true end
   end
-  local removedRequestCandidate = {}
-  for _, craft in pairs(removedCrafts) do
-    if craft.requestId then removedRequestCandidate[craft.requestId] = true end
-  end
   local keptRequests = {}
   for _, request in ipairs(data.requests) do
-    if referenced[request.id] or
-        (request.timestamp >= cutoff and not removedRequestCandidate[request.id]) then
+    if referenced[request.id] or request.timestamp >= cutoff then
       keptRequests[#keptRequests + 1] = request
     end
   end
   data.requests = keptRequests
+  if self.craftById then self:RebuildIndexes() end
   return removed
 end
 

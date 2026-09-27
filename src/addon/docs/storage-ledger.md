@@ -16,7 +16,7 @@ the ledger and migrates independently. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-The current durable schema is version 2:
+The current durable schema is version 3:
 
 - `crafts` stores one row per observed Retail result callback, with a monotonic
   local `id`, timestamp, optional request ID, session/recipe/output dimension IDs, raw game
@@ -42,7 +42,8 @@ The current durable schema is version 2:
   dimension. Identity and IDs never change; pruning never removes dimensions.
   Metadata supports monotonic enrichment as described below.
 - `nextCraftId` and `nextRequestId` are independent of retained rows, so pruning
-  never reuses either ID. Retention settings are `retentionDays` and `maxCrafts`.
+  never reuses either ID. The retention setting is `retentionDays`; there is no
+  craft-count ceiling.
 
 Session dimensions capture session start, addon version, WoW version/build/date,
 interface, project, locale, character and realm references, and the flavor
@@ -188,19 +189,52 @@ flavors receive an empty capability map and do not acquire Retail-only values.
 
 ## Retention and Migration
 
-Defaults are `retentionDays = 180` and `maxCrafts = 50000`. Pruning runs when the
-ledger loads, after submissions, and after each result. It first removes facts older than the age
-cutoff, then removes the oldest timestamp/ID rows if the count limit is still
-exceeded. Reagent facts for removed crafts are removed together. Requests age
-out with the same cutoff unless a retained craft still references them; when
-count pruning removes their final linked craft, they are removed as well.
-Zero-result requests remain until age expiry. Dimensions and
-ID counters are retained; there are no rollups or dimension garbage collection.
+The default is `retentionDays = 180`, with **no fixed craft-count threshold**.
+The issue #5 indexing/retention decision supersedes the original 50,000-craft cap.
+Pruning runs once when the ledger loads, after migration/reference validation and
+**before runtime indexes are built**. It removes craft facts older than the age
+cutoff together with their reagent facts. Requests age out with the same cutoff
+unless a retained craft still references them; zero-result requests remain until
+age expiry. Dimensions and ID counters are retained; there are no rollups or
+dimension garbage collection.
 
 The age boundary is exclusive: exactly 180 days old survives until it is older.
-Count ties break on craft ID, independent of input array order. A single
-compaction removes excess rows; dimensions and counters never reset, including
-when all facts expire. No clear command or UI is added in this slice.
+No automatic pruning occurs on submissions or results. Facts that age out during
+gameplay remain queryable until next startup, and backdated results are not
+immediately deleted. The private explicit `Prune` maintenance method rebuilds
+runtime indexes if invoked after initialization; it is not a public API or normal
+capture path. Dimensions and counters never reset, even when all facts expire.
+No clear command or UI is added in this slice.
+
+### Runtime indexes
+
+Runtime state references normalized storage rows, not projected/cached domain
+objects. Startup performs the history-sized rebuild once after retention:
+
+- `craftById`, `requestById`, and `reagentsByCraftId` provide direct lookups.
+- `craftIds` is a sorted ascending array of retained craft IDs.
+- `craftIdsByCharacter[key]`, `craftIdsByRealm[key]`, `craftIdsByRecipe[id]`,
+  `craftIdsByProfession[id]`, and `craftIdsByExpansion[key]` contain sorted
+  ascending craft-ID arrays only. They use the public domain identities and
+  recipe-based expansion/profession attribution, not surrogate dimension IDs.
+- `craftIdsByTime` contains IDs ordered by `(timestamp, craft ID)` for cursor
+  boundary searches, including timestamp ties and backward clock changes.
+- The existing operation-count index supports evidence-backed recipe attribution.
+
+New requests update their map; new crafts/reagents update all relevant maps and
+ID arrays before callbacks run. Monotonic IDs append naturally to secondary
+indexes. The chronological index appends for the normal nondecreasing clock path;
+a backdated craft uses binary-position insertion (array shifting is exceptional).
+Neither capture correlation nor callback projection scans historical requests or
+reagents. There is no history-sized pruning/index rebuild on normal capture.
+Actual dimension enrichment must refresh affected filter membership, while
+reusing an unchanged dimension does not rebuild indexes. This exceptional
+metadata maintenance work is separate from ordinary submissions/results.
+
+Indexes never enter SavedVariables and never cache denormalized projections.
+Large histories above 50,000 crafts remain supported within the time window;
+initialization and explicit analytics may do history-sized work. Detailed query
+selection and paging behavior is described in [lua-api.md](lua-api.md).
 
 Schema 0 is explicitly migration-test scaffolding, not a released legacy addon
 format. It has the same fact/dimension/reference/counter shape as schema 1 but
@@ -214,6 +248,12 @@ The explicit schema 1 to 2 migration adds an empty `requests` collection and
 Schema 1 data unexpectedly containing request fields is refused. Migration and
 reference validation operate together on a copy; failed validation never
 publishes or partially mutates SavedVariables.
+
+The explicit schema 2 to 3 migration removes `maxCrafts`, preserving
+`retentionDays`, dimensions, facts, requests, and all monotonic counters. It never
+prunes based on the old count limit. The normal startup age pass still applies
+after validation; facts already removed by older versions cannot be recovered.
+Schema 3 no longer accepts a persisted or configured `maxCrafts` value.
 
 All migrations run on a deep copy inside a protected load path. Missing/invalid
 versions, newer versions, cyclic/non-serializable data, non-finite numbers,
@@ -237,7 +277,7 @@ Unsupported reference fields are refused rather than silently treated as absent.
 Bootstrap replaces `ArtisanLogbookDB` only after successful migration,
 validation, and session initialization. A failed load leaves the original
 SavedVariables intact and tracing independent. A missing database creates schema
-2; the unrelated trace database is never imported. Malformed result snapshots
+3; the unrelated trace database is never imported. Malformed result snapshots
 are rejected before craft/reagent facts are committed; timestamps are never
 fabricated as zero when the clock is unavailable.
 
@@ -246,7 +286,7 @@ fabricated as zero when the clock is unavailable.
 `tests/ledger_test.lua` replays the sanitized Retail build-69933 fixture and
 covers basic results, concentration without Ingenuity, Multicraft,
 multi-reagent Resourcefulness, separate batch results/operation IDs, unknown
-versus zero/false, reload IDs, age/count pruning, append-only dimensions,
+versus zero/false, reload IDs, startup age pruning, append-only dimensions,
 ambiguous/repeated results, unsupported flavor capabilities, and migration
 success/refusal safety. Hardening tests cover every reference path for both
 versions, sparse collections, missing counters, atomic enrichment/conflicts,
@@ -256,7 +296,10 @@ tracing is paused, reload identity, missing identity APIs, initialization refusa
 and debug-trace clear isolation. Sanitized personal build-69933 replay covers
 two quality mixes, off/on concentration and quote/spend differences, mapped
 multi-item returns, three-result batches, partial failure, ambiguous attribution,
-migration, and pruning. Run `bash src/addon/scripts/package.sh` from
+migration, and pruning. Index coverage includes schema 3 migration, rebuild after
+load/pruning, incremental updates, metadata enrichment, sorted ID/time arrays,
+history above 50,000 crafts, direct lookup/no-scan callbacks, and indexed query
+correctness. Run `bash src/addon/scripts/package.sh` from
 the repository root to test and validate `src/addon/dist/ArtisanLogbook.zip`.
 
 Remaining evidence gaps include operation-ID reuse scope, true duplicate/late

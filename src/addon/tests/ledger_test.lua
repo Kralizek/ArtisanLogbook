@@ -118,7 +118,7 @@ test("reload preserves craft IDs and session identity advances", function()
 end)
 
 test("age pruning removes craft and reagent rows but leaves dimensions and IDs", function()
-  local ledger, clock = newLedger({ retentionDays = 1, maxCrafts = 20 })
+  local ledger, clock = newLedger({ retentionDays = 1 })
   local old = assert(ledger:RecordResult({
     itemID = 50,
     resourcesReturned = { { reagent = { itemID = 51 }, quantity = 2 } },
@@ -132,8 +132,8 @@ test("age pruning removes craft and reagent rows but leaves dimensions and IDs",
   assert(newer.id == old.id + 1)
 end)
 
-test("count pruning removes oldest facts and keeps append-only dimensions", function()
-  local ledger = newLedger({ retentionDays = 180, maxCrafts = 2 })
+test("capture retains all facts and keeps append-only dimensions", function()
+  local ledger = newLedger()
   local itemDimension = ledger:AddDimension("item", 700, { gameItemId = 700 })
   assert(ledger:AddDimension("item", 700, { gameItemId = 700, name = "ignored" }) == itemDimension)
   local expansionId = ledger:AddDimension("expansion", "era-test", {
@@ -148,8 +148,8 @@ test("count pruning removes oldest facts and keeps append-only dimensions", func
     resourcesReturned = { { reagent = { itemID = 700 }, quantity = 1 } } }))
   local second = assert(ledger:RecordResult({ operationID = 2, quantity = 1 }))
   local third = assert(ledger:RecordResult({ operationID = 3, quantity = 1 }))
-  assert(#ledger.database.crafts == 2 and ledger.database.crafts[1].id == second.id)
-  assert(ledger.database.crafts[2].id == third.id and #ledger.database.reagents == 0)
+  assert(#ledger.database.crafts == 3 and ledger.database.crafts[1].id == first.id)
+  assert(ledger.database.crafts[3].id == third.id and #ledger.database.reagents == 1)
   assert(ledger.database.nextCraftId == 4 and ledger.database.dimensions.items[1].id == itemDimension)
   assert(ledger.database.dimensions.recipes[1].id == recipeId)
   assert(ledger.database.dimensions.recipes[1].expansionDimensionId == expansionId)
@@ -159,7 +159,7 @@ test("count pruning removes oldest facts and keeps append-only dimensions", func
   assert(first.id < second.id)
   ledger:BeginCraft(801)
   local reusedOperation = assert(ledger:RecordResult({ operationID = 1, quantity = 1 }))
-  assert(reusedOperation.recipeDimensionId ~= nil)
+  assert(reusedOperation.recipeDimensionId == nil)
 end)
 
 test("ambiguous begins and repeated or late results are retained without merging", function()
@@ -274,14 +274,15 @@ test("every persisted reference is validated before load or migration can prune"
     { "items", "expansionDimensionId" }, { "professions", "expansionDimensionId" },
     { "recipes", "professionDimensionId" },
   }
-  for _, version in ipairs({ 0, 1 }) do
+  for _, version in ipairs({ 0, 1, 2, 3 }) do
     for _, reference in ipairs(cases) do
       local ledger, clock = newLedger()
       replay(ledger, fixture.cases)
       ledger:AddDimension("profession", "test")
       local data = ledger.database
       data.schemaVersion = version
-      data.requests, data.nextRequestId = nil, nil
+      if version < 3 then data.maxCrafts = 50000 end
+      if version < 2 then data.requests, data.nextRequestId = nil, nil end
       local rows = data[reference[1]] or data.dimensions[reference[1]]
       rows[1][reference[2]] = 999
       clock.current = clock.current + 200 * 86400
@@ -300,6 +301,7 @@ test("sparse collections and missing counters cannot be silently repaired", func
       replay(ledger, fixture.cases)
       local data = ledger.database
       data.schemaVersion = version
+      data.maxCrafts = 50000
       data.requests, data.nextRequestId = nil, nil
       local rows = data[collection] or data.dimensions[collection]
       rows[2] = nil
@@ -309,6 +311,7 @@ test("sparse collections and missing counters cannot be silently repaired", func
     local ledger = newLedger()
     local data = ledger.database
     data.schemaVersion, data.nextCraftId = version, nil
+    data.maxCrafts = 50000
     data.requests, data.nextRequestId = nil, nil
     assert(Ledger.New(data) == nil and data.nextCraftId == nil)
     data.nextCraftId = 100
@@ -380,8 +383,8 @@ test("invalid result snapshots cannot partially persist a craft", function()
   assert(ledger.database.nextCraftId == 1)
 end)
 
-test("pruning is deterministic at age boundaries and count ties with consistent indexes", function()
-  local ledger, clock, sessionId = newLedger({ retentionDays = 1, maxCrafts = 10 })
+test("pruning is deterministic at age boundaries with consistent indexes", function()
+  local ledger, clock, sessionId = newLedger({ retentionDays = 1 })
   local first = assert(ledger:RecordResult({ operationID = 10, quantity = 1 }))
   local second = assert(ledger:RecordResult({ operationID = 10, quantity = 1,
     resourcesReturned = { { reagent = { itemID = 100 }, quantity = 0 } } }))
@@ -389,15 +392,18 @@ test("pruning is deterministic at age boundaries and count ties with consistent 
   ledger:Prune(clock.current)
   assert(#ledger.database.crafts == 2)
   ledger.database.crafts[1], ledger.database.crafts[2] = second, first
-  ledger.database.maxCrafts = 1
   local reloaded = assert(Ledger.New(ledger.database, clock))
-  assert(#reloaded.database.crafts == 1 and reloaded.database.crafts[1].id == second.id)
+  assert(#reloaded.database.crafts == 2)
+  assert(reloaded.craftIds[1] == first.id and reloaded.craftIds[2] == second.id)
+  assert(reloaded.craftIdsByTime[1] == first.id and reloaded.craftIdsByTime[2] == second.id)
   assert(#reloaded.database.reagents == 1 and reloaded.database.reagents[1].returnedQuantity == 0)
-  assert(reloaded.operationIndex[sessionId][10] == 1)
+  assert(reloaded.operationIndex[sessionId][10] == 2)
   clock.current = clock.current + 1
   reloaded:Prune(clock.current)
   assert(#reloaded.database.crafts == 0 and #reloaded.database.reagents == 0)
   assert(reloaded.operationIndex[sessionId] == nil and reloaded.database.nextCraftId == 3)
+  assert(next(reloaded.craftById) == nil and next(reloaded.reagentsByCraftId) == nil)
+  assert(#reloaded.craftIds == 0 and #reloaded.craftIdsByTime == 0)
   assert(#reloaded.database.dimensions.items == 1)
 end)
 
@@ -533,8 +539,9 @@ test("schema 1 migration preserves partial returns and refuses invalid new refer
   } }))
   local old = ledger.database
   old.schemaVersion, old.nextRequestId, old.requests = 1, nil, nil
+  old.maxCrafts = 50000
   local migrated = assert(Ledger.New(old, clock))
-  assert(migrated.database.schemaVersion == 2 and migrated.database.nextRequestId == 1)
+  assert(migrated.database.schemaVersion == 3 and migrated.database.nextRequestId == 1)
   assert(#migrated.database.requests == 0 and migrated.database.crafts[1].id == result.id)
   assert(migrated.database.reagents[1].allocatedQuantity == nil)
   assert(old.schemaVersion == 1 and old.requests == nil)
@@ -555,7 +562,7 @@ test("schema 1 migration preserves partial returns and refuses invalid new refer
       row[field] = 999
     end
     local refused = Ledger.New(copied)
-    assert(refused == nil and copied.schemaVersion == 2 and copied.requests[1].id == 1, field)
+    assert(refused == nil and copied.schemaVersion == 3 and copied.requests[1].id == 1, field)
   end
   local mismatched = assert(Ledger.New(migrated.database)).database
   mismatched.crafts[2].recipeDimensionId = mismatched.crafts[1].recipeDimensionId
@@ -563,13 +570,13 @@ test("schema 1 migration preserves partial returns and refuses invalid new refer
 end)
 
 test("request reload and pruning keep surviving references and monotonic IDs", function()
-  local ledger, clock = newLedger({ retentionDays = 1, maxCrafts = 1 })
+  local ledger, clock = newLedger({ retentionDays = 1 })
   local first = assert(ledger:SubmitCraft(1, 2, false))
   local craft = assert(ledger:RecordResult({ operationID = 1 }))
   local reloaded = assert(Ledger.New(ledger.database, clock))
   reloaded:CreateSession({})
   assert(assert(reloaded:RecordResult({ operationID = 2 })).requestId == nil)
-  assert(#reloaded.database.requests == 0 and #reloaded.database.crafts == 1)
+  assert(#reloaded.database.requests == 1 and #reloaded.database.crafts == 2)
   local second = assert(reloaded:SubmitCraft(2, 1, true))
   assert(first.id == 1 and second.id == 2 and craft.id == 1)
   clock.current = clock.current + 86401
@@ -589,6 +596,261 @@ test("age pruning retains an old request while a newer craft references it", fun
   clock.current = clock.current + 86401
   ledger:Prune(clock.current)
   assert(#ledger.database.requests == 0 and #ledger.database.crafts == 0)
+end)
+
+test("schema 2 migration removes the count cap without mutating saved data", function()
+  local ledger, clock = newLedger()
+  assert(ledger:RecordResult({}))
+  assert(ledger:RecordResult({}))
+  ledger.database.schemaVersion = 2
+  ledger.database.maxCrafts = 1
+  local migrated = assert(Ledger.New(ledger.database, clock))
+  assert(migrated.database.schemaVersion == 3 and migrated.database.maxCrafts == nil)
+  assert(Ledger.maxCrafts == nil and migrated.database.retentionDays == 180)
+  assert(#migrated.database.crafts == 2 and #migrated.craftIds == 2)
+  assert(ledger.database.schemaVersion == 2 and ledger.database.maxCrafts == 1)
+  for _, invalid in ipairs({ false, 0, -1, 1.5, "50000" }) do
+    ledger.database.maxCrafts = invalid
+    assert(Ledger.New(ledger.database, clock) == nil)
+    assert(ledger.database.schemaVersion == 2 and ledger.database.maxCrafts == invalid)
+  end
+  ledger.database.maxCrafts = nil
+  assert(Ledger.New(ledger.database, clock) == nil)
+end)
+
+test("schema 3 refuses persisted and configured count caps", function()
+  local ledger, clock = newLedger()
+  for _, cap in ipairs({ false, 0, 1, 50000 }) do
+    local refused, reason = Ledger.New(ledger.database, clock, { maxCrafts = cap })
+    assert(refused == nil and reason:find("maxCrafts", 1, true))
+    assert(ledger.database.maxCrafts == nil)
+    ledger.database.maxCrafts = cap
+    refused, reason = Ledger.New(ledger.database, clock)
+    assert(refused == nil and reason:find("maxCrafts", 1, true))
+    assert(ledger.database.schemaVersion == 3 and ledger.database.maxCrafts == cap)
+    ledger.database.maxCrafts = nil
+  end
+end)
+
+test("startup prunes before building runtime indexes once", function()
+  local ledger, clock, sessionId = newLedger()
+  local request = assert(ledger:SubmitCraft(12, 2, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 100 } },
+  }))
+  local old = assert(ledger:RecordResult({ operationID = 10 }))
+  clock.current = clock.current + 180 * 86400 + 1
+  local retained = assert(ledger:RecordResult({ operationID = 11 }))
+  assert(#ledger.database.crafts == 2 and #ledger.database.reagents == 2)
+  local orphan = assert(ledger:SubmitCraft(13, 1, false))
+  orphan.timestamp = old.timestamp
+  ledger:CancelCraft()
+  local builds = 0
+  local rebuild = Ledger.RebuildIndexes
+  Ledger.RebuildIndexes = function(self)
+    builds = builds + 1
+    assert(self.craftById == nil and self.dimensionRows == nil and self.operationIndex == nil)
+    assert(#self.database.crafts == 1 and self.database.crafts[1].id == retained.id)
+    assert(#self.database.requests == 1 and #self.database.reagents == 1)
+    rebuild(self)
+  end
+  local reloaded, reason = Ledger.New(ledger.database, clock)
+  Ledger.RebuildIndexes = rebuild
+  assert(reloaded, reason)
+  assert(builds == 1 and #ledger.database.crafts == 2)
+  assert(reloaded.craftById[old.id] == nil and reloaded.reagentsByCraftId[old.id] == nil)
+  assert(reloaded.requestById[orphan.id] == nil)
+  assert(reloaded.craftById[retained.id] == reloaded.database.crafts[1])
+  assert(reloaded.requestById[request.id] == reloaded.database.requests[1])
+  assert(reloaded.reagentsByCraftId[retained.id][1] == reloaded.database.reagents[1])
+  assert(reloaded.operationIndex[sessionId][10] == nil)
+  assert(reloaded.operationIndex[sessionId][11] == 1)
+  assert(reloaded.pendingRequest == nil)
+  reloaded.currentSessionId = sessionId
+  reloaded:BeginCraft(14)
+  assert(assert(reloaded:RecordResult({ operationID = 10 })).recipeDimensionId ~= nil)
+end)
+
+test("secondary indexes track domain identities and monotonic dimension enrichment", function()
+  local ledger, clock = newLedger()
+  local sessionId = assert(ledger:CreateSession({}))
+  local request = assert(ledger:SubmitCraft(12, 1, false))
+  local craft = assert(ledger:RecordResult({}))
+  local unknown = assert(ledger:RecordResult({}))
+  assert(ledger.craftIdsByRecipe[12][1] == craft.id)
+  assert(next(ledger.craftIdsByCharacter) == nil and next(ledger.craftIdsByRealm) == nil)
+  assert(next(ledger.craftIdsByProfession) == nil and next(ledger.craftIdsByExpansion) == nil)
+  local indexes = ledger.craftIdsByRecipe
+  local expansion = assert(ledger:AddDimension("expansion", "era", {}))
+  local otherExpansion = assert(ledger:AddDimension("expansion", "other-era", {}))
+  local profession = assert(ledger:AddDimension("profession", "profession", {
+    expansionDimensionId = otherExpansion,
+  }))
+  local realm = assert(ledger:AddDimension("realm", "realm-key", {}))
+  local character = assert(ledger:AddDimension("character", "character-key", {
+    realmDimensionId = realm,
+  }))
+  assert(ledger.craftIdsByRecipe == indexes)
+  assert(ledger:AddDimension("recipe", 12, {
+    gameRecipeId = 12, professionDimensionId = profession, expansionDimensionId = expansion,
+  }) == request.recipeDimensionId)
+  assert(ledger.craftIdsByExpansion.era[1] == craft.id)
+  assert(ledger.craftIdsByExpansion["other-era"] == nil)
+  assert(next(ledger.craftIdsByProfession) == nil)
+  assert(ledger:AddDimension("profession", "profession", { skillLineId = 164 }) == profession)
+  assert(ledger.craftIdsByProfession[164][1] == craft.id)
+  local session = ledger.dimensionRows.session[sessionId]
+  assert(ledger:AddDimension("session", session.key, {
+    characterDimensionId = character, realmDimensionId = realm,
+  }) == sessionId)
+  for _, ids in ipairs({ ledger.craftIdsByCharacter["character-key"], ledger.craftIdsByRealm["realm-key"] }) do
+    assert(#ids == 2 and ids[1] == craft.id and ids[2] == unknown.id)
+  end
+  indexes = ledger.craftIdsByRecipe
+  assert(ledger:AddDimension("recipe", 12, {
+    gameRecipeId = 12, professionDimensionId = profession, expansionDimensionId = expansion,
+  }))
+  assert(ledger.craftIdsByRecipe == indexes)
+  assert(ledger:AddDimension("recipe", 12, { professionDimensionId = 999, name = "Conflict" }) == nil)
+  assert(ledger.craftIdsByRecipe == indexes and ledger.dimensionRows.recipe[request.recipeDimensionId].name == nil)
+  local override = assert(ledger:AddDimension("profession", "override", { skillLineId = 171 }))
+  craft.professionDimensionId = override
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  assert(reloaded.craftIdsByProfession[164] == nil)
+  assert(reloaded.craftIdsByProfession[171][1] == craft.id)
+  assert(reloaded.craftIdsByExpansion.era[1] == craft.id)
+end)
+
+test("time indexes append ties and insert backdated timestamps with ID tie breaks", function()
+  local ledger, clock = newLedger()
+  local first = assert(ledger:RecordResult({}))
+  local second = assert(ledger:RecordResult({}))
+  clock.current = clock.current - 10
+  local third = assert(ledger:RecordResult({}))
+  local fourth = assert(ledger:RecordResult({}))
+  clock.current = clock.current + 20
+  local fifth = assert(ledger:RecordResult({}))
+  local expected = { third.id, fourth.id, first.id, second.id, fifth.id }
+  for index, id in ipairs(expected) do assert(ledger.craftIdsByTime[index] == id) end
+  ledger.database.crafts[1], ledger.database.crafts[5] = fifth, first
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  for index, id in ipairs(expected) do
+    assert(reloaded.craftIdsByTime[index] == id and reloaded.craftIds[index] == index)
+    assert(reloaded.craftById[index].id == index)
+  end
+end)
+
+test("metadata-only dimension enrichment never rebuilds filter indexes", function()
+  local ledger = newLedger()
+  local request = assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({ itemID = 100 }))
+  local expansion = assert(ledger:AddDimension("expansion", "era", {}))
+  local profession = assert(ledger:AddDimension("profession", "profession", { skillLineId = 164 }))
+  local session = ledger.dimensionRows.session[ledger.currentSessionId]
+  local character = ledger.dimensionRows.character[session.characterDimensionId]
+  local realm = ledger.dimensionRows.realm[session.realmDimensionId]
+  local indexedRecipes = ledger.craftIdsByRecipe
+  ledger.RebuildFilterIndexes = function() error("metadata enrichment rebuilt filter indexes") end
+  local ok, reason = pcall(function()
+    assert(ledger:AddDimension("recipe", 12, { name = "Recipe" }) == request.recipeDimensionId)
+    assert(ledger:AddDimension("item", 100, { name = "Item", expansionDimensionId = expansion }))
+    assert(ledger:AddDimension("expansion", "era", { displayName = "Era", chronologicalOrder = 1 }))
+    assert(ledger:AddDimension("profession", "profession", {
+      name = "Profession", expansionDimensionId = expansion,
+    }) == profession)
+    assert(ledger:AddDimension("session", session.key, {
+      locale = "enUS", capabilities = { measurements = { available = false } },
+    }))
+    assert(ledger:AddDimension("character", character.key, { metadata = { note = "Observed" } }))
+    assert(ledger:AddDimension("realm", realm.key, { metadata = { note = "Observed" } }))
+    assert(ledger.craftIdsByRecipe == indexedRecipes)
+    assert(session.capabilities.measurements.available == false)
+    assert(ledger.dimensionRows.recipe[request.recipeDimensionId].name == "Recipe")
+  end)
+  ledger.RebuildFilterIndexes = nil
+  assert(ok, reason)
+end)
+
+test("pruning a backdated result does not discard its recent request", function()
+  local ledger, clock = newLedger()
+  local request = assert(ledger:SubmitCraft(12, 1, false))
+  clock.current = clock.current - 181 * 86400
+  local craft = assert(ledger:RecordResult({}))
+  clock.current = request.timestamp
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  assert(reloaded.craftById[craft.id] == nil and #reloaded.database.crafts == 0)
+  assert(reloaded.requestById[request.id] == reloaded.database.requests[1])
+end)
+
+test("incremental indexes are complete before the committed callback", function()
+  local ledger = newLedger()
+  local request = assert(ledger:SubmitCraft(12, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 100 } },
+  }))
+  assert(ledger.requestById[request.id] == request)
+  local callbackCompleted = false
+  ledger.onCraftCommitted = function(self, craft)
+    assert(self.craftById[craft.id] == craft and self.database.crafts[1] == craft)
+    assert(self.requestById[craft.requestId] == request)
+    assert(self.reagentsByCraftId[craft.id][1] == self.database.reagents[1])
+    assert(self.reagentsByCraftId[craft.id][1].returnedQuantity == 0)
+    assert(self.craftIds[1] == craft.id and self.craftIdsByTime[1] == craft.id)
+    assert(self.craftIdsByRecipe[12][1] == craft.id)
+    assert(self.operationIndex[craft.sessionDimensionId][10] == 1)
+    callbackCompleted = true
+  end
+  assert(ledger:RecordResult({ operationID = 10, resourcesReturned = {} }))
+  assert(callbackCompleted)
+end)
+
+test("more than 50000 crafts survive capture and reload without historical scans", function()
+  local ledger, clock = newLedger()
+  local selections = { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 100 } } }
+  for index = 1, 50001 do
+    local request = assert(ledger:SubmitCraft(12, 1, false, nil, selections))
+    local craft = assert(ledger:RecordResult({ operationID = index, resourcesReturned = {} }))
+    assert(craft.requestId == request.id)
+  end
+  assert(#ledger.database.crafts == 50001 and #ledger.database.requests == 50001)
+  assert(#ledger.database.reagents == 50001 and #ledger.craftIdsByRecipe[12] == 50001)
+  local oldIpairs, oldPairs, oldSort, oldInsert = ipairs, pairs, table.sort, table.insert
+  local forbidden = {
+    [ledger.database.crafts] = true, [ledger.database.requests] = true,
+    [ledger.database.reagents] = true, [ledger.craftIds] = true, [ledger.craftIdsByTime] = true,
+    [ledger.craftById] = true, [ledger.requestById] = true, [ledger.reagentsByCraftId] = true,
+  }
+  local function noScan() error("capture scanned or rebuilt historical state") end
+  ipairs = function(rows)
+    if forbidden[rows] then noScan() end
+    return oldIpairs(rows)
+  end
+  pairs = function(rows)
+    if forbidden[rows] then noScan() end
+    return oldPairs(rows)
+  end
+  table.sort, table.insert = noScan, noScan
+  ledger.Prune, ledger.RebuildIndexes, ledger.RebuildFilterIndexes = noScan, noScan, noScan
+  local indexedRecipes, indexedCrafts = ledger.craftIdsByRecipe, ledger.craftById
+  local ok, reason = pcall(function()
+    local request = assert(ledger:SubmitCraft(12, 1, false, nil, selections))
+    local craft = assert(ledger:RecordResult({ operationID = 50002, resourcesReturned = {} }))
+    assert(craft.requestId == request.id)
+    assert(ledger.requestById[request.id] == request and ledger.craftById[craft.id] == craft)
+    assert(ledger.reagentsByCraftId[craft.id][1] == ledger.database.reagents[50002])
+    request = assert(ledger:SubmitCraft(13, 1, false))
+    craft = assert(ledger:RecordResult({ operationID = 50003, itemID = 101 }))
+    assert(craft.requestId == request.id and ledger.craftIdsByRecipe[13][1] == craft.id)
+  end)
+  ipairs, pairs, table.sort, table.insert = oldIpairs, oldPairs, oldSort, oldInsert
+  ledger.Prune, ledger.RebuildIndexes, ledger.RebuildFilterIndexes = nil, nil, nil
+  assert(ok, reason)
+  assert(ledger.craftIdsByRecipe == indexedRecipes and ledger.craftById == indexedCrafts)
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  assert(#reloaded.database.crafts == 50003 and #reloaded.database.requests == 50003)
+  assert(#reloaded.craftIds == 50003 and #reloaded.craftIdsByTime == 50003)
+  assert(#reloaded.craftIdsByRecipe[12] == 50002 and reloaded.craftIdsByRecipe[13][1] == 50003)
+  assert(reloaded.craftById[50003] == reloaded.database.crafts[50003])
+  assert(reloaded.requestById[50003] == reloaded.database.requests[50003])
+  assert(reloaded.reagentsByCraftId[50002][1] == reloaded.database.reagents[50002])
 end)
 
 print(string.format("%d ledger tests passed", passed))

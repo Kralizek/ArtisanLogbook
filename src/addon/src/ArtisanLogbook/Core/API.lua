@@ -94,7 +94,7 @@ local function allocation(ledger, row)
   return result
 end
 
-local function projectCraft(ledger, craft, requests, reagents)
+local function projectCraft(ledger, craft)
   local result = fields(craft, { "id", "timestamp", "gameOperationId", "outputQuality", "outputItemLevel",
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
     "hasIngenuityProc", "ingenuityRefund" })
@@ -106,10 +106,10 @@ local function projectCraft(ledger, craft, requests, reagents)
   result.expansion = expansion(ledger, rows.expansions)
   result.outputItem = item(ledger, craft.outputItemDimensionId)
   result.reagents = {}
-  for _, row in ipairs(reagents[craft.id] or {}) do
+  for _, row in ipairs(ledger.reagentsByCraftId[craft.id] or {}) do
     result.reagents[#result.reagents + 1] = allocation(ledger, row)
   end
-  local request = requests[craft.requestId]
+  local request = ledger.requestById[craft.requestId]
   if request then
     result.request = fields(request, { "id", "timestamp", "requestedCount", "useConcentration",
       "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" })
@@ -122,25 +122,6 @@ local function projectCraft(ledger, craft, requests, reagents)
     end
   end
   return result
-end
-
--- Only page-selected relationships are indexed, and no index survives pruning.
-local function relationships(ledger, crafts)
-  local wantedCrafts, wantedRequests, requests, reagents = {}, {}, {}, {}
-  for _, craft in ipairs(crafts) do
-    wantedCrafts[craft.id] = true
-    if craft.requestId then wantedRequests[craft.requestId] = true end
-  end
-  for _, row in ipairs(ledger.database.requests) do
-    if wantedRequests[row.id] then requests[row.id] = row end
-  end
-  for _, row in ipairs(ledger.database.reagents) do
-    if wantedCrafts[row.craftId] then
-      reagents[row.craftId] = reagents[row.craftId] or {}
-      table.insert(reagents[row.craftId], row)
-    end
-  end
-  return requests, reagents
 end
 
 local function finite(value)
@@ -220,16 +201,70 @@ local function matches(craft, rows, filter, excluded)
   return true
 end
 
+local indexNames = {
+  characters = "craftIdsByCharacter", realms = "craftIdsByRealm",
+  recipes = "craftIdsByRecipe", professions = "craftIdsByProfession",
+  expansions = "craftIdsByExpansion",
+}
+
+local function union(left, right)
+  local result, i, j = {}, 1, 1
+  while i <= #left or j <= #right do
+    local a, b = left[i], right[j]
+    if b == nil or (a ~= nil and a < b) then
+      result[#result + 1] = a; i = i + 1
+    elseif a == nil or b < a then
+      result[#result + 1] = b; j = j + 1
+    else
+      result[#result + 1] = a; i = i + 1; j = j + 1
+    end
+  end
+  return result
+end
+
+-- Start with the smallest selected population; other facets remain AND constraints.
+local function candidateIds(ledger, filter, excluded, maximum)
+  local chosen, smallest = nil, math.min(#ledger.craftIds, maximum or math.huge)
+  for _, facet in ipairs(facets) do
+    if facet ~= excluded and filter[facet] then
+      local index, count = ledger[indexNames[facet]], 0
+      for value in pairs(filter[facet]) do count = count + #(index[value] or {}) end
+      if count <= smallest then chosen, smallest = facet, count end
+    end
+  end
+  if not chosen then return ledger.craftIds end
+  local result
+  for value in pairs(filter[chosen]) do
+    local ids = ledger[indexNames[chosen]][value]
+    if ids then result = result and union(result, ids) or ids end
+  end
+  return result or {}
+end
+
+local function timeBefore(left, right)
+  if left.timestamp == right.timestamp then return left.id < right.id end
+  return left.timestamp < right.timestamp
+end
+
+local function lowerBound(ledger, ids, boundary)
+  local first, last = 1, #ids + 1
+  while first < last do
+    local middle = math.floor((first + last) / 2)
+    if timeBefore(ledger.craftById[ids[middle]], boundary) then
+      first = middle + 1
+    else
+      last = middle
+    end
+  end
+  return first
+end
+
 function API.GetCraft(id)
   if not integer(id, 1) then return nil, "invalid-id" end
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
-  for _, craft in ipairs(ledger.database.crafts) do
-    if craft.id == id then
-      local requests, reagents = relationships(ledger, { craft })
-      return projectCraft(ledger, craft, requests, reagents)
-    end
-  end
+  local craft = ledger.craftById[id]
+  if craft then return projectCraft(ledger, craft) end
   return nil, "not-found"
 end
 
@@ -262,29 +297,45 @@ function API.GetCrafts(filter, options)
     end
     highWater, anchorId, anchorTime = high, id, timestamp
   end
-  local function before(left, right)
-    if left.timestamp == right.timestamp then
-      if direction == "asc" then return left.id < right.id end
-      return left.id > right.id
-    end
-    if direction == "asc" then return left.timestamp < right.timestamp end
-    return left.timestamp > right.timestamp
+  local ordered = ledger.craftIdsByTime
+  local candidates = candidateIds(ledger, normalized, nil, #ordered / 4)
+  -- Sparse selections sort only their IDs. Broad/unfiltered pages seek the time index.
+  if #candidates < #ordered / 4 then
+    ordered = {}
+    for index, id in ipairs(candidates) do ordered[index] = id end
+    table.sort(ordered, function(left, right)
+      return timeBefore(ledger.craftById[left], ledger.craftById[right])
+    end)
   end
+  local time = normalized.time or {}
+  local first = time.from and lowerBound(ledger, ordered, { timestamp = time.from, id = -math.huge }) or 1
+  local last = time.to and lowerBound(ledger, ordered, { timestamp = time.to, id = -math.huge }) - 1 or #ordered
+  if anchorId then
+    local position = lowerBound(ledger, ordered, { timestamp = anchorTime, id = anchorId })
+    if direction == "asc" then
+      if ordered[position] == anchorId and ledger.craftById[anchorId].timestamp == anchorTime then
+        position = position + 1
+      end
+      first = math.max(first, position)
+    else
+      last = math.min(last, position - 1)
+    end
+  end
+  local step = direction == "asc" and 1 or -1
+  local position = direction == "asc" and first or last
   local selected = {}
-  local anchor = anchorId and { timestamp = anchorTime, id = anchorId }
-  for _, craft in ipairs(ledger.database.crafts) do
-    if craft.id <= highWater and (not anchor or before(anchor, craft)) and
-        matches(craft, related(ledger, craft), normalized) then
+  while position >= first and position <= last and #selected <= limit do
+    local craft = ledger.craftById[ordered[position]]
+    if craft.id <= highWater and matches(craft, related(ledger, craft), normalized) then
       selected[#selected + 1] = craft
     end
+    position = position + step
   end
-  table.sort(selected, before)
   local hasMore = #selected > limit
-  for index = #selected, limit + 1, -1 do selected[index] = nil end
-  local requests, reagents = relationships(ledger, selected)
+  if hasMore then selected[#selected] = nil end
   local page = { crafts = {} }
   for _, craft in ipairs(selected) do
-    page.crafts[#page.crafts + 1] = projectCraft(ledger, craft, requests, reagents)
+    page.crafts[#page.crafts + 1] = projectCraft(ledger, craft)
   end
   if hasMore then
     local last = selected[#selected]
@@ -306,11 +357,13 @@ function API.GetFacets(filter, options)
   if not ledger then return nil, "not-ready" end
   local result, seen = {}, {}
   for _, facet in ipairs(facets) do result[facet] = {}; seen[facet] = {} end
-  for _, craft in ipairs(ledger.database.crafts) do
-    local rows = related(ledger, craft)
-    for _, facet in ipairs(facets) do
+  for _, facet in ipairs(facets) do
+    local excluded = mode == "self-excluding" and facet or nil
+    for _, id in ipairs(candidateIds(ledger, normalized, excluded)) do
+      local craft = ledger.craftById[id]
+      local rows = related(ledger, craft)
       local value = identity(facet, rows[facet])
-      if value ~= nil and matches(craft, rows, normalized, mode == "self-excluding" and facet or nil) then
+      if value ~= nil and matches(craft, rows, normalized, excluded) then
         local entry = seen[facet][value]
         if not entry then
           entry = { value = value, count = 0, details = projectors[facet](ledger, rows[facet]) }
@@ -353,11 +406,10 @@ end
 
 function addon.PublishCraftCommitted(ledger, craft)
   if #subscribers == 0 then return end
-  local requests, reagents = relationships(ledger, { craft })
   local delivery = {}
   for index, subscription in ipairs(subscribers) do delivery[index] = subscription.callback end
   for _, callback in ipairs(delivery) do
     -- Each consumer gets its own projection, including nested related objects.
-    pcall(function() callback(projectCraft(ledger, craft, requests, reagents)) end)
+    pcall(function() callback(projectCraft(ledger, craft)) end)
   end
 end

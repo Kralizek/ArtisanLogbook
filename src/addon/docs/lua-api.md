@@ -160,7 +160,7 @@ the limit may change. Equivalent reordered/deduplicated selections are accepted.
 Cursors bind an exclusive timestamp/ID boundary, direction, normalized filter,
 and the initial craft-ID high-water mark. Later commits are excluded from that
 traversal, even if their clocks move backward. Start without a cursor to refresh.
-This is **not a persistent snapshot**: pruning may remove pending rows or the
+This is **not a persistent snapshot**: startup pruning may remove pending rows or the
 anchor, and metadata enrichment may change matches/details. A pruned anchor
 does not invalidate the boundary. Cursors have no server-side cache or expiry,
 survive reload against the same ledger, and must not be shared across ledgers
@@ -170,9 +170,20 @@ Malformed cursors, impossible ID bounds, or mismatched filters/directions return
 `"invalid-cursor"`. Unknown options, invalid limits/directions, and non-table
 options return `"invalid-options"`; offset paging and arbitrary sort fields are
 not supported. Filters are applied before ordering/page selection. Only selected
-crafts' relationships are projected. Queries scan retained facts and sort matching
-references; they do not persist another ledger or require consumers to offset-scan
-history. Facet queries likewise scan retained facts, not orphaned dimensions.
+crafts' relationships are projected. `GetCraft` and callback projection use direct
+runtime craft/request/reagent maps, with no retained-history scans. Unfiltered and
+broadly filtered pages seek the timestamp/ID index with binary search, then walk
+until the page and one lookahead match are found. Selective filters use the
+smallest selected secondary-index population (OR-union of sorted craft-ID arrays)
+and check the remaining AND constraints; sparse populations sort only their
+candidate IDs for time ordering. No denormalized projections are cached.
+
+History-sized work remains possible for explicit analytical queries, particularly
+broad filters with few matches, but ordinary pages do not sort full history.
+Facets reuse secondary-index candidate populations with the appropriate
+self-exclusion; their counts may require traversing the full retained population.
+Indexes are runtime-only and rebuilt after startup retention, never persisted
+as another ledger. See [storage-ledger.md](storage-ledger.md) for details.
 
 ### Facets
 
@@ -212,9 +223,10 @@ not public capability fields or public callback events.
 ### Callbacks
 
 Only `"CRAFT_COMMITTED"` is supported. Its callback receives **one craft
-projection**, synchronously after craft and reagent facts are inserted and before
-the automatic retention pass. The craft is queryable during delivery; retention
-may remove it afterward (for example after a backward clock change). Failed
+projection**, synchronously after craft/reagent facts and their runtime indexes
+are updated. The craft is queryable during delivery. Automatic retention runs
+only at ledger startup, not during submission, capture, or callbacks; facts that
+age out during gameplay remain available until the next startup. Failed
 capture, request submissions, reload, and pruning do not emit public events.
 Callbacks also run while diagnostic tracing is off.
 

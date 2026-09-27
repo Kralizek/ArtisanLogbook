@@ -321,34 +321,129 @@ test("subscription changes take effect on the next event", function()
   equal(calls, { "first", "second", "new" })
 end)
 
-test("pruning and reload preserve projections and allow pruned cursor anchors", function()
+test("startup pruning and index rebuild preserve projections and pruned cursor anchors", function()
   local ledger, api, clock, addon = fixture()
   local page = api.GetCrafts(nil, { direction = "asc", limit = 2 })
   local expected = api.GetCraft(6)
-  ledger.database.maxCrafts = 4
-  ledger:Prune(clock.current)
+  clock.current = 1800000002 + ledger.database.retentionDays * 86400
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
   errorIs("not-found", api.GetCraft(1))
   equal(ids(api.GetCrafts(nil, { direction = "asc", cursor = page.nextCursor })), { 3, 4, 5, 6 })
   equal(api.GetCraft(6), expected)
   assert(api.GetFacets().recipes[1].count == 1)
-  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
-  equal(api.GetCraft(6), expected)
   clock.current = clock.current + 181 * 86400
-  addon.ledger:Prune(clock.current)
+  addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
   equal(api.GetCrafts(), { crafts = {} })
   equal(api.GetFacets(), { characters = {}, realms = {}, expansions = {}, professions = {}, recipes = {} })
 end)
 
-test("commit delivery precedes retention and includes a subsequently pruned craft's relationships", function()
-  local ledger, api, clock = fixture({ maxCrafts = 6 })
+test("capture does not prune old history until the next startup", function()
+  local ledger, api, clock, addon = fixture()
   local received
   api.RegisterCallback("CRAFT_COMMITTED", function(craft) received = craft end)
-  clock.current = clock.current - 100
+  clock.current = clock.current + 181 * 86400
   assert(ledger:SubmitCraft(101, 1, false, nil,
     { { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 202 } } }))
   local committed = assert(ledger:RecordResult({ resourcesReturned = {} }))
   assert(received.id == committed.id and received.request.id and received.reagents[1].returnedQuantity == 0)
-  errorIs("not-found", api.GetCraft(committed.id))
+  assert(api.GetCraft(1) and api.GetCraft(committed.id))
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  errorIs("not-found", api.GetCraft(1))
+  equal(api.GetCraft(committed.id), received)
+end)
+
+test("GetCraft and callbacks use direct lookups without traversing history", function()
+  local ledger, api = fixture()
+  local expected = api.GetCraft(1)
+  local rawIpairs = ipairs
+  local history = { [ledger.database.crafts] = true, [ledger.database.requests] = true,
+    [ledger.database.reagents] = true }
+  local visits, callbacks = 0, 0
+  ipairs = function(rows)
+    if history[rows] then visits = visits + 1; error("history traversal") end
+    return rawIpairs(rows)
+  end
+  local ok, reason = pcall(function()
+    equal(api.GetCraft(1), expected)
+    equal(ids(api.GetCrafts({ recipes = { 101 } })), { 6, 1 })
+    assert(api.GetFacets({ recipes = { 101 } }, { mode = "strict" }).recipes[1].count == 2)
+    api.RegisterCallback("CRAFT_COMMITTED", function(craft)
+      equal(api.GetCraft(craft.id), craft)
+      callbacks = callbacks + 1
+    end)
+    assert(ledger:SubmitCraft(101, 1, false, nil,
+      { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 202 } } }))
+    local craft = assert(ledger:RecordResult({ resourcesReturned = {} }))
+    assert(api.GetCraft(craft.id).reagents[1].returnedQuantity == 0)
+  end)
+  ipairs = rawIpairs
+  assert(ok, reason)
+  assert(visits == 0 and callbacks == 1)
+end)
+
+test("metadata enrichment updates indexed filters and facets without cached projections", function()
+  local ledger, api = fixture()
+  assert(#api.GetCrafts({ expansions = { "new-era" } }).crafts == 0)
+  local expansion = assert(ledger:AddDimension("expansion", "new-era", { name = "New era" }))
+  local profession = assert(ledger:AddDimension("profession", "new-profession", { skillLineId = 555 }))
+  assert(ledger:AddDimension("recipe", 104,
+    { expansionDimensionId = expansion, professionDimensionId = profession }))
+  equal(ids(api.GetCrafts({ expansions = { "new-era" }, professions = { 555 } })), { 4 })
+  assert(api.GetFacets({ recipes = { 104 } }, { mode = "strict" }).professions[1].value == 555)
+  local projected = api.GetCraft(4)
+  projected.recipe.expansion.name = "Changed"
+  assert(api.GetCraft(4).recipe.expansion.name == "New era")
+end)
+
+test("large histories page by indexed boundaries, including backdated timestamps and sparse filters", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  local start = clock.current
+  for index = 1, 51000 do
+    clock.current = start + math.floor(index / 3)
+    ledger:BeginCraft(index % 1000 == 0 and 102 or 101)
+    assert(ledger:RecordResult({ operationID = index }))
+  end
+  assert(#ledger.database.crafts == 51000)
+  local page = api.GetCrafts(nil, { limit = 2 })
+  equal(ids(page), { 51000, 50999 })
+  equal(ids(api.GetCrafts(nil, { limit = 2, cursor = page.nextCursor })), { 50998, 50997 })
+  equal(ids(api.GetCrafts({ recipes = { 102 } }, { limit = 2 })), { 51000, 50000 })
+  equal(ids(api.GetCrafts({ recipes = { 102, 999 } }, { direction = "asc", limit = 2 })), { 1000, 2000 })
+  local sparsePage = api.GetCrafts({ recipes = { 102 } }, { direction = "asc", limit = 2 })
+  equal(ids(api.GetCrafts({ recipes = { 102 } },
+    { direction = "asc", limit = 2, cursor = sparsePage.nextCursor })), { 3000, 4000 })
+  local rawSort = table.sort
+  table.sort = function(values, compare)
+    assert(#values <= 200, "full-history page sort")
+    return rawSort(values, compare)
+  end
+  local ok, reason = pcall(function()
+    equal(ids(api.GetCrafts(nil, { limit = 2, cursor = page.nextCursor })), { 50998, 50997 })
+    equal(ids(api.GetCrafts({ recipes = { 101 } }, { limit = 2 })), { 50999, 50998 })
+  end)
+  table.sort = rawSort
+  assert(ok, reason)
+  local reads = 0
+  local map = ledger.craftById
+  ledger.craftById = setmetatable({}, { __index = function(_, id)
+    reads = reads + 1
+    return map[id]
+  end })
+  assert(api.GetCrafts(nil, { limit = 2, cursor = page.nextCursor }))
+  assert(reads < 100, "unfiltered paging rescanned the history")
+  ledger.craftById = map
+  clock.current = start + 1
+  local backdated = assert(ledger:RecordResult({}))
+  local interval = { time = { from = start + 1, to = start + 2 } }
+  equal(ids(api.GetCrafts(interval, { direction = "asc" })), { 3, 4, 5, backdated.id })
+  equal(ids(api.GetCrafts(interval)), { backdated.id, 5, 4, 3 })
+  local facet = api.GetFacets({ recipes = { 102 } }, { mode = "strict" })
+  assert(facet.recipes[1].value == 102 and facet.recipes[1].count == 51)
+  clock.current = start + 17000
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  equal(ids(api.GetCrafts(interval)), { backdated.id, 5, 4, 3 })
+  assert(#api.GetFacets().recipes == 2)
 end)
 
 test("sanitized replay preserves partial returns and ambiguous allocation evidence", function()
