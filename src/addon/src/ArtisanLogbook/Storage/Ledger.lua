@@ -225,9 +225,18 @@ local function validateDatabase(data, legacy)
 
   local ids = { craft = {}, request = {} }
   for _, craft in ipairs(data.crafts) do
-    if not isInteger(craft.id) or ids.craft[craft.id] or type(craft.timestamp) ~= "number" or
+    if not isInteger(craft.id) or ids.craft[craft.id] or not isFinite(craft.timestamp) or
         craft.sessionDimensionId == nil then
       return nil, "craft facts contain an invalid or duplicate ID"
+    end
+    for _, field in ipairs({ "gameOperationId", "outputQuality", "outputItemLevel", "outputQuantity",
+      "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" }) do
+      if craft[field] ~= nil and not isFinite(craft[field]) then
+        return nil, "invalid craft measurement: " .. field
+      end
+    end
+    if craft.hasIngenuityProc ~= nil and type(craft.hasIngenuityProc) ~= "boolean" then
+      return nil, "invalid craft boolean: hasIngenuityProc"
     end
     ids.craft[craft.id] = true
   end
@@ -250,14 +259,14 @@ local function validateDatabase(data, legacy)
     end
   end
   for _, request in ipairs(data.requests) do
-    if not isInteger(request.id) or ids.request[request.id] or type(request.timestamp) ~= "number" or
+    if not isInteger(request.id) or ids.request[request.id] or not isFinite(request.timestamp) or
         request.sessionDimensionId == nil or request.recipeDimensionId == nil or
         not isInteger(request.requestedCount) or type(request.useConcentration) ~= "boolean" then
       return nil, "request facts contain an invalid or duplicate ID"
     end
     ids.request[request.id] = request
     for _, field in ipairs({ "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" }) do
-      if request[field] ~= nil and type(request[field]) ~= "number" then
+      if request[field] ~= nil and not isFinite(request[field]) then
         return nil, "invalid request quote: " .. field
       end
     end

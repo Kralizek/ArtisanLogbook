@@ -1062,4 +1062,90 @@ test("series overflow cannot partially commit facts or increment aggregate cover
   assert(ledger.database.schemaVersion == 3 and ledger.database.craftSeries == nil)
 end)
 
+test("persisted craft and request measurements reject malformed values before migration or pruning", function()
+  local collections = {
+    crafts = { "timestamp", "gameOperationId", "outputQuality", "outputItemLevel", "outputQuantity",
+      "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" },
+    requests = { "timestamp", "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" },
+  }
+  for _, version in ipairs({ 3, 4 }) do
+    for collection, fields in pairs(collections) do
+      for _, field in ipairs(fields) do
+        for _, value in ipairs({ "0", false, true, {}, math.huge, -math.huge, 0 / 0 }) do
+          local ledger, clock = newLedger()
+          assert(ledger:SubmitCraft(12, 1, false))
+          assert(ledger:RecordResult({ quantity = 1 }))
+          local data = ledger.database
+          data.schemaVersion = version
+          if version == 3 then data.craftSeries = nil end
+          local series = data.craftSeries
+          data[collection][1][field] = value
+          clock.current = clock.current + 61 * 86400
+          local refused, reason = Ledger.New(data, clock)
+          assert(refused == nil and type(reason) == "string", collection .. "." .. field)
+          assert(data.schemaVersion == version and data.craftSeries == series)
+          assert(#data.crafts == 1 and #data.requests == 1 and data.nextCraftId == 2)
+          local original = data[collection][1][field]
+          assert(original == value or (original ~= original and value ~= value))
+        end
+      end
+    end
+  end
+end)
+
+test("persisted craft and request booleans reject non-booleans without coercion", function()
+  for _, version in ipairs({ 3, 4 }) do
+    for _, target in ipairs({ { "crafts", "hasIngenuityProc" }, { "requests", "useConcentration" } }) do
+      for _, value in ipairs({ 0, 1, "false", "true", {}, math.huge, 0 / 0 }) do
+        local ledger, clock = newLedger()
+        assert(ledger:SubmitCraft(12, 1, false))
+        assert(ledger:RecordResult({}))
+        local data = ledger.database
+        data.schemaVersion = version
+        if version == 3 then data.craftSeries = nil end
+        local series = data.craftSeries
+        data[target[1]][1][target[2]] = value
+        assert(Ledger.New(data, clock) == nil, target[2])
+        assert(data.schemaVersion == version and data.craftSeries == series and #data.crafts == 1)
+      end
+    end
+  end
+end)
+
+test("persisted finite measurements and optional booleans preserve existing value semantics", function()
+  for _, version in ipairs({ 3, 4 }) do
+    for _, value in ipairs({ 0, -1.5, 2.5 }) do
+      for _, flag in ipairs({ false, true, "absent" }) do
+        local ledger, clock = newLedger()
+        assert(ledger:SubmitCraft(12, 1, false, {
+          concentrationCost = value, baseSkill = value, baseDifficulty = value, craftingQuality = value,
+        }))
+        local result = { operationID = value, craftingQuality = value, itemLevel = value, quantity = value,
+          multicraft = value, concentrationSpent = value, concentrationCurrencyID = value, ingenuityRefund = value }
+        if flag ~= "absent" then result.hasIngenuityProc = flag end
+        assert(ledger:RecordResult(result))
+        ledger.database.schemaVersion = version
+        if version == 3 then ledger.database.craftSeries = nil end
+        local loaded = assert(Ledger.New(ledger.database, clock))
+        for _, field in ipairs({ "gameOperationId", "outputQuality", "outputItemLevel", "outputQuantity",
+          "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" }) do
+          assert(loaded.database.crafts[1][field] == value)
+        end
+        for _, field in ipairs({ "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" }) do
+          assert(loaded.database.requests[1][field] == value)
+        end
+        assert(loaded.database.crafts[1].hasIngenuityProc == result.hasIngenuityProc)
+        assert(loaded.database.requests[1].useConcentration == false)
+      end
+    end
+  end
+  local ledger, clock = newLedger()
+  assert(ledger:SubmitCraft(12, 1, true))
+  assert(ledger:RecordResult({}))
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  assert(loaded.database.requests[1].useConcentration == true)
+  assert(loaded.database.requests[1].concentrationCost == nil)
+  assert(loaded.database.crafts[1].outputQuantity == nil)
+end)
+
 print(string.format("%d ledger tests passed", passed))
