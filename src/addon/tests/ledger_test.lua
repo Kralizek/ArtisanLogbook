@@ -1034,6 +1034,31 @@ test("schema 4 backfills only retained detail across mixed grains before startup
   assert(row.ingenuityRefund == 5 and row.ingenuityRefundObservedCount == 2)
 end)
 
+test("schema 4 migration preserves a persisted unknown-character grain after session enrichment", function()
+  local ledger, clock = newLedger()
+  ledger:CreateSession({})
+  ledger:BeginCraft(77)
+  local craft = assert(ledger:RecordResult({
+    operationID = 1, hasIngenuityProc = true, ingenuityRefund = 162,
+  }))
+  local row = ledger.database.craftSeries[#ledger.database.craftSeries]
+  assert(row.characterDimensionId == nil and row.recipeDimensionId == craft.recipeDimensionId)
+
+  local characterId = assert(ledger:AddDimension("character", "late-character", { name = "Late Character" }))
+  local session = ledger.dimensionRows.session[craft.sessionDimensionId]
+  assert(ledger:AddDimension("session", session.key, { characterDimensionId = characterId }) == session.id)
+  assert(session.characterDimensionId == characterId)
+  assert(row.characterDimensionId == nil)
+
+  local legacy = schemaFour(ledger.database)
+  local migrated = assert(Ledger.New(legacy, clock))
+  local migratedRow = migrated.database.craftSeries[#migrated.database.craftSeries]
+  assert(migratedRow.characterDimensionId == nil)
+  assert(migratedRow.recipeDimensionId == craft.recipeDimensionId)
+  assert(migratedRow.ingenuityProcCount == 1 and migratedRow.ingenuityProcCountObservedCount == 1)
+  assert(migratedRow.ingenuityRefund == 162 and migratedRow.ingenuityRefundObservedCount == 1)
+end)
+
 test("schema 4 with all detail pruned leaves new measures unknown", function()
   local ledger, clock = newLedger()
   assert(ledger:RecordResult({ quantity = 2, hasIngenuityProc = false, ingenuityRefund = 162 }))
@@ -1232,6 +1257,37 @@ test("series overflow cannot partially commit facts or increment aggregate cover
   ledger.database.nextCraftId = 3
   assert(Ledger.New(ledger.database, clock) == nil)
   assert(ledger.database.schemaVersion == 3 and ledger.database.craftSeries == nil)
+end)
+
+test("failed series accumulation preserves recipe correlation and adds no dimensions", function()
+  local ledger = newLedger()
+  ledger:BeginCraft(77)
+  assert(ledger:RecordResult({
+    operationID = 1, quantity = 1e308, itemID = 100,
+    resourcesReturned = { { reagent = { itemID = 101 }, quantity = 1 } },
+  }))
+  local itemCount = #ledger.database.dimensions.items
+  local recipeCount = #ledger.database.dimensions.recipes
+  local row = ledger.database.craftSeries[1]
+  assert(row.outputQuantity == 1e308 and row.craftCount == 1)
+
+  ledger:BeginCraft(77)
+  local rejected, reason = ledger:RecordResult({
+    operationID = 2, quantity = 1e308, itemID = 200,
+    resourcesReturned = { { reagent = { itemID = 201 }, quantity = 1 } },
+  })
+  assert(rejected == nil and reason:find("overflow", 1, true))
+  assert(#ledger.database.crafts == 1 and ledger.database.nextCraftId == 2)
+  assert(#ledger.database.dimensions.items == itemCount)
+  assert(#ledger.database.dimensions.recipes == recipeCount)
+  assert(ledger.dimensionIndex.item["200"] == nil and ledger.dimensionIndex.item["201"] == nil)
+  assert(ledger.pendingRecipeId == 77 and ledger.ambiguousRecipe == nil)
+  assert(row.outputQuantity == 1e308 and row.craftCount == 1)
+
+  local recovered = assert(ledger:RecordResult({ operationID = 3, quantity = 1 }))
+  assert(recovered.recipeDimensionId == ledger.dimensionIndex.recipe["77"])
+  assert(ledger.pendingRecipeId == nil and ledger.ambiguousRecipe == nil)
+  assert(row.craftCount == 2 and row.outputQuantityObservedCount == 2)
 end)
 
 test("schema 5 validates Ingenuity coverage sums and cross-metric constraints atomically", function()
