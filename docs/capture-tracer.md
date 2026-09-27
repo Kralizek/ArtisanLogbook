@@ -145,7 +145,7 @@ The findings below come from the user's live Retail traces, with build `69933`
 and version `12.1.0` in trace metadata. The raw SavedVariables attachment is not
 committed because it includes personal and instance identifiers. The selected,
 sanitized callback sequences are replayed by
-[`tests/fixtures/retail-build-69933.lua`](../tests/fixtures/retail-build-69933.lua).
+[`tests/fixtures/retail-build-69933.lua`](../src/addon/tests/fixtures/retail-build-69933.lua).
 Cast tokens are replaced with fixture-local placeholders; character/account
 metadata, item-instance GUIDs, and hyperlinks are omitted. Recipe/item IDs and
 operation IDs are retained as representative game data.
