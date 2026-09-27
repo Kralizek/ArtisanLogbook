@@ -251,6 +251,11 @@ objects. Startup performs the history-sized rebuild once after retention:
 - `seriesDays` indexes occupied UTC days for bounded chart queries; runtime
   recipe counts and an invalidatable alphabetical recipe-ID order serve bounded
   catalogue pages without traversing every historical aggregate on each page.
+- Distinct character and recipe IDs from durable series are indexed globally
+  and per character for tracked selector choices. These sets are rebuilt from
+  persisted series on load/prune/clear and updated on commit. Profession
+  identity is resolved through current recipe metadata when queried, so
+  enrichment needs no historical reindex or stored projection.
 - The existing operation-count index supports evidence-backed recipe attribution.
 
 New requests update their map; new crafts/reagents update all relevant maps and

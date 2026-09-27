@@ -6,12 +6,16 @@ button toggles the same window. `/al debug` opens the separate capture tracer;
 its raw export is diagnostic, not a portable craft export.
 
 Overview charts UTC daily craft counts from durable series for the selected 30,
-90 or 365 days, character and profession. Its compact totals cover all recorded
-days in the active population, independently of chart range. Week-over-week
+90 or 365 days, character and profession. Its compact cards show crafts,
+concentration spent/net, Multicraft bonus and most-crafted recipe **within the
+selected chart range**. They no longer show lifetime totals; this keeps both
+the chart and cards bounded as durable history grows. Week-over-week
 craft and fully observed additive-measure comparisons use the latest seven
 complete UTC days against the preceding seven. Month-over-month compares the
 current UTC calendar month through today with the same number of calendar days
-at the beginning of the previous month (capped at that month's length).
+at the beginning of the previous month (capped at that month's length). These
+comparisons remain independent of the selected chart range, and read only their
+bounded comparison window.
 Partial measurement coverage is shown, not treated as zero. Net concentration
 is shown only when spent and applied refund are observed for every craft.
 
@@ -42,7 +46,8 @@ On a Retail character with crafting activity, verify:
 2. All five tabs and Settings fit the UI scale. Dropdowns and craft rows respond
    correctly; long recipe/item/character names do not overlap adjacent columns.
 3. Overview chart changes with each time, character and profession choice.
-   Compare daily counts and WoW/MoM values against recorded crafts, including
+   Verify card totals and most-crafted recipe follow the display range while
+   WoW/MoM comparisons do not. Compare daily counts against recorded crafts, including
    unknown measurements and a true Ingenuity refund.
 4. Recent stays newest-first, filters and pages forward/backward, and never
    shows a timestamp column. Craft Detail shows exact time, request quotes,

@@ -156,6 +156,20 @@ local function seriesGroup(index, bucketStart, characterId)
   return bucket[key]
 end
 
+local function indexSeriesChoices(ledger, characterId, recipeId)
+  if characterId then ledger.seriesCharacterIds[characterId] = true end
+  if recipeId then
+    ledger.seriesRecipeIds[recipeId] = true
+    local key = characterId or 0
+    local recipes = ledger.seriesRecipeIdsByCharacter[key]
+    if not recipes then
+      recipes = {}
+      ledger.seriesRecipeIdsByCharacter[key] = recipes
+    end
+    recipes[recipeId] = true
+  end
+end
+
 local function seriesMeasurement(craft, metric)
   if metric == "ingenuityProcCount" or metric == "ingenuityRefund" then
     if craft.hasIngenuityProc == false then return 0 end
@@ -478,12 +492,14 @@ function Ledger:RebuildIndexes()
     end
   end
   self.seriesByKey, self.recipeCounts, self.seriesDays = {}, {}, {}
+  self.seriesCharacterIds, self.seriesRecipeIds, self.seriesRecipeIdsByCharacter = {}, {}, {}
   for _, row in ipairs(self.database.craftSeries) do
     if not self.seriesByKey[row.bucketStart] then
       self.seriesDays[#self.seriesDays + 1] = row.bucketStart
     end
     local group = seriesGroup(self.seriesByKey, row.bucketStart, row.characterDimensionId)
     group[row.recipeDimensionId or 0] = row
+    indexSeriesChoices(self, row.characterDimensionId, row.recipeDimensionId)
     if row.recipeDimensionId then
       self.recipeCounts[row.recipeDimensionId] = (self.recipeCounts[row.recipeDimensionId] or 0) + row.craftCount
     end
@@ -946,6 +962,7 @@ function Ledger:RecordResult(result)
 
   commitDimensions(self, stagedDimensions)
   commitStagedSeries(data, self.seriesByKey, self.seriesDays, stagedSeries)
+  indexSeriesChoices(self, stagedSeries.characterDimensionId, craft.recipeDimensionId)
   if craft.recipeDimensionId then
     if not self.recipeCounts[craft.recipeDimensionId] then self.recipeOrder = nil end
     self.recipeCounts[craft.recipeDimensionId] = (self.recipeCounts[craft.recipeDimensionId] or 0) + 1

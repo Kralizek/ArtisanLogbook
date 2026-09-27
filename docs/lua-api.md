@@ -24,6 +24,7 @@ local series, reason = ArtisanLogbookAPI.GetCraftSeries(filter, options)
 local facets, reason = ArtisanLogbookAPI.GetFacets(filter, options)
 local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
 local recipes, reason = ArtisanLogbookAPI.GetRecipeSummaries({ limit = 50 })
+local choices, reason = ArtisanLogbookAPI.GetTrackedChoices(characterKey)
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
   -- Refresh consumer state using the committed craft projection.
 end)
@@ -328,6 +329,22 @@ or metadata enrichment can change ordering between pages, so restart at page one
 when the catalogue changes. The runtime caches sorted recipe identities and
 projects only the requested page. This query does not add a general statistics
 or write API; for filtered activity use `GetCraftSeries`.
+
+### Tracked selector choices
+
+`GetTrackedChoices(characterKey)` returns `{ characters = { ... }, professions = { ... } }`
+with each entry `{ value = <public identity>, details = <detached domain object> }`.
+Omit the character key for global professions or pass an opaque character key
+to select professions that character crafted. Characters always list all known
+characters represented in durable daily series; professions derive from recipe
+metadata and omit unknown skill-line identities. Results are sorted by identity.
+An unknown key returns an empty profession list, while invalid keys return
+`nil, "invalid-filter"`; before ledger initialization the result is
+`nil, "not-ready"`. Unlike `GetFacets`, this query has no craft counts and
+includes identities whose factual details were pruned. It reads distinct
+runtime identity sets, not the full daily series. Commit updates the sets;
+reload/prune rebuild them, clear empties them, and metadata enrichment resolves
+on read. `GetFacets` retains its factual-only semantics.
 
 ### Runtime capabilities
 

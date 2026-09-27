@@ -66,58 +66,56 @@ function UI.CreateOverview(overview, width, choices, onChange)
       -270, width / 4 - 18, 130, "GameFontHighlight")
   end
   local status = UI.Text(overview, 8, -420, width - 16, 60)
-  local allSeries, seriesKey
 
   local function refresh()
     characters:Update(choices("characters", nil, true), character)
     local selection = {}
     if character then selection.characters = { character } end
-    professions:Update(choices("professions", selection, true), profession)
+    local available = choices("professions", selection, true)
+    if not UI.HasChoice(available, profession) then profession = false end
+    professions:Update(available, profession)
     if profession then selection.professions = { profession } end
-    local key = tostring(character) .. ":" .. tostring(profession)
-    if key ~= seriesKey then
-      local all = API.GetCraftSeries(selection)
-      allSeries = all and all.series or {}
-      seriesKey = key
-    end
     local from, to = UI.Range(GetServerTime(), days)
     selection.time = { from = from, to = to }
     local chartData, errorMessage = API.GetCraftSeries(selection)
     chart:Render(chartData and chartData.series or {}, from, to)
     local today = to - 86400
-    local currentWeek = summary(allSeries, today - 7 * 86400, today)
-    local priorWeek = summary(allSeries, today - 14 * 86400, today - 7 * 86400)
     local utc = date("!*t", today)
     local monthStart = today - (utc.day - 1) * 86400
     local previousMonth = date("!*t", monthStart - 86400)
     local previousStart = monthStart - previousMonth.day * 86400
     local elapsed = math.min(utc.day, previousMonth.day) * 86400
-    local currentMonth = summary(allSeries, monthStart, to)
-    local priorMonth = summary(allSeries, previousStart, previousStart + elapsed)
-    local lifetime = summary(allSeries, -math.huge, math.huge)
+    selection.time = { from = math.min(today - 14 * 86400, previousStart), to = to }
+    local comparisonData = API.GetCraftSeries(selection)
+    local comparisonSeries = comparisonData and comparisonData.series or {}
+    local currentWeek = summary(comparisonSeries, today - 7 * 86400, today)
+    local priorWeek = summary(comparisonSeries, today - 14 * 86400, today - 7 * 86400)
+    local currentMonth = summary(comparisonSeries, monthStart, to)
+    local priorMonth = summary(comparisonSeries, previousStart, previousStart + elapsed)
+    local display = summary(chartData and chartData.series or {}, from, to)
     local top
-    for _, recipe in pairs(lifetime.recipes) do
+    for _, recipe in pairs(display.recipes) do
       if not top or recipe.count > top.count or
           (recipe.count == top.count and recipe.name < top.name) then top = recipe end
     end
-    cards[1]:SetText(string.format("TOTAL CRAFTS\n%d\nWoW %s  |  MoM %s", lifetime.crafts,
+    cards[1]:SetText(string.format("CRAFTS IN RANGE\n%d\nWoW %s  |  MoM %s", display.crafts,
       comparison(currentWeek, priorWeek, "crafts"), comparison(currentMonth, priorMonth, "crafts")))
-    local net = lifetime.crafts > 0 and lifetime.spentKnown == lifetime.crafts and
-      lifetime.refundKnown == lifetime.crafts and
-      tostring(lifetime.spent - lifetime.refund) or "Unknown"
-    cards[2]:SetText(string.format("CONCENTRATION\nSpent %s\nNet %s\nWoW S%s N%s\nMoM S%s N%s",
-      measured(lifetime.spent, lifetime.spentKnown, lifetime.crafts), net,
+    local net = display.crafts > 0 and display.spentKnown == display.crafts and
+      display.refundKnown == display.crafts and
+      tostring(display.spent - display.refund) or "Unknown"
+    cards[2]:SetText(string.format("CONCENTRATION IN RANGE\nSpent %s\nNet %s\nWoW S%s N%s\nMoM S%s N%s",
+      measured(display.spent, display.spentKnown, display.crafts), net,
       comparison(currentWeek, priorWeek, "spent", "spentKnown"),
       netComparison(currentWeek, priorWeek),
       comparison(currentMonth, priorMonth, "spent", "spentKnown"),
       netComparison(currentMonth, priorMonth)))
-    cards[3]:SetText(string.format("MULTICRAFT BONUS\n%s\nWoW %s  |  MoM %s",
-      measured(lifetime.multi, lifetime.multiKnown, lifetime.crafts),
+    cards[3]:SetText(string.format("MULTICRAFT BONUS IN RANGE\n%s\nWoW %s  |  MoM %s",
+      measured(display.multi, display.multiKnown, display.crafts),
       comparison(currentWeek, priorWeek, "multi", "multiKnown"),
       comparison(currentMonth, priorMonth, "multi", "multiKnown")))
-    cards[4]:SetText("MOST CRAFTED\n" .. (top and (top.name .. " (" .. top.count .. ")") or "None"))
+    cards[4]:SetText("MOST CRAFTED IN RANGE\n" .. (top and (top.name .. " (" .. top.count .. ")") or "None"))
     status:SetText(errorMessage or "")
   end
 
-  return refresh, function() seriesKey = nil end
+  return refresh
 end

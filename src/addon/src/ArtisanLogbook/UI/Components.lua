@@ -54,6 +54,13 @@ function UI.Selector(parent, x, y, width, choices, onChoose)
   return dropdown
 end
 
+function UI.HasChoice(choices, selected)
+  for _, choice in ipairs(choices) do
+    if choice.value == selected then return true end
+  end
+  return false
+end
+
 function UI.Value(value)
   if value == nil then return "Unknown" end
   if type(value) == "boolean" then return value and "Yes" or "No" end

@@ -2,7 +2,6 @@ local addonName, addon = ...
 local UI = addon.UI
 local API = ArtisanLogbookAPI
 local tabs = { "Overview", "Recent", "Character", "Profession", "Recipes" }
-local historicalChoices
 
 local function population(character, profession, recipe)
   local filter = {}
@@ -21,18 +20,11 @@ local function choices(facet, filter, includeAll)
     result[#result + 1] = { label = UI.Name(entry.details), value = entry.value }
     seen[entry.value] = true
   end
-  if not historicalChoices then
-    local response = API.GetCraftSeries()
-    historicalChoices = response and response.series or {}
-  end
-  for _, row in ipairs(historicalChoices) do
-    local detail = facet == "characters" and row.character or row.profession
-    local value = detail and (facet == "characters" and detail.key or detail.skillLineId)
-    local selected = not filter or not filter.characters or
-      (row.character and row.character.key == filter.characters[1])
-    if selected and value ~= nil and not seen[value] then
-      result[#result + 1] = { label = UI.Name(detail), value = value }
-      seen[value] = true
+  local tracked = API.GetTrackedChoices(filter and filter.characters and filter.characters[1])
+  for _, entry in ipairs(tracked and tracked[facet] or {}) do
+    if not seen[entry.value] then
+      result[#result + 1] = { label = UI.Name(entry.details), value = entry.value }
+      seen[entry.value] = true
     end
   end
   table.sort(result, function(left, right)
@@ -148,7 +140,7 @@ function addon.CreateProductionWindow()
   end
   UI.Button(window, "Settings", width - 111, -52, 88, function() window:Activate("Settings") end)
 
-  local refreshOverview, invalidateOverview = UI.CreateOverview(pages.Overview, inner, choices,
+  local refreshOverview = UI.CreateOverview(pages.Overview, inner, choices,
     function() window:Refresh() end)
 
   local recent = pages.Recent
@@ -260,7 +252,6 @@ function addon.CreateProductionWindow()
   UI.Button(settings, "Prune now", 0, -260, 105, function()
     local removed, reason = addon.Management.Prune()
     addon.Notify(removed and (removed .. " detailed crafts pruned.") or reason)
-    invalidateOverview()
     window:Refresh(true)
   end)
   UI.Button(settings, "Clear history", 120, -260, 122, function()
@@ -272,8 +263,6 @@ function addon.CreateProductionWindow()
     hideOnEscape = true, preferredIndex = 3,
     OnAccept = function()
       addon.Management.Clear()
-      invalidateOverview()
-      historicalChoices = nil
       window:Refresh(true)
     end,
   }
@@ -296,18 +285,27 @@ function addon.CreateProductionWindow()
     if self.activeTab == "Overview" then refreshOverview()
     elseif self.activeTab == "Recent" then
       recentCharacters:Update(choices("characters", nil, true), recentCharacter)
-      recentProfessions:Update(choices("professions", population(recentCharacter), true), recentProfession)
+      local available = choices("professions", population(recentCharacter), true)
+      if not UI.HasChoice(available, recentProfession) then recentProfession = false end
+      recentProfessions:Update(available, recentProfession)
       recentHistory:Refresh(reset)
     elseif self.activeTab == "Character" then
       local available = withCurrent(choices("characters", nil), current)
+      if not UI.HasChoice(available, characterKey) then
+        characterKey = current and current.key or (available[1] and available[1].value)
+      end
       characterSelect:Update(available, characterKey)
       characterHistory:Refresh(reset)
     elseif self.activeTab == "Profession" then
       local available = withCurrent(choices("characters", nil), current)
+      if not UI.HasChoice(available, professionCharacter) then
+        professionCharacter = current and current.key or (available[1] and available[1].value)
+        professionId = nil
+      end
       professionCharacterSelect:Update(available, professionCharacter)
       local professions = choices("professions", population(professionCharacter))
       if current and professionCharacter == current.key then includeGameProfessions(professions) end
-      if not professionId then professionId = firstProfession(professions) end
+      if not UI.HasChoice(professions, professionId) then professionId = firstProfession(professions) end
       professionSelect:Update(professions, professionId)
       professionHistory:Refresh(reset)
     elseif self.activeTab == "Recipes" then
@@ -331,8 +329,6 @@ function addon.CreateProductionWindow()
   window:SetScript("OnShow", function() window:Activate(window.activeTab) end)
   window:Hide()
   API.RegisterCallback("CRAFT_COMMITTED", function()
-    invalidateOverview()
-    historicalChoices = nil
     if window:IsShown() then window:Refresh(true) end
   end)
 

@@ -463,6 +463,36 @@ function API.GetRecipeSummaries(options)
   return result
 end
 
+function API.GetTrackedChoices(characterKey)
+  if characterKey ~= nil and (type(characterKey) ~= "string" or characterKey == "") then
+    return nil, "invalid-filter"
+  end
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  local result = { characters = {}, professions = {} }
+  for id in pairs(ledger.seriesCharacterIds) do
+    local details = character(ledger, dimension(ledger, "character", id))
+    if details and details.key then
+      result.characters[#result.characters + 1] = { value = details.key, details = details }
+    end
+  end
+  table.sort(result.characters, function(left, right) return left.value < right.value end)
+  local characterId = characterKey and ledger.dimensionIndex.character[characterKey]
+  local recipes = characterKey and (characterId and ledger.seriesRecipeIdsByCharacter[characterId] or {}) or
+    ledger.seriesRecipeIds
+  local seen = {}
+  for id in pairs(recipes or {}) do
+    local row = dimension(ledger, "recipe", id)
+    local details = row and profession(ledger, dimension(ledger, "profession", row.professionDimensionId))
+    if details and details.skillLineId ~= nil and not seen[details.skillLineId] then
+      seen[details.skillLineId] = true
+      result.professions[#result.professions + 1] = { value = details.skillLineId, details = details }
+    end
+  end
+  table.sort(result.professions, function(left, right) return left.value < right.value end)
+  return result
+end
+
 local function requestedFacets(value)
   if value == nil then return facets end
   if type(value) ~= "table" or getmetatable(value) ~= nil then return nil end

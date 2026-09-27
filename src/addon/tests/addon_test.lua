@@ -318,6 +318,12 @@ end
 local uiAddon = reload(nil)
 local uiLedger = uiAddon.ledger
 local uiWindow = uiAddon.productionWindow
+local getSeries = environment.ArtisanLogbookAPI.GetCraftSeries
+environment.ArtisanLogbookAPI.GetCraftSeries = function(filter, options)
+  assert(filter and filter.time and filter.time.from and filter.time.to,
+    "UI series requests must be bounded")
+  return getSeries(filter, options)
+end
 local currentKey = uiAddon.Management.CurrentCharacter().key
 local alchemy = assert(uiLedger:AddDimension("profession", "171", { skillLineId = 171, name = "Alchemy" }))
 local enchanting = assert(uiLedger:AddDimension("profession", "333", { skillLineId = 333, name = "Enchanting" }))
@@ -390,10 +396,22 @@ for _, frame in ipairs(frames) do
   if frame.parent == overview and frame.title then chart = frame end
 end
 assert(chart and chart.title.text:find("14 crafts", 1, true))
-assert(visibleText("TOTAL CRAFTS\n14\nWoW"))
+assert(visibleText("CRAFTS IN RANGE\n14\nWoW"))
+local otherKey
+for _, choice in ipairs(dropdown(overview, "Other").choices) do
+  if choice.label == "Other" then otherKey = choice.value end
+end
+assert(otherKey)
+dropdown(overview, "Alchemy"):Choose(171)
+dropdown(overview, "Other"):Choose(otherKey)
+local overviewProfessions = dropdown(overview, "Enchanting")
+assert(overviewProfessions.value == false and overviewProfessions.text == "All")
+assert(chart.title.text:find("1 crafts", 1, true))
+dropdown(overview, "All"):Choose(false)
 dropdown(overview, "Enchanting"):Choose(333)
 assert(chart.title.text:find("2 crafts", 1, true))
-dropdown(overview, "Other"):Choose(dropdown(overview, "Other").choices[2].value)
+dropdown(overview, "Other"):Choose(otherKey)
+assert(dropdown(overview, "Enchanting").value == 333)
 assert(chart.title.text:find("1 crafts", 1, true))
 dropdown(overview, "90 days"):Choose(90)
 assert(chart.title.text:find("1 crafts", 1, true))
@@ -422,12 +440,18 @@ end
 assert(nextButton and nextButton.enabled)
 nextButton.scripts.OnClick()
 assert(displayedRow(recentArea, function(item) return item.id == 4 end))
-dropdown(recent, "Other"):Choose(dropdown(overview, "Other").value)
+dropdown(recent, "Alchemy"):Choose(171)
+dropdown(recent, "Other"):Choose(otherKey)
+local recentProfessions = dropdown(recent, "Enchanting")
+assert(recentProfessions.value == false and recentProfessions.text == "All")
 assert(displayedRow(recentArea, function(item) return item.id == 14 end))
+recentProfessions:Choose(333)
+dropdown(recent, "All"):Choose(false)
+assert(recentProfessions.value == 333 and displayedRow(recentArea, function(item) return item.id == 13 end))
 uiWindow:Activate("Character")
 local character = uiWindow.pages.Character
 assert(dropdown(character, "TestCrafter").value == currentKey)
-dropdown(character, "Other"):Choose(dropdown(recent, "Other").value)
+dropdown(character, "Other"):Choose(otherKey)
 assert(dropdown(character, "Other").text == "Other")
 local characterArea
 for _, frame in ipairs(frames) do if frame.parent == character and frame.kind == "Frame" then characterArea = frame end end
@@ -443,6 +467,9 @@ assert(displayedRow(professionArea, function(item) return item.id == 12 end))
 dropdown(profession, "Other"):Choose(dropdown(character, "Other").value)
 assert(dropdown(profession, "Enchanting").value == 333)
 assert(displayedRow(professionArea, function(item) return item.id == 14 end))
+dropdown(profession, "TestCrafter"):Choose(currentKey)
+assert(dropdown(profession, "Enchanting").value == 333)
+assert(displayedRow(professionArea, function(item) return item.id == 13 end))
 uiWindow:Activate("Recipes")
 local recipes = uiWindow.pages.Recipes
 local catalogue
@@ -483,8 +510,19 @@ uiWindow:Activate("Overview")
 dropdown(overview, "All"):Choose(false)
 local professionFilter = dropdown(overview, "Enchanting")
 professionFilter:Choose(false)
+dropdown(overview, "30 days"):Choose(30)
 assert(chart.title.text:find("16 crafts", 1, true))
-assert(visibleText("TOTAL CRAFTS\n16\nWoW -1"))
+assert(visibleText("CRAFTS IN RANGE\n16\nWoW -1"))
+uiLedger.wall = function() return 1800000000 - 40 * 86400 end
+uiLedger:BeginCraft(502)
+assert(uiLedger:RecordResult({ operationID = 17 }))
+uiLedger.wall = environment.GetServerTime
+assert(chart.title.text:find("16 crafts", 1, true))
+assert(visibleText("CRAFTS IN RANGE\n16\nWoW -1"))
+dropdown(overview, "90 days"):Choose(90)
+assert(chart.title.text:find("17 crafts", 1, true))
+assert(visibleText("CRAFTS IN RANGE\n17\nWoW -1"))
+dropdown(overview, "30 days"):Choose(30)
 uiWindow:Activate("Settings")
 local settings = uiWindow.pages.Settings
 local retentionInput
@@ -497,14 +535,14 @@ button(settings, "Save").scripts.OnClick()
 assert(uiLedger.database.retentionDays == 1)
 button(settings, "Prune now").scripts.OnClick()
 assert(#uiLedger.database.crafts == 15)
-assert(#uiLedger.database.craftSeries == 4)
+assert(#uiLedger.database.craftSeries == 5)
 button(settings, "Clear history").scripts.OnClick()
 assert(environment.popup == "ARTISANLOGBOOK_CLEAR_HISTORY" and #uiLedger.database.crafts == 15)
 environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_HISTORY.OnAccept()
 assert(#uiLedger.database.crafts == 0 and #uiLedger.database.craftSeries == 0)
 uiWindow:Activate("Overview")
 assert(chart.title.text:find("0 crafts", 1, true))
-assert(visibleText("CONCENTRATION\nSpent Unknown\nNet Unknown"))
+assert(visibleText("CONCENTRATION IN RANGE\nSpent Unknown\nNet Unknown"))
 uiWindow:Activate("Recipes")
 assert(not displayedRow(recipes, function() return true end))
 uiWindow:Activate("Recent")
