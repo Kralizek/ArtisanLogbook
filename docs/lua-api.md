@@ -12,8 +12,8 @@ dimension rows, or the private addon namespace. The API is loaded before
 `ADDON_LOADED`; queries become available after Artisan Logbook initializes.
 Consumers should declare an addon dependency or wait for its load event.
 This contract is independent of the persistence schema and any future AL1
-portable export. No export, ad-hoc statistics beyond daily series, costing, or UI
-is implemented here.
+portable export. No portable export, general statistics or costing API is
+implemented here. The production UI uses this read-only contract.
 
 All calls use **dot syntax**, not colon syntax:
 
@@ -23,6 +23,7 @@ local page, reason = ArtisanLogbookAPI.GetCrafts(filter, options)
 local series, reason = ArtisanLogbookAPI.GetCraftSeries(filter, options)
 local facets, reason = ArtisanLogbookAPI.GetFacets(filter, options)
 local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
+local recipes, reason = ArtisanLogbookAPI.GetRecipeSummaries({ limit = 50 })
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
   -- Refresh consumer state using the committed craft projection.
 end)
@@ -301,6 +302,32 @@ professions available in Midnight, while recipe choices still require Alchemy.
 the retained population, never current-flavor support or an expansion catalog.
 Only `mode` and `facets` are accepted: paging, cursors, craft sort directions, and invalid modes
 return `"invalid-options"`.
+
+### Recipe catalogue
+
+The production Recipes catalogue adds one read-only, consumer-specific query:
+
+```lua
+local page, reason = ArtisanLogbookAPI.GetRecipeSummaries({ limit = 10, cursor = nil })
+-- { recipes = { { recipe = recipe, profession = profession, craftCount = 12 } },
+--   nextCursor = "10" }
+```
+
+This is a **global**, alphabetical catalogue of recipes with a known WoW recipe
+ID and at least one committed craft. Counts come from the durable daily series,
+so detailed retention and explicit pruning do not reduce them. Unnamed recipes
+display as `Recipe #<ID>`; sorting is case-insensitive by display name with ID
+as a tie-breaker. Recipe and profession are detached domain projections.
+
+The default page size is 50, maximum 200. Only `limit` and `cursor` are accepted;
+invalid options return `"invalid-options"`. The cursor is an opaque positive
+offset in the current alphabetical catalogue; malformed/out-of-range cursors
+return `"invalid-cursor"`. No cursor means the first page; an empty catalogue
+returns `{ recipes = {} }` without a cursor. This is not a snapshot: new recipes
+or metadata enrichment can change ordering between pages, so restart at page one
+when the catalogue changes. The runtime caches sorted recipe identities and
+projects only the requested page. This query does not add a general statistics
+or write API; for filtered activity use `GetCraftSeries`.
 
 ### Runtime capabilities
 

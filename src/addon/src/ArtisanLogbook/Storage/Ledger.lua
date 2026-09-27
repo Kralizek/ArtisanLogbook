@@ -214,11 +214,19 @@ local function stageSeries(index, sessions, craft)
   }
 end
 
-local function commitStagedSeries(data, index, staged)
+local function commitStagedSeries(data, index, days, staged)
   if staged.existing then
     for field in pairs(staged.existing) do staged.existing[field] = nil end
     for field, value in pairs(staged.row) do staged.existing[field] = value end
   else
+    if not index[staged.bucketStart] then
+      local first, last = 1, #days + 1
+      while first < last do
+        local middle = math.floor((first + last) / 2)
+        if days[middle] < staged.bucketStart then first = middle + 1 else last = middle end
+      end
+      table.insert(days, first, staged.bucketStart)
+    end
     local group = seriesGroup(index, staged.bucketStart, staged.characterDimensionId)
     data.craftSeries[#data.craftSeries + 1] = staged.row
     group[staged.key] = staged.row
@@ -460,6 +468,7 @@ local function earlierCraft(ledger, leftId, rightId)
 end
 
 function Ledger:RebuildIndexes()
+  self.recipeOrder = nil
   self.dimensionIndex, self.dimensionRows = {}, {}
   for kind, collection in pairs(dimensions) do
     self.dimensionIndex[kind], self.dimensionRows[kind] = {}, {}
@@ -468,11 +477,18 @@ function Ledger:RebuildIndexes()
       self.dimensionRows[kind][row.id] = row
     end
   end
-  self.seriesByKey = {}
+  self.seriesByKey, self.recipeCounts, self.seriesDays = {}, {}, {}
   for _, row in ipairs(self.database.craftSeries) do
+    if not self.seriesByKey[row.bucketStart] then
+      self.seriesDays[#self.seriesDays + 1] = row.bucketStart
+    end
     local group = seriesGroup(self.seriesByKey, row.bucketStart, row.characterDimensionId)
     group[row.recipeDimensionId or 0] = row
+    if row.recipeDimensionId then
+      self.recipeCounts[row.recipeDimensionId] = (self.recipeCounts[row.recipeDimensionId] or 0) + row.craftCount
+    end
   end
+  table.sort(self.seriesDays)
   self.craftById, self.requestById, self.reagentsByCraftId = {}, {}, {}
   self.craftIds, self.craftIdsByTime, self.operationIndex = {}, {}, {}
   for _, request in ipairs(self.database.requests) do self.requestById[request.id] = request end
@@ -618,6 +634,7 @@ local function commitDimensions(ledger, staged)
   local filtersChanged = false
   for _, change in ipairs(staged.changes) do
     local kind, row = change.kind, change.row
+    if kind == "recipe" then ledger.recipeOrder = nil end
     local existing = ledger.dimensionRows[kind][row.id]
     if existing then
       for _, field in ipairs(filterAttributes[kind] or {}) do
@@ -928,7 +945,11 @@ function Ledger:RecordResult(result)
   end
 
   commitDimensions(self, stagedDimensions)
-  commitStagedSeries(data, self.seriesByKey, stagedSeries)
+  commitStagedSeries(data, self.seriesByKey, self.seriesDays, stagedSeries)
+  if craft.recipeDimensionId then
+    if not self.recipeCounts[craft.recipeDimensionId] then self.recipeOrder = nil end
+    self.recipeCounts[craft.recipeDimensionId] = (self.recipeCounts[craft.recipeDimensionId] or 0) + 1
+  end
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
   data.nextCraftId = craft.id + 1
@@ -981,6 +1002,23 @@ function Ledger:Prune(now)
   data.requests = keptRequests
   if self.craftById then self:RebuildIndexes() end
   return removed
+end
+
+function Ledger:SetRetentionDays(days)
+  if not isInteger(days) then return nil, "retention must be a positive integer" end
+  self.database.retentionDays = days
+  return true
+end
+
+function Ledger:ClearHistory()
+  self.database.crafts = {}
+  self.database.requests = {}
+  self.database.reagents = {}
+  self.database.craftSeries = {}
+  self.pendingRequest, self.pendingRecipeId = nil, nil
+  self.requestAmbiguous, self.ambiguousRecipe = nil, nil
+  self:RebuildIndexes()
+  return true
 end
 
 addon.Ledger = Ledger

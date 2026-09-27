@@ -222,7 +222,18 @@ gameplay remain queryable until next startup, and backdated results are not
 immediately deleted. The private explicit `Prune` maintenance method rebuilds
 runtime indexes if invoked after initialization; it is not a public API or normal
 capture path. Dimensions and counters never reset, even when all facts expire.
-No clear command or UI is added in this slice.
+The original ledger slice exposed no clear command or UI.
+
+The production UI adds an explicit internal management boundary, separate from
+the read-only public Lua API. `Management.Status` returns detached retention,
+record-count, schema and build diagnostics; `CurrentCharacter` exposes the
+active ledger identity without exposing SavedVariables. Retention changes take
+effect on the next startup or explicit prune, not on capture. `Prune` applies
+the configured age cutoff to detailed facts and rebuilds indexes, leaving daily
+series intact. Confirmed `Clear` deletes detailed crafts, requests, reagents and
+all daily totals while preserving dimensions, session identity, retention and
+monotonic ID counters. Capture can resume immediately afterward. This is distinct
+from the tracer's independent debug clear operation.
 
 ### Runtime indexes
 
@@ -237,6 +248,9 @@ objects. Startup performs the history-sized rebuild once after retention:
   recipe-based expansion/profession attribution, not surrogate dimension IDs.
 - `craftIdsByTime` contains IDs ordered by `(timestamp, craft ID)` for cursor
   boundary searches, including timestamp ties and backward clock changes.
+- `seriesDays` indexes occupied UTC days for bounded chart queries; runtime
+  recipe counts and an invalidatable alphabetical recipe-ID order serve bounded
+  catalogue pages without traversing every historical aggregate on each page.
 - The existing operation-count index supports evidence-backed recipe attribution.
 
 New requests update their map; new crafts/reagents update all relevant maps and

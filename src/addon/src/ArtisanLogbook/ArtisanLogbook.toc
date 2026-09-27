@@ -10,4 +10,9 @@ Flavors/Registry.lua
 Flavors/Retail/Adapter.lua
 UI/TraceWindow.lua
 Core/API.lua
+Core/Management.lua
+UI/Components.lua
+UI/Detail.lua
+UI/Overview.lua
+UI/Window.lua
 Core/Bootstrap.lua

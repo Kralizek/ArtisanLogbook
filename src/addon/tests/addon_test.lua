@@ -2,15 +2,19 @@ local frames, notices = {}, {}
 local environment = setmetatable({}, { __index = _G })
 environment._G = environment
 local methods = {}
+local object
 
 for _, name in ipairs({
   "SetSize", "SetPoint", "SetClampedToScreen", "SetMovable", "EnableMouse", "RegisterForDrag",
   "StartMoving", "StopMovingOrSizing", "SetJustifyH", "SetAutoFocus", "SetMaxLetters",
   "ClearFocus", "SetMultiLine", "SetFontObject", "SetWidth", "SetCursorPosition",
   "UpdateScrollChildRect", "SetScrollChild", "SetNormalTexture", "SetHighlightTexture",
+  "SetAllPoints", "SetJustifyV", "SetNumeric", "SetThickness", "SetColorTexture",
+  "SetStartPoint", "SetEndPoint",
 }) do
   methods[name] = function() end
 end
+function methods:SetEnabled(value) self.enabled = value end
 function methods:SetText(value) assert(type(value) == "string"); self.text = value end
 function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
@@ -33,11 +37,17 @@ end
 function methods:IsShown() return self.shown end
 function methods:SetVerticalScroll(offset) self.offset = offset end
 function methods:GetVerticalScroll() return self.offset or 0 end
+function methods:CreateLine() return object() end
 
-local function object()
+object = function()
   return setmetatable({ scripts = {}, events = {}, shown = true }, { __index = methods })
 end
-function methods:CreateFontString() return object() end
+function methods:CreateFontString()
+  local label = object()
+  label.parent = self
+  frames[#frames + 1] = label
+  return label
+end
 environment.CreateFrame = function(kind, name, parent, template)
   local frame = object()
   frame.kind, frame.name, frame.parent = kind, name, parent
@@ -53,6 +63,12 @@ environment.StaticPopupDialogs = {}
 environment.SlashCmdList = {}
 environment.tinsert = table.insert
 environment.StaticPopup_Show = function(name) environment.popup = name end
+environment.UIDropDownMenu_SetWidth = function() end
+environment.UIDropDownMenu_SetText = function(frame, text) frame.text = text end
+environment.UIDropDownMenu_Initialize = function(frame, callback) frame.initialize = callback end
+environment.UIDropDownMenu_CreateInfo = function() return {} end
+environment.UIDropDownMenu_AddButton = function() end
+environment.date = os.date
 environment.DEFAULT_CHAT_FRAME = { AddMessage = function(_, message) notices[#notices + 1] = message end }
 environment.GetServerTime = function() return 1800000000 end
 environment.GetTimePreciseSec = function() return 100.5 end
@@ -104,9 +120,11 @@ assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
 assert(addon.window and not addon.window:IsShown())
 environment.SlashCmdList.ARTISANLOGBOOK("")
+assert(addon.productionWindow:IsShown() and not addon.window:IsShown())
+environment.SlashCmdList.ARTISANLOGBOOK("debug")
 assert(addon.window:IsShown())
-environment.SlashCmdList.ARTISANLOGBOOK("start")
-environment.SlashCmdList.ARTISANLOGBOOK("mark basic craft")
+addon.Start()
+addon.Mark("basic craft")
 assert(notices[#notices] == "Artisan Logbook: Marker: basic craft")
 addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
 addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1 })
@@ -124,13 +142,12 @@ assert(api.GetCapabilities().personalRequests == true)
 assert(not addon.ledgerCaptureError and not addon.adapter.capabilities.captureError)
 committed[1].recipe.id = 999
 assert(api.GetCraft(1).recipe.id == 456)
-environment.SlashCmdList.ARTISANLOGBOOK("stop")
+addon.Stop()
 assert(#addon.recorder.database.records == 5)
 assert(addon.recorder.database.records[2].event == "TRACE_MARK")
 assert(not addon.recorder.recording)
-environment.SlashCmdList.ARTISANLOGBOOK("export")
-environment.SlashCmdList.ARTISANLOGBOOK("status")
-assert(notices[#notices]:find("5 events", 1, true))
+environment.SlashCmdList.ARTISANLOGBOOK("debug export")
+assert(addon.window:IsShown())
 
 local function click(text)
   for _, frame in ipairs(frames) do
@@ -289,3 +306,219 @@ environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE.OnAccept()
 assert(#unknown.recorder.database.records == 0)
 assert(unknown.ledger.database == durableDatabase and #durableDatabase.crafts == 4)
 print("PASS unrelated spell failures, partial batch, trace mark echo and clear isolation")
+
+environment.GetCurrentRegion = function() return 3 end
+environment.GetRealmID = function() return 12 end
+environment.GetRealmName = function() return "TestRealm" end
+environment.GetProfessions = function() return 1, 2 end
+environment.GetProfessionInfo = function(index)
+  return index == 1 and "Enchanting" or "Alchemy", nil, nil, nil, nil, nil,
+    index == 1 and 333 or 171
+end
+local uiAddon = reload(nil)
+local uiLedger = uiAddon.ledger
+local uiWindow = uiAddon.productionWindow
+local currentKey = uiAddon.Management.CurrentCharacter().key
+local alchemy = assert(uiLedger:AddDimension("profession", "171", { skillLineId = 171, name = "Alchemy" }))
+local enchanting = assert(uiLedger:AddDimension("profession", "333", { skillLineId = 333, name = "Enchanting" }))
+assert(uiLedger:AddDimension("recipe", 501, { gameRecipeId = 501, name = "Zebra Brew",
+  professionDimensionId = alchemy }))
+assert(uiLedger:AddDimension("recipe", 502, { gameRecipeId = 502, name = "Apple Mix",
+  professionDimensionId = enchanting }))
+for index = 1, 12 do
+  uiLedger:BeginCraft(501)
+  assert(uiLedger:RecordResult({ operationID = index, quantity = 0, craftingQuality = 0,
+    multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false, ingenuityRefund = 9 }))
+end
+uiLedger:BeginCraft(502)
+assert(uiLedger:RecordResult({ operationID = 13, quantity = 1 }))
+assert(uiLedger:CreateSession({ startedAt = 1800000000, projectId = 1, regionId = 3,
+  gameRealmId = 12, realmName = "TestRealm", characterName = "Other", characterGUID = "Player-Other" }))
+uiLedger:BeginCraft(502)
+assert(uiLedger:RecordResult({ operationID = 14 }))
+assert(uiLedger:CreateSession({ startedAt = 1800000000, projectId = 1, regionId = 3,
+  gameRealmId = 12, realmName = "TestRealm", characterName = "TestCrafter",
+  characterGUID = "Player-1-123" }))
+
+local function dropdown(parent, label)
+  for _, frame in ipairs(frames) do
+    if frame.parent == parent and frame.choices then
+      for _, choice in ipairs(frame.choices) do
+        if choice.label == label then return frame end
+      end
+    end
+  end
+  error("Missing dropdown choice: " .. label)
+end
+local function button(parent, title)
+  for _, frame in ipairs(frames) do
+    if frame.parent == parent and frame.kind == "Button" and frame.text == title then return frame end
+  end
+  error("Missing button: " .. title)
+end
+local function visibleText(part)
+  for _, frame in ipairs(frames) do
+    if type(frame.text) == "string" and frame.text:find(part, 1, true) then return frame.text end
+  end
+end
+local function displayedRow(parent, predicate)
+  for _, frame in ipairs(frames) do
+    if frame.item and predicate(frame.item) then
+      local ancestor = frame.parent
+      while ancestor do
+        if ancestor == parent then return frame end
+        ancestor = ancestor.parent
+      end
+    end
+  end
+end
+
+assert(not uiWindow:IsShown() and not uiAddon.window:IsShown())
+assert(environment.SLASH_ARTISANLOGBOOK2 == "/artisanlogbook")
+environment.SlashCmdList.ARTISANLOGBOOK("")
+assert(uiWindow:IsShown() and uiWindow.activeTab == "Overview" and not uiAddon.window:IsShown())
+local launcher
+for _, frame in ipairs(frames) do if frame.name == "ArtisanLogbookButton" then launcher = frame end end
+assert(launcher)
+launcher.scripts.OnClick()
+assert(not uiWindow:IsShown())
+launcher.scripts.OnClick()
+assert(uiWindow:IsShown())
+local overview = uiWindow.pages.Overview
+local chart
+for _, frame in ipairs(frames) do
+  if frame.parent == overview and frame.title then chart = frame end
+end
+assert(chart and chart.title.text:find("14 crafts", 1, true))
+assert(visibleText("TOTAL CRAFTS\n14\nWoW"))
+dropdown(overview, "Enchanting"):Choose(333)
+assert(chart.title.text:find("2 crafts", 1, true))
+dropdown(overview, "Other"):Choose(dropdown(overview, "Other").choices[2].value)
+assert(chart.title.text:find("1 crafts", 1, true))
+dropdown(overview, "90 days"):Choose(90)
+assert(chart.title.text:find("1 crafts", 1, true))
+uiWindow:Hide()
+environment.SlashCmdList.ARTISANLOGBOOK("anything")
+assert(uiWindow:IsShown() and not uiAddon.window:IsShown())
+environment.SlashCmdList.ARTISANLOGBOOK("debug")
+assert(uiAddon.window:IsShown() and uiWindow:IsShown())
+uiAddon.window:Hide()
+button(uiWindow, "Recent").scripts.OnClick()
+assert(uiWindow.activeTab == "Recent")
+local recent = uiWindow.pages.Recent
+local recentArea
+for _, frame in ipairs(frames) do if frame.parent == recent and frame.kind == "Frame" then recentArea = frame end end
+local recentFirst = displayedRow(recentArea, function(item) return item.id == 14 end)
+assert(recentFirst)
+recentFirst.scripts.OnClick(recentFirst)
+assert(uiWindow.openCraftId == 14 and uiWindow.visiblePage ~= recent)
+local sharedDetail = uiWindow.visiblePage
+assert(visibleText("Ingenuity proc: Unknown"))
+uiWindow:Activate("Recent")
+local nextButton
+for _, frame in ipairs(frames) do
+  if frame.parent and frame.parent.parent == recentArea and frame.text == ">" then nextButton = frame end
+end
+assert(nextButton and nextButton.enabled)
+nextButton.scripts.OnClick()
+assert(displayedRow(recentArea, function(item) return item.id == 4 end))
+dropdown(recent, "Other"):Choose(dropdown(overview, "Other").value)
+assert(displayedRow(recentArea, function(item) return item.id == 14 end))
+uiWindow:Activate("Character")
+local character = uiWindow.pages.Character
+assert(dropdown(character, "TestCrafter").value == currentKey)
+dropdown(character, "Other"):Choose(dropdown(recent, "Other").value)
+assert(dropdown(character, "Other").text == "Other")
+local characterArea
+for _, frame in ipairs(frames) do if frame.parent == character and frame.kind == "Frame" then characterArea = frame end end
+assert(displayedRow(characterArea, function(item) return item.id == 14 end))
+uiWindow:Activate("Profession")
+local profession = uiWindow.pages.Profession
+assert(dropdown(profession, "Enchanting").value == 333)
+dropdown(profession, "Alchemy"):Choose(171)
+assert(dropdown(profession, "Alchemy").value == 171)
+local professionArea
+for _, frame in ipairs(frames) do if frame.parent == profession and frame.kind == "Frame" then professionArea = frame end end
+assert(displayedRow(professionArea, function(item) return item.id == 12 end))
+dropdown(profession, "Other"):Choose(dropdown(character, "Other").value)
+assert(dropdown(profession, "Enchanting").value == 333)
+assert(displayedRow(professionArea, function(item) return item.id == 14 end))
+uiWindow:Activate("Recipes")
+local recipes = uiWindow.pages.Recipes
+local catalogue
+for _, frame in ipairs(frames) do if frame.parent == recipes and frame.rows then catalogue = frame end end
+assert(catalogue and catalogue.rows[1].item.recipe.name == "Apple Mix")
+local apple = displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 502 end)
+assert(apple and apple.item.craftCount == 2)
+assert(displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 501 end).item.craftCount == 12)
+apple.scripts.OnClick(apple)
+local recipePage = uiWindow.visiblePage
+assert(recipePage ~= recipes and visibleText("Apple Mix  |  Enchanting"))
+local recipeArea
+for _, frame in ipairs(frames) do if frame.parent == recipePage and frame.kind == "Frame" then recipeArea = frame end end
+local recipeCraft = displayedRow(recipeArea, function(item) return item.id == 13 end)
+assert(recipeCraft)
+recipeCraft.scripts.OnClick(recipeCraft)
+assert(uiWindow.visiblePage == sharedDetail and uiWindow.returnPage == recipePage and uiWindow.openCraftId == 13)
+uiWindow:Activate("Character")
+dropdown(character, "TestCrafter"):Choose(currentKey)
+local characterCraft = displayedRow(characterArea, function(item) return item.id == 12 end)
+assert(characterCraft)
+characterCraft.scripts.OnClick(characterCraft)
+assert(uiWindow.visiblePage == sharedDetail)
+uiWindow:OpenCraft(1)
+assert(visibleText("Ingenuity proc: No"))
+assert(visibleText("Net concentration: 0"))
+assert(visibleText("Reported Ingenuity refund: 9"))
+uiWindow:Activate("Recent")
+dropdown(recent, "All"):Choose(false)
+uiLedger:BeginCraft(502)
+assert(uiLedger:RecordResult({ operationID = 15 }))
+assert(displayedRow(recentArea, function(item) return item.id == 15 end))
+uiLedger.wall = function() return 1800000000 - 8 * 86400 end
+uiLedger:BeginCraft(501)
+assert(uiLedger:RecordResult({ operationID = 16 }))
+uiLedger.wall = environment.GetServerTime
+uiWindow:Activate("Overview")
+dropdown(overview, "All"):Choose(false)
+local professionFilter = dropdown(overview, "Enchanting")
+professionFilter:Choose(false)
+assert(chart.title.text:find("16 crafts", 1, true))
+assert(visibleText("TOTAL CRAFTS\n16\nWoW -1"))
+uiWindow:Activate("Settings")
+local settings = uiWindow.pages.Settings
+local retentionInput
+for _, frame in ipairs(frames) do
+  if frame.parent == settings and frame.kind == "EditBox" then retentionInput = frame end
+end
+assert(retentionInput and retentionInput.text == "60" and visibleText("Portable export is not yet defined"))
+retentionInput:SetText("1")
+button(settings, "Save").scripts.OnClick()
+assert(uiLedger.database.retentionDays == 1)
+button(settings, "Prune now").scripts.OnClick()
+assert(#uiLedger.database.crafts == 15)
+assert(#uiLedger.database.craftSeries == 4)
+button(settings, "Clear history").scripts.OnClick()
+assert(environment.popup == "ARTISANLOGBOOK_CLEAR_HISTORY" and #uiLedger.database.crafts == 15)
+environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_HISTORY.OnAccept()
+assert(#uiLedger.database.crafts == 0 and #uiLedger.database.craftSeries == 0)
+uiWindow:Activate("Overview")
+assert(chart.title.text:find("0 crafts", 1, true))
+assert(visibleText("CONCENTRATION\nSpent Unknown\nNet Unknown"))
+uiWindow:Activate("Recipes")
+assert(not displayedRow(recipes, function() return true end))
+uiWindow:Activate("Recent")
+assert(not displayedRow(recentArea, function() return true end))
+uiWindow:Activate("Character")
+assert(not displayedRow(characterArea, function() return true end))
+uiWindow:Activate("Profession")
+assert(not displayedRow(professionArea, function() return true end))
+print("PASS production navigation, filters, paging, detail reuse, live refresh and data management (mocked)")
+
+local invalidTrace = { traceSchemaVersion = 999 }
+environment.ArtisanLogbookTraceDB = invalidTrace
+local noTracer = reload(nil)
+assert(noTracer.ledger and noTracer.recorder == nil and noTracer.productionWindow)
+environment.SlashCmdList.ARTISANLOGBOOK("")
+assert(noTracer.productionWindow:IsShown() and environment.ArtisanLogbookTraceDB == invalidTrace)
+print("PASS production UI remains available when diagnostic trace storage is refused")

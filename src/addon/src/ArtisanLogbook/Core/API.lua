@@ -369,9 +369,23 @@ function API.GetCraftSeries(filter, options)
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
   local selected = {}
-  for _, row in ipairs(ledger.database.craftSeries) do
-    if matches({ timestamp = row.bucketStart }, seriesRelated(ledger, row), normalized) then
-      selected[#selected + 1] = row
+  local days = ledger.seriesDays
+  local first, last = 1, #days + 1
+  if time and time.from then
+    while first < last do
+      local middle = math.floor((first + last) / 2)
+      if days[middle] < time.from then first = middle + 1 else last = middle end
+    end
+  end
+  for index = first, #days do
+    local day = days[index]
+    if time and time.to and day >= time.to then break end
+    for _, group in pairs(ledger.seriesByKey[day]) do
+      for _, row in pairs(group) do
+        if matches({ timestamp = day }, seriesRelated(ledger, row), normalized) then
+          selected[#selected + 1] = row
+        end
+      end
     end
   end
   table.sort(selected, function(left, right)
@@ -401,6 +415,51 @@ function API.GetCraftSeries(filter, options)
     projected.expansion = expansion(ledger, rows.expansions)
     result.series[#result.series + 1] = projected
   end
+  return result
+end
+
+function API.GetRecipeSummaries(options)
+  if options == nil then options = {} end
+  if not keysAllowed(options, { limit = true, cursor = true }) then return nil, "invalid-options" end
+  local limit = options.limit or 50
+  if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
+  local offset = 0
+  if options.cursor ~= nil then
+    if type(options.cursor) ~= "string" or not options.cursor:match("^[1-9]%d*$") then
+      return nil, "invalid-cursor"
+    end
+    offset = tonumber(options.cursor)
+    if not integer(offset, 1) then return nil, "invalid-cursor" end
+  end
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  if not ledger.recipeOrder then
+    local order = {}
+    for id in pairs(ledger.recipeCounts) do
+      local row = dimension(ledger, "recipe", id)
+      if row and type(row.gameRecipeId) == "number" then order[#order + 1] = id end
+    end
+    table.sort(order, function(left, right)
+      local a, b = dimension(ledger, "recipe", left), dimension(ledger, "recipe", right)
+      local leftName = (a.name or "Recipe #" .. a.gameRecipeId):lower()
+      local rightName = (b.name or "Recipe #" .. b.gameRecipeId):lower()
+      if leftName ~= rightName then return leftName < rightName end
+      return a.gameRecipeId < b.gameRecipeId
+    end)
+    ledger.recipeOrder = order
+  end
+  local order = ledger.recipeOrder
+  if offset > #order then return nil, "invalid-cursor" end
+  local result = { recipes = {} }
+  for index = offset + 1, math.min(offset + limit, #order) do
+    local id = order[index]
+    local projected = recipe(ledger, dimension(ledger, "recipe", id))
+    if not projected.name then projected.name = "Recipe #" .. projected.id end
+    result.recipes[#result.recipes + 1] = {
+      recipe = projected, profession = projected.profession, craftCount = ledger.recipeCounts[id],
+    }
+  end
+  if offset + limit < #order then result.nextCursor = tostring(offset + limit) end
   return result
 end
 

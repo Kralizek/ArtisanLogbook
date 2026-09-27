@@ -139,6 +139,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
       addon.ledger = nil
     end
   end
+  addon.CreateProductionWindow()
   addon.recorder, addon.loadError = addon.Trace.New(ArtisanLogbookTraceDB, {
     wall = GetServerTime,
     elapsed = GetTimePreciseSec,
@@ -155,7 +156,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   if addon.ledgerError then
     addon.Notify("Ledger disabled: " .. addon.ledgerError)
   else
-    addon.Notify("Ledger ready. Open the debug tracer with the book button or /al.")
+    addon.Notify("Ledger ready. Open Artisan Logbook with /al.")
   end
 end)
 
@@ -164,25 +165,12 @@ SLASH_ARTISANLOGBOOK2 = "/artisanlogbook"
 SlashCmdList.ARTISANLOGBOOK = function(message)
   local command, argument = message:match("^%s*(%S*)%s*(.-)%s*$")
   command = command:lower()
-  if command == "start" then
-    addon.Start()
-  elseif command == "stop" then
-    addon.Stop()
-  elseif command == "mark" then
-    addon.Mark(argument)
-  elseif command == "status" then
-    if addon.recorder then
-      addon.Notify(string.format("%s; %d events; %d/%d budget bytes; %s",
-        addon.recorder.recording and "Recording" or "Paused", #addon.recorder.database.records,
-        addon.recorder.database.bytes, addon.Trace.maxBytes,
-        addon.recorder.database.stoppedReason or "no stop error"))
-    else
-      addon.Notify(addon.loadError or "Not initialized.")
-    end
-  elseif addon.window then
+  if command == "debug" and addon.window then
     addon.window:Show()
-    addon.window:Refresh(command == "export")
+    addon.window:Refresh(argument == "export")
+  elseif addon.productionWindow then
+    addon.productionWindow:Show()
   else
-    addon.Notify(addon.loadError or "Not initialized.")
+    addon.Notify(addon.ledgerError or addon.loadError or "Not initialized.")
   end
 end
