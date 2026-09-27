@@ -391,7 +391,8 @@ function API.GetCraftSeries(filter, options)
   for _, row in ipairs(selected) do
     local projected = fields(row, { "bucketStart", "craftCount", "outputQuantity", "multicraftBonus",
       "concentrationSpent", "outputQuantityObservedCount", "multicraftBonusObservedCount",
-      "concentrationSpentObservedCount" })
+      "concentrationSpentObservedCount", "ingenuityProcCount", "ingenuityProcCountObservedCount",
+      "ingenuityRefund", "ingenuityRefundObservedCount" })
     local rows = seriesRelated(ledger, row)
     projected.character = character(ledger, rows.characters)
     projected.realm = realm(ledger, rows.realms)

@@ -10,8 +10,9 @@ user's 2026-09-26 decisions below taking precedence over its suggestions.
 3. Collect controlled basic, concentration, Ingenuity, Multicraft, and
   Resourcefulness traces. The supplied Retail build-69933 evidence now covers
   basic results, concentration without Ingenuity, Multicraft, Resourcefulness,
-  and a two-operation batch; successful Ingenuity and cancellation/interruption
-  remain outstanding. Include duplicate/late callback observations. Orders
+  and a two-operation batch. The newly verified Ogrim export establishes successful
+  Ingenuity (`hasIngenuityProc=true`, spend 323, refund 162).
+  Cancellation/interruption remains outstanding. Include duplicate/late callback observations. Orders
   and actual recrafts remain follow-up evidence.
 4. Document verified behavior, field availability, limitations, and proposed
    correlation rules against the actual client build.
@@ -44,7 +45,7 @@ Tests, packaging, and product documentation live beneath `src/addon/`. See
   API-provided results from bag deltas.
 5. **Stable Lua API (issue #5):** denormalized read projections, shared
    dimension filters, bounded cursor paging, strict/self-excluding facets,
-   runtime capabilities, and isolated callback delivery. Portable export is a
+   durable daily craft series, runtime capabilities, and isolated callback delivery. Portable export is a
    separate later concern.
 6. **Minimal UI:** Recent, Stats, Data; bounded rendering and explicit destructive
    action confirmation. Validate live captured results against the game UI.
@@ -71,11 +72,12 @@ Tests and documentation accompany each slice rather than being deferred.
   including after prune/clear. Dimension IDs are also never recycled.
 - Updated by the issue #5 runtime indexing/retention decision: default
   `retentionDays = 60`, with no `maxCrafts` threshold. Maintain durable daily
-  craft-count/output/Multicraft/concentration series with metric coverage.
+  craft-count/output/Multicraft/concentration and verified Ingenuity proc/applied-refund
+  series with metric coverage.
   Prune detailed facts at startup before
   building runtime indexes, not on submissions/results; remove craft facts and their reagent
   facts together. Leave dimensions append-only. No dimension garbage collection
-  or rollups in v1 unless later measurements justify a reviewed change. These
+  or reagent-level rollups in v1; durable daily craft series are approved in issue #5. These
   defaults do not apply to the intentionally smaller temporary trace buffer.
 - Store source measurements and flags needed for derivation; do not persist
   duplicated derived totals. Apply `ingenuityRefund` only when

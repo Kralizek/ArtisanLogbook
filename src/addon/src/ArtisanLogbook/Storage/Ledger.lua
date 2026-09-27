@@ -1,10 +1,13 @@
 local _, addon = ...
 
 local Ledger = {}
-Ledger.schemaVersion = 4
+Ledger.schemaVersion = 5
 Ledger.retentionDays = 60
 
-local seriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent" }
+local oldSeriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent" }
+local ingenuityMetrics = { "ingenuityProcCount", "ingenuityRefund" }
+local seriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent",
+  "ingenuityProcCount", "ingenuityRefund" }
 
 local function isFinite(value)
   return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
@@ -170,7 +173,32 @@ local function seriesGroup(index, bucketStart, characterId)
   return bucket[key]
 end
 
-local function accumulateSeries(data, index, sessions, craft)
+local function seriesMeasurement(craft, metric)
+  if metric == "ingenuityProcCount" or metric == "ingenuityRefund" then
+    if craft.hasIngenuityProc == false then return 0 end
+    if craft.hasIngenuityProc ~= true then return nil end
+    if metric == "ingenuityProcCount" then return 1 end
+  end
+  return craft[metric]
+end
+
+local function accumulateMetrics(row, existing, craft, metrics)
+  for _, metric in ipairs(metrics) do
+    local coverage = metric .. "ObservedCount"
+    row[coverage] = existing and existing[coverage] or 0
+    row[metric] = existing and existing[metric] or nil
+    local value = seriesMeasurement(craft, metric)
+    if value ~= nil then
+      if not isFinite(value) then return nil, "invalid craft metric: " .. metric end
+      row[metric] = (row[metric] or 0) + value
+      row[coverage] = row[coverage] + 1
+      if not isFinite(row[metric]) then return nil, "craft series sum overflow: " .. metric end
+    end
+  end
+  return true
+end
+
+local function accumulateSeries(data, index, sessions, craft, metrics)
   local bucketStart = math.floor(craft.timestamp / 86400) * 86400
   if not isFinite(bucketStart) then return nil, "invalid craft series bucket" end
   local session = sessions[craft.sessionDimensionId]
@@ -184,17 +212,8 @@ local function accumulateSeries(data, index, sessions, craft)
     recipeDimensionId = craft.recipeDimensionId,
     craftCount = (existing and existing.craftCount or 0) + 1,
   }
-  for _, metric in ipairs(seriesMetrics) do
-    local coverage = metric .. "ObservedCount"
-    row[coverage] = existing and existing[coverage] or 0
-    row[metric] = existing and existing[metric] or nil
-    if craft[metric] ~= nil then
-      if not isFinite(craft[metric]) then return nil, "invalid craft metric: " .. metric end
-      row[metric] = (row[metric] or 0) + craft[metric]
-      row[coverage] = row[coverage] + 1
-      if not isFinite(row[metric]) then return nil, "craft series sum overflow: " .. metric end
-    end
-  end
+  local ok, reason = accumulateMetrics(row, existing, craft, metrics or seriesMetrics)
+  if not ok then return nil, reason end
   if existing then
     for field, value in pairs(row) do existing[field] = value end
   else
@@ -220,7 +239,7 @@ local function validateDatabase(data, legacy)
     return nil, "retentionDays must be a positive integer"
   end
   if data.maxCrafts ~= nil then
-    return nil, "schema 4 does not support maxCrafts"
+    return nil, "schema 5 does not support maxCrafts"
   end
 
   local ids = { craft = {}, request = {} }
@@ -330,12 +349,29 @@ local function validateDatabase(data, legacy)
       local key = row.recipeDimensionId or 0
       if group[key] then return nil, "duplicate craft series grain" end
       group[key] = true
-      for _, metric in ipairs(seriesMetrics) do
+      if data.schemaVersion == 4 then
+        for _, metric in ipairs(ingenuityMetrics) do
+          if row[metric] ~= nil or row[metric .. "ObservedCount"] ~= nil then
+            return nil, "schema 4 contains unexpected craft series metric: " .. metric
+          end
+        end
+      end
+      for _, metric in ipairs(data.schemaVersion == 4 and oldSeriesMetrics or seriesMetrics) do
         local count = row[metric .. "ObservedCount"]
         if not isGameId(count) or count > row.craftCount or
             (count == 0 and row[metric] ~= nil) or
             (count > 0 and not isFinite(row[metric])) then
           return nil, "invalid craft series coverage or sum: " .. metric
+        end
+      end
+      if data.schemaVersion ~= 4 then
+        if row.ingenuityProcCount ~= nil and
+            (not isGameId(row.ingenuityProcCount) or
+              row.ingenuityProcCount > row.ingenuityProcCountObservedCount) then
+          return nil, "invalid craft series proc count"
+        end
+        if row.ingenuityRefundObservedCount > row.ingenuityProcCountObservedCount then
+          return nil, "craft series refund coverage exceeds proc coverage"
         end
       end
     end
@@ -352,7 +388,7 @@ local function migrateThree(data)
   data.craftSeries = {}
   for _, craft in ipairs(data.crafts) do
     local ok
-    ok, reason = accumulateSeries(data, index, sessions, craft)
+    ok, reason = accumulateSeries(data, index, sessions, craft, oldSeriesMetrics)
     if not ok then return nil, reason end
   end
   -- Schema 3 did not distinguish its default from an explicit 180-day choice.
@@ -361,7 +397,38 @@ local function migrateThree(data)
   return data
 end
 
-local migrations = { [0] = migrateZero, [1] = migrateOne, [2] = migrateTwo, [3] = migrateThree }
+local function migrateFour(data)
+  local valid, reason = validateDatabase(data)
+  if not valid then return nil, reason end
+  local sessions, index, retainedCounts = {}, {}, {}
+  for _, session in ipairs(data.dimensions.sessions) do sessions[session.id] = session end
+  for _, row in ipairs(data.craftSeries) do
+    local group = seriesGroup(index, row.bucketStart, row.characterDimensionId)
+    group[row.recipeDimensionId or 0] = row
+    for _, metric in ipairs(ingenuityMetrics) do row[metric .. "ObservedCount"] = 0 end
+  end
+  -- Only retained detail can establish coverage; old totals may include pruned facts.
+  for _, craft in ipairs(data.crafts) do
+    local bucketStart = math.floor(craft.timestamp / 86400) * 86400
+    if not isFinite(bucketStart) then return nil, "invalid craft series bucket" end
+    local session = sessions[craft.sessionDimensionId]
+    local group = seriesGroup(index, bucketStart, session and session.characterDimensionId)
+    local row = group[craft.recipeDimensionId or 0]
+    if not row then return nil, "retained craft has no craft series grain" end
+    retainedCounts[row] = (retainedCounts[row] or 0) + 1
+    if retainedCounts[row] > row.craftCount then
+      return nil, "retained crafts exceed craft series count"
+    end
+    local ok
+    ok, reason = accumulateMetrics(row, row, craft, ingenuityMetrics)
+    if not ok then return nil, reason end
+  end
+  data.schemaVersion = 5
+  return data
+end
+
+local migrations = { [0] = migrateZero, [1] = migrateOne, [2] = migrateTwo, [3] = migrateThree,
+  [4] = migrateFour }
 
 local function nowFunction(clock)
   if clock and type(clock.wall) == "function" then
@@ -528,7 +595,7 @@ local function openDatabase(database, clock, options)
   end
   if options then
     if options.maxCrafts ~= nil then
-      return nil, "ledger options refused: schema 4 does not support maxCrafts"
+      return nil, "ledger options refused: schema 5 does not support maxCrafts"
     end
     if options.retentionDays ~= nil then data.retentionDays = options.retentionDays end
     valid, reason = validateDatabase(data)

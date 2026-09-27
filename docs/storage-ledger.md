@@ -16,7 +16,7 @@ the ledger and migrates independently. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-The current durable schema is version 4:
+The current durable schema is version 5:
 
 - `crafts` stores one row per observed Retail result callback, with a monotonic
   local `id`, timestamp, optional request ID, session/recipe/output dimension IDs, raw game
@@ -169,7 +169,8 @@ zero and `false` are stored; absent or unsupported values remain nil. The ledger
 does not persist net concentration or an inferred proc. A positive refund with
 `hasIngenuityProc = false` is preserved as a reported refund field, not treated
 as an applied refund. A future derivation may apply it only when the flag is
-explicitly true. Successful Ingenuity behavior remains unverified.
+explicitly true. The Ogrim export now verifies a successful proc with
+`hasIngenuityProc=true`, `concentrationSpent=323`, and `ingenuityRefund=162`.
 
 `resourcesReturned` is authoritative for returned item IDs and quantities. One
 result may create several reagent rows. A return attaches to a selected input
@@ -253,8 +254,15 @@ and `concentrationSpent`. Each sum has an always-present
 `<metric>ObservedCount`: absent evidence contributes neither a value nor coverage;
 observed zero contributes coverage and a zero sum. Zero coverage requires an absent
 sum, positive coverage requires a sum, and coverage cannot exceed `craftCount`.
-No Resourcefulness/reagent totals, Ingenuity rollups, or derived measurements are
-persisted.
+Schema 5 also stores `ingenuityProcCount` and `ingenuityRefund` with
+`ingenuityProcCountObservedCount` and `ingenuityRefundObservedCount`. Known true/
+false flags contribute one/zero to proc count; unknown flags contribute no
+coverage. Applied refund is the observed raw amount only for true, zero for
+false (including positive potential raw refunds), and unknown for an absent flag
+or true without an amount. Raw craft refunds are unchanged. These fields follow
+the same absent-sum/zero-coverage rule. Proc count is an integer between zero and
+its coverage; refund coverage cannot exceed known-flag coverage.
+No Resourcefulness/reagent totals or derived net measurements are persisted.
 
 A runtime keyed aggregate lookup is rebuilt from these rows once at startup.
 Every successful commit updates exactly its aggregate grain before callback
@@ -270,6 +278,16 @@ schema is refused rather than overwritten or double-counted. Existing reference
 validation gates backfill. Schema 4 validates aggregate collection shape, unique
 grain, UTC-day alignment, references, counts, metric coverage and finite sums.
 Migration works on a copy and cannot publish partial changes on failure.
+
+Schema 4 to 5 preserves existing daily counts and original metric sums/coverage.
+After validating legacy data, it initializes new metric coverage to zero, then
+backfills only the new metrics from every still-retained detailed fact, before
+startup pruning. It never guesses refund/proc values for previously pruned facts.
+Aggregate-only grains therefore retain unknown coverage for the new fields.
+Reloading schema 5 never repeats backfill. Unexpected new metric fields in schema 4
+are rejected rather than overwritten. Missing aggregate grains or detailed counts
+exceeding their aggregate craft count are refused atomically. Schemas before 4
+first backfill the original measures, then follow this same new-metric migration.
 
 The old default retention setting of 180 becomes 60 during migration; other
 configured retention values are preserved. An explicitly configured 180 is
@@ -318,7 +336,7 @@ Unsupported reference fields are refused rather than silently treated as absent.
 Bootstrap replaces `ArtisanLogbookDB` only after successful migration,
 validation, and session initialization. A failed load leaves the original
 SavedVariables intact and tracing independent. A missing database creates schema
-4; the unrelated trace database is never imported. Malformed result snapshots
+5; the unrelated trace database is never imported. Malformed result snapshots
 are rejected before craft/reagent facts are committed; timestamps are never
 fabricated as zero when the clock is unavailable.
 
@@ -344,7 +362,7 @@ correctness. Run `bash src/addon/scripts/package.sh` from
 the repository root to test and validate `src/addon/dist/ArtisanLogbook.zip`.
 
 Remaining evidence gaps include operation-ID reuse scope, true duplicate/late
-callback behavior, successful Ingenuity/refund semantics, crafting-order/recraft
+callback behavior, crafting-order/recraft
 context, and reagent ownership/source. The Lua API projects only facts already
 supported by this ledger; see [lua-api.md](lua-api.md). This slice does not add
 AL1 export, Recent/

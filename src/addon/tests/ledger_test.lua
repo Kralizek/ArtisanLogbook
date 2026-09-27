@@ -49,6 +49,15 @@ local function craftByOperation(ledger, operationId)
   end
 end
 
+local function schemaFour(data)
+  data.schemaVersion = 4
+  for _, row in ipairs(data.craftSeries) do
+    row.ingenuityProcCount, row.ingenuityRefund = nil, nil
+    row.ingenuityProcCountObservedCount, row.ingenuityRefundObservedCount = nil, nil
+  end
+  return data
+end
+
 test("build-69933 replay records one fact per observed result", function()
   local ledger = newLedger()
   replay(ledger, fixture.cases)
@@ -275,7 +284,7 @@ test("every persisted reference is validated before load or migration can prune"
     { "items", "expansionDimensionId" }, { "professions", "expansionDimensionId" },
     { "recipes", "professionDimensionId" },
   }
-  for _, version in ipairs({ 0, 1, 2, 3, 4 }) do
+  for _, version in ipairs({ 0, 1, 2, 3, 4, 5 }) do
     for _, reference in ipairs(cases) do
       local ledger, clock = newLedger()
       replay(ledger, fixture.cases)
@@ -283,6 +292,7 @@ test("every persisted reference is validated before load or migration can prune"
       local data = ledger.database
       data.schemaVersion = version
       if version < 4 then data.craftSeries = nil end
+      if version == 4 then schemaFour(data) end
       if version < 3 then data.maxCrafts = 50000 end
       if version < 2 then data.requests, data.nextRequestId = nil, nil end
       local rows = data[reference[1]] or data.dimensions[reference[1]]
@@ -546,7 +556,7 @@ test("schema 1 migration preserves partial returns and refuses invalid new refer
   old.craftSeries = nil
   old.maxCrafts = 50000
   local migrated = assert(Ledger.New(old, clock))
-  assert(migrated.database.schemaVersion == 4 and migrated.database.nextRequestId == 1)
+  assert(migrated.database.schemaVersion == 5 and migrated.database.nextRequestId == 1)
   assert(#migrated.database.requests == 0 and migrated.database.crafts[1].id == result.id)
   assert(migrated.database.reagents[1].allocatedQuantity == nil)
   assert(old.schemaVersion == 1 and old.requests == nil)
@@ -567,7 +577,7 @@ test("schema 1 migration preserves partial returns and refuses invalid new refer
       row[field] = 999
     end
     local refused = Ledger.New(copied)
-    assert(refused == nil and copied.schemaVersion == 4 and copied.requests[1].id == 1, field)
+    assert(refused == nil and copied.schemaVersion == 5 and copied.requests[1].id == 1, field)
   end
   local mismatched = assert(Ledger.New(migrated.database)).database
   mismatched.crafts[2].recipeDimensionId = mismatched.crafts[1].recipeDimensionId
@@ -611,7 +621,7 @@ test("schema 2 migration removes the count cap without mutating saved data", fun
   ledger.database.craftSeries = nil
   ledger.database.maxCrafts = 1
   local migrated = assert(Ledger.New(ledger.database, clock))
-  assert(migrated.database.schemaVersion == 4 and migrated.database.maxCrafts == nil)
+  assert(migrated.database.schemaVersion == 5 and migrated.database.maxCrafts == nil)
   assert(Ledger.maxCrafts == nil and migrated.database.retentionDays == 60)
   assert(#migrated.database.crafts == 2 and #migrated.craftIds == 2)
   assert(ledger.database.schemaVersion == 2 and ledger.database.maxCrafts == 1)
@@ -624,7 +634,7 @@ test("schema 2 migration removes the count cap without mutating saved data", fun
   assert(Ledger.New(ledger.database, clock) == nil)
 end)
 
-test("schema 4 refuses persisted and configured count caps", function()
+test("schema 5 refuses persisted and configured count caps", function()
   local ledger, clock = newLedger()
   for _, cap in ipairs({ false, 0, 1, 50000 }) do
     local refused, reason = Ledger.New(ledger.database, clock, { maxCrafts = cap })
@@ -633,7 +643,7 @@ test("schema 4 refuses persisted and configured count caps", function()
     ledger.database.maxCrafts = cap
     refused, reason = Ledger.New(ledger.database, clock)
     assert(refused == nil and reason:find("maxCrafts", 1, true))
-    assert(ledger.database.schemaVersion == 4 and ledger.database.maxCrafts == cap)
+    assert(ledger.database.schemaVersion == 5 and ledger.database.maxCrafts == cap)
     ledger.database.maxCrafts = nil
   end
 end)
@@ -807,9 +817,12 @@ test("incremental indexes are complete before the committed callback", function(
     assert(series.craftCount == 1 and series.recipeDimensionId == request.recipeDimensionId)
     assert(series.characterDimensionId == characterId)
     assert(self.seriesByKey[series.bucketStart][characterId][request.recipeDimensionId] == series)
+    assert(series.ingenuityProcCount == 1 and series.ingenuityProcCountObservedCount == 1)
+    assert(series.ingenuityRefund == 162 and series.ingenuityRefundObservedCount == 1)
     callbackCompleted = true
   end
-  assert(ledger:RecordResult({ operationID = 10, resourcesReturned = {} }))
+  assert(ledger:RecordResult({ operationID = 10, resourcesReturned = {},
+    hasIngenuityProc = true, ingenuityRefund = 162 }))
   assert(callbackCompleted)
 end)
 
@@ -845,12 +858,14 @@ test("more than 50000 crafts survive capture and reload without historical scans
   local indexedRecipes, indexedCrafts = ledger.craftIdsByRecipe, ledger.craftById
   local ok, reason = pcall(function()
     local request = assert(ledger:SubmitCraft(12, 1, false, nil, selections))
-    local craft = assert(ledger:RecordResult({ operationID = 50002, resourcesReturned = {} }))
+    local craft = assert(ledger:RecordResult({ operationID = 50002, resourcesReturned = {},
+      hasIngenuityProc = true, ingenuityRefund = 162 }))
     assert(craft.requestId == request.id)
     assert(ledger.requestById[request.id] == request and ledger.craftById[craft.id] == craft)
     assert(ledger.reagentsByCraftId[craft.id][1] == ledger.database.reagents[50002])
     request = assert(ledger:SubmitCraft(13, 1, false))
-    craft = assert(ledger:RecordResult({ operationID = 50003, itemID = 101 }))
+    craft = assert(ledger:RecordResult({ operationID = 50003, itemID = 101,
+      hasIngenuityProc = false, ingenuityRefund = 162 }))
     assert(craft.requestId == request.id and ledger.craftIdsByRecipe[13][1] == craft.id)
   end)
   ipairs, pairs, table.sort, table.insert = oldIpairs, oldPairs, oldSort, oldInsert
@@ -866,6 +881,12 @@ test("more than 50000 crafts survive capture and reload without historical scans
   assert(reloaded.reagentsByCraftId[50002][1] == reloaded.database.reagents[50002])
   assert(#reloaded.database.craftSeries == 2 and reloaded.database.craftSeries[1].craftCount == 50002)
   assert(reloaded.database.craftSeries[2].craftCount == 1)
+  assert(reloaded.database.craftSeries[1].ingenuityProcCount == 1)
+  assert(reloaded.database.craftSeries[1].ingenuityRefund == 162)
+  assert(reloaded.database.craftSeries[1].ingenuityRefundObservedCount == 1)
+  assert(reloaded.database.craftSeries[2].ingenuityProcCount == 0)
+  assert(reloaded.database.craftSeries[2].ingenuityRefund == 0)
+  assert(reloaded.database.craftSeries[2].ingenuityRefundObservedCount == 1)
 end)
 
 test("daily series distinguish observed zero from unavailable metrics", function()
@@ -873,7 +894,8 @@ test("daily series distinguish observed zero from unavailable metrics", function
   assert(ledger:RecordResult({}))
   local series = ledger.database.craftSeries[1]
   assert(series.craftCount == 1 and series.recipeDimensionId == nil)
-  for _, metric in ipairs({ "outputQuantity", "multicraftBonus", "concentrationSpent" }) do
+  for _, metric in ipairs({ "outputQuantity", "multicraftBonus", "concentrationSpent",
+    "ingenuityProcCount", "ingenuityRefund" }) do
     assert(series[metric] == nil and series[metric .. "ObservedCount"] == 0)
   end
   assert(ledger:RecordResult({ quantity = 0, multicraft = 0, concentrationSpent = 0 }))
@@ -927,18 +949,166 @@ test("daily series grain uses UTC day character and optional recipe across sessi
   assert(ledger.database.craftSeries[5].characterDimensionId ~= first.characterDimensionId)
 end)
 
+test("Ogrim Ingenuity series count observed procs and only applied refunds", function()
+  local cases = {
+    { result = { concentrationSpent = 323, hasIngenuityProc = true, ingenuityRefund = 162 },
+      proc = 1, procCoverage = 1, refund = 162, refundCoverage = 1 },
+    { result = { concentrationSpent = 323, hasIngenuityProc = false, ingenuityRefund = 162 },
+      proc = 0, procCoverage = 1, refund = 0, refundCoverage = 1 },
+    { result = { hasIngenuityProc = false },
+      proc = 0, procCoverage = 1, refund = 0, refundCoverage = 1 },
+    { result = { hasIngenuityProc = true },
+      proc = 1, procCoverage = 1, refundCoverage = 0 },
+    { result = { ingenuityRefund = 162 }, procCoverage = 0, refundCoverage = 0 },
+    { result = {}, procCoverage = 0, refundCoverage = 0 },
+  }
+  local combined, clock = newLedger()
+  for _, case in ipairs(cases) do
+    local ledger = newLedger()
+    local craft = assert(ledger:RecordResult(case.result))
+    local row = ledger.database.craftSeries[1]
+    assert(row.ingenuityProcCount == case.proc and row.ingenuityProcCountObservedCount == case.procCoverage)
+    assert(row.ingenuityRefund == case.refund and row.ingenuityRefundObservedCount == case.refundCoverage)
+    assert(craft.ingenuityRefund == case.result.ingenuityRefund)
+    assert(craft.concentrationSpent == case.result.concentrationSpent)
+    assert(combined:RecordResult(case.result))
+  end
+  local row = combined.database.craftSeries[1]
+  assert(row.craftCount == 6 and row.concentrationSpent == 646)
+  assert(row.ingenuityProcCount == 2 and row.ingenuityProcCountObservedCount == 4)
+  assert(row.ingenuityRefund == 162 and row.ingenuityRefundObservedCount == 3)
+  local loaded = assert(Ledger.New(combined.database, clock)).database.craftSeries[1]
+  assert(loaded.ingenuityRefund == 162 and loaded.ingenuityRefundObservedCount == 3)
+end)
+
+test("schema 4 backfills only retained detail across mixed grains before startup pruning", function()
+  local ledger, clock = newLedger()
+  local now = clock.current
+  clock.current = now - 100 * 86400
+  assert(ledger:SubmitCraft(12, 3, false))
+  assert(ledger:RecordResult({ quantity = 10, hasIngenuityProc = true, ingenuityRefund = 999 }))
+  assert(ledger:RecordResult({ quantity = 2, multicraft = 0,
+    concentrationSpent = 323, hasIngenuityProc = true, ingenuityRefund = 162 }))
+  assert(ledger:RecordResult({ quantity = 3, hasIngenuityProc = false, ingenuityRefund = 162 }))
+  clock.current = now - 99 * 86400
+  assert(ledger:RecordResult({ quantity = 8, hasIngenuityProc = false }))
+  clock.current = now
+  assert(ledger:SubmitCraft(13, 1, false))
+  assert(ledger:RecordResult({ quantity = 4, hasIngenuityProc = true }))
+  ledger:CreateSession({})
+  assert(ledger:SubmitCraft(13, 1, false))
+  assert(ledger:RecordResult({ quantity = 5, hasIngenuityProc = false }))
+  assert(ledger:RecordResult({ quantity = 6, hasIngenuityProc = true, ingenuityRefund = 5 }))
+  ledger:CreateSession({ characterGUID = "Player-Other" })
+  assert(ledger:SubmitCraft(13, 1, false))
+  assert(ledger:RecordResult({ quantity = 7, hasIngenuityProc = true, ingenuityRefund = 7 }))
+  local legacy = schemaFour(ledger.database)
+  table.remove(legacy.crafts, 4)
+  table.remove(legacy.crafts, 1)
+  local migrated = assert(Ledger.New(legacy, clock))
+  assert(legacy.schemaVersion == 4 and #legacy.crafts == 6)
+  assert(migrated.database.schemaVersion == 5 and #migrated.database.crafts == 4)
+  assert(#migrated.database.craftSeries == 6)
+  local expected = {
+    { proc = 1, procCoverage = 2, refund = 162, refundCoverage = 2 },
+    { procCoverage = 0, refundCoverage = 0 },
+    { proc = 1, procCoverage = 1, refundCoverage = 0 },
+    { proc = 0, procCoverage = 1, refund = 0, refundCoverage = 1 },
+    { proc = 1, procCoverage = 1, refund = 5, refundCoverage = 1 },
+    { proc = 1, procCoverage = 1, refund = 7, refundCoverage = 1 },
+  }
+  local reloaded = assert(Ledger.New(migrated.database, clock))
+  for index, old in ipairs(legacy.craftSeries) do
+    assert(old.ingenuityProcCountObservedCount == nil and old.ingenuityRefundObservedCount == nil)
+    for _, data in ipairs({ migrated.database, reloaded.database }) do
+      local row, want = data.craftSeries[index], expected[index]
+      for field, value in pairs(old) do assert(row[field] == value, field) end
+      assert(row.ingenuityProcCount == want.proc and row.ingenuityProcCountObservedCount == want.procCoverage)
+      assert(row.ingenuityRefund == want.refund and row.ingenuityRefundObservedCount == want.refundCoverage)
+    end
+  end
+  reloaded:CreateSession({})
+  assert(reloaded:RecordResult({ hasIngenuityProc = false, ingenuityRefund = 100 }))
+  local row = reloaded.database.craftSeries[5]
+  assert(row.craftCount == 2 and row.ingenuityProcCount == 1 and row.ingenuityProcCountObservedCount == 2)
+  assert(row.ingenuityRefund == 5 and row.ingenuityRefundObservedCount == 2)
+end)
+
+test("schema 4 with all detail pruned leaves new measures unknown", function()
+  local ledger, clock = newLedger()
+  assert(ledger:RecordResult({ quantity = 2, hasIngenuityProc = false, ingenuityRefund = 162 }))
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  assert(#ledger.database.crafts == 0)
+  local migrated = assert(Ledger.New(schemaFour(ledger.database), clock))
+  local row = migrated.database.craftSeries[1]
+  assert(row.craftCount == 1 and row.outputQuantity == 2 and row.outputQuantityObservedCount == 1)
+  assert(row.ingenuityProcCount == nil and row.ingenuityProcCountObservedCount == 0)
+  assert(row.ingenuityRefund == nil and row.ingenuityRefundObservedCount == 0)
+end)
+
+test("schema 4 validates old series and rejects unexpected new metrics before backfill", function()
+  local mutations = {
+    function(row) row.outputQuantityObservedCount = nil end,
+    function(row) row.outputQuantity = nil end,
+    function(row) row.concentrationSpent = 0 end,
+    function(row) row.craftCount = 0 end,
+    function(row) row.ingenuityProcCount = 0 end,
+    function(row) row.ingenuityProcCountObservedCount = 0 end,
+    function(row) row.ingenuityRefund = 0 end,
+    function(row) row.ingenuityRefundObservedCount = 0 end,
+  }
+  for _, mutate in ipairs(mutations) do
+    local ledger, clock = newLedger()
+    assert(ledger:RecordResult({ quantity = 1, hasIngenuityProc = true, ingenuityRefund = 162 }))
+    local data = schemaFour(ledger.database)
+    local row = data.craftSeries[1]
+    mutate(row)
+    clock.current = clock.current + 61 * 86400
+    local refused, reason = Ledger.New(data, clock)
+    assert(refused == nil and reason:find("series", 1, true))
+    assert(data.schemaVersion == 4 and data.craftSeries[1] == row and #data.crafts == 1)
+    assert(row.ingenuityProcCount ~= 1 and row.ingenuityRefund ~= 162)
+  end
+end)
+
+test("schema 4 rejects retained detail missing its grain or exceeding its count atomically", function()
+  for _, mutation in ipairs({ "missing", "excess" }) do
+    local ledger, clock = newLedger()
+    assert(ledger:RecordResult({ hasIngenuityProc = true, ingenuityRefund = 162 }))
+    assert(ledger:RecordResult({}))
+    ledger:CreateSession({})
+    assert(ledger:RecordResult({}))
+    local data = schemaFour(ledger.database)
+    if mutation == "missing" then
+      table.remove(data.craftSeries, 1)
+    else
+      data.craftSeries[1].craftCount = 1
+      data.craftSeries[2].craftCount = 2
+    end
+    clock.current = clock.current + 61 * 86400
+    local refused, reason = Ledger.New(data, clock)
+    assert(refused == nil and reason:find("retained", 1, true))
+    assert(data.schemaVersion == 4 and #data.crafts == 3 and data.nextCraftId == 4)
+    for _, row in ipairs(data.craftSeries) do
+      assert(row.ingenuityProcCountObservedCount == nil and row.ingenuityRefundObservedCount == nil)
+    end
+  end
+end)
+
 test("schema 3 backfills all surviving history before 60 day pruning exactly once", function()
   local ledger, clock = newLedger()
   local originalTime = clock.current
   for _, age in ipairs({ 200, 61, 60, 0 }) do
     clock.current = originalTime - age * 86400
-    assert(ledger:RecordResult({ quantity = age, multicraft = 0 }))
+    assert(ledger:RecordResult({ quantity = age, multicraft = 0,
+      hasIngenuityProc = true, ingenuityRefund = 162 }))
   end
   clock.current = originalTime
   local legacy = ledger.database
   legacy.schemaVersion, legacy.craftSeries, legacy.retentionDays = 3, nil, 180
   local migrated = assert(Ledger.New(legacy, clock))
-  assert(migrated.database.schemaVersion == 4 and migrated.database.retentionDays == 60)
+  assert(migrated.database.schemaVersion == 5 and migrated.database.retentionDays == 60)
   assert(#migrated.database.crafts == 2 and #migrated.database.craftSeries == 4)
   assert(migrated.database.craftSeries[1].outputQuantity == 200)
   assert(migrated.database.craftSeries[2].outputQuantity == 61)
@@ -950,6 +1120,8 @@ test("schema 3 backfills all surviving history before 60 day pruning exactly onc
     assert(row.craftCount == 1 and row.outputQuantityObservedCount == 1)
     assert(row.multicraftBonus == 0 and row.multicraftBonusObservedCount == 1)
     assert(row.concentrationSpent == nil and row.concentrationSpentObservedCount == 0)
+    assert(row.ingenuityProcCount == 1 and row.ingenuityProcCountObservedCount == 1)
+    assert(row.ingenuityRefund == 162 and row.ingenuityRefundObservedCount == 1)
   end
   reloaded:CreateSession({})
   assert(reloaded:RecordResult({ quantity = 2 }))
@@ -1039,7 +1211,7 @@ test("series validation rejects malformed grains references coverage and sums at
     mutate(ledger.database)
     clock.current = clock.current + 61 * 86400
     assert(Ledger.New(ledger.database, clock) == nil, tostring(index))
-    assert(#ledger.database.crafts == 1 and ledger.database.schemaVersion == 4)
+    assert(#ledger.database.crafts == 1 and ledger.database.schemaVersion == 5)
   end
 end)
 
@@ -1062,13 +1234,96 @@ test("series overflow cannot partially commit facts or increment aggregate cover
   assert(ledger.database.schemaVersion == 3 and ledger.database.craftSeries == nil)
 end)
 
+test("schema 5 validates Ingenuity coverage sums and cross-metric constraints atomically", function()
+  local mutations = {
+    function(row) row.ingenuityProcCount = -1 end,
+    function(row) row.ingenuityProcCount = 0.5 end,
+    function(row) row.ingenuityProcCount = 2 end,
+    function(row)
+      row.ingenuityRefundObservedCount = 2
+      row.craftCount = 2
+    end,
+  }
+  for _, metric in ipairs({ "ingenuityProcCount", "ingenuityRefund" }) do
+    local field = metric
+    for _, value in ipairs({ -1, 0, 0.5, 2, "1", false, math.huge, 0 / 0 }) do
+      local invalid = value
+      mutations[#mutations + 1] = function(row) row[field .. "ObservedCount"] = invalid end
+    end
+    for _, value in ipairs({ "1", false, math.huge, -math.huge, 0 / 0 }) do
+      local invalid = value
+      mutations[#mutations + 1] = function(row) row[field] = invalid end
+    end
+    mutations[#mutations + 1] = function(row) row[field] = nil end
+    mutations[#mutations + 1] = function(row) row[field .. "ObservedCount"] = nil end
+  end
+  for index, mutate in ipairs(mutations) do
+    local ledger, clock = newLedger()
+    assert(ledger:RecordResult({ hasIngenuityProc = true, ingenuityRefund = 162 }))
+    local data = ledger.database
+    mutate(data.craftSeries[1])
+    clock.current = clock.current + 61 * 86400
+    local refused, reason = Ledger.New(data, clock)
+    assert(refused == nil and type(reason) == "string", tostring(index))
+    assert(data.schemaVersion == 5 and #data.crafts == 1 and data.nextCraftId == 2)
+  end
+  for _, metric in ipairs({ "ingenuityProcCount", "ingenuityRefund" }) do
+    local ledger, clock = newLedger()
+    assert(ledger:RecordResult({}))
+    ledger.database.craftSeries[1][metric] = 0
+    assert(Ledger.New(ledger.database, clock) == nil)
+  end
+end)
+
+test("Ingenuity refund overflow leaves facts coverage indexes request and callback uncommitted", function()
+  local ledger, clock = newLedger()
+  assert(ledger:SubmitCraft(12, 2, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 100 } },
+  }))
+  assert(ledger:RecordResult({ operationID = 1, quantity = 1, concentrationSpent = 323,
+    hasIngenuityProc = true, ingenuityRefund = 1e308, resourcesReturned = {} }))
+  local called = false
+  ledger.onCraftCommitted = function() called = true end
+  local rejected, reason = ledger:RecordResult({ operationID = 2, quantity = 1, concentrationSpent = 323,
+    hasIngenuityProc = true, ingenuityRefund = 1e308, resourcesReturned = {} })
+  assert(rejected == nil and reason:find("overflow", 1, true))
+  assert(not called and #ledger.database.crafts == 1 and ledger.database.nextCraftId == 2)
+  assert(#ledger.database.reagents == 1 and #ledger.craftIds == 1 and ledger.craftById[2] == nil)
+  assert(#ledger.craftIdsByRecipe[12] == 1 and ledger.operationIndex[ledger.currentSessionId][2] == nil)
+  assert(ledger.pendingRequest.remaining == 1)
+  local row = ledger.database.craftSeries[1]
+  assert(row.craftCount == 1 and row.outputQuantity == 1 and row.outputQuantityObservedCount == 1)
+  assert(row.concentrationSpent == 323 and row.concentrationSpentObservedCount == 1)
+  assert(row.ingenuityProcCount == 1 and row.ingenuityProcCountObservedCount == 1)
+  assert(row.ingenuityRefund == 1e308 and row.ingenuityRefundObservedCount == 1)
+  assert(Ledger.New(ledger.database, clock))
+  assert(ledger:RecordResult({ operationID = 2, hasIngenuityProc = false, ingenuityRefund = 1e308 }))
+  assert(row.craftCount == 2 and row.ingenuityRefund == 1e308 and row.ingenuityRefundObservedCount == 2)
+end)
+
+test("Ingenuity overflow during schema 4 backfill cannot mutate legacy saved data", function()
+  local ledger, clock = newLedger()
+  assert(ledger:RecordResult({ quantity = 1, hasIngenuityProc = true, ingenuityRefund = 1e308 }))
+  assert(ledger:RecordResult({ quantity = 2, hasIngenuityProc = false, ingenuityRefund = 1e308 }))
+  local data = schemaFour(ledger.database)
+  data.crafts[2].hasIngenuityProc = true
+  clock.current = clock.current + 61 * 86400
+  local refused, reason = Ledger.New(data, clock)
+  assert(refused == nil and reason:find("overflow", 1, true))
+  assert(data.schemaVersion == 4 and #data.crafts == 2 and data.nextCraftId == 3)
+  local row = data.craftSeries[1]
+  assert(row.craftCount == 2 and row.outputQuantity == 3 and row.outputQuantityObservedCount == 2)
+  assert(row.ingenuityProcCount == nil and row.ingenuityProcCountObservedCount == nil)
+  assert(row.ingenuityRefund == nil and row.ingenuityRefundObservedCount == nil)
+end)
+
 test("persisted craft and request measurements reject malformed values before migration or pruning", function()
   local collections = {
     crafts = { "timestamp", "gameOperationId", "outputQuality", "outputItemLevel", "outputQuantity",
       "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" },
     requests = { "timestamp", "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" },
   }
-  for _, version in ipairs({ 3, 4 }) do
+  for _, version in ipairs({ 3, 4, 5 }) do
     for collection, fields in pairs(collections) do
       for _, field in ipairs(fields) do
         for _, value in ipairs({ "0", false, true, {}, math.huge, -math.huge, 0 / 0 }) do
@@ -1078,6 +1333,7 @@ test("persisted craft and request measurements reject malformed values before mi
           local data = ledger.database
           data.schemaVersion = version
           if version == 3 then data.craftSeries = nil end
+          if version == 4 then schemaFour(data) end
           local series = data.craftSeries
           data[collection][1][field] = value
           clock.current = clock.current + 61 * 86400
@@ -1094,7 +1350,7 @@ test("persisted craft and request measurements reject malformed values before mi
 end)
 
 test("persisted craft and request booleans reject non-booleans without coercion", function()
-  for _, version in ipairs({ 3, 4 }) do
+  for _, version in ipairs({ 3, 4, 5 }) do
     for _, target in ipairs({ { "crafts", "hasIngenuityProc" }, { "requests", "useConcentration" } }) do
       for _, value in ipairs({ 0, 1, "false", "true", {}, math.huge, 0 / 0 }) do
         local ledger, clock = newLedger()
@@ -1103,6 +1359,7 @@ test("persisted craft and request booleans reject non-booleans without coercion"
         local data = ledger.database
         data.schemaVersion = version
         if version == 3 then data.craftSeries = nil end
+        if version == 4 then schemaFour(data) end
         local series = data.craftSeries
         data[target[1]][1][target[2]] = value
         assert(Ledger.New(data, clock) == nil, target[2])
@@ -1113,7 +1370,7 @@ test("persisted craft and request booleans reject non-booleans without coercion"
 end)
 
 test("persisted finite measurements and optional booleans preserve existing value semantics", function()
-  for _, version in ipairs({ 3, 4 }) do
+  for _, version in ipairs({ 3, 4, 5 }) do
     for _, value in ipairs({ 0, -1.5, 2.5 }) do
       for _, flag in ipairs({ false, true, "absent" }) do
         local ledger, clock = newLedger()
@@ -1126,6 +1383,7 @@ test("persisted finite measurements and optional booleans preserve existing valu
         assert(ledger:RecordResult(result))
         ledger.database.schemaVersion = version
         if version == 3 then ledger.database.craftSeries = nil end
+        if version == 4 then schemaFour(ledger.database) end
         local loaded = assert(Ledger.New(ledger.database, clock))
         for _, field in ipairs({ "gameOperationId", "outputQuality", "outputItemLevel", "outputQuantity",
           "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" }) do
@@ -1136,6 +1394,17 @@ test("persisted finite measurements and optional booleans preserve existing valu
         end
         assert(loaded.database.crafts[1].hasIngenuityProc == result.hasIngenuityProc)
         assert(loaded.database.requests[1].useConcentration == false)
+        local row = loaded.database.craftSeries[1]
+        if flag == true then
+          assert(row.ingenuityProcCount == 1 and row.ingenuityRefund == value)
+          assert(row.ingenuityProcCountObservedCount == 1 and row.ingenuityRefundObservedCount == 1)
+        elseif flag == false then
+          assert(row.ingenuityProcCount == 0 and row.ingenuityRefund == 0)
+          assert(row.ingenuityProcCountObservedCount == 1 and row.ingenuityRefundObservedCount == 1)
+        else
+          assert(row.ingenuityProcCount == nil and row.ingenuityRefund == nil)
+          assert(row.ingenuityProcCountObservedCount == 0 and row.ingenuityRefundObservedCount == 0)
+        end
       end
     end
   end

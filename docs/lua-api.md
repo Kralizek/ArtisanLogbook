@@ -217,6 +217,8 @@ details never removes these daily rows.
   outputQuantity = 12, outputQuantityObservedCount = 3,
   multicraftBonus = 0, multicraftBonusObservedCount = 2,
   concentrationSpentObservedCount = 0, -- concentrationSpent absent, not zero
+  ingenuityProcCount = 1, ingenuityProcCountObservedCount = 3,
+  ingenuityRefund = 162, ingenuityRefundObservedCount = 2, -- APPLIED refund only
 }
 ```
 
@@ -233,8 +235,30 @@ was observed. Its corresponding `...ObservedCount` is always present, from zero
 through `craftCount`. A sum is absent when coverage is zero; observed zero produces
 a present zero sum and positive coverage. A sum covers all crafts only when its
 observed count equals `craftCount`; missing evidence must not be interpreted as
-zero. There are no reagent totals, Ingenuity measures, output-item grouping,
+zero. There are no reagent totals, output-item grouping,
 request counts, or derived net/profit measures.
+
+Verified Ingenuity adds two metrics to this same series shape:
+
+- `ingenuityProcCount` counts true proc flags; false contributes zero. Its
+  `ingenuityProcCountObservedCount` counts known boolean flags, not just procs.
+- `ingenuityRefund` sums **applied refund only**, unlike the raw per-craft field.
+  True adds the observed refund; false contributes zero even when the raw field
+  is positive or absent. An absent flag contributes no value or coverage. True
+  with no refund amount contributes to proc coverage but not refund coverage.
+  `ingenuityRefundObservedCount` counts crafts with a known applied amount.
+
+Both metrics retain absent-sum/zero-coverage semantics. The Ogrim export's true
+proc, spend 323, refund 162 contributes one proc and 162 applied refund; a
+non-proc result with raw refund 93 contributes zero applied refund. The factual
+`GetCraft`/`GetCrafts` refund fields remain untouched. No Resourcefulness rollup
+is added.
+
+Upgrading existing daily history backfills these new metrics only from available
+detailed facts, without changing prior craft counts or sums. Older aggregate-only
+history retains zero coverage and absent sums for the new metrics. Thus partial
+coverage is possible even for a previously complete day. Reload does not count
+the same detailed facts again.
 
 The shared dimensional filter has the same OR-within/AND-across semantics.
 For this API alone, supplied `time.from`/`time.to` **must be UTC-midnight-aligned**

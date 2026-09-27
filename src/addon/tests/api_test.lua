@@ -524,7 +524,9 @@ test("series use UTC days and only the specified additive metrics with observati
   assert(row.concentrationSpent == 0 and row.concentrationSpentObservedCount == 1)
   assert(row.recipe.id == 101 and row.character.name == "A" and row.realm.name == "Realm 1")
   assert(row.expansion.key == "midnight" and row.profession.skillLineId == 171)
-  assert(row.reagents == nil and row.ingenuityRefund == nil and row.hasIngenuityProc == nil)
+  assert(row.reagents == nil and row.hasIngenuityProc == nil)
+  assert(row.ingenuityRefund == 0 and row.ingenuityRefundObservedCount == 1)
+  assert(row.ingenuityProcCount == 0 and row.ingenuityProcCountObservedCount == 1)
   assert(row.id == nil and row.recipeDimensionId == nil and row.characterDimensionId == nil)
   local absent = api.GetCraftSeries({ recipes = { 104 } }).series[1]
   assert(absent.outputQuantity == nil and absent.outputQuantityObservedCount == 0)
@@ -636,6 +638,75 @@ test("unknown series identities are not inferred and durable metadata enrichment
     { name = "Enriched", professionDimensionId = profession, expansionDimensionId = expansion }))
   local row = api.GetCraftSeries({ expansions = { "known" }, professions = { 171 } }).series[1]
   assert(row.recipe.name == "Enriched" and row.bucketStart == 0 and row.craftCount == 1)
+end)
+
+test("Ogrim-verified series refund is applied only with observed proc evidence", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  -- Measurements supplied from the Ogrim export; no unprovided trace metadata is inferred.
+  local observations = {
+    { hasIngenuityProc = true, concentrationSpent = 323, ingenuityRefund = 162 },
+    { hasIngenuityProc = false, concentrationSpent = 185, ingenuityRefund = 93 },
+    { hasIngenuityProc = false },
+    { hasIngenuityProc = true },
+    { ingenuityRefund = 80 },
+  }
+  for _, result in ipairs(observations) do
+    ledger:BeginCraft(101)
+    result.operationID = ledger.database.nextCraftId
+    assert(ledger:RecordResult(result))
+  end
+  local series = api.GetCraftSeries().series[1]
+  assert(series.craftCount == 5 and series.ingenuityProcCount == 2)
+  assert(series.ingenuityProcCountObservedCount == 4)
+  assert(series.ingenuityRefund == 162 and series.ingenuityRefundObservedCount == 3)
+  assert(series.concentrationSpent == 508 and series.concentrationSpentObservedCount == 2)
+  assert(api.GetCraft(1).ingenuityRefund == 162)
+  assert(api.GetCraft(2).ingenuityRefund == 93 and api.GetCraft(2).hasIngenuityProc == false)
+  assert(api.GetCraft(5).ingenuityRefund == 80 and api.GetCraft(5).hasIngenuityProc == nil)
+  series.ingenuityRefund = 999
+  assert(api.GetCraftSeries().series[1].ingenuityRefund == 162)
+  local before = api.GetCraftSeries()
+  clock.current = clock.current + 61 * 86400
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  equal(api.GetCraftSeries(), before)
+  equal(api.GetCrafts(), { crafts = {} })
+end)
+
+test("series unknown Ingenuity coverage is distinct from observed zero", function()
+  local ledger, api = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:RecordResult({ ingenuityRefund = 162 }))
+  local row = api.GetCraftSeries().series[1]
+  assert(row.ingenuityProcCount == nil and row.ingenuityProcCountObservedCount == 0)
+  assert(row.ingenuityRefund == nil and row.ingenuityRefundObservedCount == 0)
+  assert(ledger:RecordResult({ hasIngenuityProc = true, ingenuityRefund = 0 }))
+  row = api.GetCraftSeries().series[1]
+  assert(row.ingenuityProcCount == 1 and row.ingenuityProcCountObservedCount == 1)
+  assert(row.ingenuityRefund == 0 and row.ingenuityRefundObservedCount == 1)
+end)
+
+test("upgraded aggregate-only history keeps unknown Ingenuity coverage in the public series", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:RecordResult({ hasIngenuityProc = true, concentrationSpent = 323, ingenuityRefund = 162 }))
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  assert(#ledger.database.crafts == 0)
+  ledger.database.schemaVersion = 4
+  for _, row in ipairs(ledger.database.craftSeries) do
+    row.ingenuityProcCount, row.ingenuityProcCountObservedCount = nil, nil
+    row.ingenuityRefund, row.ingenuityRefundObservedCount = nil, nil
+  end
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  local row = api.GetCraftSeries().series[1]
+  assert(row.craftCount == 1 and row.concentrationSpent == 323)
+  assert(row.ingenuityProcCount == nil and row.ingenuityProcCountObservedCount == 0)
+  assert(row.ingenuityRefund == nil and row.ingenuityRefundObservedCount == 0)
+  assert(#api.GetCrafts().crafts == 0)
+  local expected = api.GetCraftSeries()
+  addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
+  equal(api.GetCraftSeries(), expected)
 end)
 
 print(string.format("%d API tests passed", passed))
