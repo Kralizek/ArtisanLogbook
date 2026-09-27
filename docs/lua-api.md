@@ -254,11 +254,13 @@ non-proc result with raw refund 93 contributes zero applied refund. The factual
 `GetCraft`/`GetCrafts` refund fields remain untouched. No Resourcefulness rollup
 is added.
 
-Upgrading existing daily history backfills these new metrics only from available
-detailed facts, without changing prior craft counts or sums. Older aggregate-only
-history retains zero coverage and absent sums for the new metrics. Thus partial
-coverage is possible even for a previously complete day. Reload does not count
-the same detailed facts again.
+These metrics are captured continuously in the first supported persistence
+contract (schema 1 with its format identity marker). Partial coverage reflects
+unknown observations, not invented zeros. Reload preserves coverage even when
+detailed facts have expired; it never replays facts into aggregates.
+Experimental prerelease formats are not supported upgrade sources; development
+users may need to reset SavedVariables. See [storage-ledger.md](storage-ledger.md)
+for the format discriminator and reset guidance. The public Lua API is unchanged.
 
 The shared dimensional filter has the same OR-within/AND-across semantics.
 For this API alone, supplied `time.from`/`time.to` **must be UTC-midnight-aligned**
@@ -269,11 +271,11 @@ may be absent; equal bounds return no rows. UTC buckets are computed from the
 observed timestamp, independent of locale, daylight saving, or login time.
 `GetCrafts` and factual facets continue to accept arbitrary timestamp bounds.
 
-Migration initializes series once from every still-persisted craft **before**
-the new startup retention pass. Previously pruned history is unrecoverable and
-is not invented. Per-metric coverage describes observed facts within a stored
+Series are accumulated when each craft commits, never manufactured at startup
+or when detail expires. Previously unrecorded history is not invented.
+Per-metric coverage describes observed facts within a stored
 grain, not a guarantee that the addon observed every craft ever made that day.
-Successful future commits update series before callbacks; querying from a
+Successful commits update series before callbacks; querying from a
 callback sees the new counts. Queries return copies and cannot mutate storage.
 
 ### Facets

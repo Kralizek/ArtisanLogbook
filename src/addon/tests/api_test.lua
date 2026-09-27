@@ -686,18 +686,14 @@ test("series unknown Ingenuity coverage is distinct from observed zero", functio
   assert(row.ingenuityRefund == 0 and row.ingenuityRefundObservedCount == 1)
 end)
 
-test("upgraded aggregate-only history keeps unknown Ingenuity coverage in the public series", function()
+test("supported aggregate-only history reloads without synthesizing unknown Ingenuity coverage", function()
   local ledger, api, clock, addon = newLedger()
   session(ledger, "A", 1)
-  assert(ledger:RecordResult({ hasIngenuityProc = true, concentrationSpent = 323, ingenuityRefund = 162 }))
+  assert(ledger:RecordResult({ concentrationSpent = 323, ingenuityRefund = 162 }))
   clock.current = clock.current + 61 * 86400
   ledger:Prune(clock.current)
   assert(#ledger.database.crafts == 0)
-  ledger.database.schemaVersion = 4
-  for _, row in ipairs(ledger.database.craftSeries) do
-    row.ingenuityProcCount, row.ingenuityProcCountObservedCount = nil, nil
-    row.ingenuityRefund, row.ingenuityRefundObservedCount = nil, nil
-  end
+  assert(ledger.database.schemaVersion == 1)
   addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
   local row = api.GetCraftSeries().series[1]
   assert(row.craftCount == 1 and row.concentrationSpent == 323)

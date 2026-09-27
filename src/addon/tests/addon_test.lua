@@ -98,6 +98,8 @@ assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
+assert(addon.ledger.database.schemaVersion == 1)
+assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
 assert(addon.window and not addon.window:IsShown())
@@ -201,6 +203,13 @@ assert(#saved.crafts == 1)
 
 local invalid = { schemaVersion = 999, marker = "preserved" }
 assert(reload(invalid).ledger == nil and environment.ArtisanLogbookDB == invalid)
+for version = 0, 5 do
+  local experimental = { schemaVersion = version, marker = "experimental" }
+  local rejected = reload(experimental)
+  assert(rejected.ledger == nil and environment.ArtisanLogbookDB == experimental)
+  assert(experimental.schemaVersion == version and experimental.marker == "experimental")
+  assert(rejected.ledgerError:find("unsupported", 1, true))
+end
 local missing, missingReason = environment.ArtisanLogbookAPI.GetCrafts()
 assert(missing == nil and missingReason == "not-ready")
 assert(invalid.marker == "preserved")

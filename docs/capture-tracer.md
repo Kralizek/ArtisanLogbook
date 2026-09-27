@@ -252,7 +252,7 @@ left untouched until initialization succeeds. Unsupported schema/export versions
 or invalid top-level shapes are refused without overwriting the existing data.
 Export/back up the SavedVariables file outside the game before resetting an
 incompatible debug database. The durable ledger has its own versioned schema
-and migration path; debug records still do not silently become ledger entries.
+and load contract; debug records still do not silently become ledger entries.
 
 ## Source Findings, Not Runtime Verification
 
@@ -363,12 +363,13 @@ produce multiple result operations, or fewer results after a queued failure.
 Quote concentration cost and actual spend may differ by one; `useConcentration`
 is request intent, not spend. `resourcesReturned` item IDs matched selected
 personal-craft inputs, but only unambiguous item mappings can be attributed.
-The ledger (currently schema 5) captures a personal submission snapshot and
-links only reliably correlated successful result callbacks. Older schema 1
-return-only rows remain partial. `operationID` is not assumed to identify a
+The ledger (first supported schema 1, with its format identity marker) captures a
+personal submission snapshot and links only reliably correlated successful
+result callbacks. Return-only rows remain partial. `operationID` is not assumed to identify a
 request, and no nearest-event/time-window correlation is used. Order/recraft
 semantics and target-item GUID conversion still require live evidence; see
-`storage-ledger.md` for the precise storage and migration contract.
+`storage-ledger.md` for the precise storage contract and experimental-format reset
+requirements. The trace schema's own migration is independent and unchanged.
 
 ### Controlled live traces for remaining gaps
 

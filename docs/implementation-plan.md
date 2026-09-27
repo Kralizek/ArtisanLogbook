@@ -39,7 +39,7 @@ documentation can coexist. See
    capture. Preserve separate Core, Capture, Storage, Integrations, Flavors, and
    UI responsibilities without adding empty speculative modules.
 3. **Durable storage (issue #4):** evidence-backed craft/reagent schema,
-   dimension registry, monotonic identities, independent versioning, migrations,
+   dimension registry, monotonic identities, independent versioning, validated loading,
    and safe retention. Implemented; see [storage-ledger.md](storage-ledger.md).
 4. **Additional Retail capture:** implement pre-craft facts, verified reagent
   allocation, and order/recraft context as evidence becomes available. Successful
@@ -73,6 +73,14 @@ Tests and documentation accompany each slice rather than being deferred.
 - Persistence schema, public Lua API, portable export contract, and addon
   version are separate boundaries. Monotonic craft IDs are never reused,
   including after prune/clear. Dimension IDs are also never recycled.
+- Before the first supported release, squish the experimental ledger formats
+  into **schema 1**, distinguished by `schemaIdentity = "ArtisanLogbookLedger"`.
+  Prerelease schemas 0–5 (including the experimental schema 1) are not supported
+  upgrade sources. Remove their migration/backfill chain rather than guessing
+  historical grain from enriched dimensions. Development users may need to back
+  up and reset SavedVariables; unsupported data is refused without mutation.
+  Keep current atomic capture, finite measurement checks, aggregate consistency,
+  and exact-integer counter exhaustion safeguards. See [storage-ledger.md](storage-ledger.md).
 - Updated by the issue #5 runtime indexing/retention decision: default
   `retentionDays = 60`, with no `maxCrafts` threshold. Maintain durable daily
   craft-count/output/Multicraft/concentration and verified Ingenuity proc/applied-refund
@@ -175,14 +183,14 @@ their databases, accounting, inventories, optimizers, or other responsibilities.
 ## Validation and Documentation
 
 Use Lua 5.1-compatible tests with mocked WoW boundaries; turn reviewed live
-traces into clearly attributed fixtures. Verify reloads, migrations, time-based
+traces into clearly attributed fixtures. Verify reloads, unsupported-format refusal, time-based
 retention, dimension integrity, unknowns, callback correlation, API
 filtering/paging/facets, and provider failure modes as the relevant slices are introduced.
 Portable-export round trips belong to the later export-format work.
 In-game traces remain the authority, not mocks or source declarations.
 
 Document the verified event contract, supported-field/capability matrix, API
-limitations, chosen architecture, storage schema, migration behavior, and
+limitations, chosen architecture, storage schema, supported-format loading, and
 in-game checklist near the addon or under `docs/`. Keep the root README minimal.
 Each implementation PR should explain its completed slice, evidence, tests,
 limitations, divergences from the issue, and what remains behind the gate.

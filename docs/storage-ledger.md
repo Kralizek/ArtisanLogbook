@@ -12,11 +12,26 @@ The stable consumer-facing Lua API is documented separately in
 `ArtisanLogbookDB` is account-wide SavedVariables for durable facts.
 `ArtisanLogbookTraceDB` remains the independent bounded debug trace database.
 The TOC addon's version is recorded on each session; `schemaVersion` belongs to
-the ledger and migrates independently. The debug export version in
+the ledger and is versioned independently. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-The current durable schema is version 5:
+**Schema 1 is the first supported persistence contract**, identified by both
+`schemaVersion = 1` and `schemaIdentity = "ArtisanLogbookLedger"`.
+The identity marker distinguishes it from experimental builds that also used
+the number 1. Development/prerelease schemas 0–5 were experimental and are **not
+supported upgrade sources**. There is no migration or historical backfill path
+from them. Changing the version number or adding the marker manually is not a
+supported conversion.
+
+Users of development builds may need to reset SavedVariables. With WoW fully
+closed, back up the account's `ArtisanLogbook.lua` SavedVariables file before
+resetting/removing `ArtisanLogbookDB` (and any backup WoW might restore).
+The addon refuses unsupported data with a clear reset-required error rather
+than deleting or rewriting it automatically. Resetting the ledger loses its
+experimental history; the independent diagnostic trace is not imported.
+
+The supported schema contains:
 
 - `crafts` stores one row per observed Retail result callback, with a monotonic
   local `id`, timestamp, optional request ID, session/recipe/output dimension IDs, raw game
@@ -177,7 +192,7 @@ result may create several reagent rows. A return attaches to a selected input
 only if exactly one allocation uses that item ID. With duplicate allocations
 of the same item, the return stays in a separate return-only row and the input
 rows have unknown return quantities. Net consumption can be derived only for
-unambiguous rows with both quantities. Old schema 1 return-only rows stay
+unambiguous rows with both quantities. Return-only rows remain
 partial. Reagent item expansion comes only from its own item dimension, not
 from the recipe consuming it. No separate Resourcefulness fact or derived
 aggregate is persisted.
@@ -190,11 +205,11 @@ verified. The optional
 verify its applicability. Other
 flavors receive an empty capability map and do not acquire Retail-only values.
 
-## Retention and Migration
+## Retention and Supported-Schema Loading
 
 The default is `retentionDays = 60`, with **no fixed craft-count threshold**.
 The issue #5 indexing/retention decision supersedes the original 50,000-craft cap.
-Pruning runs once when the ledger loads, after migration/reference validation and
+Pruning runs once when the ledger loads, after format/reference validation and
 **before runtime indexes are built**. It removes craft facts older than the age
 cutoff together with their reagent facts. Requests age out with the same cutoff
 unless a retained craft still references them; zero-result requests remain until
@@ -241,7 +256,7 @@ selection and paging behavior is described in [lua-api.md](lua-api.md).
 
 ### Durable daily aggregates
 
-Schema 4 adds `craftSeries`, a dense collection of rows keyed by `bucketStart`,
+`craftSeries` is a dense collection of rows keyed by `bucketStart`,
 optional `characterDimensionId`, and optional `recipeDimensionId`. `bucketStart`
 is `floor(craft.timestamp / 86400) * 86400` (Unix UTC midnight). Character derives
 through the craft session; unknown character/recipe references form unknown
@@ -254,14 +269,16 @@ and `concentrationSpent`. Each sum has an always-present
 `<metric>ObservedCount`: absent evidence contributes neither a value nor coverage;
 observed zero contributes coverage and a zero sum. Zero coverage requires an absent
 sum, positive coverage requires a sum, and coverage cannot exceed `craftCount`.
-Schema 5 also stores `ingenuityProcCount` and `ingenuityRefund` with
+The series also stores `ingenuityProcCount` and `ingenuityRefund` with
 `ingenuityProcCountObservedCount` and `ingenuityRefundObservedCount`. Known true/
 false flags contribute one/zero to proc count; unknown flags contribute no
 coverage. Applied refund is the observed raw amount only for true, zero for
 false (including positive potential raw refunds), and unknown for an absent flag
 or true without an amount. Raw craft refunds are unchanged. These fields follow
 the same absent-sum/zero-coverage rule. Proc count is an integer between zero and
-its coverage; refund coverage cannot exceed known-flag coverage.
+its coverage; refund coverage cannot exceed known-flag coverage and cannot be
+less than the number of observed false flags (`proc coverage - proc count`).
+If no true proc was observed, a present applied-refund sum must be zero.
 No Resourcefulness/reagent totals or derived net measurements are persisted.
 
 A runtime keyed aggregate lookup is rebuilt from these rows once at startup.
@@ -271,51 +288,36 @@ history or waits for pruning. Detail pruning never removes aggregate rows.
 Queries read this store for all days, including recent days; they never combine
 recent facts with old aggregates. The factual APIs remain detail-only.
 
-Migration from schema 3 backfills all still-persisted facts once before startup
-age pruning; a subsequent reload never replays them into the aggregate store.
-Already-pruned history cannot be recovered. Unexpected aggregate data in an old
-schema is refused rather than overwritten or double-counted. Existing reference
-validation gates backfill. Schema 4 validates aggregate collection shape, unique
-grain, UTC-day alignment, references, counts, metric coverage and finite sums.
-Migration works on a copy and cannot publish partial changes on failure.
+All measures are recorded at commit from the start of the supported contract.
+Loading never replays detailed facts into series, recomputes historical grain,
+or reconciles unknown-character rows against enriched session metadata.
+Reload preserves persisted daily rows and their coverage even after all details
+expire. Metadata still resolves through append-only dimensions, while stored
+series grain references remain unchanged.
 
-Schema 4 to 5 preserves existing daily counts and original metric sums/coverage.
-After validating legacy data, it initializes new metric coverage to zero, then
-backfills only the new metrics from every still-retained detailed fact, before
-startup pruning. It never guesses refund/proc values for previously pruned facts.
-Aggregate-only grains therefore retain unknown coverage for the new fields.
-Reloading schema 5 never repeats backfill. Unexpected new metric fields in schema 4
-are rejected rather than overwritten. Missing aggregate grains or detailed counts
-exceeding their aggregate craft count are refused atomically. Schemas before 4
-first backfill the original measures, then follow this same new-metric migration.
+Schema 1 validates aggregate collection shape, unique grain, UTC-day alignment,
+references, counts, metric coverage, finite sums, and Ingenuity consistency.
+A persisted or configured `maxCrafts` is rejected, not converted.
+The default detailed retention is 60 days; explicit positive settings are
+preserved on reload. Public APIs expose no retention setter.
 
-The old default retention setting of 180 becomes 60 during migration; other
-configured retention values are preserved. An explicitly configured 180 is
-indistinguishable from the old stored default and also becomes 60. Consumers may
-still configure a different positive retention value through the internal ledger
-settings; public APIs expose no retention setter.
+### Exact integers and exhaustion
 
-Schema 0 is explicitly migration-test scaffolding, not a released legacy addon
-format. It has the same fact/dimension/reference/counter shape as schema 1 but
-may omit retention settings. Its only migration fills nil retention settings
-and advances the version. It never infers missing counters from retained facts,
-creates missing collections, supplies measured zeroes, or repairs references.
-Even an empty retained collection cannot prove the historical next ID.
+Local IDs, monotonic counters, and counts must fit Lua's exact safe-integer range,
+up to **9,007,199,254,740,991 (2^53 − 1)**. Zero is allowed for observation counts
+but not local IDs/next-ID counters. Allocation requires room to advance the
+next-ID counter, so the maximum next-ID value is an exhausted sentinel, not
+another allocatable ID. Counts can reach the maximum but cannot increment again.
+Finite numeric measurements retain their existing signed/fractional semantics.
 
-The explicit schema 1 to 2 migration adds an empty `requests` collection and
-`nextRequestId = 1` without changing old crafts, reagents, or dimensions.
-Schema 1 data unexpectedly containing request fields is refused. Migration and
-reference validation operate together on a copy; failed validation never
-publishes or partially mutates SavedVariables.
+Exhausted counters/counts reject the operation before committing dimensions,
+facts, aggregates, or correlation changes. Multi-dimension requests/results and
+session creation check capacity for all needed new dimensions, not just the
+first. Reusing existing dimensions does not consume an ID. Pruning never resets
+counters; loading never reconstructs them from retained rows.
 
-The explicit schema 2 to 3 migration removes `maxCrafts`, preserving
-`retentionDays`, dimensions, facts, requests, and all monotonic counters. It never
-prunes based on the old count limit. The normal startup age pass still applies
-after validation; facts already removed by older versions cannot be recovered.
-Schema 3 no longer accepts a persisted or configured `maxCrafts` value.
-
-All migrations run on a deep copy inside a protected load path. Missing/invalid
-versions, newer versions, cyclic/non-serializable data, non-finite numbers,
+Loading runs on a deep copy inside a protected path. Missing/invalid format
+identity or versions, unsupported versions, cyclic/non-serializable data, non-finite numbers,
 sparse/non-array collections, duplicate IDs/keys, invalid counters, or broken
 references refuse the database before pruning or index construction. Craft
 timestamps and session references, and reagent craft/item references, are
@@ -333,10 +335,10 @@ must resolve to positive local IDs in the correct collection:
 
 The same reference checks run before live dimension creation/enrichment.
 Unsupported reference fields are refused rather than silently treated as absent.
-Bootstrap replaces `ArtisanLogbookDB` only after successful migration,
-validation, and session initialization. A failed load leaves the original
+Bootstrap replaces `ArtisanLogbookDB` only after successful
+validation and session initialization. A failed load leaves the original
 SavedVariables intact and tracing independent. A missing database creates schema
-5; the unrelated trace database is never imported. Malformed result snapshots
+1 with the required identity marker; the unrelated trace database is never imported. Malformed result snapshots
 are rejected before craft/reagent facts are committed; timestamps are never
 fabricated as zero when the clock is unavailable.
 
@@ -346,16 +348,16 @@ fabricated as zero when the clock is unavailable.
 covers basic results, concentration without Ingenuity, Multicraft,
 multi-reagent Resourcefulness, separate batch results/operation IDs, unknown
 versus zero/false, reload IDs, startup age pruning, append-only dimensions,
-ambiguous/repeated results, unsupported flavor capabilities, and migration
-success/refusal safety. Hardening tests cover every reference path for both
-versions, sparse collections, missing counters, atomic enrichment/conflicts,
+ambiguous/repeated results, unsupported flavor capabilities, and supported-format
+reload/refusal safety. Hardening tests cover every reference path,
+sparse collections, missing/exhausted counters, atomic enrichment/conflicts,
 expansion enrichment, runtime realm collisions/fallback, and deterministic
 pruning/index reconstruction. The mocked TOC test covers passive capture while
 tracing is paused, reload identity, missing identity APIs, initialization refusal,
 and debug-trace clear isolation. Sanitized personal build-69933 replay covers
 two quality mixes, off/on concentration and quote/spend differences, mapped
 multi-item returns, three-result batches, partial failure, ambiguous attribution,
-migration, and pruning. Index coverage includes schema 3 migration, rebuild after
+reload and pruning. Index coverage includes rebuild after
 load/pruning, incremental updates, metadata enrichment, sorted ID/time arrays,
 history above 50,000 crafts, direct lookup/no-scan callbacks, and indexed query
 correctness. Run `bash src/addon/scripts/package.sh` from
@@ -369,7 +371,7 @@ AL1 export, Recent/
 Stats/Data product UI, CraftSim/TSM integration, Forever support, costing,
 inventory/sales accounting, or release publishing; those remain later work.
 
-Series tests cover backfill before pruning, repeated reload, coverage and observed
+Series tests cover atomic commit/exhaustion, repeated reload, coverage and observed
 zero, unknown dimensions, commit visibility, UTC boundaries, and durable queries
 on both sides of the detail cutoff. Facet tests cover requested subsets without
 unused population traversal.
