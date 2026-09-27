@@ -20,7 +20,6 @@ trap 'rm -rf -- "$staging"' EXIT
 mkdir -p "$staging/ArtisanLogbook" dist
 cp "$source_root/ArtisanLogbook.toc" "$staging/ArtisanLogbook/"
 cp -R "$source_root/Capture" "$source_root/Core" "$source_root/Flavors" "$source_root/Storage" "$source_root/UI" "$staging/ArtisanLogbook/"
-cp -R docs "$staging/ArtisanLogbook/"
 
 pushd "$staging" >/dev/null
 zip -qr ArtisanLogbook.zip ArtisanLogbook
