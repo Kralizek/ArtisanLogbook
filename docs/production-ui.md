@@ -55,8 +55,8 @@ presented as one. No optional CraftSim/TSM integration is provided.
 On a Retail character with crafting activity, verify:
 
 1. `/al`, `/artisanlogbook`, the minimap button and Escape open/close the
-   production window. `/al debug` still opens the production window; `/al_trace`
-   opens the Core tracer and works with the UI addon disabled.
+   production window. `/al_trace` opens the Core tracer and works with the
+   UI addon disabled.
 2. All five tabs and Settings fit the UI scale. Dropdowns and craft rows respond
    correctly; long recipe/item/character names do not overlap adjacent columns.
 3. Overview chart changes with each time, character and profession choice.
