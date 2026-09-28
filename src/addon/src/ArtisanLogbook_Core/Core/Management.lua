@@ -1,7 +1,7 @@
 local addonName, addon = ...
 
-addon.Management = {}
-local management = addon.Management
+ArtisanLogbookManagement = {}
+local management = ArtisanLogbookManagement
 
 function management.Status()
   local ledger = addon.ledger

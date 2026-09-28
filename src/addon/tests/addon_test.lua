@@ -90,18 +90,24 @@ environment.C_TradeSkillUI = {
 }
 environment.hooksecurefunc = function(_, name, callback) hooks[name] = callback end
 
-local root = arg[1] or "src/ArtisanLogbook"
-local addon = {}
-for line in io.lines(root .. "/ArtisanLogbook.toc") do
-  if line:match("%.lua$") then
-    local chunk = assert(loadfile(root .. "/" .. line))
-    setfenv(chunk, environment)
-    chunk("ArtisanLogbook", addon)
+local coreRoot = arg[1] or "src/ArtisanLogbook_Core"
+local uiRoot = arg[2] or "src/ArtisanLogbook"
+local function load(root, name)
+  local namespace = {}
+  for line in io.lines(root .. "/" .. name .. ".toc") do
+    if line:match("%.lua$") then
+      local chunk = assert(loadfile(root .. "/" .. line))
+      setfenv(chunk, environment)
+      chunk(name, namespace)
+    end
   end
+  return namespace
 end
+local addon = load(coreRoot, "ArtisanLogbook_Core")
 local lifecycle = frames[1]
 local api = environment.ArtisanLogbookAPI
 assert(type(api) == "table")
+assert(api.GetVersion() == 1)
 local unavailable, reason = api.GetCrafts()
 assert(unavailable == nil and reason == "not-ready")
 local committed = {}
@@ -109,7 +115,7 @@ api.RegisterCallback("CRAFT_COMMITTED", function() error("consumer failure") end
 api.RegisterCallback("CRAFT_COMMITTED", function(craft) committed[#committed + 1] = craft end)
 lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "OtherAddon")
 assert(addon.recorder == nil)
-lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook")
+lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Core")
 assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
@@ -119,9 +125,9 @@ assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
 assert(addon.window and not addon.window:IsShown())
-environment.SlashCmdList.ARTISANLOGBOOK("")
-assert(addon.productionWindow:IsShown() and not addon.window:IsShown())
-environment.SlashCmdList.ARTISANLOGBOOK("debug")
+assert(not addon.productionWindow and not environment.SLASH_ARTISANLOGBOOK1)
+assert(environment.SLASH_ARTISANLOGBOOKTRACE1 == "/altrace")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
 assert(addon.window:IsShown())
 addon.Start()
 addon.Mark("basic craft")
@@ -146,8 +152,11 @@ addon.Stop()
 assert(#addon.recorder.database.records == 5)
 assert(addon.recorder.database.records[2].event == "TRACE_MARK")
 assert(not addon.recorder.recording)
-environment.SlashCmdList.ARTISANLOGBOOK("debug export")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("export")
 assert(addon.window:IsShown())
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("status")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark from slash")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
 
 local function click(text)
   for _, frame in ipairs(frames) do
@@ -186,22 +195,31 @@ assert(#addon.recorder.database.records == 1)
 click("Stop")
 assert(addon.recorder.database.records[1].sequence == 6)
 addon.window.scripts.OnUpdate(addon.window, 0.6)
-print("PASS TOC load order, lifecycle, slash commands, and debug UI controls (mocked)")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("start")
+assert(addon.recorder.recording)
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark from slash")
+assert(addon.recorder.database.records[#addon.recorder.database.records].event == "TRACE_MARK")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("status")
+assert(notices[#notices] == "Artisan Logbook: Recording.")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
+assert(not addon.recorder.recording)
+print("PASS Core-only TOC, lifecycle, tracer slash commands and debug UI controls (mocked)")
 
 local function reload(database)
   environment.ArtisanLogbookDB = database
-  local reloaded = {}
   local frameStart = #frames
-  for line in io.lines(root .. "/ArtisanLogbook.toc") do
-    if line:match("%.lua$") then
-      local chunk = assert(loadfile(root .. "/" .. line))
-      setfenv(chunk, environment)
-      chunk("ArtisanLogbook", reloaded)
-    end
-  end
+  local reloaded = load(coreRoot, "ArtisanLogbook_Core")
+  local frame = frames[frameStart + 1]
+  frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook_Core")
+  return reloaded
+end
+
+local function loadUI()
+  local frameStart = #frames
+  local ui = load(uiRoot, "ArtisanLogbook")
   local frame = frames[frameStart + 1]
   frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
-  return reloaded
+  return ui
 end
 
 local saved = addon.ledger.database
@@ -315,8 +333,23 @@ environment.GetProfessionInfo = function(index)
   return index == 1 and "Enchanting" or "Alchemy", nil, nil, nil, nil, nil,
     index == 1 and 333 or 171
 end
-local uiAddon = reload(nil)
-local uiLedger = uiAddon.ledger
+local uiCore = reload(nil)
+local uiLedger = uiCore.ledger
+local savedAPI = environment.ArtisanLogbookAPI
+environment.ArtisanLogbookAPI = nil
+assert(not loadUI().productionWindow)
+environment.ArtisanLogbookAPI = { GetVersion = function() return 2 end }
+local incompatible = loadUI()
+assert(not incompatible.productionWindow)
+environment.ArtisanLogbookAPI = savedAPI
+local savedManagement = environment.ArtisanLogbookManagement
+environment.ArtisanLogbookManagement = nil
+assert(not loadUI().productionWindow)
+environment.ArtisanLogbookManagement = savedManagement
+environment.ArtisanLogbookDB = nil
+environment.ArtisanLogbookTraceDB = nil
+local uiAddon = loadUI()
+assert(not uiAddon.ledger and not uiAddon.recorder and not uiAddon.Ledger and not uiAddon.Trace)
 local uiWindow = uiAddon.productionWindow
 local getSeries = environment.ArtisanLogbookAPI.GetCraftSeries
 environment.ArtisanLogbookAPI.GetCraftSeries = function(filter, options)
@@ -324,7 +357,7 @@ environment.ArtisanLogbookAPI.GetCraftSeries = function(filter, options)
     "UI series requests must be bounded")
   return getSeries(filter, options)
 end
-local currentKey = uiAddon.Management.CurrentCharacter().key
+local currentKey = environment.ArtisanLogbookManagement.CurrentCharacter().key
 local alchemy = assert(uiLedger:AddDimension("profession", "171", { skillLineId = 171, name = "Alchemy" }))
 local enchanting = assert(uiLedger:AddDimension("profession", "333", { skillLineId = 333, name = "Enchanting" }))
 assert(uiLedger:AddDimension("recipe", 501, { gameRecipeId = 501, name = "Zebra Brew",
@@ -379,10 +412,13 @@ local function displayedRow(parent, predicate)
   end
 end
 
-assert(not uiWindow:IsShown() and not uiAddon.window:IsShown())
+assert(not uiWindow:IsShown() and not uiCore.window:IsShown())
 assert(environment.SLASH_ARTISANLOGBOOK2 == "/artisanlogbook")
+environment.SlashCmdList.ARTISANLOGBOOK("anything")
+assert(uiWindow:IsShown() and uiWindow.activeTab == "Overview" and not uiCore.window:IsShown())
+uiWindow:Hide()
 environment.SlashCmdList.ARTISANLOGBOOK("")
-assert(uiWindow:IsShown() and uiWindow.activeTab == "Overview" and not uiAddon.window:IsShown())
+assert(uiWindow:IsShown())
 local launcher
 for _, frame in ipairs(frames) do if frame.name == "ArtisanLogbookButton" then launcher = frame end end
 assert(launcher)
@@ -417,10 +453,12 @@ dropdown(overview, "90 days"):Choose(90)
 assert(chart.title.text:find("1 crafts", 1, true))
 uiWindow:Hide()
 environment.SlashCmdList.ARTISANLOGBOOK("anything")
-assert(uiWindow:IsShown() and not uiAddon.window:IsShown())
+assert(uiWindow:IsShown() and not uiCore.window:IsShown())
 environment.SlashCmdList.ARTISANLOGBOOK("debug")
-assert(uiAddon.window:IsShown() and uiWindow:IsShown())
-uiAddon.window:Hide()
+assert(not uiCore.window:IsShown() and uiWindow:IsShown())
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
+assert(uiCore.window:IsShown())
+uiCore.window:Hide()
 button(uiWindow, "Recent").scripts.OnClick()
 assert(uiWindow.activeTab == "Recent")
 local recent = uiWindow.pages.Recent
@@ -556,7 +594,8 @@ print("PASS production navigation, filters, paging, detail reuse, live refresh a
 local invalidTrace = { traceSchemaVersion = 999 }
 environment.ArtisanLogbookTraceDB = invalidTrace
 local noTracer = reload(nil)
-assert(noTracer.ledger and noTracer.recorder == nil and noTracer.productionWindow)
+assert(noTracer.ledger and noTracer.recorder == nil and not noTracer.productionWindow)
+local noTracerUI = loadUI()
 environment.SlashCmdList.ARTISANLOGBOOK("")
-assert(noTracer.productionWindow:IsShown() and environment.ArtisanLogbookTraceDB == invalidTrace)
+assert(noTracerUI.productionWindow:IsShown() and environment.ArtisanLogbookTraceDB == invalidTrace)
 print("PASS production UI remains available when diagnostic trace storage is refused")

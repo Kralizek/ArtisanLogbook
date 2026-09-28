@@ -15,11 +15,12 @@ From the repository root, with Lua 5.1, ZIP, and unzip available:
 bash src/addon/scripts/package.sh
 ```
 
-This runs the addon tests and produces
-`src/addon/dist/ArtisanLogbook.zip`. Extract its
-`ArtisanLogbook` folder into the live client's `_retail_/Interface/AddOns/`.
-The resulting path must be `Interface/AddOns/ArtisanLogbook/ArtisanLogbook.toc`,
-not an extra nested directory. Restart the client after the first installation.
+This runs the addon tests and produces Core-only `ArtisanLogbook_Core.zip`,
+UI-only `ArtisanLogbook.zip`, and `ArtisanLogbook-Bundle.zip` in `src/addon/dist/`.
+Extract the bundle's sibling `ArtisanLogbook_Core` and `ArtisanLogbook` folders
+into the live client's `_retail_/Interface/AddOns/`, or install both individual
+archives. Core's TOC must be at `Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc`;
+the UI requires Core. Restart the client after the first installation.
 Enable **Artisan Logbook** in the addon list.
 
 The TOC targets interface `120100`, based on the live UI source mirror reporting
@@ -28,7 +29,7 @@ The TOC targets interface `120100`, based on the live UI source mirror reporting
 mismatch before changing the compatibility target. Every recording start also
 stores the actual build, interface, locale, character, realm, and capabilities.
 
-Open the book button below the minimap, or use `/al`. Recording starts **paused**
+Open the tracer with `/altrace`. Recording starts **paused**
 on every load/reload. The native window provides Start, Stop, an editable scenario
 label with Mark, Export, Diagnostics, page arrows, and confirmed Clear. Closing
 the window does not stop capture. It does not alter the crafting UI or trigger
@@ -37,15 +38,15 @@ crafts. No third-party libraries or addons are required.
 Optional commands:
 
 ```text
-/al start
-/al mark basic-before
-/al mark basic-after
-/al stop
-/al status
-/al export
+/altrace start
+/altrace mark basic-before
+/altrace mark basic-after
+/altrace stop
+/altrace status
+/altrace export
 ```
 
-`/artisanlogbook` is an alias. The window refreshes status twice per second while
+`/al` and `/artisanlogbook` open the separate production UI. The tracer window refreshes status twice per second while
 visible, but does not overwrite export text as events arrive. Export refreshes
 the displayed data. Each page contains at most ten records; capture is bounded
 independently of rendering.
@@ -62,7 +63,7 @@ independently of rendering.
 3. Perform the intended craft through the normal game UI. Mark the observed
    outcome, including visible output quantity, quality, and proc messages.
    Keep recording for several seconds after completion to retain late callbacks.
-4. Stop, check `/al status`, and inspect the export for `warnings`. Capacity
+4. Stop, check `/altrace status`, and inspect the export for `warnings`. Capacity
    stops and omitted payloads mean the affected evidence is incomplete, not
    evidence that the game omitted a field. Report these before proceeding.
 5. Export every page, including the first page with `TRACE_START`, or preferably
@@ -85,7 +86,7 @@ capture and a new Start creates another metadata boundary. Do not use reload
 mid-scenario unless testing that boundary intentionally.
 
 The file is under
-`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook.lua` and contains
+`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Core.lua` and contains
 `ArtisanLogbookTraceDB`. This is account-wide, not a per-character file. Raw traces
 can include character names, GUIDs, targets, hyperlinks, and order identifiers.
 The claimed-order probe stores only an allowlisted diagnostic snapshot, not
@@ -375,9 +376,9 @@ requirements. The trace schema's own migration is independent and unchanged.
 
 Install the instrumented ZIP as above. Back up the raw SavedVariables
 privately, disable unrelated addons, work out of combat, and use a fresh
-recording **per scenario**. Open the recipe first, then `/al start`, mark
+recording **per scenario**. Open the recipe first, then `/altrace start`, mark
 `scenario-before`, choose reagents and concentration, wait for the quote,
-mark `scenario-click`, craft normally, mark `scenario-after`, and `/al stop`.
+mark `scenario-click`, craft normally, mark `scenario-after`, and `/altrace stop`.
 If quote activity fills the 2,000-record / 2 MiB budget, clear and restart
 immediately before selection; report any capacity or payload warnings.
 Preserve every export page or the raw SavedVariables after a normal logout,

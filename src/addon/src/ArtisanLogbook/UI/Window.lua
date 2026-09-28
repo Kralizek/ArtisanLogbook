@@ -1,6 +1,7 @@
 local addonName, addon = ...
 local UI = addon.UI
 local API = ArtisanLogbookAPI
+local management = ArtisanLogbookManagement
 local tabs = { "Overview", "Recent", "Character", "Profession", "Recipes" }
 
 local function population(character, profession, recipe)
@@ -20,11 +21,16 @@ local function choices(facet, filter, includeAll)
     result[#result + 1] = { label = UI.Name(entry.details), value = entry.value }
     seen[entry.value] = true
   end
-  local tracked = API.GetTrackedChoices(filter and filter.characters and filter.characters[1])
-  for _, entry in ipairs(tracked and tracked[facet] or {}) do
-    if not seen[entry.value] then
-      result[#result + 1] = { label = UI.Name(entry.details), value = entry.value }
-      seen[entry.value] = true
+  local observed
+  if facet == "characters" then observed = API.GetCharacters()
+  elseif facet == "professions" then
+    observed = API.GetProfessions(filter and filter.characters and filter.characters[1])
+  end
+  for _, details in ipairs(observed or {}) do
+    local value = facet == "characters" and details.key or details.skillLineId
+    if not seen[value] then
+      result[#result + 1] = { label = UI.Name(details), value = value }
+      seen[value] = true
     end
   end
   table.sort(result, function(left, right)
@@ -159,7 +165,7 @@ function addon.CreateProductionWindow()
     function() return population(recentCharacter, recentProfession) end,
     function(id) window:OpenCraft(id) end)
 
-  local current = addon.Management.CurrentCharacter()
+  local current = management.CurrentCharacter()
   local characterKey = current and current.key
   local character = pages.Character
   UI.Text(character, 0, -4, inner, 25, "GameFontNormalLarge"):SetText("Character")
@@ -245,12 +251,12 @@ function addon.CreateProductionWindow()
   retention:SetNumeric(true)
   retention:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
   UI.Button(settings, "Save", 275, -208, 76, function()
-    local ok, reason = addon.Management.SetRetentionDays(tonumber(retention:GetText()))
+    local ok, reason = management.SetRetentionDays(tonumber(retention:GetText()))
     addon.Notify(ok and "Retention updated. Use Prune to apply now." or reason)
     window:Refresh(true)
   end)
   UI.Button(settings, "Prune now", 0, -260, 105, function()
-    local removed, reason = addon.Management.Prune()
+    local removed, reason = management.Prune()
     addon.Notify(removed and (removed .. " detailed crafts pruned.") or reason)
     window:Refresh(true)
   end)
@@ -262,12 +268,12 @@ function addon.CreateProductionWindow()
     button1 = "Delete", button2 = "Cancel", timeout = 0, whileDead = true,
     hideOnEscape = true, preferredIndex = 3,
     OnAccept = function()
-      addon.Management.Clear()
+      management.Clear()
       window:Refresh(true)
     end,
   }
   local function refreshSettings()
-    local status, reason = addon.Management.Status()
+    local status, reason = management.Status()
     local capabilities = API.GetCapabilities()
     if not status then settingsStatus:SetText(reason or "Unavailable"); return end
     retention:SetText(tostring(status.retentionDays))

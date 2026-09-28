@@ -11,8 +11,13 @@ The stable consumer-facing Lua API is documented separately in
 
 `ArtisanLogbookDB` is account-wide SavedVariables for durable facts.
 `ArtisanLogbookTraceDB` remains the independent bounded debug trace database.
-The TOC addon's version is recorded on each session; `schemaVersion` belongs to
-the ledger and is versioned independently. The debug export version in
+Both belong to `ArtisanLogbook_Core`; their Lua tables are private persistence,
+not supported in-game consumer APIs. All addons, including the production UI,
+must use `ArtisanLogbookAPI` for factual reads. Offline exporters may have
+version-specific persistence readers without making these tables a public
+in-game API. The Core TOC addon version is recorded on each session;
+`schemaVersion` belongs to the ledger, and public API version 1 is independent
+of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
@@ -25,7 +30,7 @@ from them. Changing the version number or adding the marker manually is not a
 supported conversion.
 
 Users of development builds may need to reset SavedVariables. With WoW fully
-closed, back up the account's `ArtisanLogbook.lua` SavedVariables file before
+closed, back up the account's `ArtisanLogbook_Core.lua` SavedVariables file before
 resetting/removing `ArtisanLogbookDB` (and any backup WoW might restore).
 The addon refuses unsupported data with a clear reset-required error rather
 than deleting or rewriting it automatically. Resetting the ledger loses its
@@ -129,7 +134,7 @@ discarded when the trade skill closes. Without a positive matching quote,
 allocations remain absent; the hook's own reagent table can be empty and is not
 used as a fallback. A guarded operation query supplies optional
 quote measurements, and an optional item-quality lookup supplies observed
-reagent quality. This passive path does not depend on `/al start`. Later UI
+reagent quality. This passive path does not depend on `/altrace start`. Later UI
 quotes cannot mutate an already submitted request. Missing/mismatched quote
 arguments leave selections and quote values absent. Orders, recrafts, and
 target-dependent operations do not create request rows.
@@ -224,8 +229,10 @@ runtime indexes if invoked after initialization; it is not a public API or norma
 capture path. Dimensions and counters never reset, even when all facts expire.
 The original ledger slice exposed no clear command or UI.
 
-The production UI adds an explicit internal management boundary, separate from
-the read-only public Lua API. `Management.Status` returns detached retention,
+The production UI uses the deliberately separate `ArtisanLogbookManagement`
+cross-addon boundary for mutable Settings operations. It is not part of the
+stable read-only factual `ArtisanLogbookAPI` and never exposes raw persistence.
+`Status` returns detached retention,
 record-count, schema and build diagnostics; `CurrentCharacter` exposes the
 active ledger identity without exposing SavedVariables. Retention changes take
 effect on the next startup or explicit prune, not on capture. `Prune` applies
@@ -380,7 +387,8 @@ reload and pruning. Index coverage includes rebuild after
 load/pruning, incremental updates, metadata enrichment, sorted ID/time arrays,
 history above 50,000 crafts, direct lookup/no-scan callbacks, and indexed query
 correctness. Run `bash src/addon/scripts/package.sh` from
-the repository root to test and validate `src/addon/dist/ArtisanLogbook.zip`.
+the repository root to test and validate the Core-only, UI-only, and bundle ZIPs
+in `src/addon/dist/`.
 
 Remaining evidence gaps include operation-ID reuse scope, true duplicate/late
 callback behavior, crafting-order/recraft

@@ -8,23 +8,27 @@ separate from the SavedVariables persistence schema documented in
 ## API v1
 
 UI and addon consumers use the global `ArtisanLogbookAPI`, not SavedVariables,
-dimension rows, or the private addon namespace. The API is loaded before
-`ADDON_LOADED`; queries become available after Artisan Logbook initializes.
-Consumers should declare an addon dependency or wait for its load event.
-This contract is independent of the persistence schema and any future AL1
+dimension rows, or the private Core addon namespace. The API is loaded before
+`ADDON_LOADED`; queries become available after `ArtisanLogbook_Core` initializes.
+Consumers should declare `## RequiredDeps: ArtisanLogbook_Core` and check
+`ArtisanLogbookAPI.GetVersion() == 1` before using this API. A different version
+is incompatible; there is no version negotiation. This contract version is
+independent of the Core addon's TOC version, persistence `schemaVersion`, and any future AL1
 portable export. No portable export, general statistics or costing API is
 implemented here. The production UI uses this read-only contract.
 
 All calls use **dot syntax**, not colon syntax:
 
 ```lua
+local version = ArtisanLogbookAPI.GetVersion() -- 1
 local craft, reason = ArtisanLogbookAPI.GetCraft(id)
 local page, reason = ArtisanLogbookAPI.GetCrafts(filter, options)
 local series, reason = ArtisanLogbookAPI.GetCraftSeries(filter, options)
 local facets, reason = ArtisanLogbookAPI.GetFacets(filter, options)
 local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
 local recipes, reason = ArtisanLogbookAPI.GetRecipeSummaries({ limit = 50 })
-local choices, reason = ArtisanLogbookAPI.GetTrackedChoices(characterKey)
+local characters, reason = ArtisanLogbookAPI.GetCharacters()
+local professions, reason = ArtisanLogbookAPI.GetProfessions(characterKey)
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
   -- Refresh consumer state using the committed craft projection.
 end)
@@ -306,7 +310,7 @@ return `"invalid-options"`.
 
 ### Recipe catalogue
 
-The production Recipes catalogue adds one read-only, consumer-specific query:
+The production Recipes catalogue uses one read-only factual query:
 
 ```lua
 local page, reason = ArtisanLogbookAPI.GetRecipeSummaries({ limit = 10, cursor = nil })
@@ -327,24 +331,27 @@ return `"invalid-cursor"`. No cursor means the first page; an empty catalogue
 returns `{ recipes = {} }` without a cursor. This is not a snapshot: new recipes
 or metadata enrichment can change ordering between pages, so restart at page one
 when the catalogue changes. The runtime caches sorted recipe identities and
-projects only the requested page. This query does not add a general statistics
+projects only the requested page. The name `GetRecipeSummaries` distinguishes
+these lifetime counts from full recipe or craft facts. This query does not add a general statistics
 or write API; for filtered activity use `GetCraftSeries`.
 
-### Tracked selector choices
+### Durable observed identities
 
-`GetTrackedChoices(characterKey)` returns `{ characters = { ... }, professions = { ... } }`
-with each entry `{ value = <public identity>, details = <detached domain object> }`.
-Omit the character key for global professions or pass an opaque character key
-to select professions that character crafted. Characters always list all known
-characters represented in durable daily series; professions derive from recipe
-metadata and omit unknown skill-line identities. Results are sorted by identity.
-An unknown key returns an empty profession list, while invalid keys return
+`GetCharacters()` returns detached character projections (with `key` and `name`);
+`GetProfessions(characterKey)` returns detached profession projections (with
+`skillLineId` and `name`). Omit the character key for global professions or
+pass an opaque character key to select professions that character crafted.
+Characters represented in durable daily series remain available after detail
+pruning; professions derive from observed recipes' metadata and omit unknown
+skill-line identities. Results are sorted by public identity. An unknown key
+returns an empty profession list, while invalid keys return
 `nil, "invalid-filter"`; before ledger initialization the result is
-`nil, "not-ready"`. Unlike `GetFacets`, this query has no craft counts and
-includes identities whose factual details were pruned. It reads distinct
+`nil, "not-ready"`. Unlike `GetFacets`, these queries have no craft counts and
+include identities whose factual details were pruned. They read distinct
 runtime identity sets, not the full daily series. Commit updates the sets;
 reload/prune rebuild them, clear empties them, and metadata enrichment resolves
-on read. `GetFacets` retains its factual-only semantics.
+on read. The UI converts domain projections into dropdown choices. `GetFacets`
+retains its retained-detail-only semantics.
 
 ### Runtime capabilities
 

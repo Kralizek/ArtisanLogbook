@@ -139,38 +139,38 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
       addon.ledger = nil
     end
   end
-  addon.CreateProductionWindow()
   addon.recorder, addon.loadError = addon.Trace.New(ArtisanLogbookTraceDB, {
     wall = GetServerTime,
     elapsed = GetTimePreciseSec,
   }, issecretvalue)
   if not addon.recorder then
     addon.Notify(addon.loadError)
-    if addon.ledgerError then
-      addon.Notify("Ledger disabled: " .. addon.ledgerError)
-    end
-    return
+  else
+    ArtisanLogbookTraceDB = addon.recorder.database
+    addon.CreateTraceWindow()
   end
-  ArtisanLogbookTraceDB = addon.recorder.database
-  addon.CreateTraceWindow()
   if addon.ledgerError then
     addon.Notify("Ledger disabled: " .. addon.ledgerError)
-  else
-    addon.Notify("Ledger ready. Open Artisan Logbook with /al.")
   end
 end)
 
-SLASH_ARTISANLOGBOOK1 = "/al"
-SLASH_ARTISANLOGBOOK2 = "/artisanlogbook"
-SlashCmdList.ARTISANLOGBOOK = function(message)
+SLASH_ARTISANLOGBOOKTRACE1 = "/altrace"
+SlashCmdList.ARTISANLOGBOOKTRACE = function(message)
   local command, argument = message:match("^%s*(%S*)%s*(.-)%s*$")
   command = command:lower()
-  if command == "debug" and addon.window then
+  if (command == "" or command == "open" or command == "export") and addon.window then
     addon.window:Show()
-    addon.window:Refresh(argument == "export")
-  elseif addon.productionWindow then
-    addon.productionWindow:Show()
+    addon.window:Refresh(command == "export" or argument == "export")
+  elseif command == "start" then
+    addon.Start()
+  elseif command == "stop" then
+    addon.Stop()
+  elseif command == "mark" then
+    addon.Mark(argument)
+  elseif command == "status" then
+    addon.Notify(addon.recorder and (addon.recorder.recording and "Recording." or "Not recording.") or
+      (addon.loadError or "Tracer unavailable."))
   else
-    addon.Notify(addon.ledgerError or addon.loadError or "Not initialized.")
+    addon.Notify(addon.loadError or "Use /altrace [open|start|stop|mark <label>|status|export].")
   end
 end

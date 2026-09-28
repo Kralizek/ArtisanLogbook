@@ -2,6 +2,10 @@ local _, addon = ...
 local API = {}
 ArtisanLogbookAPI = API
 
+function API.GetVersion()
+  return 1
+end
+
 local facets = { "characters", "realms", "expansions", "professions", "recipes" }
 local filterFields = { time = true, characters = true, realms = true, expansions = true,
   professions = true, recipes = true }
@@ -463,20 +467,27 @@ function API.GetRecipeSummaries(options)
   return result
 end
 
-function API.GetTrackedChoices(characterKey)
+function API.GetCharacters()
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  local result = {}
+  for id in pairs(ledger.seriesCharacterIds) do
+    local details = character(ledger, dimension(ledger, "character", id))
+    if details and details.key then
+      result[#result + 1] = details
+    end
+  end
+  table.sort(result, function(left, right) return left.key < right.key end)
+  return result
+end
+
+function API.GetProfessions(characterKey)
   if characterKey ~= nil and (type(characterKey) ~= "string" or characterKey == "") then
     return nil, "invalid-filter"
   end
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
-  local result = { characters = {}, professions = {} }
-  for id in pairs(ledger.seriesCharacterIds) do
-    local details = character(ledger, dimension(ledger, "character", id))
-    if details and details.key then
-      result.characters[#result.characters + 1] = { value = details.key, details = details }
-    end
-  end
-  table.sort(result.characters, function(left, right) return left.value < right.value end)
+  local result = {}
   local characterId = characterKey and ledger.dimensionIndex.character[characterKey]
   local recipes = characterKey and (characterId and ledger.seriesRecipeIdsByCharacter[characterId] or {}) or
     ledger.seriesRecipeIds
@@ -486,10 +497,10 @@ function API.GetTrackedChoices(characterKey)
     local details = row and profession(ledger, dimension(ledger, "profession", row.professionDimensionId))
     if details and details.skillLineId ~= nil and not seen[details.skillLineId] then
       seen[details.skillLineId] = true
-      result.professions[#result.professions + 1] = { value = details.skillLineId, details = details }
+      result[#result + 1] = details
     end
   end
-  table.sort(result.professions, function(left, right) return left.value < right.value end)
+  table.sort(result, function(left, right) return left.skillLineId < right.skillLineId end)
   return result
 end
 
