@@ -2,7 +2,7 @@
 
 `/al` and `/artisanlogbook` open the native Artisan Logbook window. Its five
 tabs are Overview, Recent, Character, Profession and Recipes. The minimap book
-button toggles the same window. Core owns the separate `/altrace` capture tracer;
+button toggles the same window. Core owns the separate `/al_trace` capture tracer;
 its raw export is diagnostic, not a portable craft export.
 
 `ArtisanLogbook` is the user-facing UI addon and requires `ArtisanLogbook_Core`.
@@ -55,7 +55,7 @@ presented as one. No optional CraftSim/TSM integration is provided.
 On a Retail character with crafting activity, verify:
 
 1. `/al`, `/artisanlogbook`, the minimap button and Escape open/close the
-   production window. `/al debug` still opens the production window; `/altrace`
+   production window. `/al debug` still opens the production window; `/al_trace`
    opens the Core tracer and works with the UI addon disabled.
 2. All five tabs and Settings fit the UI scale. Dropdowns and craft rows respond
    correctly; long recipe/item/character names do not overlap adjacent columns.

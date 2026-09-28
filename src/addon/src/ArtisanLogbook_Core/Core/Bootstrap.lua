@@ -154,7 +154,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   end
 end)
 
-SLASH_ARTISANLOGBOOKTRACE1 = "/altrace"
+SLASH_ARTISANLOGBOOKTRACE1 = "/al_trace"
 SlashCmdList.ARTISANLOGBOOKTRACE = function(message)
   local command, argument = message:match("^%s*(%S*)%s*(.-)%s*$")
   command = command:lower()
@@ -171,6 +171,6 @@ SlashCmdList.ARTISANLOGBOOKTRACE = function(message)
     addon.Notify(addon.recorder and (addon.recorder.recording and "Recording." or "Not recording.") or
       (addon.loadError or "Tracer unavailable."))
   else
-    addon.Notify(addon.loadError or "Use /altrace [open|start|stop|mark <label>|status|export].")
+    addon.Notify(addon.loadError or "Use /al_trace [open|start|stop|mark <label>|status|export].")
   end
 end

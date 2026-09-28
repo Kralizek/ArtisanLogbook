@@ -29,7 +29,7 @@ The TOC targets interface `120100`, based on the live UI source mirror reporting
 mismatch before changing the compatibility target. Every recording start also
 stores the actual build, interface, locale, character, realm, and capabilities.
 
-Open the tracer with `/altrace`. Recording starts **paused**
+Open the tracer with `/al_trace`. Recording starts **paused**
 on every load/reload. The native window provides Start, Stop, an editable scenario
 label with Mark, Export, Diagnostics, page arrows, and confirmed Clear. Closing
 the window does not stop capture. It does not alter the crafting UI or trigger
@@ -38,12 +38,12 @@ crafts. No third-party libraries or addons are required.
 Optional commands:
 
 ```text
-/altrace start
-/altrace mark basic-before
-/altrace mark basic-after
-/altrace stop
-/altrace status
-/altrace export
+/al_trace start
+/al_trace mark basic-before
+/al_trace mark basic-after
+/al_trace stop
+/al_trace status
+/al_trace export
 ```
 
 `/al` and `/artisanlogbook` open the separate production UI. The tracer window refreshes status twice per second while
@@ -63,7 +63,7 @@ independently of rendering.
 3. Perform the intended craft through the normal game UI. Mark the observed
    outcome, including visible output quantity, quality, and proc messages.
    Keep recording for several seconds after completion to retain late callbacks.
-4. Stop, check `/altrace status`, and inspect the export for `warnings`. Capacity
+4. Stop, check `/al_trace status`, and inspect the export for `warnings`. Capacity
    stops and omitted payloads mean the affected evidence is incomplete, not
    evidence that the game omitted a field. Report these before proceeding.
 5. Export every page, including the first page with `TRACE_START`, or preferably
@@ -376,9 +376,9 @@ requirements. The trace schema's own migration is independent and unchanged.
 
 Install the instrumented ZIP as above. Back up the raw SavedVariables
 privately, disable unrelated addons, work out of combat, and use a fresh
-recording **per scenario**. Open the recipe first, then `/altrace start`, mark
+recording **per scenario**. Open the recipe first, then `/al_trace start`, mark
 `scenario-before`, choose reagents and concentration, wait for the quote,
-mark `scenario-click`, craft normally, mark `scenario-after`, and `/altrace stop`.
+mark `scenario-click`, craft normally, mark `scenario-after`, and `/al_trace stop`.
 If quote activity fills the 2,000-record / 2 MiB budget, clear and restart
 immediately before selection; report any capacity or payload warnings.
 Preserve every export page or the raw SavedVariables after a normal logout,

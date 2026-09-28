@@ -134,7 +134,7 @@ discarded when the trade skill closes. Without a positive matching quote,
 allocations remain absent; the hook's own reagent table can be empty and is not
 used as a fallback. A guarded operation query supplies optional
 quote measurements, and an optional item-quality lookup supplies observed
-reagent quality. This passive path does not depend on `/altrace start`. Later UI
+reagent quality. This passive path does not depend on `/al_trace start`. Later UI
 quotes cannot mutate an already submitted request. Missing/mismatched quote
 arguments leave selections and quote values absent. Orders, recrafts, and
 target-dependent operations do not create request rows.
