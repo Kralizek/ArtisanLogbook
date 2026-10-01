@@ -1,6 +1,8 @@
 {
   "name": "ArtisanLogbook",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "initializeCommand": ["pwsh", "-NoProfile", "-File", "${localWorkspaceFolder}/.devcontainer/initialize-host.ps1"],
+  "runArgs": ["--env-file", "${localWorkspaceFolder}/.devcontainer/gh-token.env"],
   "features": {
     "ghcr.io/devcontainers/features/dotnet:2": {
       "version": "10.0"

@@ -7,3 +7,6 @@ Thumbs.db
 .idea/
 *.user
 *.suo
+
+# Local Dev Container credentials
+.devcontainer/gh-token.env
