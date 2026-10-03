@@ -29,5 +29,5 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         with:
           name: ArtisanLogbook-addon
-          path: src/addon/dist/ArtisanLogbook.zip
+          path: src/addon/dist/*.zip
           if-no-files-found: error

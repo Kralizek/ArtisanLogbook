@@ -7,6 +7,11 @@ local fixture = assert(loadfile(testsRoot .. "/fixtures/retail-build-69933.lua")
 local personalFixture = assert(loadfile(testsRoot .. "/fixtures/retail-personal-69933.lua"))()
 local passed = 0
 local maxInteger = 9007199254740991
+local function rowCount(rows)
+  local count = 0
+  for _ in pairs(rows) do count = count + 1 end
+  return count
+end
 
 local function unchangedAfter(value, action)
   local snapshots = {}
@@ -78,7 +83,7 @@ test("build-69933 replay records one fact per observed result", function()
   assert(basic and basic.outputQuantity == 5 and basic.outputQuality == 1)
   assert(basic.multicraftBonus == 0 and basic.concentrationSpent == 0)
   assert(basic.hasIngenuityProc == false and basic.ingenuityRefund == 65)
-  assert(basic.recipeDimensionId and basic.outputItemDimensionId)
+  assert(basic.recipeId and basic.outputItemId)
 end)
 
 test("concentration and Multicraft facts preserve the observed result fields", function()
@@ -119,8 +124,7 @@ test("zero and false remain distinct from unavailable result fields", function()
   }))
   local unknown = assert(ledger:RecordResult({}))
   assert(zero.gameOperationId == 0 and zero.outputQuantity == 0)
-  assert(zero.outputItemDimensionId ~= nil)
-  assert(ledger.database.dimensions.items[1].gameItemId == 0)
+  assert(zero.outputItemId == 0 and ledger.database.dimensions.items[0].id == 0)
   assert(zero.concentrationSpent == 0 and zero.multicraftBonus == 0)
   assert(zero.hasIngenuityProc == false and zero.ingenuityRefund == 0)
   assert(unknown.gameOperationId == nil and unknown.outputQuantity == nil)
@@ -134,7 +138,7 @@ test("reload preserves craft IDs and session identity advances", function()
   local secondSession = reloaded:CreateSession({ startedAt = clock.current })
   local second = assert(reloaded:RecordResult({ operationID = 11, quantity = 1 }))
   assert(first.id == 1 and second.id == 2)
-  assert(first.sessionDimensionId == firstSession and second.sessionDimensionId == secondSession)
+  assert(first.sessionId == firstSession and second.sessionId == secondSession)
   assert(reloaded.database.nextCraftId == 3)
 end)
 
@@ -144,25 +148,24 @@ test("age pruning removes craft and reagent rows but leaves dimensions and IDs",
     itemID = 50,
     resourcesReturned = { { reagent = { itemID = 51 }, quantity = 2 } },
   }))
-  local dimensionCount = #ledger.database.dimensions.items
+  local dimensionCount = rowCount(ledger.database.dimensions.items)
   clock.current = clock.current + 86401
   ledger:Prune(clock.current)
   assert(#ledger.database.crafts == 0 and #ledger.database.reagents == 0)
-  assert(#ledger.database.dimensions.items == dimensionCount)
+  assert(rowCount(ledger.database.dimensions.items) == dimensionCount)
   local newer = assert(ledger:RecordResult({ quantity = 1 }))
   assert(newer.id == old.id + 1)
 end)
 
 test("capture retains all facts and keeps append-only dimensions", function()
   local ledger = newLedger()
-  local itemDimension = ledger:AddDimension("item", 700, { gameItemId = 700 })
-  assert(ledger:AddDimension("item", 700, { gameItemId = 700, name = "ignored" }) == itemDimension)
+  local itemDimension = ledger:AddDimension("item", 700)
+  assert(ledger:AddDimension("item", 700, { name = "ignored" }) == itemDimension)
   local expansionId = ledger:AddDimension("expansion", "era-test", {
     displayName = "Test Era",
     chronologicalOrder = 90,
   })
   local recipeId = ledger:AddDimension("recipe", 800, {
-    gameRecipeId = 800,
     expansionDimensionId = expansionId,
   })
   local first = assert(ledger:RecordResult({ operationID = 1, quantity = 1,
@@ -171,23 +174,23 @@ test("capture retains all facts and keeps append-only dimensions", function()
   local third = assert(ledger:RecordResult({ operationID = 3, quantity = 1 }))
   assert(#ledger.database.crafts == 3 and ledger.database.crafts[1].id == first.id)
   assert(ledger.database.crafts[3].id == third.id and #ledger.database.reagents == 1)
-  assert(ledger.database.nextCraftId == 4 and ledger.database.dimensions.items[1].id == itemDimension)
-  assert(ledger.database.dimensions.recipes[1].id == recipeId)
-  assert(ledger.database.dimensions.recipes[1].expansionDimensionId == expansionId)
+  assert(ledger.database.nextCraftId == 4 and ledger.database.dimensions.items[700].id == itemDimension)
+  assert(ledger.database.dimensions.recipes[800].id == recipeId)
+  assert(ledger.database.dimensions.recipes[800].expansionDimensionId == expansionId)
   assert(ledger.database.dimensions.expansions[1].chronologicalOrder == 90)
   local invalidExpansion = ledger:AddDimension("item", 701, { expansionDimensionId = 999 })
   assert(invalidExpansion == nil)
   assert(first.id < second.id)
   ledger:BeginCraft(801)
   local reusedOperation = assert(ledger:RecordResult({ operationID = 1, quantity = 1 }))
-  assert(reusedOperation.recipeDimensionId == nil)
+  assert(reusedOperation.recipeId == nil)
 end)
 
 test("ambiguous begins and repeated or late results are retained without merging", function()
   local ledger = newLedger()
   ledger:BeginCraft(900)
   local zeroId = assert(ledger:RecordResult({ operationID = 0, quantity = 1 }))
-  assert(zeroId.recipeDimensionId == nil)
+  assert(zeroId.recipeId == nil)
   ledger:BeginCraft(900)
   local first = assert(ledger:RecordResult({ operationID = 42, itemID = 1, quantity = 1 }))
   local repeated = assert(ledger:RecordResult({ operationID = 42, itemID = 1, quantity = 1 }))
@@ -196,16 +199,16 @@ test("ambiguous begins and repeated or late results are retained without merging
   ledger:BeginCraft(901)
   ledger:BeginCraft(902)
   local ambiguous = assert(ledger:RecordResult({ operationID = 43, quantity = 1 }))
-  assert(ambiguous.recipeDimensionId == nil)
+  assert(ambiguous.recipeId == nil)
   ledger:BeginCraft(903)
   local later = assert(ledger:RecordResult({ operationID = 44, quantity = 1 }))
-  assert(later.recipeDimensionId ~= nil)
+  assert(later.recipeId == 903)
   ledger:BeginCraft(904)
   local late = assert(ledger:RecordResult({ operationID = 42, quantity = 1 }))
-  assert(late.recipeDimensionId == nil and late.gameOperationId == 42)
+  assert(late.recipeId == nil and late.gameOperationId == 42)
   ledger:BeginCraft(905)
   local missingId = assert(ledger:RecordResult({ quantity = 1 }))
-  assert(missingId.recipeDimensionId == nil)
+  assert(missingId.recipeId == nil)
   assert(#ledger.database.crafts == 7)
 end)
 
@@ -216,7 +219,7 @@ test("unsupported flavor measurements remain absent", function()
   } })
   local craft = assert(ledger:RecordResult({ quantity = 1 }))
   assert(craft.concentrationSpent == nil and craft.hasIngenuityProc == nil)
-  assert(craft.professionDimensionId == nil and craft.recipeDimensionId == nil)
+  assert(craft.professionId == nil and craft.recipeId == nil)
   assert(ledger.database.dimensions.sessions[1].capabilities.measurements.concentrationSpent == nil)
 end)
 
@@ -232,10 +235,8 @@ test("newer and failed schemas are refused without changing saved data", functio
 
   local malformedDimensions = assert(Ledger.New(nil)).database
   malformedDimensions.dimensions.items = {
-    { id = 1, key = "7", gameItemId = 7 },
-    { id = 2, key = "7", gameItemId = 7 },
+    [7] = { id = 8 },
   }
-  malformedDimensions.nextDimensionId.item = 3
   assert(Ledger.New(malformedDimensions) == nil)
 end)
 
@@ -268,7 +269,12 @@ test("clean schema 1 initializes the complete model and reload does not rebuild 
   assert(#ledger.database.crafts == 0 and #ledger.database.requests == 0)
   assert(#ledger.database.reagents == 0 and #ledger.database.craftSeries == 0)
   for kind, rows in pairs(ledger.dimensionRows) do
-    assert(next(rows) == nil and ledger.database.nextDimensionId[kind] == 1)
+    assert(next(rows) == nil)
+    if kind == "item" or kind == "recipe" or kind == "profession" then
+      assert(ledger.database.nextDimensionId[kind] == nil)
+    else
+      assert(ledger.database.nextDimensionId[kind] == 1)
+    end
   end
   local populated, clock = newLedger()
   assert(populated:RecordResult({ quantity = 4, multicraft = 2, concentrationSpent = 5,
@@ -289,22 +295,23 @@ end)
 test("dimension enrichment is monotonic, atomic, and includes expansion metadata", function()
   local ledger = newLedger()
   for _, kind in ipairs({ "realm", "character", "profession", "recipe", "item", "session", "expansion" }) do
-    local id = assert(ledger:AddDimension(kind, "sparse"))
-    assert(ledger:AddDimension(kind, "sparse", { name = "Known" }) == id)
-    assert(ledger:AddDimension(kind, "sparse", { name = "Known" }) == id)
-    local failed, reason = ledger:AddDimension(kind, "sparse", { name = "Conflict", extra = "no" })
+    local key = (kind == "recipe" or kind == "item" or kind == "profession") and 700 or "sparse"
+    local id = assert(ledger:AddDimension(kind, key))
+    assert(ledger:AddDimension(kind, key, { name = "Known" }) == id)
+    assert(ledger:AddDimension(kind, key, { name = "Known" }) == id)
+    local failed, reason = ledger:AddDimension(kind, key, { name = "Conflict", extra = "no" })
     assert(failed == nil and reason:find("conflicting", 1, true))
-    assert(ledger:AddDimension(kind, "sparse", { extra = "yes" }) == id)
-    assert(ledger:AddDimension(kind, "sparse", { id = id + 1 }) == nil)
+    assert(ledger:AddDimension(kind, key, { extra = "yes" }) == id)
+    assert(ledger:AddDimension(kind, key, { id = id + 1 }) == nil)
   end
   local expansion = assert(ledger:AddDimension("expansion", "era", {
     displayName = "Observed Era", chronologicalOrder = 0,
   }))
   for _, kind in ipairs({ "recipe", "item", "profession" }) do
-    local id = assert(ledger:AddDimension(kind, "sparse", { expansionDimensionId = expansion }))
+    local id = assert(ledger:AddDimension(kind, 700, { expansionDimensionId = expansion }))
     assert(ledger.dimensionRows[kind][id].expansionDimensionId == expansion)
-    assert(ledger:AddDimension(kind, "sparse", { expansionDimensionId = expansion }) == id)
-    assert(ledger:AddDimension(kind, "sparse", { expansionDimensionId = 999 }) == nil)
+    assert(ledger:AddDimension(kind, 700, { expansionDimensionId = expansion }) == id)
+    assert(ledger:AddDimension(kind, 700, { expansionDimensionId = 999 }) == nil)
   end
   local metadata = { capabilities = { measurements = { available = false } } }
   local session = assert(ledger:AddDimension("session", "nested", metadata))
@@ -318,31 +325,45 @@ end)
 
 test("every persisted reference is validated before startup can prune", function()
   local cases = {
-    { "crafts", "sessionDimensionId" }, { "crafts", "recipeDimensionId" },
-    { "crafts", "outputItemDimensionId" }, { "crafts", "professionDimensionId" },
-    { "reagents", "craftId" }, { "reagents", "itemDimensionId" },
+    { "crafts", "sessionId" }, { "crafts", "recipeId" },
+    { "crafts", "outputItemId" }, { "crafts", "professionId" },
+    { "reagents", "craftId" }, { "reagents", "itemId" },
     { "characters", "realmDimensionId" }, { "sessions", "characterDimensionId" },
     { "sessions", "realmDimensionId" }, { "recipes", "expansionDimensionId" },
     { "items", "expansionDimensionId" }, { "professions", "expansionDimensionId" },
-    { "recipes", "professionDimensionId" },
+    { "recipes", "professionId" },
   }
   for _, reference in ipairs(cases) do
     local ledger, clock = newLedger()
     replay(ledger, fixture.cases)
-    ledger:AddDimension("profession", "test")
+    ledger:AddDimension("profession", 164)
     local data = ledger.database
     local rows = data[reference[1]] or data.dimensions[reference[1]]
-    rows[1][reference[2]] = 999
+    local row = reference[1] == "recipes" and rows[fixture.cases[1].events[1].arguments[1]] or
+      reference[1] == "items" and rows[next(rows)] or
+      reference[1] == "professions" and rows[164] or rows[1]
+    row[reference[2]] = 999
     clock.current = clock.current + 200 * 86400
     local refused, reason = Ledger.New(data, clock)
     assert(refused == nil and reason:find(reference[2], 1, true), reference[2])
     assert(data.schemaVersion == 1 and #data.crafts == 7 and #data.reagents == 9)
-    assert(rows[1][reference[2]] == 999)
+    assert(row[reference[2]] == 999)
+  end
+end)
+
+test("natural metadata names are validated before commit and reload", function()
+  for _, kind in ipairs({ "recipe", "item", "profession" }) do
+    local ledger = newLedger()
+    assert(ledger:AddDimension(kind, 700, { name = false }) == nil)
+    assert(ledger.database.dimensions[kind .. "s"][700] == nil)
+    assert(ledger:AddDimension(kind, 700, { name = "Known" }) == 700)
+    ledger.database.dimensions[kind .. "s"][700].name = false
+    assert(Ledger.New(ledger.database) == nil)
   end
 end)
 
 test("sparse collections and missing counters cannot be silently repaired", function()
-  for _, collection in ipairs({ "crafts", "reagents", "items" }) do
+  for _, collection in ipairs({ "crafts", "reagents" }) do
     local ledger = newLedger()
     replay(ledger, fixture.cases)
     local data = ledger.database
@@ -356,9 +377,9 @@ test("sparse collections and missing counters cannot be silently repaired", func
   data.nextCraftId = nil
   assert(Ledger.New(data) == nil and data.nextCraftId == nil)
   data.nextCraftId = 100
-  data.nextDimensionId.item = nil
-  assert(Ledger.New(data) == nil and data.nextDimensionId.item == nil)
   data.nextDimensionId.item = 100
+  assert(Ledger.New(data) == nil and data.nextDimensionId.item == 100)
+  data.nextDimensionId.item = nil
   data.retentionDays = false
   assert(Ledger.New(data) == nil and data.retentionDays == false)
   data.retentionDays = 180
@@ -369,11 +390,12 @@ end)
 test("dimension reference validation also rejects live invalid enrichment", function()
   local ledger = newLedger()
   for _, kind in ipairs({ "character", "session", "recipe", "item", "profession" }) do
-    local id = assert(ledger:AddDimension(kind, "target"))
+    local key = (kind == "recipe" or kind == "item" or kind == "profession") and 700 or "target"
+    local id = assert(ledger:AddDimension(kind, key))
     local field = (kind == "character" or kind == "session") and "realmDimensionId" or "expansionDimensionId"
     local counter = ledger.database.nextDimensionId[kind]
-    assert(ledger:AddDimension(kind, "target", { [field] = 999, name = "Must not stick" }) == nil)
-    assert(ledger:AddDimension(kind, "target", { name = "Valid" }) == id)
+    assert(ledger:AddDimension(kind, key, { [field] = 999, name = "Must not stick" }) == nil)
+    assert(ledger:AddDimension(kind, key, { name = "Valid" }) == id)
     assert(ledger.database.nextDimensionId[kind] == counter)
   end
 end)
@@ -411,16 +433,19 @@ test("invalid result snapshots cannot partially persist a craft", function()
   result.resourcesReturned[1] = result
   assert(ledger:RecordResult(result) == nil)
   assert(#ledger.database.crafts == 0 and #ledger.database.reagents == 0)
-  assert(ledger.database.nextCraftId == 1 and #ledger.database.dimensions.items == 0)
-  ledger:AddDimension("item", 100, { gameItemId = 101 })
-  assert(ledger:RecordResult({ itemID = 200, resourcesReturned = {
+  assert(ledger.database.nextCraftId == 1 and rowCount(ledger.database.dimensions.items) == 0)
+  assert(ledger:AddDimension("item", 100, { id = 101 }) == nil)
+  assert(ledger:AddDimension("item", 100))
+  assert(ledger:AddDimension("item", 100, { expansionDimensionId = 999 }) == nil)
+  assert(ledger.dimensionRows.item[100].expansionDimensionId == nil)
+  local recorded = assert(ledger:RecordResult({ itemID = 200, resourcesReturned = {
     { reagent = { itemID = 100 }, quantity = 1 },
-  } }) == nil)
-  assert(#ledger.database.crafts == 0 and #ledger.database.reagents == 0)
-  assert(ledger.database.nextCraftId == 1 and next(ledger.operationIndex) == nil)
+  } }))
+  assert(recorded.outputItemId == 200 and ledger.database.reagents[1].itemId == 100)
+  assert(ledger.database.nextCraftId == 2 and next(ledger.operationIndex) == nil)
   ledger.wall = function() return nil end
   assert(ledger:RecordResult({}) == nil)
-  assert(ledger.database.nextCraftId == 1)
+  assert(ledger.database.nextCraftId == 2)
 end)
 
 test("pruning is deterministic at age boundaries with consistent indexes", function()
@@ -444,7 +469,7 @@ test("pruning is deterministic at age boundaries with consistent indexes", funct
   assert(reloaded.operationIndex[sessionId] == nil and reloaded.database.nextCraftId == 3)
   assert(next(reloaded.craftById) == nil and next(reloaded.reagentsByCraftId) == nil)
   assert(#reloaded.craftIds == 0 and #reloaded.craftIdsByTime == 0)
-  assert(#reloaded.database.dimensions.items == 1)
+  assert(rowCount(reloaded.database.dimensions.items) == 1)
 end)
 
 test("real concentration batch retains separate results with intentionally absent recipe attribution", function()
@@ -454,7 +479,7 @@ test("real concentration batch retains separate results with intentionally absen
   local first, second = ledger.database.crafts[1], ledger.database.crafts[2]
   assert(first.id ~= second.id and first.gameOperationId ~= second.gameOperationId)
   for _, craft in ipairs(ledger.database.crafts) do
-    assert(craft.recipeDimensionId == nil)
+    assert(craft.recipeId == nil)
     assert(craft.concentrationSpent == 185 and craft.hasIngenuityProc == false and craft.ingenuityRefund == 93)
     assert(craft.netConcentration == nil and craft.actualRefund == nil)
   end
@@ -494,8 +519,8 @@ test("allocation snapshots reject zero slot and item IDs", function()
   }))
   assert(request.allocations and #request.allocations == 1)
   assert(request.allocations[1].dataSlotIndex == 2)
-  local item = ledger.dimensionRows.item[request.allocations[1].itemDimensionId]
-  assert(item.gameItemId == 102)
+  local item = ledger.dimensionRows.item[request.allocations[1].itemId]
+  assert(item.id == 102)
 
   local unknown = assert(ledger:SubmitCraft(457, 1, false, nil, {
     { dataSlotIndex = 0, quantity = 1, reagent = { itemID = 103 } },
@@ -513,7 +538,7 @@ test("sanitized personal craft replay preserves quote, allocation, returns, and 
     assert(request.requestedCount == scenario.requestedCount)
     for _, result in ipairs(scenario.results) do
       local craft = assert(ledger:RecordResult(result))
-      assert(craft.requestId == request.id and craft.recipeDimensionId == request.recipeDimensionId)
+      assert(craft.requestId == request.id and craft.recipeId == request.recipeId)
     end
     if scenario.failedQueuedOperation then ledger:CancelCraft() end
   end
@@ -521,7 +546,7 @@ test("sanitized personal craft replay preserves quote, allocation, returns, and 
   assert(#data.requests == 4 and #data.crafts == 6 and #data.reagents == 8)
   assert(data.requests[1].allocations[1].allocatedQuantity == 3)
   assert(data.requests[1].allocations[1].quality == 1)
-  assert(data.requests[2].allocations[1].itemDimensionId ~= data.requests[1].allocations[1].itemDimensionId)
+  assert(data.requests[2].allocations[1].itemId ~= data.requests[1].allocations[1].itemId)
   assert(data.requests[2].useConcentration and data.requests[2].concentrationCost == 81)
   assert(data.crafts[2].concentrationSpent == 80 and data.crafts[2].hasIngenuityProc == false)
   assert(data.reagents[1].returnedQuantity == 1 and data.reagents[2].returnedQuantity == 1)
@@ -532,7 +557,7 @@ test("sanitized personal craft replay preserves quote, allocation, returns, and 
   assert(assert(ledger:RecordResult({ operationID = 3002 })).requestId == nil)
 end)
 
-test("ambiguous submissions and duplicate allocation items do not guess attribution", function()
+test("new submissions supersede unfinished personal requests without guessing duplicate returns", function()
   local ledger = newLedger()
   local first = assert(ledger:SubmitCraft(1, 3, false, nil, {
     { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 100 } },
@@ -546,12 +571,345 @@ test("ambiguous submissions and duplicate allocation items do not guess attribut
   assert(ledger.database.reagents[2].returnedQuantity == nil)
   assert(ledger.database.reagents[3].allocatedQuantity == nil)
   assert(ledger.database.reagents[3].returnedQuantity == 1)
-  ledger:SubmitCraft(2, 2, false)
-  assert(assert(ledger:RecordResult({ operationID = 5 })).requestId == nil)
+  local second = assert(ledger:SubmitCraft(2, 2, false))
+  local resumed = assert(ledger:RecordResult({ operationID = 5 }))
+  assert(resumed.requestId == second.id and resumed.recipeId == second.recipeId)
   ledger:CancelCraft()
   ledger:SubmitCraft(3, 2, false)
   assert(assert(ledger:RecordResult({ operationID = 5 })).requestId == 3)
   assert(assert(ledger:RecordResult({})).requestId == 3)
+end)
+
+test("a partial batch is superseded by a new recipe in the same session", function()
+  local ledger = newLedger()
+  local first = assert(ledger:SubmitCraft(101, 25, false))
+  ledger:BeginCraft(101)
+  assert(assert(ledger:RecordResult({ operationID = 1 })).requestId == first.id)
+  local second = assert(ledger:SubmitCraft(102, 2, false))
+  for operationId = 2, 3 do
+    ledger:BeginCraft(102)
+    local craft = assert(ledger:RecordResult({ operationID = operationId }))
+    assert(craft.requestId == second.id and craft.recipeId == second.recipeId)
+  end
+  assert(ledger.pendingRequest == nil and ledger.requestAmbiguous == nil)
+  assert(ledger.database.requests[1].requestedCount == 25)
+end)
+
+test("unknown recipe repair transfers uniquely evidenced crafts and preserves durable series", function()
+  local ledger, clock = newLedger()
+  ledger:AddDimension("profession", 800, { name = "Sanitized Profession" })
+  ledger:AddDimension("recipe", 101, { professionId = 800 })
+  ledger:BeginCraft(101)
+  local attributed = assert(ledger:RecordResult({ operationID = 1, itemID = 500,
+    quantity = 1, multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false }))
+  ledger:BeginCraft(102)
+  assert(ledger:RecordResult({ operationID = 2, itemID = 600 }))
+  ledger:BeginCraft(103)
+  assert(ledger:RecordResult({ operationID = 3, itemID = 600 }))
+
+  local request = assert(ledger:SubmitCraft(101, 1, false))
+  ledger:CancelCraft()
+  local function unknown(operationId, itemId, result)
+    result = result or {}
+    result.operationID = operationId
+    result.itemID = itemId
+    ledger:BeginCraft(nil)
+    return assert(ledger:RecordResult(result))
+  end
+  local first = unknown(4, 500, { quantity = 2, multicraft = 1,
+    concentrationSpent = 10, hasIngenuityProc = true, ingenuityRefund = 3 })
+  local second = unknown(5, 500, { quantity = 4, concentrationSpent = 20,
+    hasIngenuityProc = false })
+  second.requestId = request.id
+  local ambiguous = unknown(6, 600)
+  local unsupported = unknown(7, 700)
+  local missingOutput = unknown(8, nil)
+  local unknownSeries
+  for _, row in ipairs(ledger.database.craftSeries) do
+    if row.recipeId == nil then unknownSeries = row; break end
+  end
+  assert(unknownSeries and unknownSeries.craftCount == 5)
+  unknownSeries.craftCount = unknownSeries.craftCount + 1
+  unknownSeries.outputQuantity = unknownSeries.outputQuantity + 7
+  unknownSeries.outputQuantityObservedCount = unknownSeries.outputQuantityObservedCount + 1
+
+  local analysis = assert(ledger:AnalyzeUnknownRecipeRepair())
+  assert(analysis.unattributedCount == 5 and analysis.repairableCount == 2)
+  assert(ledger.unknownRecipeCount == 5)
+  assert(analysis.ambiguousCount == 1 and analysis.insufficientEvidenceCount == 1)
+  assert(analysis.missingOutputCount == 1 and #analysis.repairs == 2)
+  assert(analysis.ambiguous[1].craftId == ambiguous.id)
+  assert(#analysis.ambiguous[1].recipeIds == 2)
+  assert(first.recipeId == nil and second.recipeId == nil)
+
+  local originalAttributed = {
+    recipeId = attributed.recipeId,
+    requestId = attributed.requestId,
+    outputItemId = attributed.outputItemId,
+    timestamp = attributed.timestamp,
+  }
+  local result = assert(ledger:RepairUnknownRecipes())
+  assert(result.repairedCount == 2)
+  assert(ledger.unknownRecipeCount == 3)
+  assert(ledger.database.schemaVersion == 1)
+  local repairedFirst, repairedSecond = ledger.craftById[first.id], ledger.craftById[second.id]
+  assert(repairedFirst.recipeId == 101 and repairedSecond.recipeId == 101)
+  assert(repairedSecond.requestId == request.id)
+  assert(ledger.craftById[ambiguous.id].recipeId == nil)
+  assert(ledger.craftById[unsupported.id].recipeId == nil)
+  assert(ledger.craftById[missingOutput.id].recipeId == nil)
+  assert(attributed.recipeId == originalAttributed.recipeId and
+    attributed.requestId == originalAttributed.requestId and
+    attributed.outputItemId == originalAttributed.outputItemId and
+    attributed.timestamp == originalAttributed.timestamp)
+  assert(#ledger.craftIdsByRecipe[101] == 3 and ledger.recipeCounts[101] == 3)
+  assert(ledger.dimensionRows.recipe[101].professionId == 800)
+
+  local unknownAfter, targetAfter
+  for _, row in ipairs(ledger.database.craftSeries) do
+    if row.recipeId == nil then unknownAfter = row end
+    if row.recipeId == 101 then targetAfter = row end
+  end
+  assert(unknownAfter and unknownAfter.craftCount == 4)
+  assert(unknownAfter.outputQuantity == 7 and unknownAfter.outputQuantityObservedCount == 1)
+  assert(unknownAfter.multicraftBonusObservedCount == 0 and unknownAfter.multicraftBonus == nil)
+  assert(unknownAfter.concentrationSpentObservedCount == 0 and unknownAfter.concentrationSpent == nil)
+  assert(unknownAfter.ingenuityProcCountObservedCount == 0 and unknownAfter.ingenuityProcCount == nil)
+  assert(unknownAfter.ingenuityRefundObservedCount == 0 and unknownAfter.ingenuityRefund == nil)
+  assert(targetAfter and targetAfter.craftCount == 3)
+  assert(targetAfter.outputQuantity == 7 and targetAfter.outputQuantityObservedCount == 3)
+  assert(targetAfter.multicraftBonus == 1 and targetAfter.multicraftBonusObservedCount == 2)
+  assert(targetAfter.concentrationSpent == 30 and targetAfter.concentrationSpentObservedCount == 3)
+  assert(targetAfter.ingenuityProcCount == 1 and targetAfter.ingenuityProcCountObservedCount == 3)
+  assert(targetAfter.ingenuityRefund == 3 and targetAfter.ingenuityRefundObservedCount == 3)
+
+  local reloaded = assert(Ledger.New(ledger.database, clock))
+  assert(reloaded.database.schemaVersion == 1 and reloaded.craftById[first.id].recipeId == 101)
+  assert(reloaded.recipeCounts[101] == 3)
+  assert(ledger:RepairUnknownRecipes().repairedCount == 0)
+end)
+
+test("recipe-output knowledge is idempotent, supports multiple outputs, and preserves ambiguity", function()
+  local ledger = newLedger()
+  local unknownX = assert(ledger:RecordResult({ operationID = 1, itemID = 1200 }))
+  local unknownY = assert(ledger:RecordResult({ operationID = 2, itemID = 1201 }))
+  ledger:BeginCraft(1100)
+  assert(ledger:RecordResult({ operationID = 3, itemID = 1200 }))
+  ledger:BeginCraft(1100)
+  assert(ledger:RecordResult({ operationID = 4, itemID = 1201 }))
+  ledger:BeginCraft(1100)
+  assert(ledger:RecordResult({ operationID = 5, itemID = 1200 }))
+  assert(ledger.database.recipeOutputs[1100][1200] == true)
+  assert(ledger.database.recipeOutputs[1100][1201] == true)
+  assert(ledger.recipeOutputCount == 2)
+  assert(ledger.recipeIdsByOutputItemId[1200][1100] == true)
+  assert(ledger.recipeIdsByOutputItemId[1201][1100] == true)
+  local analysis = assert(ledger:AnalyzeUnknownRecipeRepair())
+  assert(analysis.repairableCount == 2 and analysis.ambiguousCount == 0)
+  assert(ledger:RepairUnknownRecipes().repairedCount == 2)
+  assert(ledger.craftById[unknownX.id].recipeId == 1100 and
+    ledger.craftById[unknownY.id].recipeId == 1100)
+
+  ledger:BeginCraft(1101)
+  assert(ledger:RecordResult({ operationID = 6, itemID = 1200 }))
+  assert(ledger.database.recipeOutputs[1101][1200] == true)
+  assert(ledger.recipeOutputCount == 3)
+  assert(ledger.recipeIdsByOutputItemId[1200][1100] == true and
+    ledger.recipeIdsByOutputItemId[1200][1101] == true)
+  local ambiguous = assert(ledger:RecordResult({ operationID = 7, itemID = 1200 }))
+  analysis = assert(ledger:AnalyzeUnknownRecipeRepair())
+  assert(analysis.ambiguousCount == 1 and analysis.repairableCount == 0)
+  assert(ledger:RepairUnknownRecipes().repairedCount == 0)
+  assert(ledger.craftById[ambiguous.id].recipeId == nil and ledger.unknownRecipeCount == 1)
+  assert(ledger.database.recipeOutputs[1100][1200] == true)
+end)
+
+test("recipe-output bootstrap is idempotent and survives source-craft retention", function()
+  local ledger, clock = newLedger({ retentionDays = 1 })
+  ledger:BeginCraft(1300)
+  assert(ledger:RecordResult({ operationID = 1, itemID = 1400, quantity = 2 }))
+  assert(ledger.recipeOutputCount == 1)
+  ledger.database.recipeOutputs = nil
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  assert(loaded.database.schemaVersion == 1 and loaded.database.recipeOutputs ~= nil)
+  assert(next(loaded.database.recipeOutputs) == nil)
+  local bootstrap = assert(loaded:BootstrapRecipeOutputs())
+  assert(bootstrap.learned == 1 and bootstrap.existing == 0 and bootstrap.relationshipCount == 1)
+  bootstrap = assert(loaded:BootstrapRecipeOutputs())
+  assert(bootstrap.learned == 0 and bootstrap.existing == 1 and bootstrap.relationshipCount == 1)
+  assert(loaded.recipeIdsByOutputItemId[1400][1300] == true)
+
+  clock.current = clock.current + 2 * 86400
+  local pruned = assert(Ledger.New(loaded.database, clock))
+  assert(#pruned.database.crafts == 0 and pruned.database.recipeOutputs[1300][1400] == true)
+  assert(pruned.recipeIdsByOutputItemId[1400][1300] == true)
+  assert(pruned:CreateSession({ startedAt = clock.current, characterName = "Later Crafter" }))
+  local unknown = assert(pruned:RecordResult({ operationID = 2, itemID = 1400, quantity = 3 }))
+  local analysis = assert(pruned:AnalyzeUnknownRecipeRepair())
+  assert(analysis.repairableCount == 1)
+  assert(pruned:RepairUnknownRecipes().repairedCount == 1)
+  assert(pruned.craftById[unknown.id].recipeId == 1300 and pruned.unknownRecipeCount == 0)
+  assert(pruned.database.schemaVersion == 1 and pruned.database.recipeOutputs[1300][1400] == true)
+  local reloaded = assert(Ledger.New(pruned.database, clock))
+  assert(reloaded.recipeIdsByOutputItemId[1400][1300] == true)
+  assert(reloaded.craftById[unknown.id].recipeId == 1300)
+end)
+
+test("unknown recipe repair evidence can improve and staged index failures are atomic", function()
+  local ledger = newLedger()
+  ledger:BeginCraft(nil)
+  local historical = assert(ledger:RecordResult({ operationID = 1, itemID = 900 }))
+  local before = assert(ledger:AnalyzeUnknownRecipeRepair())
+  assert(before.insufficientEvidenceCount == 1 and before.repairableCount == 0)
+  assert(ledger.unknownRecipeCount == 1)
+  ledger:BeginCraft(901)
+  assert(ledger:RecordResult({ operationID = 2, itemID = 900 }))
+  assert(ledger:AnalyzeUnknownRecipeRepair().repairableCount == 1)
+
+  local database = ledger.database
+  local oldRebuild = Ledger.RebuildIndexes
+  Ledger.RebuildIndexes = function() error("injected staged rebuild failure") end
+  local failed, reason = ledger:RepairUnknownRecipes()
+  Ledger.RebuildIndexes = oldRebuild
+  assert(failed == nil and reason:match("repair index staging failed"))
+  assert(ledger.database == database and ledger.craftById[historical.id].recipeId == nil)
+  assert(ledger.unknownRecipeCount == 1)
+  assert(ledger:RepairUnknownRecipes().repairedCount == 1)
+  assert(ledger.craftById[historical.id].recipeId == 901)
+  assert(ledger.unknownRecipeCount == 0)
+end)
+
+test("unknown recipe count is derived on load and follows commits pruning and clear", function()
+  local ledger, clock = newLedger({ retentionDays = 1 })
+  for index = 1, 3 do
+    ledger:BeginCraft(101)
+    assert(ledger:RecordResult({ operationID = index, itemID = 500 }))
+  end
+  assert(ledger.unknownRecipeCount == 0)
+  ledger:BeginCraft(nil)
+  local prunedUnknown = assert(ledger:RecordResult({ operationID = 4, itemID = 600 }))
+  assert(ledger.unknownRecipeCount == 1)
+  ledger:BeginCraft(nil)
+  assert(ledger:RecordResult({ operationID = 5, itemID = 600 }))
+  assert(ledger.unknownRecipeCount == 2)
+  local database = ledger.database
+  assert(database.unknownRecipeCount == nil)
+
+  local reloaded = assert(Ledger.New(database, clock))
+  assert(reloaded.database ~= database and reloaded.unknownRecipeCount == 2)
+  assert(reloaded:RecordResult("invalid") == nil and reloaded.unknownRecipeCount == 2)
+  reloaded.craftById[prunedUnknown.id].timestamp = clock.current - 86401
+  reloaded:Prune(clock.current)
+  assert(reloaded.unknownRecipeCount == 1)
+  local durableUnknownSeries
+  for _, row in ipairs(database.craftSeries) do
+    if row.recipeId == nil then durableUnknownSeries = row end
+  end
+  assert(durableUnknownSeries and durableUnknownSeries.craftCount == 2)
+  assert(reloaded:ClearHistory() and reloaded.unknownRecipeCount == 0)
+end)
+
+test("a late begin keeps its observed recipe without claiming the newer request", function()
+  local ledger = newLedger()
+  assert(ledger:SubmitCraft(101, 3, false))
+  local second = assert(ledger:SubmitCraft(102, 1, false))
+  ledger:BeginCraft(101)
+  local late = assert(ledger:RecordResult({ operationID = 1 }))
+  assert(late.requestId == nil and late.recipeId == 101)
+  ledger:BeginCraft(102)
+  local craft = assert(ledger:RecordResult({ operationID = 2 }))
+  assert(craft.requestId == nil and craft.recipeId == second.recipeId)
+  assert(ledger.requestById[second.id] and ledger.requestById[second.id].recipeId == 102 and
+    ledger.requestById[second.id].requestedCount == 1)
+end)
+
+test("a new submission clears an abandoned begin without a result", function()
+  local ledger = newLedger()
+  assert(ledger:SubmitCraft(101, 3, false))
+  ledger:BeginCraft(101)
+  local second = assert(ledger:SubmitCraft(102, 1, false))
+  local craft = assert(ledger:RecordResult({ operationID = 1 }))
+  assert(craft.requestId == second.id and craft.recipeId == second.recipeId)
+end)
+
+test("a completed batch does not obstruct a subsequent recipe", function()
+  local ledger = newLedger()
+  local first = assert(ledger:SubmitCraft(101, 1, false))
+  assert(assert(ledger:RecordResult({ operationID = 1 })).requestId == first.id)
+  local second = assert(ledger:SubmitCraft(102, 1, false))
+  assert(assert(ledger:RecordResult({ operationID = 2 })).requestId == second.id)
+end)
+
+test("a same-recipe restart uses the latest submission and allocations", function()
+  local ledger = newLedger()
+  local first = assert(ledger:SubmitCraft(101, 3, false))
+  assert(assert(ledger:RecordResult({ operationID = 1 })).requestId == first.id)
+  local second = assert(ledger:SubmitCraft(101, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 501 } },
+  }))
+  ledger:BeginCraft(101)
+  local craft = assert(ledger:RecordResult({ operationID = 2 }))
+  assert(craft.requestId == second.id and craft.recipeId == first.recipeId)
+  assert(ledger.database.reagents[1].craftId == craft.id and ledger.database.reagents[1].itemId == 501)
+end)
+
+test("cancelled batches and profession-window close discard pending correlation", function()
+  local ledger = newLedger()
+  assert(ledger:SubmitCraft(101, 3, false))
+  ledger:CancelCraft()
+  assert(assert(ledger:RecordResult({ operationID = 1 })).requestId == nil)
+  local second = assert(ledger:SubmitCraft(102, 2, false))
+  assert(assert(ledger:RecordResult({ operationID = 2 })).requestId == second.id)
+  ledger:CancelCraft()
+  assert(ledger.pendingRequest == nil and ledger.requestAmbiguous == nil)
+  assert(assert(ledger:RecordResult({ operationID = 3 })).requestId == nil)
+  local third = assert(ledger:SubmitCraft(103, 1, false))
+  assert(assert(ledger:RecordResult({ operationID = 4 })).requestId == third.id)
+end)
+
+test("a character switch cannot inherit an unfinished request", function()
+  local ledger = newLedger()
+  local first = assert(ledger:SubmitCraft(101, 3, false))
+  local newSession = assert(ledger:CreateSession({ startedAt = 1800000001,
+    characterName = "Other Crafter", characterGUID = "Player-Other", realmName = "Sanitized Realm" }))
+  assert(ledger.pendingRequest == nil and ledger.requestAmbiguous == nil)
+  assert(assert(ledger:RecordResult({ operationID = 1 })).requestId == nil)
+  local second = assert(ledger:SubmitCraft(102, 1, false))
+  local craft = assert(ledger:RecordResult({ operationID = 2 }))
+  assert(craft.requestId == second.id and craft.sessionId == newSession and first.sessionId ~= newSession)
+end)
+
+test("authoritative begin supersedes a stale incomplete request from another recipe", function()
+  local ledger = newLedger()
+  local stale = assert(ledger:SubmitCraft(101, 5, true))
+  ledger:BeginCraft(101)
+  local first = assert(ledger:RecordResult({ operationID = 1, quantity = 1 }))
+  assert(first.requestId == stale.id and first.recipeId == 101)
+  assert(ledger.pendingRequest and ledger.pendingRequest.remaining == 4)
+
+  -- Retail can stop an incomplete batch without a close/cancel signal. A later
+  -- begin for a different recipe is authoritative and must not remain unknown.
+  ledger:BeginCraft(202)
+  local nextCraft = assert(ledger:RecordResult({ operationID = 2, quantity = 1 }))
+  assert(nextCraft.requestId == nil and nextCraft.recipeId == 202)
+  assert(ledger.pendingRequest == nil and ledger.requestAmbiguous == nil)
+
+  ledger:BeginCraft(303)
+  local following = assert(ledger:RecordResult({ operationID = 3, quantity = 1 }))
+  assert(following.recipeId == 303)
+end)
+
+test("unsupported concurrent crafts cannot be superseded into personal results", function()
+  local ledger = newLedger()
+  assert(ledger:SubmitCraft(101, 3, false))
+  ledger:InvalidateCraft()
+  assert(ledger:SubmitCraft(102, 1, false))
+  ledger:BeginCraft(102)
+  local craft = assert(ledger:RecordResult({ operationID = 1 }))
+  assert(craft.requestId == nil and craft.recipeId == nil)
+  ledger:CancelCraft()
+  local nextRequest = assert(ledger:SubmitCraft(103, 1, false))
+  assert(assert(ledger:RecordResult({ operationID = 2 })).requestId == nextRequest.id)
 end)
 
 test("unsupported craft submission cannot inherit a personal request", function()
@@ -560,7 +918,7 @@ test("unsupported craft submission cannot inherit a personal request", function(
   ledger:InvalidateCraft()
   ledger:BeginCraft(789)
   assert(assert(ledger:RecordResult({ operationID = 1 })).requestId == nil)
-  assert(ledger.database.crafts[1].recipeDimensionId == nil)
+  assert(ledger.database.crafts[1].recipeId == nil)
   assert(#ledger.database.requests == 1 and #ledger.database.crafts == 1)
 end)
 
@@ -585,13 +943,13 @@ test("reload preserves partial returns and refuses invalid request references", 
   local request = assert(reloaded:SubmitCraft(456, 1, false))
   assert(request.id == 1 and assert(reloaded:RecordResult({})).id == 2)
   assert(assert(Ledger.New(reloaded.database)).database.requests[1].completedCount == nil)
-  for _, field in ipairs({ "requestId", "sessionDimensionId", "recipeDimensionId", "itemDimensionId" }) do
+  for _, field in ipairs({ "requestId", "sessionId", "recipeId", "itemId" }) do
     local data = reloaded.database
     local copied = assert(Ledger.New(data)).database
     local row = field == "requestId" and copied.crafts[2] or
-      field == "itemDimensionId" and copied.requests[1].allocations or copied.requests[1]
-    if field == "itemDimensionId" then
-      copied.requests[1].allocations = { { dataSlotIndex = 1, allocatedQuantity = 1, itemDimensionId = 999 } }
+      field == "itemId" and copied.requests[1].allocations or copied.requests[1]
+    if field == "itemId" then
+      copied.requests[1].allocations = { { dataSlotIndex = 1, allocatedQuantity = 1, itemId = 999 } }
     else
       row[field] = 999
     end
@@ -599,7 +957,7 @@ test("reload preserves partial returns and refuses invalid request references", 
     assert(refused == nil and copied.schemaVersion == 1 and copied.requests[1].id == 1, field)
   end
   local mismatched = assert(Ledger.New(reloaded.database)).database
-  mismatched.crafts[2].recipeDimensionId = mismatched.crafts[1].recipeDimensionId
+  mismatched.crafts[2].recipeId = 999
   assert(Ledger.New(mismatched) == nil)
 end)
 
@@ -681,7 +1039,7 @@ test("startup prunes before building runtime indexes once", function()
   assert(reloaded.pendingRequest == nil)
   reloaded.currentSessionId = sessionId
   reloaded:BeginCraft(14)
-  assert(assert(reloaded:RecordResult({ operationID = 10 })).recipeDimensionId ~= nil)
+  assert(assert(reloaded:RecordResult({ operationID = 10 })).recipeId == 14)
 end)
 
 test("secondary indexes track domain identities and monotonic dimension enrichment", function()
@@ -696,7 +1054,7 @@ test("secondary indexes track domain identities and monotonic dimension enrichme
   local indexes = ledger.craftIdsByRecipe
   local expansion = assert(ledger:AddDimension("expansion", "era", {}))
   local otherExpansion = assert(ledger:AddDimension("expansion", "other-era", {}))
-  local profession = assert(ledger:AddDimension("profession", "profession", {
+  local profession = assert(ledger:AddDimension("profession", 164, {
     expansionDimensionId = otherExpansion,
   }))
   local realm = assert(ledger:AddDimension("realm", "realm-key", {}))
@@ -705,12 +1063,10 @@ test("secondary indexes track domain identities and monotonic dimension enrichme
   }))
   assert(ledger.craftIdsByRecipe == indexes)
   assert(ledger:AddDimension("recipe", 12, {
-    gameRecipeId = 12, professionDimensionId = profession, expansionDimensionId = expansion,
-  }) == request.recipeDimensionId)
+    professionId = profession, expansionDimensionId = expansion,
+  }) == request.recipeId)
   assert(ledger.craftIdsByExpansion.era[1] == craft.id)
   assert(ledger.craftIdsByExpansion["other-era"] == nil)
-  assert(next(ledger.craftIdsByProfession) == nil)
-  assert(ledger:AddDimension("profession", "profession", { skillLineId = 164 }) == profession)
   assert(ledger.craftIdsByProfession[164][1] == craft.id)
   local session = ledger.dimensionRows.session[sessionId]
   assert(ledger:AddDimension("session", session.key, {
@@ -721,13 +1077,13 @@ test("secondary indexes track domain identities and monotonic dimension enrichme
   end
   indexes = ledger.craftIdsByRecipe
   assert(ledger:AddDimension("recipe", 12, {
-    gameRecipeId = 12, professionDimensionId = profession, expansionDimensionId = expansion,
+    professionId = profession, expansionDimensionId = expansion,
   }))
   assert(ledger.craftIdsByRecipe == indexes)
-  assert(ledger:AddDimension("recipe", 12, { professionDimensionId = 999, name = "Conflict" }) == nil)
-  assert(ledger.craftIdsByRecipe == indexes and ledger.dimensionRows.recipe[request.recipeDimensionId].name == nil)
-  local override = assert(ledger:AddDimension("profession", "override", { skillLineId = 171 }))
-  craft.professionDimensionId = override
+  assert(ledger:AddDimension("recipe", 12, { professionId = 999, name = "Conflict" }) == nil)
+  assert(ledger.craftIdsByRecipe == indexes and ledger.dimensionRows.recipe[request.recipeId].name == nil)
+  local override = assert(ledger:AddDimension("profession", 171))
+  craft.professionId = override
   local reloaded = assert(Ledger.New(ledger.database, clock))
   assert(reloaded.craftIdsByProfession[164] == nil)
   assert(reloaded.craftIdsByProfession[171][1] == craft.id)
@@ -758,17 +1114,17 @@ test("metadata-only dimension enrichment never rebuilds filter indexes", functio
   local request = assert(ledger:SubmitCraft(12, 1, false))
   assert(ledger:RecordResult({ itemID = 100 }))
   local expansion = assert(ledger:AddDimension("expansion", "era", {}))
-  local profession = assert(ledger:AddDimension("profession", "profession", { skillLineId = 164 }))
+  local profession = assert(ledger:AddDimension("profession", 164))
   local session = ledger.dimensionRows.session[ledger.currentSessionId]
   local character = ledger.dimensionRows.character[session.characterDimensionId]
   local realm = ledger.dimensionRows.realm[session.realmDimensionId]
   local indexedRecipes = ledger.craftIdsByRecipe
   ledger.RebuildFilterIndexes = function() error("metadata enrichment rebuilt filter indexes") end
   local ok, reason = pcall(function()
-    assert(ledger:AddDimension("recipe", 12, { name = "Recipe" }) == request.recipeDimensionId)
+    assert(ledger:AddDimension("recipe", 12, { name = "Recipe" }) == request.recipeId)
     assert(ledger:AddDimension("item", 100, { name = "Item", expansionDimensionId = expansion }))
     assert(ledger:AddDimension("expansion", "era", { displayName = "Era", chronologicalOrder = 1 }))
-    assert(ledger:AddDimension("profession", "profession", {
+    assert(ledger:AddDimension("profession", 164, {
       name = "Profession", expansionDimensionId = expansion,
     }) == profession)
     assert(ledger:AddDimension("session", session.key, {
@@ -778,7 +1134,7 @@ test("metadata-only dimension enrichment never rebuilds filter indexes", functio
     assert(ledger:AddDimension("realm", realm.key, { metadata = { note = "Observed" } }))
     assert(ledger.craftIdsByRecipe == indexedRecipes)
     assert(session.capabilities.measurements.available == false)
-    assert(ledger.dimensionRows.recipe[request.recipeDimensionId].name == "Recipe")
+    assert(ledger.dimensionRows.recipe[request.recipeId].name == "Recipe")
   end)
   ledger.RebuildFilterIndexes = nil
   assert(ok, reason)
@@ -809,12 +1165,12 @@ test("incremental indexes are complete before the committed callback", function(
     assert(self.reagentsByCraftId[craft.id][1].returnedQuantity == 0)
     assert(self.craftIds[1] == craft.id and self.craftIdsByTime[1] == craft.id)
     assert(self.craftIdsByRecipe[12][1] == craft.id)
-    assert(self.operationIndex[craft.sessionDimensionId][10] == 1)
+    assert(self.operationIndex[craft.sessionId][10] == 1)
     local series = self.database.craftSeries[1]
-    local characterId = self.dimensionRows.session[craft.sessionDimensionId].characterDimensionId
-    assert(series.craftCount == 1 and series.recipeDimensionId == request.recipeDimensionId)
+    local characterId = self.dimensionRows.session[craft.sessionId].characterDimensionId
+    assert(series.craftCount == 1 and series.recipeId == request.recipeId)
     assert(series.characterDimensionId == characterId)
-    assert(self.seriesByKey[series.bucketStart][characterId][request.recipeDimensionId] == series)
+    assert(self.seriesByKey[series.bucketStart][characterId][request.recipeId] == series)
     assert(series.ingenuityProcCount == 1 and series.ingenuityProcCountObservedCount == 1)
     assert(series.ingenuityRefund == 162 and series.ingenuityRefundObservedCount == 1)
     callbackCompleted = true
@@ -891,7 +1247,7 @@ test("daily series distinguish observed zero from unavailable metrics", function
   local ledger = newLedger()
   assert(ledger:RecordResult({}))
   local series = ledger.database.craftSeries[1]
-  assert(series.craftCount == 1 and series.recipeDimensionId == nil)
+  assert(series.craftCount == 1 and series.recipeId == nil)
   for _, metric in ipairs({ "outputQuantity", "multicraftBonus", "concentrationSpent",
     "ingenuityProcCount", "ingenuityRefund" }) do
     assert(series[metric] == nil and series[metric .. "ObservedCount"] == 0)
@@ -933,12 +1289,12 @@ test("daily series grain uses UTC day character and optional recipe across sessi
   ledger:CreateSession({})
   assert(ledger:RecordResult({}))
   local unknown = ledger.database.craftSeries[3]
-  assert(unknown.characterDimensionId == nil and unknown.recipeDimensionId == nil)
+  assert(unknown.characterDimensionId == nil and unknown.recipeId == nil)
   assert(unknown.craftCount == 2 and ledger.seriesByKey[unknown.bucketStart][0][0] == unknown)
   assert(ledger:SubmitCraft(12, 1, false))
   assert(ledger:RecordResult({}))
   assert(ledger.database.craftSeries[4].characterDimensionId == nil)
-  assert(ledger.database.craftSeries[4].recipeDimensionId == request.recipeDimensionId)
+  assert(ledger.database.craftSeries[4].recipeId == request.recipeId)
   metadata.characterGUID = "Player-Other"
   ledger:CreateSession(metadata)
   assert(ledger:SubmitCraft(12, 1, false))
@@ -987,10 +1343,10 @@ test("reload preserves a persisted unknown-character grain after session enrichm
     operationID = 1, hasIngenuityProc = true, ingenuityRefund = 162,
   }))
   local row = ledger.database.craftSeries[#ledger.database.craftSeries]
-  assert(row.characterDimensionId == nil and row.recipeDimensionId == craft.recipeDimensionId)
+  assert(row.characterDimensionId == nil and row.recipeId == craft.recipeId)
 
   local characterId = assert(ledger:AddDimension("character", "late-character", { name = "Late Character" }))
-  local session = ledger.dimensionRows.session[craft.sessionDimensionId]
+  local session = ledger.dimensionRows.session[craft.sessionId]
   assert(ledger:AddDimension("session", session.key, { characterDimensionId = characterId }) == session.id)
   assert(session.characterDimensionId == characterId)
   assert(row.characterDimensionId == nil)
@@ -998,7 +1354,7 @@ test("reload preserves a persisted unknown-character grain after session enrichm
   local reloaded = assert(Ledger.New(ledger.database, clock))
   local loadedRow = reloaded.database.craftSeries[#reloaded.database.craftSeries]
   assert(loadedRow.characterDimensionId == nil)
-  assert(loadedRow.recipeDimensionId == craft.recipeDimensionId)
+  assert(loadedRow.recipeId == craft.recipeId)
   assert(loadedRow.ingenuityProcCount == 1 and loadedRow.ingenuityProcCountObservedCount == 1)
   assert(loadedRow.ingenuityRefund == 162 and loadedRow.ingenuityRefundObservedCount == 1)
 end)
@@ -1068,17 +1424,17 @@ test("series keep dimensions and enrichable metadata after all detailed facts ex
   local series = reloaded.database.craftSeries[1]
   assert(series.craftCount == 1 and series.outputQuantity == 2)
   assert(reloaded.dimensionRows.character[row.characterDimensionId])
-  local profession = assert(reloaded:AddDimension("profession", "profession", { skillLineId = 164 }))
+  local profession = assert(reloaded:AddDimension("profession", 164))
   local expansion = assert(reloaded:AddDimension("expansion", "era", {}))
   assert(reloaded:AddDimension("recipe", 12, {
-    professionDimensionId = profession, expansionDimensionId = expansion, name = "Enriched",
-  }) == request.recipeDimensionId)
-  assert(series.recipeDimensionId == request.recipeDimensionId)
-  assert(series.professionDimensionId == nil and series.expansionDimensionId == nil)
-  assert(reloaded.dimensionRows.recipe[series.recipeDimensionId].professionDimensionId == profession)
+    professionId = profession, expansionDimensionId = expansion, name = "Enriched",
+  }) == request.recipeId)
+  assert(series.recipeId == request.recipeId)
+  assert(series.professionId == nil and series.expansionDimensionId == nil)
+  assert(reloaded.dimensionRows.recipe[series.recipeId].professionId == profession)
   reloaded:Prune(clock.current + 1000 * 86400)
   assert(reloaded.database.craftSeries[1] == series and series.outputQuantity == 2)
-  assert(reloaded.seriesByKey[series.bucketStart][series.characterDimensionId][series.recipeDimensionId] == series)
+  assert(reloaded.seriesByKey[series.bucketStart][series.characterDimensionId][series.recipeId] == series)
   assert(#assert(Ledger.New(reloaded.database, clock)).database.craftSeries == 1)
 end)
 
@@ -1090,7 +1446,7 @@ test("series validation rejects malformed grains references coverage and sums at
     function(data) data.craftSeries[1].bucketStart = 1 end,
     function(data) data.craftSeries[1].bucketStart = math.huge end,
     function(data) data.craftSeries[1].characterDimensionId = 999 end,
-    function(data) data.craftSeries[1].recipeDimensionId = 999 end,
+    function(data) data.craftSeries[1].recipeId = 999 end,
     function(data) data.craftSeries[1].realmDimensionId = 1 end,
     function(data) data.craftSeries[1].craftCount = 0 end,
     function(data) data.craftSeries[1].craftCount = 1.5 end,
@@ -1135,8 +1491,8 @@ test("failed series accumulation preserves recipe correlation and adds no dimens
     operationID = 1, quantity = 1e308, itemID = 100,
     resourcesReturned = { { reagent = { itemID = 101 }, quantity = 1 } },
   }))
-  local itemCount = #ledger.database.dimensions.items
-  local recipeCount = #ledger.database.dimensions.recipes
+  local itemCount = rowCount(ledger.database.dimensions.items)
+  local recipeCount = rowCount(ledger.database.dimensions.recipes)
   local row = ledger.database.craftSeries[1]
   assert(row.outputQuantity == 1e308 and row.craftCount == 1)
 
@@ -1147,14 +1503,14 @@ test("failed series accumulation preserves recipe correlation and adds no dimens
   })
   assert(rejected == nil and reason:find("overflow", 1, true))
   assert(#ledger.database.crafts == 1 and ledger.database.nextCraftId == 2)
-  assert(#ledger.database.dimensions.items == itemCount)
-  assert(#ledger.database.dimensions.recipes == recipeCount)
-  assert(ledger.dimensionIndex.item["200"] == nil and ledger.dimensionIndex.item["201"] == nil)
+  assert(rowCount(ledger.database.dimensions.items) == itemCount)
+  assert(rowCount(ledger.database.dimensions.recipes) == recipeCount)
+  assert(ledger.dimensionRows.item[200] == nil and ledger.dimensionRows.item[201] == nil)
   assert(ledger.pendingRecipeId == 77 and ledger.ambiguousRecipe == nil)
   assert(row.outputQuantity == 1e308 and row.craftCount == 1)
 
   local recovered = assert(ledger:RecordResult({ operationID = 3, quantity = 1 }))
-  assert(recovered.recipeDimensionId == ledger.dimensionIndex.recipe["77"])
+  assert(recovered.recipeId == 77)
   assert(ledger.pendingRecipeId == nil and ledger.ambiguousRecipe == nil)
   assert(row.craftCount == 2 and row.outputQuantityObservedCount == 2)
 end)
@@ -1349,8 +1705,8 @@ test("craft and request IDs stop at the last safely advanceable counter without 
   assert(reloaded.craftById[maxInteger - 1] and reloaded.requestById[maxInteger - 1])
 end)
 
-test("all dimension counters allow their final ID and existing keys still work at exhaustion", function()
-  for _, kind in ipairs({ "realm", "character", "profession", "recipe", "item", "session", "expansion" }) do
+test("Core-owned dimension counters allow their final ID and existing keys still work", function()
+  for _, kind in ipairs({ "realm", "character", "session", "expansion" }) do
     local ledger, clock = newLedger()
     ledger.database.nextDimensionId[kind] = maxInteger - 1
     local id = assert(ledger:AddDimension(kind, "last", { name = "Last" }))
@@ -1399,12 +1755,11 @@ test("session creation stages all dimensions and preserves correlation on every 
   assert(ledger:CreateSession(metadata))
 end)
 
-test("result and request preflight collectively reserve distinct item dimensions", function()
+test("result and request record distinct WoW item IDs without allocating surrogates", function()
   for _, capture in ipairs({ "result", "request" }) do
     local ledger, clock = newLedger()
     assert(ledger:SubmitCraft(12, 2, false))
     ledger:BeginCraft(13)
-    ledger.database.nextDimensionId.item = maxInteger - 1
     local function attempt(twoItems)
       if capture == "result" then
         return ledger:RecordResult({ operationID = 1, itemID = 100, resourcesReturned = {
@@ -1416,63 +1771,47 @@ test("result and request preflight collectively reserve distinct item dimensions
         { dataSlotIndex = 2, quantity = 1, reagent = { itemID = twoItems and 101 or 100 } },
       })
     end
-    unchangedAfter(ledger, function() return attempt(true) end)
+    assert(attempt(true))
+    assert(ledger.dimensionRows.item[100] and ledger.dimensionRows.item[101])
     assert(attempt(false))
-    assert(ledger.database.nextDimensionId.item == maxInteger)
-    assert(#ledger.database.dimensions.items == 1)
+    assert(ledger.database.nextDimensionId.item == nil)
+    assert(rowCount(ledger.database.dimensions.items) == 2)
     assert(attempt(false))
     assert(Ledger.New(ledger.database, clock))
   end
 end)
 
-test("failed captures cannot enrich existing dimensions or consume pending correlation", function()
-  for _, capture in ipairs({ "result", "request" }) do
-    local ledger = newLedger()
-    local recipe = assert(ledger:AddDimension("recipe", 12))
-    local item = assert(ledger:AddDimension("item", 100))
-    assert(ledger:AddDimension("item", 101, { gameItemId = 999 }))
-    ledger:BeginCraft(12)
-    unchangedAfter(ledger, function()
-      if capture == "result" then
-        return ledger:RecordResult({ operationID = 1, itemID = 100, resourcesReturned = {
-          { reagent = { itemID = 101 }, quantity = 1 },
-        } })
-      end
-      return ledger:SubmitCraft(12, 1, false, nil, {
-        { dataSlotIndex = 1, quantity = 1, reagent = { itemID = 100 } },
-        { dataSlotIndex = 2, quantity = 1, reagent = { itemID = 101 } },
-      })
-    end)
-    assert(ledger.dimensionRows.recipe[recipe].gameRecipeId == nil)
-    assert(ledger.dimensionRows.item[item].gameItemId == nil)
-  end
+test("failed captures do not create natural metadata or consume pending correlation", function()
   local ledger = newLedger()
-  assert(ledger:SubmitCraft(12, 2, false))
-  ledger:BeginCraft(13)
+  ledger:BeginCraft(12)
   unchangedAfter(ledger, function() return ledger:RecordResult(false) end)
-  unchangedAfter(ledger, function() return ledger:RecordResult({ quantity = math.huge }) end)
+  unchangedAfter(ledger, function() return ledger:RecordResult({ itemID = 100, quantity = math.huge }) end)
+  assert(ledger.dimensionRows.recipe[12] == nil and ledger.dimensionRows.item[100] == nil)
+  assert(ledger.pendingRecipeId == 12)
+  unchangedAfter(ledger, function() return ledger:SubmitCraft(13, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 1, reagent = { itemID = 101 }, invalid = function() end },
+  }) end)
+  assert(ledger.dimensionRows.recipe[13] == nil and ledger.dimensionRows.item[101] == nil)
   ledger.wall = function() return nil end
   unchangedAfter(ledger, function() return ledger:RecordResult({}) end)
 end)
 
-test("recipe capacity failures are atomic while existing recipes remain usable", function()
+test("recipe identity is the WoW ID without a surrogate counter", function()
   local ledger, clock = newLedger()
-  ledger.database.nextDimensionId.recipe = maxInteger - 1
   ledger:BeginCraft(12)
   local first = assert(ledger:RecordResult({ operationID = 1 }))
-  assert(first.recipeDimensionId == maxInteger - 1)
-  assert(ledger.database.nextDimensionId.recipe == maxInteger)
+  assert(first.recipeId == 12 and ledger.database.nextDimensionId.recipe == nil)
   ledger:BeginCraft(13)
-  unchangedAfter(ledger, function() return ledger:RecordResult({ operationID = 2, itemID = 100 }) end)
-  unchangedAfter(ledger, function()
-    return ledger:SubmitCraft(13, 1, false, nil, {
-      { dataSlotIndex = 1, quantity = 1, reagent = { itemID = 100 } },
-    })
-  end)
+  local second = assert(ledger:RecordResult({ operationID = 2, itemID = 100 }))
+  assert(second.recipeId == 13 and second.outputItemId == 100)
+  assert(ledger:SubmitCraft(13, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 1, reagent = { itemID = 100 } },
+  }))
   ledger:CancelCraft()
   ledger:BeginCraft(12)
-  assert(assert(ledger:RecordResult({ operationID = 2 })).recipeDimensionId == first.recipeDimensionId)
+  assert(assert(ledger:RecordResult({ operationID = 3 })).recipeId == first.recipeId)
   assert(ledger:SubmitCraft(12, 1, false))
+  assert(rowCount(ledger.database.dimensions.recipes) == 2 and rowCount(ledger.database.dimensions.items) == 1)
   assert(Ledger.New(ledger.database, clock))
 end)
 
@@ -1495,7 +1834,7 @@ test("aggregate counts can reach the exact integer maximum but cannot advance pa
     assert(row.craftCount == maxInteger and row.outputQuantityObservedCount == maxInteger)
     assert(row.ingenuityProcCount == (proc and maxInteger or 0))
     assert(row.ingenuityProcCountObservedCount == maxInteger and row.ingenuityRefundObservedCount == maxInteger)
-    ledger:BeginCraft(13)
+    ledger:BeginCraft(12)
     unchangedAfter(ledger, function()
       return ledger:RecordResult({ itemID = 100, hasIngenuityProc = proc, ingenuityRefund = 0 })
     end)
@@ -1507,9 +1846,9 @@ test("persisted counts counters and reference IDs reject unsafe integers before 
   local setters = {
     function(data, value) data.nextCraftId = value end,
     function(data, value) data.nextRequestId = value end,
-    function(data, value) data.nextDimensionId.item = value end,
+    function(data, value) data.nextDimensionId.session = value end,
     function(data, value) data.crafts[1].id = value end,
-    function(data, value) data.crafts[1].sessionDimensionId = value end,
+    function(data, value) data.crafts[1].sessionId = value end,
     function(data, value) data.crafts[1].requestId = value end,
     function(data, value) data.requests[1].id = value end,
     function(data, value) data.requests[1].requestedCount = value end,
@@ -1517,7 +1856,7 @@ test("persisted counts counters and reference IDs reject unsafe integers before 
     function(data, value) data.requests[1].allocations[1].allocatedQuantity = value end,
     function(data, value) data.reagents[1].allocatedQuantity = value end,
     function(data, value) data.reagents[1].dataSlotIndex = value end,
-    function(data, value) data.dimensions.items[1].id = value end,
+    function(data, value) data.dimensions.items[100].id = value end,
     function(data, value) data.craftSeries[1].craftCount = value end,
     function(data, value) data.craftSeries[1].outputQuantityObservedCount = value end,
     function(data, value) data.craftSeries[1].ingenuityProcCount = value end,
@@ -1566,23 +1905,21 @@ test("adjacent near-limit numeric dimension identities remain distinct across ca
     { dataSlotIndex = 2, quantity = 1, reagent = { itemID = upper } },
   }))
   local craft = assert(ledger:RecordResult({ itemID = upper, operationID = upper }))
-  assert(request.allocations[1].itemDimensionId ~= request.allocations[2].itemDimensionId)
-  assert(craft.outputItemDimensionId == request.allocations[2].itemDimensionId)
+  assert(request.allocations[1].itemId ~= request.allocations[2].itemId)
+  assert(craft.outputItemId == request.allocations[2].itemId)
   ledger:BeginCraft(upper)
   local nextCraft = assert(ledger:RecordResult({ itemID = lower, operationID = lower }))
-  assert(nextCraft.recipeDimensionId ~= request.recipeDimensionId)
-  assert(nextCraft.outputItemDimensionId == request.allocations[1].itemDimensionId)
+  assert(nextCraft.recipeId ~= request.recipeId)
+  assert(nextCraft.outputItemId == request.allocations[1].itemId)
   for _, kind in ipairs({ "recipe", "item" }) do
-    assert(ledger.dimensionIndex[kind]["9007199254740990"])
-    assert(ledger.dimensionIndex[kind]["9007199254740991"])
-    assert(ledger.dimensionIndex[kind]["9007199254740990"] ~=
-      ledger.dimensionIndex[kind]["9007199254740991"])
+    assert(ledger.dimensionRows[kind][lower] and ledger.dimensionRows[kind][upper])
+    assert(ledger.dimensionRows[kind][lower] ~= ledger.dimensionRows[kind][upper])
   end
   local reloaded = assert(Ledger.New(ledger.database, clock))
-  assert(reloaded.operationIndex[craft.sessionDimensionId][upper] == 1)
-  assert(reloaded.operationIndex[craft.sessionDimensionId][lower] == 1)
-  assert(reloaded:AddDimension("recipe", upper, { gameRecipeId = upper }) == nextCraft.recipeDimensionId)
-  assert(reloaded:AddDimension("item", lower, { gameItemId = lower }) == nextCraft.outputItemDimensionId)
+  assert(reloaded.operationIndex[craft.sessionId][upper] == 1)
+  assert(reloaded.operationIndex[craft.sessionId][lower] == 1)
+  assert(reloaded:AddDimension("recipe", upper) == nextCraft.recipeId)
+  assert(reloaded:AddDimension("item", lower) == nextCraft.outputItemId)
 end)
 
 test("reagent return sum overflow does not commit staged dimensions or request changes", function()

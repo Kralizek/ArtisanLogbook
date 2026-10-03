@@ -8,21 +8,27 @@ separate from the SavedVariables persistence schema documented in
 ## API v1
 
 UI and addon consumers use the global `ArtisanLogbookAPI`, not SavedVariables,
-dimension rows, or the private addon namespace. The API is loaded before
-`ADDON_LOADED`; queries become available after Artisan Logbook initializes.
-Consumers should declare an addon dependency or wait for its load event.
-This contract is independent of the persistence schema and any future AL1
-portable export. No export, ad-hoc statistics beyond daily series, costing, or UI
-is implemented here.
+dimension rows, or the private Core addon namespace. The API is loaded before
+`ADDON_LOADED`; queries become available after `ArtisanLogbook_Core` initializes.
+Consumers should declare `## RequiredDeps: ArtisanLogbook_Core` and check
+`ArtisanLogbookAPI.GetVersion() == 1` before using this API. A different version
+is incompatible; there is no version negotiation. This contract version is
+independent of the Core addon's TOC version, persistence `schemaVersion`, and any future AL1
+portable export. No portable export, general statistics or costing API is
+implemented here. The production UI uses this read-only contract.
 
 All calls use **dot syntax**, not colon syntax:
 
 ```lua
+local version = ArtisanLogbookAPI.GetVersion() -- 1
 local craft, reason = ArtisanLogbookAPI.GetCraft(id)
 local page, reason = ArtisanLogbookAPI.GetCrafts(filter, options)
 local series, reason = ArtisanLogbookAPI.GetCraftSeries(filter, options)
 local facets, reason = ArtisanLogbookAPI.GetFacets(filter, options)
 local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
+local recipes, reason = ArtisanLogbookAPI.GetRecipeSummaries({ limit = 50 })
+local characters, reason = ArtisanLogbookAPI.GetCharacters()
+local professions, reason = ArtisanLogbookAPI.GetProfessions(characterKey)
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
   -- Refresh consumer state using the committed craft projection.
 end)
@@ -82,10 +88,10 @@ Related objects have these allowlisted fields (each metadata field is optional):
 | Object | Public fields |
 | --- | --- |
 | realm | `key`, `name`, `identityScope`, `projectId`, `regionId`, `gameRealmId` |
-| character | `key`, `name`, `guid`, resolved `realm` |
+| character | `key`, `name`, `guid`, `classFile`, resolved `realm` |
 | expansion | `key`, `name`, `chronologicalOrder` |
 | profession | WoW `skillLineId`, `name`, resolved `expansion` |
-| recipe | WoW recipe `id`, `name`, resolved `profession`, resolved `expansion` |
+| recipe | WoW recipe `id`, `name`, `maxQuality`, resolved `profession`, resolved `expansion` |
 | item | WoW item `id`, `name`, resolved `expansion` |
 
 Character/realm keys are **opaque, case-sensitive API identities**, stable within
@@ -115,7 +121,11 @@ copies without affecting persistence, another query, or another subscriber.
 The API has no write methods; detached copies are not immutable Lua proxies.
 Internal dimension IDs, session rows, and unlisted persistence fields are not
 public. Metadata may become known through ledger enrichment; reads project
-current retained metadata without rewriting observed measurements.
+current retained metadata without rewriting observed measurements. `classFile`
+is the authoritative player class file token from `UnitClass` when that
+character's session is observed. `maxQuality` is the recipe's supported quality
+scale from `GetRecipeInfo` when `supportsQualities` is true; neither is guessed
+for historical dimensions that lack the evidence.
 
 ### Shared filter
 
@@ -301,6 +311,60 @@ professions available in Midnight, while recipe choices still require Alchemy.
 the retained population, never current-flavor support or an expansion catalog.
 Only `mode` and `facets` are accepted: paging, cursors, craft sort directions, and invalid modes
 return `"invalid-options"`.
+
+### Recipe catalogue
+
+The production Recipes catalogue uses one read-only factual query:
+
+```lua
+local page, reason = ArtisanLogbookAPI.GetRecipeSummaries({
+  limit = 40, cursor = nil, character = characterKey,
+  profession = 171, sort = "count",
+})
+-- { recipes = { { recipe = recipe, profession = profession, craftCount = 12 } },
+--   nextCursor = "40" }
+```
+
+This catalogue includes recipes with a known WoW recipe ID and at least one
+committed craft. Counts come from the durable daily series, so detailed
+retention and explicit pruning do not reduce them. Optional `character` selects
+an opaque character key; `profession` selects a WoW skill-line ID. Both
+constraints apply together, and unknown values yield an empty catalogue.
+Unnamed recipes display as `Recipe #<ID>`. `sort = "name"` (the default) is
+case-insensitive by display name with ID as a tie-breaker; `sort = "count"`
+orders most-crafted first, using name and ID to break ties. Recipe and
+profession are detached domain projections.
+
+The default page size is 50, maximum 200. Only `limit`, `cursor`, `character`,
+`profession`, and `sort` are accepted; invalid options return
+`"invalid-options"`. The cursor is a positive offset in the current selected
+order; malformed/out-of-range cursors
+return `"invalid-cursor"`. No cursor means the first page; an empty catalogue
+returns `{ recipes = {} }` without a cursor. This is not a snapshot: new recipes
+or metadata enrichment can change ordering between pages, so restart at page one
+when the catalogue or filters change. The runtime caches the unfiltered name
+order; filtered/count-sorted calls derive an order from durable totals and
+project only the requested page. The name `GetRecipeSummaries` distinguishes
+these lifetime counts from full recipe or craft facts. This query does not add a general statistics
+or write API; for filtered activity use `GetCraftSeries`.
+
+### Durable observed identities
+
+`GetCharacters()` returns detached character projections (with `key` and `name`);
+`GetProfessions(characterKey)` returns detached profession projections (with
+`skillLineId` and `name`). Omit the character key for global professions or
+pass an opaque character key to select professions that character crafted.
+Characters represented in durable daily series remain available after detail
+pruning; professions derive from observed recipes' metadata and omit unknown
+skill-line identities. Results are sorted by public identity. An unknown key
+returns an empty profession list, while invalid keys return
+`nil, "invalid-filter"`; before ledger initialization the result is
+`nil, "not-ready"`. Unlike `GetFacets`, these queries have no craft counts and
+include identities whose factual details were pruned. They read distinct
+runtime identity sets, not the full daily series. Commit updates the sets;
+reload/prune rebuild them, clear empties them, and metadata enrichment resolves
+on read. The UI converts domain projections into dropdown choices. `GetFacets`
+retains its retained-detail-only semantics.
 
 ### Runtime capabilities
 

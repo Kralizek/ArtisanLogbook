@@ -5,8 +5,7 @@ addon.Trace = Trace
 
 Trace.schemaVersion = 2
 Trace.exportVersion = 2
-Trace.maxRecords = 2000
-Trace.maxBytes = 2 * 1024 * 1024
+Trace.maxRecords = 10000
 Trace.maxPayloadBytes = 16384
 
 function Trace.Serialize(value, isSecret)
@@ -131,11 +130,6 @@ function Trace.New(database, clock, isSecret)
       record.warnings = warnings
     end
     local byteCount = #payload + #event + #warnings + 512
-    if #database.records >= Trace.maxRecords or database.bytes + byteCount > Trace.maxBytes then
-      self.recording = false
-      database.stoppedReason = "capacity"
-      return false, "Trace capacity reached; export and clear before recording more."
-    end
     database.records[#database.records + 1] = record
     database.bytes = database.bytes + byteCount
     database.nextSequence = database.nextSequence + 1
@@ -145,6 +139,10 @@ function Trace.New(database, clock, isSecret)
   function recorder:Start(metadata)
     if self.recording then
       return false, "Already recording."
+    end
+    if #database.records >= Trace.maxRecords then
+      database.stoppedReason = "capacity"
+      return false, "Trace capacity reached; export and clear before recording more."
     end
     self.recording = true
     local captured, reason = self:Capture("TRACE_START", metadata)

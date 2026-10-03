@@ -16,17 +16,15 @@ end
 local dimensions = {
   realm = "realms",
   character = "characters",
-  profession = "professions",
-  recipe = "recipes",
-  item = "items",
   session = "sessions",
   expansion = "expansions",
 }
 
+local naturalDimensions = { profession = "professions", recipe = "recipes", item = "items" }
+
 local filterAttributes = {
   session = { "characterDimensionId", "realmDimensionId" },
-  recipe = { "gameRecipeId", "professionDimensionId", "expansionDimensionId" },
-  profession = { "skillLineId" },
+  recipe = { "professionId", "expansionDimensionId" },
 }
 
 local function isInteger(value)
@@ -79,6 +77,7 @@ local function emptyDatabase()
     nextRequestId = 1,
     crafts = {},
     craftSeries = {},
+    recipeOutputs = {},
     requests = {},
     reagents = {},
     dimensions = {},
@@ -89,6 +88,7 @@ local function emptyDatabase()
     data.dimensions[collection] = {}
     data.nextDimensionId[kind] = 1
   end
+  for _, collection in pairs(naturalDimensions) do data.dimensions[collection] = {} end
   return data
 end
 
@@ -116,29 +116,37 @@ local function maximumId(rows, field)
 end
 
 local references = {
-  series = { characterDimensionId = "character", recipeDimensionId = "recipe" },
-  craft = { sessionDimensionId = "session", recipeDimensionId = "recipe", requestId = "request",
-    outputItemDimensionId = "item", professionDimensionId = "profession" },
-  request = { sessionDimensionId = "session", recipeDimensionId = "recipe" },
-  allocation = { itemDimensionId = "item" },
-  reagent = { craftId = "craft", itemDimensionId = "item" },
+  series = { characterDimensionId = "character", recipeId = "recipe" },
+  craft = { sessionId = "session", recipeId = "recipe", requestId = "request",
+    outputItemId = "item", professionId = "profession" },
+  request = { sessionId = "session", recipeId = "recipe" },
+  allocation = { itemId = "item" },
+  reagent = { craftId = "craft", itemId = "item" },
   character = { realmDimensionId = "realm" },
   session = { characterDimensionId = "character", realmDimensionId = "realm" },
-  recipe = { expansionDimensionId = "expansion", professionDimensionId = "profession" },
+  recipe = { expansionDimensionId = "expansion", professionId = "profession" },
   item = { expansionDimensionId = "expansion" },
   profession = { expansionDimensionId = "expansion" },
 }
 
 local function validateReferences(kind, row, ids)
+  if naturalDimensions[kind] and row.name ~= nil and
+      (type(row.name) ~= "string" or row.name == "") then
+    return nil, "invalid " .. kind .. ".name"
+  end
   for field in pairs(row) do
-    if type(field) == "string" and (field:match("DimensionId$") or field == "introducedInExpansionId") and
+    if type(field) == "string" and (field:match("DimensionId$") or field:match("Id$") or
+      field == "introducedInExpansionId") and field ~= "id" and
+      field ~= "gameOperationId" and field ~= "concentrationCurrencyId" and
+      field ~= "gameRealmId" and field ~= "projectId" and field ~= "regionId" and
         not (references[kind] or {})[field] then
       return nil, "unsupported reference: " .. kind .. "." .. field
     end
   end
   for field, target in pairs(references[kind] or {}) do
     local value = row[field]
-    if value ~= nil and (not isInteger(value) or not ids[target][value]) then
+    if value ~= nil and (not (naturalDimensions[target] and isGameId(value) or isInteger(value)) or
+      not ids[target][value]) then
       return nil, kind .. "." .. field .. " references a missing " .. target
     end
   end
@@ -154,6 +162,20 @@ local function seriesGroup(index, bucketStart, characterId)
   local key = characterId or 0
   if not bucket[key] then bucket[key] = {} end
   return bucket[key]
+end
+
+local function indexSeriesChoices(ledger, characterId, recipeId)
+  if characterId then ledger.seriesCharacterIds[characterId] = true end
+  if recipeId then
+    ledger.seriesRecipeIds[recipeId] = true
+    local key = characterId or 0
+    local recipes = ledger.seriesRecipeIdsByCharacter[key]
+    if not recipes then
+      recipes = {}
+      ledger.seriesRecipeIdsByCharacter[key] = recipes
+    end
+    recipes[recipeId] = true
+  end
 end
 
 local function seriesMeasurement(craft, metric)
@@ -191,11 +213,11 @@ end
 local function stageSeries(index, sessions, craft)
   local bucketStart = math.floor(craft.timestamp / 86400) * 86400
   if not isFinite(bucketStart) then return nil, "invalid craft series bucket" end
-  local session = sessions[craft.sessionDimensionId]
+  local session = sessions[craft.sessionId]
   local characterId = session and session.characterDimensionId
   local bucket = index[bucketStart]
   local group = bucket and bucket[characterId or 0]
-  local key = craft.recipeDimensionId or 0
+  local key = craft.recipeId or 0
   local existing = group and group[key]
   if existing and (not isInteger(existing.craftCount) or existing.craftCount >= maxInteger) then
     return nil, "craft series count overflow"
@@ -203,7 +225,7 @@ local function stageSeries(index, sessions, craft)
   local row = {
     bucketStart = bucketStart,
     characterDimensionId = characterId,
-    recipeDimensionId = craft.recipeDimensionId,
+    recipeId = craft.recipeId,
     craftCount = (existing and existing.craftCount or 0) + 1,
   }
   local ok, reason = accumulateMetrics(row, existing, craft)
@@ -214,11 +236,19 @@ local function stageSeries(index, sessions, craft)
   }
 end
 
-local function commitStagedSeries(data, index, staged)
+local function commitStagedSeries(data, index, days, staged)
   if staged.existing then
     for field in pairs(staged.existing) do staged.existing[field] = nil end
     for field, value in pairs(staged.row) do staged.existing[field] = value end
   else
+    if not index[staged.bucketStart] then
+      local first, last = 1, #days + 1
+      while first < last do
+        local middle = math.floor((first + last) / 2)
+        if days[middle] < staged.bucketStart then first = middle + 1 else last = middle end
+      end
+      table.insert(days, first, staged.bucketStart)
+    end
     local group = seriesGroup(index, staged.bucketStart, staged.characterDimensionId)
     data.craftSeries[#data.craftSeries + 1] = staged.row
     group[staged.key] = staged.row
@@ -249,7 +279,7 @@ local function validateDatabase(data)
   local ids = { craft = {}, request = {} }
   for _, craft in ipairs(data.crafts) do
     if not isInteger(craft.id) or ids.craft[craft.id] or not isFinite(craft.timestamp) or
-        craft.sessionDimensionId == nil then
+        craft.sessionId == nil then
       return nil, "craft facts contain an invalid or duplicate ID"
     end
     for _, field in ipairs({ "gameOperationId", "outputQuality", "outputItemLevel", "outputQuantity",
@@ -281,9 +311,36 @@ local function validateDatabase(data)
       seenKeys[row.key] = true
     end
   end
+  for kind, collection in pairs(naturalDimensions) do
+    local rows = data.dimensions[collection]
+    if type(rows) ~= "table" or data.nextDimensionId[kind] ~= nil then
+      return nil, "natural ID collection is invalid for " .. kind
+    end
+    ids[kind] = {}
+    for id, row in pairs(rows) do
+      if not isGameId(id) or type(row) ~= "table" or row.id ~= id or row.key ~= nil or
+          row.gameRecipeId ~= nil or row.gameItemId ~= nil or row.skillLineId ~= nil then
+        return nil, "natural ID row is invalid for " .. kind
+      end
+      ids[kind][id] = true
+    end
+  end
+  if type(data.recipeOutputs) ~= "table" then
+    return nil, "recipeOutputs must be a recipe-to-item set map"
+  end
+  for recipeId, outputs in pairs(data.recipeOutputs) do
+    if not isGameId(recipeId) or not ids.recipe[recipeId] or type(outputs) ~= "table" then
+      return nil, "recipeOutputs contains an invalid recipe identity"
+    end
+    for outputItemId, observed in pairs(outputs) do
+      if not isGameId(outputItemId) or not ids.item[outputItemId] or observed ~= true then
+        return nil, "recipeOutputs contains an invalid output relationship"
+      end
+    end
+  end
   for _, request in ipairs(data.requests) do
     if not isInteger(request.id) or ids.request[request.id] or not isFinite(request.timestamp) or
-        request.sessionDimensionId == nil or request.recipeDimensionId == nil or
+        request.sessionId == nil or request.recipeId == nil or
         not isInteger(request.requestedCount) or type(request.useConcentration) ~= "boolean" then
       return nil, "request facts contain an invalid or duplicate ID"
     end
@@ -302,7 +359,7 @@ local function validateDatabase(data)
     if not ok then return nil, reason end
     for _, allocation in ipairs(request.allocations or {}) do
       if not isInteger(allocation.dataSlotIndex) or not isInteger(allocation.allocatedQuantity) or
-          allocation.itemDimensionId == nil or
+          allocation.itemId == nil or
           (allocation.quality ~= nil and not isGameId(allocation.quality)) then
         return nil, "request allocation is invalid"
       end
@@ -316,8 +373,8 @@ local function validateDatabase(data)
     if not ok then return nil, reason end
     if craft.requestId then
       local request = ids.request[craft.requestId]
-      if request.sessionDimensionId ~= craft.sessionDimensionId or
-          request.recipeDimensionId ~= craft.recipeDimensionId then
+      if request.sessionId ~= craft.sessionId or
+          request.recipeId ~= craft.recipeId then
         return nil, "craft.requestId conflicts with request context"
       end
       linkedCounts[request.id] = (linkedCounts[request.id] or 0) + 1
@@ -327,7 +384,7 @@ local function validateDatabase(data)
     end
   end
   for _, reagent in ipairs(data.reagents) do
-    if reagent.craftId == nil or reagent.itemDimensionId == nil then
+    if reagent.craftId == nil or reagent.itemId == nil then
       return nil, "reagent fact requires craft and item references"
     end
     local ok, reason = validateReferences("reagent", reagent, ids)
@@ -344,6 +401,12 @@ local function validateDatabase(data)
       if not ok then return nil, reason end
     end
   end
+  for kind, collection in pairs(naturalDimensions) do
+    for _, row in pairs(data.dimensions[collection]) do
+      local ok, reason = validateReferences(kind, row, ids)
+      if not ok then return nil, reason end
+    end
+  end
   if not isArray(data.craftSeries) then return nil, "craftSeries must be a dense array" end
   local seen = {}
   for _, row in ipairs(data.craftSeries) do
@@ -354,7 +417,7 @@ local function validateDatabase(data)
       return nil, "invalid craft series bucket or count"
     end
     local group = seriesGroup(seen, row.bucketStart, row.characterDimensionId)
-    local key = row.recipeDimensionId or 0
+    local key = row.recipeId or 0
     if group[key] then return nil, "duplicate craft series grain" end
     group[key] = true
     for _, metric in ipairs(seriesMetrics) do
@@ -393,7 +456,7 @@ local function nowFunction(clock)
 end
 
 local function adjustOperationIndex(ledger, craft, change)
-  local sessionId = craft.sessionDimensionId
+  local sessionId = craft.sessionId
   local operationId = craft.gameOperationId
   if sessionId == nil or type(operationId) ~= "number" or operationId <= 0 then
     return
@@ -426,19 +489,17 @@ end
 
 local function indexCraftDimensions(ledger, craft)
   local rows = ledger.dimensionRows
-  local session = rows.session[craft.sessionDimensionId]
+  local session = rows.session[craft.sessionId]
   local character = session and rows.character[session.characterDimensionId]
   local realm = session and rows.realm[session.realmDimensionId]
-  local recipe = rows.recipe[craft.recipeDimensionId]
-  local profession = rows.profession[craft.professionDimensionId or
-    (recipe and recipe.professionDimensionId)]
+  local recipe = rows.recipe[craft.recipeId]
+  local profession = rows.profession[craft.professionId or (recipe and recipe.professionId)]
   local expansion = recipe and rows.expansion[recipe.expansionDimensionId]
   appendIdentity(ledger.craftIdsByCharacter, character and character.key, craft.id)
   appendIdentity(ledger.craftIdsByRealm, realm and realm.key, craft.id)
-  appendIdentity(ledger.craftIdsByRecipe,
-    recipe and type(recipe.gameRecipeId) == "number" and recipe.gameRecipeId or nil, craft.id)
+  appendIdentity(ledger.craftIdsByRecipe, craft.recipeId, craft.id)
   appendIdentity(ledger.craftIdsByProfession,
-    profession and type(profession.skillLineId) == "number" and profession.skillLineId or nil, craft.id)
+    profession and profession.id or nil, craft.id)
   appendIdentity(ledger.craftIdsByExpansion, expansion and expansion.key, craft.id)
 end
 
@@ -459,7 +520,26 @@ local function earlierCraft(ledger, leftId, rightId)
   return left.timestamp < right.timestamp
 end
 
+local function buildRecipeOutputIndex(recipeOutputs)
+  local recipesByOutput, relationshipCount = {}, 0
+  for recipeId, outputs in pairs(recipeOutputs) do
+    for outputItemId, observed in pairs(outputs) do
+      if observed then
+        local recipes = recipesByOutput[outputItemId]
+        if not recipes then
+          recipes = {}
+          recipesByOutput[outputItemId] = recipes
+        end
+        recipes[recipeId] = true
+        relationshipCount = relationshipCount + 1
+      end
+    end
+  end
+  return recipesByOutput, relationshipCount
+end
+
 function Ledger:RebuildIndexes()
+  self.recipeOrder = nil
   self.dimensionIndex, self.dimensionRows = {}, {}
   for kind, collection in pairs(dimensions) do
     self.dimensionIndex[kind], self.dimensionRows[kind] = {}, {}
@@ -468,15 +548,43 @@ function Ledger:RebuildIndexes()
       self.dimensionRows[kind][row.id] = row
     end
   end
-  self.seriesByKey = {}
-  for _, row in ipairs(self.database.craftSeries) do
-    local group = seriesGroup(self.seriesByKey, row.bucketStart, row.characterDimensionId)
-    group[row.recipeDimensionId or 0] = row
+  for kind, collection in pairs(naturalDimensions) do
+    self.dimensionRows[kind] = self.database.dimensions[collection]
   end
+  self.seriesByKey, self.recipeCounts, self.seriesDays = {}, {}, {}
+  self.seriesCharacterIds, self.seriesRecipeIds, self.seriesRecipeIdsByCharacter = {}, {}, {}
+  self.recipeIdsByOutputItemId, self.recipeOutputCount =
+    buildRecipeOutputIndex(self.database.recipeOutputs)
+  for _, row in ipairs(self.database.craftSeries) do
+    if not self.seriesByKey[row.bucketStart] then
+      self.seriesDays[#self.seriesDays + 1] = row.bucketStart
+    end
+    local group = seriesGroup(self.seriesByKey, row.bucketStart, row.characterDimensionId)
+    group[row.recipeId or 0] = row
+    indexSeriesChoices(self, row.characterDimensionId, row.recipeId)
+    if row.recipeId then
+      self.recipeCounts[row.recipeId] = (self.recipeCounts[row.recipeId] or 0) + row.craftCount
+    end
+  end
+  table.sort(self.seriesDays)
   self.craftById, self.requestById, self.reagentsByCraftId = {}, {}, {}
   self.craftIds, self.craftIdsByTime, self.operationIndex = {}, {}, {}
+  self.unknownRecipeCount = 0
+  self.unknownRecipeCraftIds, self.unknownCraftIdsByOutput = {}, {}
   for _, request in ipairs(self.database.requests) do self.requestById[request.id] = request end
   for _, craft in ipairs(self.database.crafts) do
+    if craft.recipeId == nil then
+      self.unknownRecipeCount = self.unknownRecipeCount + 1
+      self.unknownRecipeCraftIds[#self.unknownRecipeCraftIds + 1] = craft.id
+      if craft.outputItemId ~= nil then
+        local craftIds = self.unknownCraftIdsByOutput[craft.outputItemId]
+        if not craftIds then
+          craftIds = {}
+          self.unknownCraftIdsByOutput[craft.outputItemId] = craftIds
+        end
+        craftIds[#craftIds + 1] = craft.id
+      end
+    end
     self.craftById[craft.id] = craft
     self.reagentsByCraftId[craft.id] = {}
     self.craftIds[#self.craftIds + 1] = craft.id
@@ -494,6 +602,18 @@ end
 
 local function appendCraftIndexes(ledger, craft, reagents)
   ledger.craftById[craft.id] = craft
+  if craft.recipeId == nil then
+    ledger.unknownRecipeCount = ledger.unknownRecipeCount + 1
+    ledger.unknownRecipeCraftIds[#ledger.unknownRecipeCraftIds + 1] = craft.id
+    if craft.outputItemId ~= nil then
+      local craftIds = ledger.unknownCraftIdsByOutput[craft.outputItemId]
+      if not craftIds then
+        craftIds = {}
+        ledger.unknownCraftIdsByOutput[craft.outputItemId] = craftIds
+      end
+      craftIds[#craftIds + 1] = craft.id
+    end
+  end
   ledger.reagentsByCraftId[craft.id] = reagents
   ledger.craftIds[#ledger.craftIds + 1] = craft.id
   local times = ledger.craftIdsByTime
@@ -512,6 +632,72 @@ local function appendCraftIndexes(ledger, craft, reagents)
   adjustOperationIndex(ledger, craft, 1)
 end
 
+function Ledger:LearnRecipeOutputs(observations)
+  if not isArray(observations) then return nil, "recipe-output observations must be an array" end
+  local copied, staged = pcall(copyValue, self.database.recipeOutputs)
+  if not copied then return nil, tostring(staged) end
+  local learned = 0
+  for _, observation in ipairs(observations) do
+    local recipeId, outputItemId = observation.recipeId, observation.outputItemId
+    if not isGameId(recipeId) or not isGameId(outputItemId) or
+        not self.dimensionRows.recipe[recipeId] or not self.dimensionRows.item[outputItemId] then
+      return nil, "recipe-output observation references an unknown natural identity"
+    end
+    local outputs = staged[recipeId]
+    if not outputs then
+      outputs = {}
+      staged[recipeId] = outputs
+    end
+    if not outputs[outputItemId] then
+      outputs[outputItemId] = true
+      learned = learned + 1
+    end
+  end
+  if learned > 0 then
+    self.database.recipeOutputs = staged
+    self.recipeIdsByOutputItemId, self.recipeOutputCount = buildRecipeOutputIndex(staged)
+  end
+  return learned
+end
+
+function Ledger:LearnRecipeOutput(recipeId, outputItemId)
+  local learned, reason = self:LearnRecipeOutputs({ {
+    recipeId = recipeId,
+    outputItemId = outputItemId,
+  } })
+  if learned == nil then return nil, reason end
+  return learned > 0
+end
+
+function Ledger:BootstrapRecipeOutputs()
+  local outputsByRecipe, observations = {}, {}
+  local existingCount = self.recipeOutputCount
+  for _, craft in ipairs(self.database.crafts) do
+    if craft.recipeId ~= nil and craft.outputItemId ~= nil then
+      local outputs = outputsByRecipe[craft.recipeId]
+      if not outputs then
+        outputs = {}
+        outputsByRecipe[craft.recipeId] = outputs
+      end
+      outputs[craft.outputItemId] = true
+    end
+  end
+  local recipeIds = {}
+  for recipeId in pairs(outputsByRecipe) do recipeIds[#recipeIds + 1] = recipeId end
+  table.sort(recipeIds)
+  for _, recipeId in ipairs(recipeIds) do
+    local outputIds = {}
+    for outputItemId in pairs(outputsByRecipe[recipeId]) do outputIds[#outputIds + 1] = outputItemId end
+    table.sort(outputIds)
+    for _, outputItemId in ipairs(outputIds) do
+      observations[#observations + 1] = { recipeId = recipeId, outputItemId = outputItemId }
+    end
+  end
+  local learned, reason = self:LearnRecipeOutputs(observations)
+  if learned == nil then return nil, reason end
+  return { learned = learned, existing = existingCount, relationshipCount = self.recipeOutputCount }
+end
+
 local function openDatabase(database, clock, options)
   local data
   if database == nil then
@@ -521,6 +707,7 @@ local function openDatabase(database, clock, options)
   else
     data = copyValue(database)
   end
+  if data.recipeOutputs == nil then data.recipeOutputs = {} end
 
   local valid, reason = validateDatabase(data)
   if not valid then
@@ -579,28 +766,34 @@ local function dimensionStage(ledger)
     staged.keys[kind] = setmetatable({}, { __index = ledger.dimensionIndex[kind] })
     staged.nextIds[kind] = ledger.database.nextDimensionId[kind]
   end
+  for kind in pairs(naturalDimensions) do
+    staged.rows[kind] = setmetatable({}, { __index = ledger.dimensionRows[kind] })
+  end
   return staged
 end
 
 local function stageDimension(staged, kind, key, attributes)
-  local collection = dimensions[kind]
+  local collection = dimensions[kind] or naturalDimensions[kind]
   if not collection or (type(key) ~= "string" and type(key) ~= "number") then
     return nil, "dimension kind or key is invalid"
+  end
+  if naturalDimensions[kind] and not isGameId(key) then
+    return nil, "natural dimension key is invalid"
   end
   if attributes ~= nil and type(attributes) ~= "table" then
     return nil, "dimension attributes must be a table"
   end
   local copied, safeAttributes = pcall(copyValue, attributes or {})
   if not copied then return nil, tostring(safeAttributes) end
-  key = isFinite(key) and key % 1 == 0 and string.format("%.0f", key) or tostring(key)
-  local existingId = staged.keys[kind][key]
+  local natural = naturalDimensions[kind] ~= nil
+  key = natural and key or (isFinite(key) and key % 1 == 0 and string.format("%.0f", key) or tostring(key))
+  local existingId = natural and key or staged.keys[kind][key]
   local existing = staged.rows[kind][existingId]
-  if not existing and not canAllocate(staged.nextIds[kind]) then
+  if not existing and not natural and not canAllocate(staged.nextIds[kind]) then
     return nil, "dimension ID capacity exhausted: " .. kind
   end
-  local row = existing and copyValue(existing) or {
-    id = staged.nextIds[kind], key = key,
-  }
+  local row = existing and copyValue(existing) or { id = natural and key or staged.nextIds[kind] }
+  if not natural then row.key = key end
   local ok, reason, changed = enrich(row, safeAttributes)
   if not ok then return nil, reason end
   ok, reason = validateReferences(kind, row, staged.rows)
@@ -608,9 +801,9 @@ local function stageDimension(staged, kind, key, attributes)
   if not existing or changed then
     staged.changes[#staged.changes + 1] = { kind = kind, row = row }
     staged.rows[kind][row.id] = row
-    staged.keys[kind][key] = row.id
+    if not natural then staged.keys[kind][key] = row.id end
   end
-  if not existing then staged.nextIds[kind] = row.id + 1 end
+  if not existing and not natural then staged.nextIds[kind] = row.id + 1 end
   return row.id
 end
 
@@ -618,6 +811,7 @@ local function commitDimensions(ledger, staged)
   local filtersChanged = false
   for _, change in ipairs(staged.changes) do
     local kind, row = change.kind, change.row
+    if kind == "recipe" then ledger.recipeOrder = nil end
     local existing = ledger.dimensionRows[kind][row.id]
     if existing then
       for _, field in ipairs(filterAttributes[kind] or {}) do
@@ -625,9 +819,9 @@ local function commitDimensions(ledger, staged)
       end
       for field, value in pairs(row) do existing[field] = value end
     else
-      local rows = ledger.database.dimensions[dimensions[kind]]
-      rows[#rows + 1] = row
-      ledger.dimensionIndex[kind][row.key] = row.id
+      local rows = ledger.database.dimensions[dimensions[kind] or naturalDimensions[kind]]
+      if naturalDimensions[kind] then rows[row.id] = row else rows[#rows + 1] = row end
+      if not naturalDimensions[kind] then ledger.dimensionIndex[kind][row.key] = row.id end
       ledger.dimensionRows[kind][row.id] = row
     end
   end
@@ -675,6 +869,7 @@ local function createSession(self, metadata)
     characterId, reason = stageDimension(staged, "character", characterKey, {
       guid = metadata.characterGUID,
       name = metadata.characterName,
+      classFile = metadata.characterClassFile,
       realmDimensionId = realmId,
     })
     if not characterId then return nil, reason end
@@ -745,13 +940,13 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   local timestamp = observedNumber(self.wall())
   if not copied or timestamp == nil then return nil, "request snapshot or timestamp is unavailable" end
   local staged = dimensionStage(self)
-  local recipeDimensionId, reason = stageDimension(staged, "recipe", recipeId, { gameRecipeId = recipeId })
-  if not recipeDimensionId then return nil, reason end
+  local observedRecipeId, reason = stageDimension(staged, "recipe", recipeId)
+  if not observedRecipeId then return nil, reason end
   local request = {
     id = self.database.nextRequestId,
     timestamp = timestamp,
-    sessionDimensionId = self.currentSessionId,
-    recipeDimensionId = recipeDimensionId,
+    sessionId = self.currentSessionId,
+    recipeId = observedRecipeId,
     requestedCount = requestedCount,
     useConcentration = useConcentration,
   }
@@ -764,12 +959,12 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
       local itemId = type(selection.reagent) == "table" and selection.reagent.itemID or nil
       if isInteger(selection.dataSlotIndex) and isGameId(itemId) and itemId > 0 and
           isInteger(selection.quantity) then
-        local itemDimensionId
-        itemDimensionId, reason = stageDimension(staged, "item", itemId, { gameItemId = itemId })
-        if not itemDimensionId then return nil, reason end
+        local observedItemId
+        observedItemId, reason = stageDimension(staged, "item", itemId)
+        if not observedItemId then return nil, reason end
         allocations[#allocations + 1] = {
           dataSlotIndex = selection.dataSlotIndex,
-          itemDimensionId = itemDimensionId,
+          itemId = observedItemId,
           allocatedQuantity = selection.quantity,
           quality = isGameId(selection.quality) and selection.quality or nil,
         }
@@ -781,7 +976,8 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   self.database.nextRequestId = request.id + 1
   self.database.requests[#self.database.requests + 1] = request
   self.requestById[request.id] = request
-  if self.pendingRequest then self.requestAmbiguous = true end
+  self.pendingRecipeId = nil
+  self.ambiguousRecipe = nil
   self.pendingRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
   return request
 end
@@ -828,7 +1024,7 @@ function Ledger:RecordResult(result)
   local craft = {
     id = data.nextCraftId,
     timestamp = timestamp,
-    sessionDimensionId = self.currentSessionId,
+    sessionId = self.currentSessionId,
     gameOperationId = observedNumber(result.operationID),
     outputQuality = observedNumber(result.craftingQuality),
     outputItemLevel = observedNumber(result.itemLevel),
@@ -843,24 +1039,25 @@ function Ledger:RecordResult(result)
   end
 
   local pending = self.pendingRequest
-  local request
-  if pending and not self.requestAmbiguous then
-    request = self.requestById[pending.id]
-    if request then
-      craft.requestId = request.id
-      craft.recipeDimensionId = request.recipeDimensionId
-    end
+  local request = pending and self.requestById[pending.id]
+  local supersededRequest = request and self.pendingRecipeId and
+    self.pendingRecipeId ~= request.recipeId
+  if request and not self.requestAmbiguous and not supersededRequest then
+    craft.requestId = request.id
+    craft.recipeId = request.recipeId
+  else
+    request = nil
   end
 
   local recipeId = self.pendingRecipeId
   local ambiguousRecipe = self.ambiguousRecipe
   local reason
-  if not craft.recipeDimensionId and not self.requestAmbiguous and recipeId and not ambiguousRecipe and
+  if not craft.recipeId and not self.requestAmbiguous and
+      recipeId and not ambiguousRecipe and
       craft.gameOperationId and craft.gameOperationId > 0 and
       not operationIdSeen(self, craft.gameOperationId) then
-    craft.recipeDimensionId, reason =
-      stageDimension(stagedDimensions, "recipe", recipeId, { gameRecipeId = recipeId })
-    if not craft.recipeDimensionId then return nil, reason end
+    craft.recipeId, reason = stageDimension(stagedDimensions, "recipe", recipeId)
+    if not craft.recipeId then return nil, reason end
   end
 
   -- Stage the aggregate first. Any handled failure must leave correlation,
@@ -870,9 +1067,8 @@ function Ledger:RecordResult(result)
   if not stagedSeries then return nil, reason end
 
   if isGameId(result.itemID) then
-    craft.outputItemDimensionId, reason =
-      stageDimension(stagedDimensions, "item", result.itemID, { gameItemId = result.itemID })
-    if not craft.outputItemDimensionId then return nil, reason end
+    craft.outputItemId, reason = stageDimension(stagedDimensions, "item", result.itemID)
+    if not craft.outputItemId then return nil, reason end
   end
 
   local reagentFacts = {}
@@ -882,13 +1078,13 @@ function Ledger:RecordResult(result)
     for _, allocation in ipairs(request.allocations) do
       reagentFacts[#reagentFacts + 1] = {
         craftId = craft.id,
-        itemDimensionId = allocation.itemDimensionId,
+        itemId = allocation.itemId,
         dataSlotIndex = allocation.dataSlotIndex,
         quality = allocation.quality,
         allocatedQuantity = allocation.allocatedQuantity,
         returnedQuantity = type(result.resourcesReturned) == "table" and 0 or nil,
       }
-      local itemId = allocation.itemDimensionId
+      local itemId = allocation.itemId
       allocatedFactsByItem[itemId] = allocatedFactsByItem[itemId] or {}
       allocatedFactsByItem[itemId][#allocatedFactsByItem[itemId] + 1] = reagentFacts[#reagentFacts]
       if allocationsByItem[itemId] == nil then
@@ -904,22 +1100,22 @@ function Ledger:RecordResult(result)
       local itemId = type(reagent) == "table" and reagent.itemID or nil
       local quantity = type(returned) == "table" and observedNumber(returned.quantity) or nil
       if isGameId(itemId) and quantity ~= nil then
-        local itemDimensionId
-        itemDimensionId, reason = stageDimension(stagedDimensions, "item", itemId, { gameItemId = itemId })
-        if not itemDimensionId then return nil, reason end
-        local matched = allocationsByItem[itemDimensionId]
+        local observedItemId
+        observedItemId, reason = stageDimension(stagedDimensions, "item", itemId)
+        if not observedItemId then return nil, reason end
+        local matched = allocationsByItem[observedItemId]
         if matched then
           matched.returnedQuantity = matched.returnedQuantity + quantity
           if not isFinite(matched.returnedQuantity) then return nil, "reagent return sum overflow" end
         else
-          if allocatedFactsByItem[itemDimensionId] then
-            for _, allocated in ipairs(allocatedFactsByItem[itemDimensionId]) do
+          if allocatedFactsByItem[observedItemId] then
+            for _, allocated in ipairs(allocatedFactsByItem[observedItemId]) do
               allocated.returnedQuantity = nil
             end
           end
           reagentFacts[#reagentFacts + 1] = {
             craftId = craft.id,
-            itemDimensionId = itemDimensionId,
+            itemId = observedItemId,
             returnedQuantity = quantity,
           }
         end
@@ -928,19 +1124,228 @@ function Ledger:RecordResult(result)
   end
 
   commitDimensions(self, stagedDimensions)
-  commitStagedSeries(data, self.seriesByKey, stagedSeries)
+  commitStagedSeries(data, self.seriesByKey, self.seriesDays, stagedSeries)
+  indexSeriesChoices(self, stagedSeries.characterDimensionId, craft.recipeId)
+  if craft.recipeId then
+    if not self.recipeCounts[craft.recipeId] then self.recipeOrder = nil end
+    self.recipeCounts[craft.recipeId] = (self.recipeCounts[craft.recipeId] or 0) + 1
+  end
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
   data.nextCraftId = craft.id + 1
   data.crafts[#data.crafts + 1] = craft
-  if pending and request then
+  if supersededRequest then
+    -- TRADE_SKILL_CRAFT_BEGIN is authoritative for the result being committed.
+    -- A different recipe means an older incomplete batch/request can no longer
+    -- own this result; retire it instead of poisoning subsequent attribution.
+    self.pendingRequest = nil
+  elseif pending and request then
     pending.remaining = pending.remaining - 1
     if pending.remaining == 0 then self.pendingRequest = nil end
   end
   for _, reagent in ipairs(reagentFacts) do data.reagents[#data.reagents + 1] = reagent end
   appendCraftIndexes(self, craft, reagentFacts)
+  local learnedOutput = false
+  if craft.recipeId ~= nil and craft.outputItemId ~= nil then
+    learnedOutput = self:LearnRecipeOutput(craft.recipeId, craft.outputItemId) == true
+  end
   if self.onCraftCommitted then pcall(self.onCraftCommitted, self, craft) end
-  return craft
+  if learnedOutput and self.onRecipeOutputKnowledgeChanged then
+    pcall(self.onRecipeOutputKnowledgeChanged, self, craft.outputItemId, "craft")
+  end
+  return self.craftById[craft.id] or craft
+end
+
+function Ledger:AnalyzeUnknownRecipeRepair(outputFilter)
+  local analysis = {
+    unattributedCount = self.unknownRecipeCount,
+    repairableCount = 0,
+    ambiguousCount = 0,
+    missingOutputCount = 0,
+    insufficientEvidenceCount = 0,
+    repairs = {},
+    ambiguous = {},
+  }
+  local candidateCraftIds = self.unknownRecipeCraftIds
+  if outputFilter ~= nil then
+    if type(outputFilter) ~= "table" then return nil, "invalid-output-filter" end
+    candidateCraftIds = {}
+    for outputItemId in pairs(outputFilter) do
+      if not isGameId(outputItemId) then return nil, "invalid-output-filter" end
+      for _, craftId in ipairs(self.unknownCraftIdsByOutput[outputItemId] or {}) do
+        candidateCraftIds[#candidateCraftIds + 1] = craftId
+      end
+    end
+    table.sort(candidateCraftIds)
+  end
+  for _, craftId in ipairs(candidateCraftIds) do
+    local craft = self.craftById[craftId]
+    if craft.recipeId == nil then
+      if craft.outputItemId == nil then
+        analysis.missingOutputCount = analysis.missingOutputCount + 1
+      else
+        local recipes = self.recipeIdsByOutputItemId[craft.outputItemId]
+        local candidates, candidateCount = {}, 0
+        for recipeId in pairs(recipes or {}) do
+          candidateCount = candidateCount + 1
+          candidates[#candidates + 1] = recipeId
+        end
+        if candidateCount == 1 then
+          analysis.repairableCount = analysis.repairableCount + 1
+          analysis.repairs[#analysis.repairs + 1] = {
+            craftId = craft.id,
+            outputItemId = craft.outputItemId,
+            recipeId = candidates[1],
+          }
+        elseif candidateCount > 1 then
+          table.sort(candidates)
+          analysis.ambiguousCount = analysis.ambiguousCount + 1
+          analysis.ambiguous[#analysis.ambiguous + 1] = {
+            craftId = craft.id,
+            outputItemId = craft.outputItemId,
+            recipeIds = candidates,
+          }
+        else
+          analysis.insufficientEvidenceCount = analysis.insufficientEvidenceCount + 1
+        end
+      end
+    end
+  end
+  return analysis
+end
+
+local function seriesRowsByGrain(rows)
+  local index = {}
+  for _, row in ipairs(rows) do
+    local group = seriesGroup(index, row.bucketStart, row.characterDimensionId)
+    group[row.recipeId or 0] = row
+  end
+  return index
+end
+
+local function moveSeriesMetric(source, target, craft, metric)
+  local value = seriesMeasurement(craft, metric)
+  if value == nil then return true end
+  local coverage = metric .. "ObservedCount"
+  local sourceCoverage = source[coverage]
+  local sourceValue = source[metric] or 0
+  if not isCount(sourceCoverage) or sourceCoverage < 1 or not isFinite(sourceValue) then
+    return nil, "unknown craft series contribution is inconsistent: " .. metric
+  end
+  source[coverage] = sourceCoverage - 1
+  if source[coverage] == 0 then
+    source[metric] = nil
+  else
+    source[metric] = sourceValue - value
+    if not isFinite(source[metric]) then return nil, "invalid source series sum: " .. metric end
+  end
+
+  local targetCoverage = target[coverage]
+  if not isCount(targetCoverage) or targetCoverage >= maxInteger then
+    return nil, "craft series coverage overflow: " .. metric
+  end
+  local targetValue = target[metric] or 0
+  if not isFinite(targetValue) then return nil, "invalid target series sum: " .. metric end
+  target[metric] = targetValue + value
+  target[coverage] = targetCoverage + 1
+  if not isFinite(target[metric]) then return nil, "craft series sum overflow: " .. metric end
+  return true
+end
+
+local function moveCraftSeriesContribution(index, rows, craft, characterId, recipeId)
+  local bucketStart = math.floor(craft.timestamp / 86400) * 86400
+  local bucket = index[bucketStart]
+  local group = bucket and bucket[characterId or 0]
+  local source = group and group[0]
+  if not source or source.craftCount < 1 then
+    return nil, "unknown craft series grain is missing"
+  end
+  local target = group and group[recipeId]
+  if target and target.craftCount >= maxInteger then
+    return nil, "craft series count overflow"
+  end
+
+  source.craftCount = source.craftCount - 1
+  if target then
+    target.craftCount = target.craftCount + 1
+  else
+    target = {
+      bucketStart = bucketStart,
+      characterDimensionId = characterId,
+      recipeId = recipeId,
+      craftCount = 1,
+    }
+    for _, metric in ipairs(seriesMetrics) do
+      target[metric .. "ObservedCount"] = 0
+    end
+    group = group or seriesGroup(index, bucketStart, characterId)
+    group[recipeId] = target
+    rows[#rows + 1] = target
+  end
+
+  for _, metric in ipairs(seriesMetrics) do
+    local ok, reason = moveSeriesMetric(source, target, craft, metric)
+    if not ok then return nil, reason end
+  end
+  if source.craftCount == 0 then
+    for indexInRows, row in ipairs(rows) do
+      if row == source then table.remove(rows, indexInRows); break end
+    end
+    group[0] = nil
+  end
+  return true
+end
+
+function Ledger:RepairUnknownRecipes(outputFilter)
+  local analysis, reason = self:AnalyzeUnknownRecipeRepair(outputFilter)
+  if not analysis then return nil, reason end
+  if analysis.repairableCount == 0 then
+    return { analysis = analysis, repairedCount = 0 }
+  end
+
+  local copied, stagedData = pcall(copyValue, self.database)
+  if not copied then return nil, tostring(stagedData) end
+  local repairsById = {}
+  for _, repair in ipairs(analysis.repairs) do repairsById[repair.craftId] = repair end
+
+  local seriesIndex = seriesRowsByGrain(stagedData.craftSeries)
+  local sessions = {}
+  for _, session in ipairs(stagedData.dimensions.sessions) do sessions[session.id] = session end
+  local recipes = {}
+  for _, recipe in pairs(stagedData.dimensions.recipes) do recipes[recipe.id] = recipe end
+  for _, craft in ipairs(stagedData.crafts) do
+    local repair = repairsById[craft.id]
+    if repair then
+      if craft.recipeId ~= nil or craft.outputItemId ~= repair.outputItemId or
+          not recipes[repair.recipeId] then
+        return nil, "repair plan no longer matches validated ledger facts"
+      end
+      local session = sessions[craft.sessionId]
+      local characterId = session and session.characterDimensionId
+      local ok
+      ok, reason = moveCraftSeriesContribution(seriesIndex, stagedData.craftSeries,
+        craft, characterId, repair.recipeId)
+      if not ok then return nil, reason end
+      craft.recipeId = repair.recipeId
+    end
+  end
+
+  local valid
+  valid, reason = validateDatabase(stagedData)
+  if not valid then return nil, "repair validation failed: " .. tostring(reason) end
+
+  local stagedLedger = {}
+  for key, value in pairs(self) do stagedLedger[key] = value end
+  stagedLedger.database = stagedData
+  setmetatable(stagedLedger, { __index = Ledger })
+  local rebuilt, rebuildReason = pcall(Ledger.RebuildIndexes, stagedLedger)
+  if not rebuilt then return nil, "repair index staging failed: " .. tostring(rebuildReason) end
+
+  local oldKeys = {}
+  for key in pairs(self) do oldKeys[#oldKeys + 1] = key end
+  for _, key in ipairs(oldKeys) do self[key] = nil end
+  for key, value in pairs(stagedLedger) do self[key] = value end
+  return { analysis = analysis, repairedCount = analysis.repairableCount }
 end
 
 function Ledger:Prune(now)
@@ -981,6 +1386,47 @@ function Ledger:Prune(now)
   data.requests = keptRequests
   if self.craftById then self:RebuildIndexes() end
   return removed
+end
+
+function Ledger:SetRetentionDays(days)
+  if not isInteger(days) then return nil, "retention must be a positive integer" end
+  self.database.retentionDays = days
+  return true
+end
+
+function Ledger:ClearHistory()
+  self.database.crafts = {}
+  self.database.requests = {}
+  self.database.reagents = {}
+  self.database.craftSeries = {}
+  self.pendingRequest, self.pendingRecipeId = nil, nil
+  self.requestAmbiguous, self.ambiguousRecipe = nil, nil
+  self:RebuildIndexes()
+  return true
+end
+
+function Ledger:Purge()
+  local session = self.dimensionRows.session[self.currentSessionId]
+  if not session then return nil, "no ledger session is active" end
+  local character = self.dimensionRows.character[session.characterDimensionId]
+  local realm = self.dimensionRows.realm[session.realmDimensionId]
+  local clean, reason = Ledger.New(nil, { wall = self.wall })
+  if not clean then return nil, reason end
+  local sessionId
+  sessionId, reason = clean:CreateSession({
+    addonVersion = session.addonVersion, wowVersion = session.wowVersion,
+    wowBuild = session.wowBuild, wowBuildDate = session.wowBuildDate,
+    interface = session.interface, projectId = session.projectId, locale = session.locale,
+    characterName = character and character.name, characterGUID = character and character.guid,
+    realmName = realm and realm.name, regionId = realm and realm.regionId,
+    gameRealmId = realm and realm.gameRealmId, capabilities = session.capabilities,
+  })
+  if not sessionId then return nil, reason end
+  self.database = clean.database
+  self:RebuildIndexes()
+  self.currentSessionId = sessionId
+  self:CancelCraft()
+  return true
 end
 
 addon.Ledger = Ledger

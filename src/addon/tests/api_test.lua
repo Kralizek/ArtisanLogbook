@@ -38,17 +38,17 @@ local function fixture(options)
   local ledger, api, clock, addon = newLedger(options)
   local midnight = assert(ledger:AddDimension("expansion", "midnight", { name = "Midnight", chronologicalOrder = 11 }))
   local legion = assert(ledger:AddDimension("expansion", "legion", { name = "Legion", chronologicalOrder = 6 }))
-  local alchemy = assert(ledger:AddDimension("profession", "171", { skillLineId = 171, name = "Alchemy" }))
-  local enchanting = assert(ledger:AddDimension("profession", "333", { skillLineId = 333, name = "Enchanting" }))
-  assert(ledger:AddDimension("recipe", 101, { gameRecipeId = 101, name = "Potion",
-    expansionDimensionId = midnight, professionDimensionId = alchemy }))
-  assert(ledger:AddDimension("recipe", 102, { gameRecipeId = 102, name = "Enchant",
-    expansionDimensionId = midnight, professionDimensionId = enchanting }))
-  assert(ledger:AddDimension("recipe", 103, { gameRecipeId = 103, name = "Old potion",
-    expansionDimensionId = legion, professionDimensionId = alchemy }))
-  assert(ledger:AddDimension("item", 201, { gameItemId = 201, name = "Output",
+  local alchemy = assert(ledger:AddDimension("profession", 171, { name = "Alchemy" }))
+  local enchanting = assert(ledger:AddDimension("profession", 333, { name = "Enchanting" }))
+  assert(ledger:AddDimension("recipe", 101, { name = "Potion",
+    expansionDimensionId = midnight, professionId = alchemy }))
+  assert(ledger:AddDimension("recipe", 102, { name = "Enchant",
+    expansionDimensionId = midnight, professionId = enchanting }))
+  assert(ledger:AddDimension("recipe", 103, { name = "Old potion",
+    expansionDimensionId = legion, professionId = alchemy }))
+  assert(ledger:AddDimension("item", 201, { name = "Output",
     expansionDimensionId = legion }))
-  assert(ledger:AddDimension("item", 202, { gameItemId = 202, name = "Reagent",
+  assert(ledger:AddDimension("item", 202, { name = "Reagent",
     expansionDimensionId = legion }))
   session(ledger, "A", 1)
   assert(ledger:SubmitCraft(101, 1, false,
@@ -129,8 +129,8 @@ test("GetCrafts shares projection semantics and all nested values are detached",
   vandalize(api.GetCrafts().crafts)
   equal(api.GetCraft(1), original)
   assert(ledger.database.requests[1].useConcentration == false)
-  local recipeRow = ledger.database.dimensions.recipes[1]
-  assert(ledger:AddDimension("recipe", recipeRow.key, { internalOnly = { secretSchema = true } }))
+  local recipeRow = ledger.database.dimensions.recipes[101]
+  assert(ledger:AddDimension("recipe", recipeRow.id, { internalOnly = { secretSchema = true } }))
   equal(api.GetCraft(1), original)
 end)
 
@@ -239,10 +239,101 @@ test("facets count retained crafts only, sort by identity, and return detached d
   assert(result.expansions[2].value == "midnight" and result.expansions[2].count == 3)
   assert(#result.recipes == 4 and result.recipes[1].value == 101 and result.recipes[1].count == 2)
   assert(result.recipes[1].details.id == 101 and result.recipes[1].details.profession.skillLineId == 171)
-  assert(result.recipes[1].details.key == nil and result.recipes[1].details.professionDimensionId == nil)
+  assert(result.recipes[1].details.key == nil and result.recipes[1].details.professionId == nil)
   result.recipes[1].details.expansion.name = "Changed"
   result.characters[1].details.realm.name = "Changed"
   assert(api.GetCraft(1).expansion.name == "Midnight" and api.GetCraft(1).realm.name == "Realm 1")
+end)
+
+test("recipe summaries use durable counts and alphabetical bounded pages", function()
+  local ledger, api = fixture()
+  local first = assert(api.GetRecipeSummaries({ limit = 2 }))
+  assert(#first.recipes == 2 and first.recipes[1].recipe.name == "Enchant")
+  assert(first.recipes[1].craftCount == 1 and first.recipes[2].recipe.name == "Old potion")
+  local second = assert(api.GetRecipeSummaries({ limit = 2, cursor = first.nextCursor }))
+  assert(second.recipes[1].recipe.name == "Potion" and second.recipes[1].craftCount == 2)
+  assert(second.recipes[2].recipe.name == "Recipe #104")
+  assert(second.nextCursor == nil)
+  first.recipes[1].recipe.name = "Changed"
+  assert(api.GetRecipeSummaries({ limit = 1 }).recipes[1].recipe.name == "Enchant")
+  ledger:Prune(ledger.wall() + 86400 * 61)
+  assert(#api.GetCrafts().crafts == 0)
+  assert(api.GetRecipeSummaries().recipes[3].craftCount == 2)
+  errorIs("invalid-options", api.GetRecipeSummaries({ limit = 201 }))
+  errorIs("invalid-cursor", api.GetRecipeSummaries({ cursor = "invalid" }))
+end)
+
+test("recipe summary filters and count sort page durable character totals", function()
+  local ledger, api = fixture()
+  local characterKey = api.GetCraft(1).character.key
+  local first = assert(api.GetRecipeSummaries({ character = characterKey,
+    sort = "count", limit = 1 }))
+  assert(#first.recipes == 1 and first.recipes[1].recipe.id == 101)
+  assert(first.recipes[1].craftCount == 2 and first.nextCursor == "1")
+  local second = assert(api.GetRecipeSummaries({ character = characterKey,
+    sort = "count", cursor = first.nextCursor, limit = 1 }))
+  assert(second.recipes[1].recipe.id == 104 and second.recipes[1].craftCount == 1)
+  assert(second.nextCursor == nil)
+  assert(#api.GetRecipeSummaries({ character = characterKey, profession = 171 }).recipes == 1)
+  local all = assert(api.GetRecipeSummaries({ sort = "count" }))
+  assert(all.recipes[1].recipe.id == 101 and all.recipes[1].craftCount == 2)
+  assert(#api.GetRecipeSummaries({ character = "missing" }).recipes == 0)
+  errorIs("invalid-cursor", api.GetRecipeSummaries({ character = "missing", cursor = "1" }))
+  for _, options in ipairs({ { character = false }, { profession = -1 }, { sort = "recent" } }) do
+    errorIs("invalid-options", api.GetRecipeSummaries(options))
+  end
+  ledger:Prune(ledger.wall() + 86400 * 61)
+  assert(api.GetRecipeSummaries({ character = characterKey, profession = 171,
+    sort = "count" }).recipes[1].craftCount == 2)
+end)
+
+test("first craft for an existing recipe invalidates the catalogue order", function()
+  local ledger, api = fixture()
+  assert(ledger:AddDimension("recipe", 105))
+  assert(#api.GetRecipeSummaries().recipes == 4)
+  ledger:BeginCraft(105)
+  assert(ledger:RecordResult({ operationID = 99 }))
+  assert(#api.GetRecipeSummaries().recipes == 5)
+  assert(ledger:AddDimension("recipe", 105, { name = "A new recipe" }))
+  local result = api.GetRecipeSummaries({ limit = 1 })
+  assert(result.recipes[1].recipe.id == 105 and result.recipes[1].craftCount == 1)
+end)
+
+test("observed identities follow durable indexes across enrichment, pruning, reload and clear", function()
+  local ledger, api, clock, addon = fixture()
+  assert(api.GetVersion() == 1)
+  local first = api.GetCraft(1).character.key
+  local second = api.GetCraft(2).character.key
+  local characters = assert(api.GetCharacters())
+  assert(#characters == 3 and #api.GetProfessions() == 2)
+  equal(api.GetProfessions(first), { { skillLineId = 171, name = "Alchemy" } })
+  assert(api.GetProfessions(second)[1].skillLineId == 333)
+  assert(#api.GetProfessions("missing-character") == 0)
+  errorIs("invalid-filter", api.GetProfessions(false))
+  errorIs("invalid-filter", api.GetProfessions(""))
+  characters[1].name = "Changed"
+  assert(api.GetCharacters()[1].name ~= "Changed")
+
+  assert(ledger:AddDimension("recipe", 105))
+  ledger:BeginCraft(105)
+  assert(ledger:RecordResult({ operationID = 99 }))
+  local newProfession = assert(ledger:AddDimension("profession", 444, { name = "Inscription" }))
+  assert(ledger:AddDimension("recipe", 105, { professionId = newProfession }))
+  assert(#api.GetProfessions(first) == 2)
+  assert(ledger:AddDimension("profession", 444))
+  assert(api.GetProfessions(first)[2].skillLineId == 444)
+
+  ledger:Prune(clock.current + 61 * 86400)
+  assert(#api.GetCrafts().crafts == 0)
+  assert(#api.GetCharacters() == 3 and #api.GetProfessions(first) == 2)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(#api.GetCharacters() == 3 and #api.GetProfessions(first) == 2)
+  assert(addon.ledger:ClearHistory())
+  assert(#api.GetCharacters() == 0 and #api.GetProfessions() == 0)
+  session(addon.ledger, "A", 1)
+  addon.ledger:BeginCraft(105)
+  assert(addon.ledger:RecordResult({ operationID = 100 }))
+  assert(api.GetProfessions(first)[1].skillLineId == 444)
 end)
 
 test("self-excluding facets remove only their own selection; strict applies all selections", function()
@@ -385,9 +476,9 @@ test("metadata enrichment updates indexed filters and facets without cached proj
   local ledger, api = fixture()
   assert(#api.GetCrafts({ expansions = { "new-era" } }).crafts == 0)
   local expansion = assert(ledger:AddDimension("expansion", "new-era", { name = "New era" }))
-  local profession = assert(ledger:AddDimension("profession", "new-profession", { skillLineId = 555 }))
+  local profession = assert(ledger:AddDimension("profession", 555))
   assert(ledger:AddDimension("recipe", 104,
-    { expansionDimensionId = expansion, professionDimensionId = profession }))
+    { expansionDimensionId = expansion, professionId = profession }))
   equal(ids(api.GetCrafts({ expansions = { "new-era" }, professions = { 555 } })), { 4 })
   assert(api.GetFacets({ recipes = { 104 } }, { mode = "strict" }).professions[1].value == 555)
   local projected = api.GetCraft(4)
@@ -527,7 +618,7 @@ test("series use UTC days and only the specified additive metrics with observati
   assert(row.reagents == nil and row.hasIngenuityProc == nil)
   assert(row.ingenuityRefund == 0 and row.ingenuityRefundObservedCount == 1)
   assert(row.ingenuityProcCount == 0 and row.ingenuityProcCountObservedCount == 1)
-  assert(row.id == nil and row.recipeDimensionId == nil and row.characterDimensionId == nil)
+  assert(row.id == nil and row.recipeId == nil and row.characterDimensionId == nil)
   local absent = api.GetCraftSeries({ recipes = { 104 } }).series[1]
   assert(absent.outputQuantity == nil and absent.outputQuantityObservedCount == 0)
   assert(absent.concentrationSpent == nil and absent.concentrationSpentObservedCount == 0)
@@ -633,9 +724,9 @@ test("unknown series identities are not inferred and durable metadata enrichment
   ledger = addon.ledger
   equal(api.GetCrafts(), { crafts = {} })
   local expansion = assert(ledger:AddDimension("expansion", "known", { name = "Known" }))
-  local profession = assert(ledger:AddDimension("profession", "171", { skillLineId = 171 }))
+  local profession = assert(ledger:AddDimension("profession", 171))
   assert(ledger:AddDimension("recipe", 101,
-    { name = "Enriched", professionDimensionId = profession, expansionDimensionId = expansion }))
+    { name = "Enriched", professionId = profession, expansionDimensionId = expansion }))
   local row = api.GetCraftSeries({ expansions = { "known" }, professions = { 171 } }).series[1]
   assert(row.recipe.name == "Enriched" and row.bucketStart == 0 and row.craftCount == 1)
 end)
@@ -684,6 +775,40 @@ test("series unknown Ingenuity coverage is distinct from observed zero", functio
   row = api.GetCraftSeries().series[1]
   assert(row.ingenuityProcCount == 1 and row.ingenuityProcCountObservedCount == 1)
   assert(row.ingenuityRefund == 0 and row.ingenuityRefundObservedCount == 1)
+end)
+
+test("recipe repair is immediately visible through public craft and catalogue queries", function()
+  local ledger, api = newLedger()
+  local profession = assert(ledger:AddDimension("profession", 171, { name = "Alchemy" }))
+  assert(ledger:AddDimension("recipe", 105, { name = "Observed recipe", professionId = profession }))
+  session(ledger, "Repair Crafter", 1)
+  ledger:BeginCraft(105)
+  assert(ledger:RecordResult({ operationID = 1, itemID = 905, quantity = 1 }))
+  ledger:BeginCraft(nil)
+  local unknown = assert(ledger:RecordResult({ operationID = 2, itemID = 905, quantity = 2 }))
+  assert(api.GetCraft(unknown.id).recipe == nil)
+
+  local repair = assert(ledger:RepairUnknownRecipes())
+  assert(repair.repairedCount == 1 and api.GetCraft(unknown.id).recipe.id == 105)
+  local characterKey = api.GetCraft(unknown.id).character.key
+  assert(#api.GetCrafts({ recipes = { 105 } }).crafts == 2)
+  assert(#api.GetCrafts({ professions = { 171 } }).crafts == 2)
+  assert(#api.GetCrafts({ characters = { characterKey } }).crafts == 2)
+  local series = api.GetCraftSeries({ recipes = { 105 }, professions = { 171 },
+    characters = { characterKey } }).series
+  assert(#series == 1 and series[1].craftCount == 2 and series[1].profession.skillLineId == 171)
+  local catalogue = api.GetRecipeSummaries({ profession = 171, sort = "count" }).recipes
+  local summary
+  for _, entry in ipairs(catalogue) do
+    if entry.recipe.id == 105 then summary = entry end
+  end
+  assert(summary and summary.craftCount == 2 and summary.profession.skillLineId == 171)
+  local facets = api.GetFacets(nil, { facets = { "recipes" } }).recipes
+  local facet
+  for _, entry in ipairs(facets) do
+    if entry.value == 105 then facet = entry end
+  end
+  assert(facet and facet.count == 2)
 end)
 
 test("supported aggregate-only history reloads without synthesizing unknown Ingenuity coverage", function()

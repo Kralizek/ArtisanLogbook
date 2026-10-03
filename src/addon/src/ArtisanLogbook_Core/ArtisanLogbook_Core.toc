@@ -1,0 +1,14 @@
+## Interface: 120100
+## Title: Artisan Logbook Core
+## Notes: Captures and stores observed crafting facts.
+## Version: 0.2.0-ledger
+## SavedVariables: ArtisanLogbookDB, ArtisanLogbookTraceDB
+
+Capture/Trace.lua
+Storage/Ledger.lua
+Flavors/Registry.lua
+Flavors/Retail/Adapter.lua
+Core/API.lua
+Core/Management.lua
+TraceWindow.lua
+Core/Bootstrap.lua
