@@ -1,31 +1,58 @@
 local frames, notices = {}, {}
+local function rowCount(rows)
+  local count = 0
+  for _ in pairs(rows) do count = count + 1 end
+  return count
+end
 local environment = setmetatable({}, { __index = _G })
 environment._G = environment
 local methods = {}
+local object
 
 for _, name in ipairs({
   "SetSize", "SetPoint", "SetClampedToScreen", "SetMovable", "EnableMouse", "RegisterForDrag",
   "StartMoving", "StopMovingOrSizing", "SetJustifyH", "SetAutoFocus", "SetMaxLetters",
   "ClearFocus", "SetMultiLine", "SetFontObject", "SetWidth", "SetCursorPosition",
   "UpdateScrollChildRect", "SetScrollChild", "SetNormalTexture", "SetHighlightTexture",
+  "SetAllPoints", "SetJustifyV", "SetNumeric", "SetThickness", "SetColorTexture",
+  "SetStartPoint", "SetEndPoint", "SetWordWrap", "SetMaxLines",
+  "SetFrameStrata", "RegisterForClicks", "ClearAllPoints", "SetTexture", "SetTexCoord",
+  "LockHighlight", "UnlockHighlight", "SetToplevel", "Raise", "SetAtlas",
+  "SetTextColor", "AddMaskTexture",
 }) do
   methods[name] = function() end
 end
+function methods:SetSize(width, height) self.width, self.height = width, height end
+function methods:SetWidth(width) self.width = width end
+function methods:SetTexture(texture) self.texture = texture end
+function methods:SetPoint(point, relative, relativePoint, x, y)
+  if type(relative) == "number" then
+    x, y, relative, relativePoint = relative, relativePoint, nil, nil
+  end
+  self.point, self.relative, self.relativePoint = point, relative, relativePoint
+  self.x, self.y = x, y
+end
+function methods:SetEnabled(value) self.enabled = value end
 function methods:SetText(value) assert(type(value) == "string"); self.text = value end
 function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
-function methods:GetWidth() return 1024 end
+function methods:GetWidth() return self.width or 1024 end
 function methods:GetHeight() return self.height or (self.kind == "ScrollFrame" and 300 or 768) end
+function methods:GetCenter() return 500, 500 end
+function methods:GetEffectiveScale() return 1 end
+function methods:GetNormalTexture() return object() end
 function methods:GetStringHeight()
   local _, lineCount = (self.text or ""):gsub("\n", "")
   return math.max(14, (lineCount + 1) * 14)
 end
 function methods:SetScript(name, callback) self.scripts[name] = callback end
+function methods:HookScript(name, callback) self.scripts[name] = callback end
 function methods:RegisterEvent(event) self.events[event] = true end
 function methods:UnregisterEvent(event) self.events[event] = nil end
 function methods:RegisterUnitEvent(event, unit) assert(unit == "player"); self:RegisterEvent(event) end
 function methods:IsEventRegistered(event) return self.events[event] or false end
 function methods:Hide() self.shown = false end
+function methods:SetShown(value) self.shown = value end
 function methods:Show()
   self.shown = true
   if self.scripts.OnShow then self.scripts.OnShow(self) end
@@ -33,11 +60,24 @@ end
 function methods:IsShown() return self.shown end
 function methods:SetVerticalScroll(offset) self.offset = offset end
 function methods:GetVerticalScroll() return self.offset or 0 end
+function methods:CreateLine() return object() end
+function methods:CreateTexture()
+  local texture = object()
+  texture.parent = self
+  frames[#frames + 1] = texture
+  return texture
+end
+function methods:CreateMaskTexture() return object() end
 
-local function object()
+object = function()
   return setmetatable({ scripts = {}, events = {}, shown = true }, { __index = methods })
 end
-function methods:CreateFontString() return object() end
+function methods:CreateFontString()
+  local label = object()
+  label.parent = self
+  frames[#frames + 1] = label
+  return label
+end
 environment.CreateFrame = function(kind, name, parent, template)
   local frame = object()
   frame.kind, frame.name, frame.parent = kind, name, parent
@@ -47,12 +87,24 @@ environment.CreateFrame = function(kind, name, parent, template)
 end
 environment.UIParent = object()
 environment.Minimap = object()
+environment.Minimap:SetSize(140, 140)
+environment.GetCursorPosition = function() return 600, 500 end
 environment.ChatFontNormal = {}
 environment.UISpecialFrames = {}
 environment.StaticPopupDialogs = {}
 environment.SlashCmdList = {}
 environment.tinsert = table.insert
 environment.StaticPopup_Show = function(name) environment.popup = name end
+environment.UIDropDownMenu_SetWidth = function() end
+environment.UIDropDownMenu_SetText = function(frame, text) frame.text = text end
+environment.UIDropDownMenu_Initialize = function(frame, callback) frame.initialize = callback end
+environment.UIDropDownMenu_CreateInfo = function() return {} end
+environment.UIDropDownMenu_AddButton = function() end
+environment.GameTooltip = { SetOwner = function() end,
+  SetText = function(self, text) self.text, self.lines = text, {} end,
+  AddLine = function(self, text) self.lines[#self.lines + 1] = text end,
+  Show = function() end, Hide = function() end }
+environment.date = os.date
 environment.DEFAULT_CHAT_FRAME = { AddMessage = function(_, message) notices[#notices + 1] = message end }
 environment.GetServerTime = function() return 1800000000 end
 environment.GetTimePreciseSec = function() return 100.5 end
@@ -60,10 +112,13 @@ environment.GetBuildInfo = function() return "12.1.0", "69933", "mock", 120100 e
 environment.GetLocale = function() return "enUS" end
 environment.UnitName = function() return "TestCrafter" end
 environment.UnitGUID = function() return "Player-1-123" end
+environment.UnitClass = function() return nil, "MAGE", 8 end
 environment.GetRealmName = function() return "TestRealm" end
 environment.GetRealmID = function() return 12 end
 environment.GetCurrentRegion = function() return 3 end
 environment.C_AddOns = { GetAddOnMetadata = function() return "0.1.0-tracer" end }
+environment.RAID_CLASS_COLORS = { MAGE = { r = .2, g = .5, b = 1, colorStr = "ff3399ff" } }
+environment.GetItemIcon = function() return "Interface\\Icons\\INV_Misc_Gem_01" end
 environment.WOW_PROJECT_ID = 1
 environment.WOW_PROJECT_MAINLINE = 1
 local hooks = {}
@@ -71,21 +126,32 @@ environment.C_TradeSkillUI = {
   CraftRecipe = function() end,
   GetCraftingOperationInfo = function() return { concentrationCost = 81, baseSkill = 120 } end,
   GetItemReagentQualityByItemInfo = function() return 2 end,
+  GetRecipeItemQualityInfo = function(recipeID, quality)
+    if recipeID == 42 then return { icon = "Quality-" .. quality } end
+    if recipeID == 99 then error("quality data unavailable") end
+  end,
 }
 environment.hooksecurefunc = function(_, name, callback) hooks[name] = callback end
 
-local root = arg[1] or "src/ArtisanLogbook"
-local addon = {}
-for line in io.lines(root .. "/ArtisanLogbook.toc") do
-  if line:match("%.lua$") then
-    local chunk = assert(loadfile(root .. "/" .. line))
-    setfenv(chunk, environment)
-    chunk("ArtisanLogbook", addon)
+local coreRoot = arg[1] or "src/ArtisanLogbook_Core"
+local uiRoot = arg[2] or "src/ArtisanLogbook"
+local function load(root, name, afterFile)
+  local namespace = {}
+  for line in io.lines(root .. "/" .. name .. ".toc") do
+    if line:match("%.lua$") then
+      local chunk = assert(loadfile(root .. "/" .. line))
+      setfenv(chunk, environment)
+      chunk(name, namespace)
+      if afterFile then afterFile(line, namespace) end
+    end
   end
+  return namespace
 end
+local addon = load(coreRoot, "ArtisanLogbook_Core")
 local lifecycle = frames[1]
 local api = environment.ArtisanLogbookAPI
 assert(type(api) == "table")
+assert(api.GetVersion() == 1)
 local unavailable, reason = api.GetCrafts()
 assert(unavailable == nil and reason == "not-ready")
 local committed = {}
@@ -93,7 +159,7 @@ api.RegisterCallback("CRAFT_COMMITTED", function() error("consumer failure") end
 api.RegisterCallback("CRAFT_COMMITTED", function(craft) committed[#committed + 1] = craft end)
 lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "OtherAddon")
 assert(addon.recorder == nil)
-lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook")
+lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Core")
 assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
@@ -102,17 +168,21 @@ assert(addon.ledger.database.schemaVersion == 1)
 assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
+assert(addon.ledger.database.dimensions.characters[1].classFile == "MAGE")
+assert(api.GetCharacters()[1] == nil)
 assert(addon.window and not addon.window:IsShown())
-environment.SlashCmdList.ARTISANLOGBOOK("")
+assert(not addon.productionWindow and not environment.SLASH_ARTISANLOGBOOK1)
+assert(environment.SLASH_ARTISANLOGBOOKTRACE1 == "/al_trace")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
 assert(addon.window:IsShown())
-environment.SlashCmdList.ARTISANLOGBOOK("start")
-environment.SlashCmdList.ARTISANLOGBOOK("mark basic craft")
+addon.Start()
+addon.Mark("basic craft")
 assert(notices[#notices] == "Artisan Logbook: Marker: basic craft")
 addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
 addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1 })
 assert(#addon.ledger.database.crafts == 1)
 assert(addon.ledger.database.crafts[1].gameOperationId == 1)
-assert(addon.ledger.database.crafts[1].recipeDimensionId ~= nil)
+assert(addon.ledger.database.crafts[1].recipeId == 456)
 assert(#committed == 1 and committed[1].recipe.id == 456)
 assert(api.GetCraft(1).recipe.id == 456 and api.GetCrafts().crafts[1].id == 1)
 assert(api.GetCraftSeries().series[1].craftCount == 1)
@@ -124,13 +194,15 @@ assert(api.GetCapabilities().personalRequests == true)
 assert(not addon.ledgerCaptureError and not addon.adapter.capabilities.captureError)
 committed[1].recipe.id = 999
 assert(api.GetCraft(1).recipe.id == 456)
-environment.SlashCmdList.ARTISANLOGBOOK("stop")
+addon.Stop()
 assert(#addon.recorder.database.records == 5)
 assert(addon.recorder.database.records[2].event == "TRACE_MARK")
 assert(not addon.recorder.recording)
-environment.SlashCmdList.ARTISANLOGBOOK("export")
-environment.SlashCmdList.ARTISANLOGBOOK("status")
-assert(notices[#notices]:find("5 events", 1, true))
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("export")
+assert(addon.window:IsShown())
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("status")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark from slash")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
 
 local function click(text)
   for _, frame in ipairs(frames) do
@@ -145,7 +217,7 @@ click("Diagnostics")
 click("Export")
 click(">")
 click("<")
-click("Clear")
+click("Clear Trace")
 assert(environment.popup == "ARTISANLOGBOOK_CLEAR_TRACE")
 assert(#addon.recorder.database.records == 5)
 environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE.OnAccept()
@@ -157,6 +229,30 @@ for _, frame in ipairs(frames) do
   if frame.kind == "ScrollFrame" then scrollFrame = frame end
 end
 assert(textEditBox and scrollFrame)
+local savedRecords = addon.recorder.database.records
+local exportRecords = {}
+for index = 1, 25 do
+  exportRecords[index] = { sequence = index, timestamp = 1800000000, elapsed = index,
+    event = "TRACE_MARK", payload = "{}" }
+end
+addon.recorder.database.records = exportRecords
+local function displayedExport()
+  return assert(loadstring(textEditBox:GetText()))()
+end
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("export")
+assert(#displayedExport().records == 25 and displayedExport().totalRecords == 25)
+click(">")
+assert(#displayedExport().records == 10 and displayedExport().records[1].sequence == 1)
+click(">")
+assert(#displayedExport().records == 10 and displayedExport().records[1].sequence == 11)
+click(">")
+assert(#displayedExport().records == 5 and displayedExport().records[1].sequence == 21)
+click("Export")
+assert(#displayedExport().records == 25 and displayedExport().records[25].sequence == 25)
+addon.recorder.database.records = savedRecords
+click("Export")
+assert(#displayedExport().records == 0)
+print("PASS complete trace export and optional paged fallback")
 textEditBox:SetText("short export")
 textEditBox.scripts.OnTextChanged()
 assert(textEditBox.height == scrollFrame:GetHeight())
@@ -164,27 +260,442 @@ textEditBox:SetText(string.rep("long line\n", 100))
 textEditBox.scripts.OnTextChanged()
 assert(textEditBox.height > scrollFrame:GetHeight())
 click("Start")
-click("Clear")
+click("Clear Trace")
 assert(#addon.recorder.database.records == 1)
 click("Stop")
 assert(addon.recorder.database.records[1].sequence == 6)
 addon.window.scripts.OnUpdate(addon.window, 0.6)
-print("PASS TOC load order, lifecycle, slash commands, and debug UI controls (mocked)")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("start")
+assert(addon.recorder.recording)
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark from slash")
+assert(addon.recorder.database.records[#addon.recorder.database.records].event == "TRACE_MARK")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("status")
+assert(notices[#notices] == "Artisan Logbook: Recording.")
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
+assert(not addon.recorder.recording)
+print("PASS Core-only TOC, lifecycle, tracer slash commands and debug UI controls (mocked)")
 
-local function reload(database)
+local function reload(database, afterFile)
   environment.ArtisanLogbookDB = database
-  local reloaded = {}
   local frameStart = #frames
-  for line in io.lines(root .. "/ArtisanLogbook.toc") do
-    if line:match("%.lua$") then
-      local chunk = assert(loadfile(root .. "/" .. line))
-      setfenv(chunk, environment)
-      chunk("ArtisanLogbook", reloaded)
-    end
-  end
+  local reloaded = load(coreRoot, "ArtisanLogbook_Core", afterFile)
+  local frame = frames[frameStart + 1]
+  frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook_Core")
+  return reloaded
+end
+
+local function loadUI()
+  local frameStart = #frames
+  local ui = load(uiRoot, "ArtisanLogbook")
   local frame = frames[frameStart + 1]
   frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
-  return reloaded
+  return ui
+end
+
+local maintenance = reload(nil)
+maintenance.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 9901)
+maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 9902 })
+maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2, itemID = 9902 })
+local maintenanceDatabase = maintenance.ledger.database
+local repairButton
+for _, frame in ipairs(frames) do
+  if frame.parent == maintenance.window and frame.kind == "Button" and
+      frame.text == "Repair unknown recipes" then repairButton = frame end
+end
+assert(repairButton and maintenance.ledger.database.crafts[2].recipeId == nil)
+repairButton.scripts.OnClick(repairButton)
+assert(environment.popup == "ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES")
+assert(maintenance.ledger.database == maintenanceDatabase and
+  maintenance.ledger.database.crafts[2].recipeId == nil)
+local repairDialog = environment.StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES
+assert(repairDialog.text:find("1 can be uniquely attributed", 1, true))
+assert(repairDialog.button1 == "Repair 1 crafts")
+repairDialog.OnAccept()
+assert(maintenance.ledger.database ~= maintenanceDatabase)
+assert(environment.ArtisanLogbookDB == maintenance.ledger.database)
+assert(maintenance.ledger.database.crafts[2].recipeId == 9901)
+assert(maintenance.lastMaintenanceDiagnostic:find("success=true", 1, true))
+assert(notices[#notices]:find("Repaired 1 crafts and reconciled affected aggregates. 0 ambiguous and 0 without sufficient evidence remain.", 1, true))
+maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 3, itemID = 9903 })
+maintenanceDatabase = maintenance.ledger.database
+environment.popup = nil
+repairButton.scripts.OnClick(repairButton)
+assert(environment.popup == nil and maintenance.ledger.database == maintenanceDatabase)
+print("PASS confirmed offline recipe repair preview and no-evidence no-write flow")
+
+local function startupDatabase(knownOutput, unknownOutputs, competingRecipe)
+  local source = assert(maintenance.Ledger.New(nil, { wall = function() return 1800000000 end }))
+  assert(source:CreateSession({ startedAt = 1800000000, characterName = "Startup Crafter",
+    realmName = "Startup Realm", capabilities = {} }))
+  local operationId = 1
+  if knownOutput then
+    source:BeginCraft(9910)
+    assert(source:RecordResult({ operationID = operationId, itemID = knownOutput, quantity = 2 }))
+    operationId = operationId + 1
+  end
+  if competingRecipe then
+    source:BeginCraft(competingRecipe)
+    assert(source:RecordResult({ operationID = operationId, itemID = knownOutput, quantity = 1 }))
+    operationId = operationId + 1
+  end
+  for _, output in ipairs(unknownOutputs) do
+    source:BeginCraft(nil)
+    assert(source:RecordResult({ operationID = operationId, itemID = output, quantity = 3 }))
+    operationId = operationId + 1
+  end
+  return source.database
+end
+
+local automaticDatabase = startupDatabase(9920, { 9920, 9921 })
+automaticDatabase.recipeOutputs = nil
+local noticesBeforeAutomatic = #notices
+local automatic = reload(automaticDatabase)
+assert(automatic.ledger and automatic.ledger.unknownRecipeCount == 1)
+assert(automatic.ledger.craftById[2].recipeId == 9910 and
+  automatic.ledger.craftById[3].recipeId == nil)
+assert(#automatic.ledger.craftIdsByRecipe[9910] == 2 and automatic.ledger.recipeCounts[9910] == 2)
+assert(environment.ArtisanLogbookDB == automatic.ledger.database and
+  environment.ArtisanLogbookDB ~= automaticDatabase)
+assert(automatic.lastMaintenanceDiagnostic:find("automatic unknown=2 repairable=1 repaired=1", 1, true))
+assert(automatic.lastRecipeOutputDiagnostic:find("bootstrap learned=1 existing=0 total=1", 1, true))
+for index = noticesBeforeAutomatic + 1, #notices do
+  assert(notices[index]:find("Automatically repaired", 1, true) == nil)
+end
+local automaticSeries = automatic.ledger.database.craftSeries
+local repairedSeriesCount, unknownSeriesCount = 0, 0
+for _, row in ipairs(automaticSeries) do
+  if row.recipeId == 9910 then repairedSeriesCount = row.craftCount end
+  if row.recipeId == nil then unknownSeriesCount = row.craftCount end
+end
+assert(repairedSeriesCount == 2 and unknownSeriesCount == 1)
+assert(environment.ArtisanLogbookAPI.GetCraft(2).recipe.id == 9910)
+print("PASS Core startup repairs unique historical evidence and rebuilds runtime indexes")
+
+local ambiguousDatabase = startupDatabase(9925, { 9925, 9926 }, 9912)
+local ambiguousStartup = reload(ambiguousDatabase)
+assert(ambiguousStartup.ledger and ambiguousStartup.ledger.unknownRecipeCount == 2)
+assert(ambiguousStartup.ledger.craftById[3].recipeId == nil and
+  ambiguousStartup.ledger.craftById[4].recipeId == nil)
+assert(ambiguousStartup.lastMaintenanceDiagnostic:find("ambiguous=1 insufficient=1", 1, true))
+print("PASS Core startup leaves ambiguous and unsupported crafts Unknown")
+
+local noUnknownDatabase = startupDatabase(9922, {})
+local noOpDatabaseAtMaintenance
+local noUnknown = reload(noUnknownDatabase, function(file, namespace)
+  if file == "Core/Management.lua" then
+    local automaticRepair = environment.ArtisanLogbookManagement.AutomaticRepairUnknownRecipes
+    environment.ArtisanLogbookManagement.AutomaticRepairUnknownRecipes = function()
+      noOpDatabaseAtMaintenance = namespace.ledger.database
+      return automaticRepair()
+    end
+  end
+end)
+assert(noUnknown.ledger.unknownRecipeCount == 0)
+assert(noUnknown.ledger.database == noOpDatabaseAtMaintenance)
+assert(environment.ArtisanLogbookDB == noUnknown.ledger.database)
+print("PASS Core startup skips repair without retained Unknown crafts")
+
+local unsupportedDatabase = startupDatabase(nil, { 9923 })
+local unsupportedOriginalCraft = unsupportedDatabase.crafts[1]
+local unsupportedAtMaintenance
+local unsupported = reload(unsupportedDatabase, function(file, namespace)
+  if file == "Core/Management.lua" then
+    local automaticRepair = environment.ArtisanLogbookManagement.AutomaticRepairUnknownRecipes
+    environment.ArtisanLogbookManagement.AutomaticRepairUnknownRecipes = function()
+      unsupportedAtMaintenance = namespace.ledger.database
+      return automaticRepair()
+    end
+  end
+end)
+assert(unsupported.ledger and unsupported.ledger.unknownRecipeCount == 1)
+assert(unsupported.ledger.database == unsupportedAtMaintenance)
+assert(environment.ArtisanLogbookDB == unsupported.ledger.database)
+assert(unsupported.ledger.database.crafts[1].recipeId == nil and
+  unsupportedOriginalCraft.recipeId == nil)
+assert(unsupported.lastMaintenanceDiagnostic:find("automatic unknown=1 repairable=0", 1, true))
+unsupported.ledger:BeginCraft(9911)
+assert(unsupported.ledger:RecordResult({ operationID = 2, itemID = 9923, quantity = 1 }))
+assert(unsupported.ledger.unknownRecipeCount == 0)
+assert(unsupported.ledger.craftById[1].recipeId == 9911)
+assert(unsupported.lastRecipeOutputDiagnostic:find("targeted-repair", 1, true) == nil)
+assert(unsupported.lastMaintenanceDiagnostic:find("targeted unknown=1 repairable=1 repaired=1", 1, true))
+local improved = reload(unsupported.ledger.database)
+assert(improved.ledger.unknownRecipeCount == 0 and improved.ledger.craftById[1].recipeId == 9911)
+assert(environment.ArtisanLogbookDB == improved.ledger.database)
+print("PASS startup leaves unsupported Unknowns and repairs them after evidence improves")
+
+local failureDatabase = startupDatabase(9924, { 9924 })
+local failureDatabaseAtRepair
+local failingAutomatic = reload(failureDatabase, function(file, namespace)
+  if file == "Storage/Ledger.lua" then
+    namespace.Ledger.RepairUnknownRecipes = function(ledger)
+      failureDatabaseAtRepair = ledger.database
+      error("injected automatic repair failure")
+    end
+  end
+end)
+assert(failingAutomatic.ledger and failingAutomatic.ledger.unknownRecipeCount == 1)
+assert(failingAutomatic.ledger.database == failureDatabaseAtRepair and
+  environment.ArtisanLogbookDB == failureDatabaseAtRepair)
+assert(failingAutomatic.ledger.database.crafts[2].recipeId == nil)
+assert(failingAutomatic.lastMaintenanceDiagnostic:find("automatic success=false error=", 1, true))
+assert(failingAutomatic.recorder)
+print("PASS automatic repair failure leaves Core and original loaded ledger available")
+
+do
+  local previousSchematic = environment.C_TradeSkillUI.GetRecipeSchematic
+  local previousQualities = environment.C_TradeSkillUI.GetRecipeQualityItemIDs
+  local previousIds = environment.C_TradeSkillUI.GetAllRecipeIDs
+  local previousReady = environment.C_TradeSkillUI.IsTradeSkillReady
+  local previousChanging = environment.C_TradeSkillUI.IsDataSourceChanging
+  local previousInfo = environment.C_TradeSkillUI.GetRecipeInfo
+  local function candidateDatabase(recipes, outputs)
+    local database = startupDatabase(nil, outputs or { 243807 })
+    local name = "Gleeful Glamour - Lightforged Draenei"
+    for _, item in pairs(database.dimensions.items) do item.name = name end
+    local source = assert(maintenance.Ledger.New(database))
+    for _, recipeId in ipairs(recipes or { 1236472 }) do
+      source:AddDimension("recipe", recipeId, { name = name })
+    end
+    return source.database
+  end
+  local queries = 0
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId, isRecraft)
+    queries = queries + 1
+    assert(recipeId == 1236472 and isRecraft == false)
+    return nil
+  end
+  local noticeCount = #notices
+  local unavailableCore = reload(candidateDatabase())
+  assert(unavailableCore.ledger.unknownRecipeCount == 1)
+  assert(unavailableCore.ledger.recipeOutputCount == 0)
+  assert(queries == 1 and #notices == noticeCount)
+  assert(environment.ArtisanLogbookAPI.GetCraft(1).recipe == nil)
+
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId, isRecraft)
+    queries = queries + 1
+    assert(recipeId == 1236472 and isRecraft == false)
+    return { recipeID = recipeId, outputItemID = 243807 }
+  end
+  local confirmed = reload(candidateDatabase())
+  assert(queries == 2 and #notices == noticeCount)
+  assert(confirmed.ledger.unknownRecipeCount == 0)
+  assert(confirmed.ledger.database.recipeOutputs[1236472][243807])
+  assert(confirmed.ledger.craftById[1].recipeId == 1236472)
+  assert(confirmed.ledger.craftById[1].requestId == nil)
+  assert(confirmed.ledger.database.schemaVersion == 1)
+  local reloadedKnowledge = reload(confirmed.ledger.database)
+  assert(queries == 2 and reloadedKnowledge.ledger.database.recipeOutputs[1236472][243807])
+  print("PASS candidate confirmation, silence, schema v1 and durable reload")
+
+  queries = 0
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    queries = queries + 1
+    return { recipeID = recipeId, outputItemID = 999999 }
+  end
+  local disproved = reload(candidateDatabase())
+  assert(disproved.ledger.unknownRecipeCount == 1 and disproved.ledger.recipeOutputCount == 0)
+  assert(disproved.lastRecoverySummary.unconfirmedCount == 1)
+  assert(disproved.ledger.dimensionRows.item[999999] == nil)
+  local noCandidate = reload(candidateDatabase({}))
+  local differentName = candidateDatabase()
+  differentName.dimensions.recipes[1236472].name = "gleeful glamour - lightforged draenei"
+  reload(differentName)
+  local knownMapping = candidateDatabase()
+  knownMapping.recipeOutputs[1236472] = { [243807] = true }
+  local known = reload(knownMapping)
+  assert(known.ledger.unknownRecipeCount == 0)
+  assert(noCandidate.ledger.unknownRecipeCount == 1 and queries == 1)
+  print("PASS disproved, absent and nonexact candidates; known mappings skip discovery queries")
+
+  local results = { [1236472] = 243807, [1236473] = 999999 }
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    queries = queries + 1
+    return { recipeID = recipeId, outputItemID = results[recipeId] }
+  end
+  local single = reload(candidateDatabase({ 1236472, 1236473 }))
+  assert(single.ledger.craftById[1].recipeId == 1236472)
+  assert(single.ledger.database.recipeOutputs[1236473] == nil)
+  assert(single.lastRecoverySummary.candidateCount == 2 and single.lastRecoverySummary.verifiedCount == 1)
+  results[1236473] = 243807
+  local shared = reload(candidateDatabase({ 1236472, 1236473 }))
+  assert(shared.ledger.recipeOutputCount == 2 and shared.ledger.unknownRecipeCount == 1)
+  assert(shared.ledger:AnalyzeUnknownRecipeRepair().ambiguousCount == 1)
+  assert(shared.lastRecoverySummary.verifiedCount == 2)
+  print("PASS all name candidates verified before shared-output ambiguity is evaluated")
+
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function(recipeId)
+    assert(recipeId == 1236472)
+    return { 243807, 243808, 243808, 0, -1 }
+  end
+  local targetedCalls = 0
+  local multiple = reload(candidateDatabase(nil, { 243807, 243808 }), function(file)
+    if file == "Core/Management.lua" then
+      local original = environment.ArtisanLogbookManagement.RepairUnknownRecipesForOutputs
+      environment.ArtisanLogbookManagement.RepairUnknownRecipesForOutputs = function(filter)
+        targetedCalls = targetedCalls + 1
+        assert(filter[243807] and filter[243808])
+        return original(filter)
+      end
+    end
+  end)
+  assert(multiple.ledger.recipeOutputCount == 2 and multiple.ledger.unknownRecipeCount == 0)
+  assert(targetedCalls == 1)
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = previousQualities
+  print("PASS multiple authoritative outputs deduplicate and use one staged targeted repair")
+
+  queries = 0
+  environment.C_TradeSkillUI.GetRecipeSchematic = function()
+    queries = queries + 1
+    error("metadata unavailable")
+  end
+  local manual = reload(candidateDatabase())
+  local beforeManual = manual.Trace.Serialize(manual.ledger.database)
+  local analysis = assert(environment.ArtisanLogbookManagement.AnalyzeUnknownRecipeRepair())
+  assert(queries == 2 and analysis.recovery.candidateCount == 1 and analysis.recovery.unavailableCount == 1)
+  assert(analysis.repairableCount == 0 and analysis.insufficientEvidenceCount == 1)
+  assert(manual.Trace.Serialize(manual.ledger.database) == beforeManual)
+  assert(manual.recorder and not manual.ledgerError and #notices == noticeCount)
+  local manualButton
+  for _, frame in ipairs(frames) do
+    if frame.parent == manual.window and frame.text == "Repair unknown recipes" then manualButton = frame end
+  end
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    queries = queries + 1
+    return { recipeID = recipeId, outputItemID = 243807 }
+  end
+  environment.popup = nil
+  manualButton.scripts.OnClick()
+  assert(environment.popup == "ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES" and queries == 3)
+  assert(manual.ledger.craftById[1].recipeId == nil and manual.ledger.unknownRecipeCount == 1)
+  assert(manual.ledger.database.recipeOutputs[1236472][243807])
+  local canceledDatabase = manual.ledger.database
+  local diagnostics = assert(environment.ArtisanLogbookManagement.RecipeOutputDiagnostics())
+  assert(diagnostics.recovery.verifiedCount == 1 and diagnostics.verifiedRelationshipCount == 1)
+  environment.StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES.OnAccept()
+  assert(manual.ledger.craftById[1].recipeId == 1236472 and queries == 3)
+  assert(canceledDatabase.crafts[1].recipeId == nil)
+  local canceledReload = reload(canceledDatabase)
+  assert(canceledReload.ledger.craftById[1].recipeId == 1236472 and queries == 3)
+  print("PASS manual verification previews before repair; unresolved is read-only; canceled knowledge survives reload")
+
+  noticeCount = #notices
+  local metadataReady = false
+  local queriesByRecipe = {}
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    queriesByRecipe[recipeId] = (queriesByRecipe[recipeId] or 0) + 1
+    if metadataReady then return { recipeID = recipeId, outputItemID = results[recipeId] } end
+  end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(recipeId) return { recipeID = recipeId } end
+  local eventsCore = reload(candidateDatabase())
+  local currentIds = { 7654321 }
+  environment.C_TradeSkillUI.GetAllRecipeIDs = function() return currentIds end
+  environment.C_TradeSkillUI.IsTradeSkillReady = function() return true end
+  environment.C_TradeSkillUI.IsDataSourceChanging = function() return false end
+  eventsCore.HandleRetailEvent("TRADE_SKILL_SHOW")
+  eventsCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  for index = 1, 20 do
+    eventsCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+    eventsCore.HandleRetailEvent("TRADE_SKILL_SHOW")
+    eventsCore.HandleRetailEvent("CRAFTING_DETAILS_UPDATE")
+  end
+  assert(queriesByRecipe[1236472] == 1 and queriesByRecipe[7654321] == 2)
+  assert(eventsCore.ledger.unknownRecipeCount == 1)
+  eventsCore.HandleRetailEvent("TRADE_SKILL_CLOSE")
+  currentIds = { 1236472, 1236472 }
+  metadataReady = true
+  environment.C_TradeSkillUI.IsTradeSkillReady = function() return false end
+  eventsCore.HandleRetailEvent("TRADE_SKILL_SHOW")
+  assert(queriesByRecipe[1236472] == 1)
+  environment.C_TradeSkillUI.IsTradeSkillReady = function() return true end
+  environment.C_TradeSkillUI.IsDataSourceChanging = function() return true end
+  eventsCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  assert(queriesByRecipe[1236472] == 1)
+  environment.C_TradeSkillUI.IsDataSourceChanging = function() return false end
+  eventsCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  assert(queriesByRecipe[1236472] == 2 and eventsCore.ledger.craftById[1].recipeId == 1236472)
+  eventsCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  assert(queriesByRecipe[1236472] == 2 and #notices == noticeCount)
+  assert(not eventsCore.ledgerCaptureError and not eventsCore.adapter.capabilities.captureError)
+  metadataReady = false
+  local changingCore = reload(candidateDatabase())
+  changingCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  assert(changingCore.ledger.unknownRecipeCount == 1 and queriesByRecipe[1236472] == 4)
+  environment.C_TradeSkillUI.IsDataSourceChanging = function() return true end
+  changingCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  metadataReady = true
+  environment.C_TradeSkillUI.IsDataSourceChanging = function() return false end
+  changingCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  assert(changingCore.ledger.unknownRecipeCount == 0 and queriesByRecipe[1236472] == 5)
+  environment.C_TradeSkillUI.GetAllRecipeIDs = function() return nil end
+  changingCore.HandleRetailEvent("TRADE_SKILL_SHOW")
+  changingCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+  assert(queriesByRecipe[1236472] == 5)
+  environment.C_TradeSkillUI.GetAllRecipeIDs = previousIds
+  environment.C_TradeSkillUI.IsTradeSkillReady = previousReady
+  environment.C_TradeSkillUI.IsDataSourceChanging = previousChanging
+  environment.C_TradeSkillUI.GetRecipeInfo = previousInfo
+  print("PASS profession-scoped ready events heal without reload; duplicate and irrelevant events stop querying")
+
+  environment.C_TradeSkillUI.GetRecipeSchematic = nil
+  local absentApi = reload(candidateDatabase())
+  assert(absentApi.ledger.unknownRecipeCount == 1 and absentApi.lastRecoverySummary.unavailableCount == 1)
+  assert(absentApi.recorder and environment.ArtisanLogbookAPI.GetCraft(1))
+  local previousSecret, previousAccessible = environment.issecretvalue, environment.canaccesstable
+  environment.issecretvalue = function(value) return value == 243807 end
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, outputItemID = 243807 }
+  end
+  local secret = reload(candidateDatabase())
+  assert(secret.ledger.unknownRecipeCount == 1 and secret.ledger.recipeOutputCount == 0)
+  environment.issecretvalue = previousSecret
+  local forbidden = setmetatable({}, { __index = function() error("forbidden access") end })
+  environment.canaccesstable = function(value) return value ~= forbidden end
+  environment.C_TradeSkillUI.GetRecipeSchematic = function() return forbidden end
+  local inaccessible = reload(candidateDatabase())
+  assert(inaccessible.ledger.unknownRecipeCount == 1 and inaccessible.ledger.recipeOutputCount == 0)
+  environment.canaccesstable = previousAccessible
+  environment.C_TradeSkillUI.GetRecipeSchematic = function() return { recipeID = 7654321, outputItemID = 243807 } end
+  local wrongIdentity = reload(candidateDatabase())
+  assert(wrongIdentity.ledger.unknownRecipeCount == 1 and wrongIdentity.ledger.recipeOutputCount == 0)
+  assert(#notices == noticeCount)
+  print("PASS secret, inaccessible and mismatched metadata cannot become durable evidence")
+
+  local large = assert(maintenance.Ledger.New(startupDatabase(9920, {}), {
+    wall = function() return 1800000000 end,
+  }))
+  assert(large:CreateSession({ startedAt = 1800000000, characterName = "Startup Crafter",
+    realmName = "Startup Realm", capabilities = {} }))
+  for recipeId = 2000000, 2001999 do large:AddDimension("recipe", recipeId, { name = "Unrelated " .. recipeId }) end
+  for operationId = 2, 2000 do
+    large:BeginCraft(9910)
+    assert(large:RecordResult({ operationID = operationId, itemID = 9920, quantity = 1 }))
+  end
+  for index = 1, 14 do
+    local outputId = 3000000 + index
+    large:BeginCraft(nil)
+    assert(large:RecordResult({ operationID = 2000 + index, itemID = outputId, quantity = 2 }))
+    large:AddDimension("item", outputId, { name = "Missing " .. index })
+    if index <= 9 then large:AddDimension("recipe", 4000000 + index, { name = "Missing " .. index }) end
+  end
+  local candidateQueries, enumerationQueries, infoQueries = 0, 0, 0
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    candidateQueries = candidateQueries + 1
+    assert(recipeId > 4000000 and recipeId <= 4000009)
+    if recipeId <= 4000003 then return { recipeID = recipeId, outputItemID = recipeId - 1000000 } end
+  end
+  environment.C_TradeSkillUI.GetAllRecipeIDs = function() enumerationQueries = enumerationQueries + 1; return {} end
+  environment.C_TradeSkillUI.GetRecipeInfo = function() infoQueries = infoQueries + 1 end
+  local started = os.clock()
+  local bounded = reload(large.database)
+  assert(candidateQueries == 9 and enumerationQueries == 0 and infoQueries == 0)
+  assert(bounded.lastRecoverySummary.candidateCount == 9 and bounded.lastRecoverySummary.verifiedCount == 3)
+  assert(bounded.ledger.unknownRecipeCount == 11 and bounded.ledger.recipeOutputCount == 4)
+  assert(bounded.ledger.database.schemaVersion == 1 and #notices == noticeCount)
+  print(string.format("PASS bounded startup: 2010 recipe dimensions, 2000 good crafts, 14 Unknowns, 9 queries (%.3fs mocked full load)", os.clock() - started))
+  environment.C_TradeSkillUI.GetRecipeSchematic = previousSchematic
+  environment.C_TradeSkillUI.GetAllRecipeIDs = previousIds
+  environment.C_TradeSkillUI.GetRecipeInfo = previousInfo
 end
 
 local saved = addon.ledger.database
@@ -289,3 +800,687 @@ environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE.OnAccept()
 assert(#unknown.recorder.database.records == 0)
 assert(unknown.ledger.database == durableDatabase and #durableDatabase.crafts == 4)
 print("PASS unrelated spell failures, partial batch, trace mark echo and clear isolation")
+
+environment.GetCurrentRegion = function() return 3 end
+environment.GetRealmID = function() return 12 end
+environment.GetRealmName = function() return "TestRealm" end
+environment.GetProfessions = function() return 1, 2 end
+environment.GetProfessionInfo = function(index)
+  return index == 1 and "Enchanting" or "Alchemy", nil, nil, nil, nil, nil,
+    index == 1 and 333 or 171
+end
+local uiCore = reload(nil)
+local uiLedger = uiCore.ledger
+local savedAPI = environment.ArtisanLogbookAPI
+environment.ArtisanLogbookAPI = nil
+assert(not loadUI().productionWindow)
+environment.ArtisanLogbookAPI = { GetVersion = function() return 2 end }
+local incompatible = loadUI()
+assert(not incompatible.productionWindow)
+environment.ArtisanLogbookAPI = savedAPI
+local savedManagement = environment.ArtisanLogbookManagement
+environment.ArtisanLogbookManagement = nil
+assert(not loadUI().productionWindow)
+environment.ArtisanLogbookManagement = savedManagement
+environment.ArtisanLogbookDB = nil
+environment.ArtisanLogbookTraceDB = nil
+local uiAddon = loadUI()
+assert(not uiAddon.ledger and not uiAddon.recorder and not uiAddon.Ledger and not uiAddon.Trace)
+local uiWindow = uiAddon.productionWindow
+local UI = uiAddon.UI
+assert(UI.Elide("Silvermoon Health Potion", 10) == "Silvermoon...")
+assert(UI.Elide("caf\195\169 noir", 4) == "caf\195\169...")
+assert(UI.CraftOutput({ recipe = { name = "Potion" }, outputItem = { name = "Potion" } }) == "")
+assert(UI.CraftOutput({ recipe = { name = "Potion" }, outputItem = { name = "Vial" } }) == "Vial")
+assert(UI.ClassColor("MAGE") == environment.RAID_CLASS_COLORS.MAGE and UI.ClassColor(nil) == nil)
+assert(UI.CharacterName({ name = "TestCrafter", classFile = "MAGE" }) == "|cff3399ffTestCrafter|r")
+assert(UI.CharacterName({ name = "Other" }) == "Other")
+assert(UI.QualityAtlas(42, 2, 3) == "Quality-2" and UI.QualityAtlas(99, 2, 5) == nil)
+assert(UI.QualityAtlas(42, 0, 5) == nil and UI.QualityAtlas(42, 2, nil) == nil)
+local activity = UI.Activity({ recipe = { id = 42, name = "Crushing", maxQuality = 3 },
+  outputItem = { id = 42, name = "Gemdust" }, outputQuantity = 12, outputQuality = 2,
+  concentrationSpent = 397, multicraftBonus = 11, hasIngenuityProc = true,
+  ingenuityRefund = 180, reagents = { { item = { name = "Azeroot" }, returnedQuantity = 4 } } })
+assert(#activity == 6 and activity[1].atlas == "Quality-2")
+assert(activity[2].tooltip:find("Gemdust", 1, true) and
+  activity[4].tooltip == "Multicraft: produced 11 additional items" and
+  activity[6].tooltip:find("Azeroot: 4 returned (allocation unknown)", 1, true))
+assert(#UI.Activity({ recipe = { name = "Potion", maxQuality = 5 },
+  outputItem = { name = "Potion" }, outputQuality = 0, multicraftBonus = 0,
+  concentrationSpent = 0, reagents = {} }) == 0)
+assert(#UI.CraftHighlights({ concentrationSpent = 0, multicraftBonus = 0,
+  hasIngenuityProc = false, reagents = { { returnedQuantity = 0 } } }) == 0)
+local highlights = table.concat(UI.CraftHighlights({ concentrationSpent = 323,
+  multicraftBonus = 4, hasIngenuityProc = true, ingenuityRefund = 162,
+  reagents = { { returnedQuantity = 4 }, { returnedQuantity = 0 } } }), "; ")
+assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Reagents returned: 4")
+assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 5,
+  returnedQuantity = 1 }) == "Azeroot: 5 allocated, 1 returned")
+assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
+  "Azeroot: 4 returned (allocation unknown)")
+assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) == "#100: 2 allocated")
+local longName = "Silvermoon Health Potion of the Long Night"
+local sampleTable = UI.ScrollList(environment.CreateFrame("Frame"), 0, 0, 140, 140,
+  { { title = "Recipe", width = 116, value = function(row) return row.name end } }, function() end)
+sampleTable:Append({ { name = longName } })
+assert(sampleTable.rows[1].cells[1].label.text ~= longName)
+assert(sampleTable.rows[1].cells[1].label.text:sub(-3) == "...")
+assert(sampleTable.rows[1].cells[1].label.height == 20)
+sampleTable.rows[1].scripts.OnEnter(sampleTable.rows[1])
+assert(environment.GameTooltip.text == "Artisan Logbook")
+sampleTable:Reset()
+assert(sampleTable.empty:IsShown() and not sampleTable.rows[1]:IsShown())
+local getSeries = environment.ArtisanLogbookAPI.GetCraftSeries
+environment.ArtisanLogbookAPI.GetCraftSeries = function(filter, options)
+  assert(filter and filter.time and filter.time.from and filter.time.to,
+    "UI series requests must be bounded")
+  return getSeries(filter, options)
+end
+local currentKey = environment.ArtisanLogbookManagement.CurrentCharacter().key
+local alchemy = assert(uiLedger:AddDimension("profession", 171, { name = "Alchemy" }))
+local enchanting = assert(uiLedger:AddDimension("profession", 333, { name = "Enchanting" }))
+assert(uiLedger:AddDimension("recipe", 501, { name = "Zebra Brew", professionId = alchemy }))
+assert(uiLedger:AddDimension("recipe", 502, { name = "Apple Mix", professionId = enchanting }))
+for index = 1, 12 do
+  uiLedger:BeginCraft(501)
+  assert(uiLedger:RecordResult({ operationID = index, quantity = 0, craftingQuality = 0,
+    multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false, ingenuityRefund = 9 }))
+end
+uiLedger:BeginCraft(502)
+assert(uiLedger:RecordResult({ operationID = 13, quantity = 1 }))
+assert(uiLedger:CreateSession({ startedAt = 1800000000, projectId = 1, regionId = 3,
+  gameRealmId = 12, realmName = "TestRealm", characterName = "Other", characterGUID = "Player-Other" }))
+uiLedger:BeginCraft(502)
+assert(uiLedger:RecordResult({ operationID = 14 }))
+assert(uiLedger:CreateSession({ startedAt = 1800000000, projectId = 1, regionId = 3,
+  gameRealmId = 12, realmName = "TestRealm", characterName = "TestCrafter",
+  characterGUID = "Player-1-123" }))
+
+local function dropdown(parent, label)
+  for _, frame in ipairs(frames) do
+    if frame.parent == parent and frame.choices then
+      for _, choice in ipairs(frame.choices) do
+        if choice.label == label then return frame end
+      end
+    end
+  end
+  error("Missing dropdown choice: " .. label)
+end
+local function button(parent, title)
+  for _, frame in ipairs(frames) do
+    if frame.parent == parent and frame.kind == "Button" and frame.text == title then return frame end
+  end
+  error("Missing button: " .. title)
+end
+local function visibleText(part)
+  for _, frame in ipairs(frames) do
+    if type(frame.text) == "string" and frame.text:find(part, 1, true) then return frame.text end
+  end
+end
+local function displayedRow(parent, predicate)
+  for _, frame in ipairs(frames) do
+    if frame.item and predicate(frame.item) then
+      local ancestor = frame.parent
+      while ancestor do
+        if ancestor == parent then return frame end
+        ancestor = ancestor.parent
+      end
+    end
+  end
+end
+
+assert(not uiWindow:IsShown() and not uiCore.window:IsShown())
+assert(environment.SLASH_ARTISANLOGBOOK2 == "/artisanlogbook")
+environment.SlashCmdList.ARTISANLOGBOOK("anything")
+assert(uiWindow:IsShown() and uiWindow.activeTab == "Logbook" and not uiCore.window:IsShown())
+assert(uiWindow.pages.Logbook and uiWindow.pages.Recipes and uiWindow.pages.Settings)
+assert(not uiWindow.pages.Overview and not uiWindow.pages.Recent and
+  not uiWindow.pages.Character and not uiWindow.pages.Profession)
+uiWindow:Hide()
+environment.SlashCmdList.ARTISANLOGBOOK("")
+assert(uiWindow:IsShown())
+local launcher
+for _, frame in ipairs(frames) do if frame.name == "ArtisanLogbookButton" then launcher = frame end end
+assert(launcher)
+assert(launcher.parent == environment.UIParent and launcher.relative == environment.Minimap)
+assert(launcher.x > 0 and launcher.y > 0 and type(environment.ArtisanLogbookUISettings) == "table")
+local launcherBorder
+for _, frame in ipairs(frames) do
+  if frame.parent == launcher and frame.texture == "Interface\\Minimap\\MiniMap-TrackingBorder" then
+    launcherBorder = frame
+  end
+end
+assert(launcherBorder and launcherBorder.point == "TOPLEFT" and launcherBorder.relative == launcher)
+assert(launcherBorder.relativePoint == "TOPLEFT" and launcherBorder.x == 0 and launcherBorder.y == 0)
+local initialRadius = math.sqrt(launcher.x ^ 2 + launcher.y ^ 2)
+assert(math.abs(initialRadius - 72) < 0.01)
+launcher.scripts.OnDragStart(launcher)
+assert(launcher.scripts.OnUpdate)
+launcher.scripts.OnUpdate(launcher)
+launcher.scripts.OnDragStop(launcher)
+assert(environment.ArtisanLogbookUISettings.minimapAngle == 0 and launcher.scripts.OnUpdate == nil)
+assert(math.abs(launcher.x - 72) < 0.01 and math.abs(launcher.y) < 0.01)
+launcher.scripts.OnClick()
+assert(not uiWindow:IsShown())
+launcher.scripts.OnClick()
+assert(uiWindow:IsShown())
+local logbook = uiWindow.pages.Logbook
+local chart
+for _, frame in ipairs(frames) do
+  if frame.parent == logbook and frame.title then chart = frame end
+end
+assert(chart and chart.title.text == "Craft activity" and chart.total.text == "14 crafts")
+local history
+for _, frame in ipairs(frames) do if frame.parent == logbook and frame.scroll then history = frame end end
+assert(history and #history.items == 14 and history.scroll:GetHeight() > 0)
+local otherKey
+for _, choice in ipairs(dropdown(logbook, "Other").choices) do
+  if choice.label == "Other" then otherKey = choice.value end
+end
+assert(otherKey)
+dropdown(logbook, "Alchemy"):Choose(171)
+dropdown(logbook, "Other"):Choose(otherKey)
+local logbookProfessions = dropdown(logbook, "Enchanting")
+assert(logbookProfessions.value == false and logbookProfessions.text == "All")
+assert(chart.total.text == "1 crafts" and #history.items == 1 and history.items[1].id == 14)
+logbookProfessions:Choose(333)
+assert(#history.items == 1 and history.items[1].profession.skillLineId == 333)
+dropdown(logbook, "30 days"):Choose(30)
+assert(#history.items == 1 and history.scroll:GetVerticalScroll() == 0)
+uiWindow:Hide()
+environment.SlashCmdList.ARTISANLOGBOOK("anything")
+assert(uiWindow:IsShown() and not uiCore.window:IsShown())
+environment.SlashCmdList.ARTISANLOGBOOK("debug")
+assert(not uiCore.window:IsShown() and uiWindow:IsShown())
+environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
+assert(uiCore.window:IsShown())
+uiCore.window:Hide()
+local recentFirst = displayedRow(logbook, function(item) return item.id == 14 end)
+assert(recentFirst)
+recentFirst.scripts.OnClick(recentFirst)
+assert(uiWindow.openCraftId == 14 and uiWindow.visiblePage ~= logbook)
+local sharedDetail = uiWindow.visiblePage
+assert(visibleText("Quantity:") and not visibleText("Ingenuity proc: Unknown"))
+button(sharedDetail, "Back").scripts.OnClick()
+assert(uiWindow.visiblePage == logbook and logbook:IsShown() and not sharedDetail:IsShown())
+recentFirst.scripts.OnClick(recentFirst)
+uiWindow:OpenCraft(13)
+button(sharedDetail, "Back").scripts.OnClick()
+assert(uiWindow.visiblePage == logbook and logbook:IsShown() and not sharedDetail:IsShown())
+uiWindow:Activate("Recipes")
+local recipes = uiWindow.pages.Recipes
+local catalogue
+for _, frame in ipairs(frames) do if frame.parent == recipes and frame.scroll then catalogue = frame end end
+assert(catalogue and catalogue.items[1].recipe.name == "Apple Mix")
+local apple = displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 502 end)
+assert(apple and apple.item.craftCount == 2)
+assert(displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 501 end).item.craftCount == 12)
+dropdown(recipes, "Most crafted"):Choose("count")
+assert(catalogue.items[1].recipe.name == "Zebra Brew")
+dropdown(recipes, "Recipe name"):Choose("name")
+dropdown(recipes, "Other"):Choose(otherKey)
+assert(#catalogue.items == 1 and catalogue.items[1].recipe.id == 502)
+dropdown(recipes, "Enchanting"):Choose(333)
+assert(#catalogue.items == 1)
+dropdown(recipes, "All"):Choose(false)
+assert(#catalogue.items == 2)
+apple = displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 502 end)
+apple.scripts.OnClick(apple)
+local recipePage = uiWindow.visiblePage
+assert(recipePage ~= recipes and visibleText("Apple Mix") and visibleText("Enchanting"))
+local recipeCraft = displayedRow(recipePage, function(item) return item.id == 13 end)
+assert(recipeCraft)
+recipeCraft.scripts.OnClick(recipeCraft)
+assert(uiWindow.visiblePage == sharedDetail and uiWindow.returnPage == recipePage and uiWindow.openCraftId == 13)
+button(sharedDetail, "Back").scripts.OnClick()
+assert(uiWindow.visiblePage == recipePage and recipePage:IsShown() and not sharedDetail:IsShown())
+uiWindow:Activate("Logbook")
+dropdown(logbook, "TestCrafter"):Choose(currentKey)
+local characterCraft = displayedRow(logbook, function(item) return item.id == 12 end)
+assert(characterCraft)
+characterCraft.scripts.OnClick(characterCraft)
+assert(uiWindow.visiblePage == sharedDetail)
+uiWindow:OpenCraft(1)
+assert(not visibleText("Ingenuity proc: No"))
+assert(not visibleText("Net concentration: 0"))
+assert(not visibleText("Reported Ingenuity refund: 9"))
+uiWindow:Activate("Logbook")
+dropdown(logbook, "All"):Choose(false)
+uiLedger:BeginCraft(502)
+uiWindow:Hide()
+local noticeCount = #notices
+assert(uiLedger:RecordResult({ operationID = 15 }))
+assert(#notices == noticeCount + 1 and notices[#notices] ==
+  "|cffffd100Artisan Logbook:|r Crafted Unknown item from Apple Mix")
+noticeCount = #notices
+local cachedItemLink = "|cff1eff00|Hitem:123|h[Potion]|h|r"
+environment.C_Item = { GetItemInfo = function(id)
+  assert(id == 123)
+  return "Potion", cachedItemLink
+end }
+uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity = 3,
+  recipe = { name = "Potion recipe" },
+  multicraftBonus = 2, hasIngenuityProc = true, ingenuityRefund = 10,
+  reagents = { { returnedQuantity = 3 } } })
+assert(#notices == noticeCount + 1 and notices[#notices] ==
+  "|cffffd100Artisan Logbook:|r Crafted " .. cachedItemLink ..
+  "x3 from Potion recipe (Multicraft +2; Ingenuity +10; Reagents returned: 3)")
+environment.C_Item.GetItemInfo = function() return nil end
+uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity = 1,
+  recipe = { name = "Potion recipe" } })
+assert(notices[#notices] ==
+  "|cffffd100Artisan Logbook:|r Crafted |Hitem:123|h[Potion]|hx1 from Potion recipe")
+environment.C_Item = nil
+uiWindow:Show()
+assert(displayedRow(logbook, function(item) return item.id == 15 end))
+uiLedger.wall = function() return 1800000000 - 8 * 86400 end
+uiLedger:BeginCraft(501)
+assert(uiLedger:RecordResult({ operationID = 16 }))
+uiLedger.wall = environment.GetServerTime
+uiWindow:Activate("Logbook")
+dropdown(logbook, "All"):Choose(false)
+local professionFilter = dropdown(logbook, "Enchanting")
+professionFilter:Choose(false)
+dropdown(logbook, "30 days"):Choose(30)
+assert(chart.total.text:find("16 crafts", 1, true))
+assert(#history.items == 16)
+dropdown(logbook, "7 days"):Choose(7)
+assert(chart.total.text:find("15 crafts", 1, true) and #history.items == 15)
+dropdown(logbook, "Today"):Choose(1)
+assert(chart.total.text:find("15 crafts", 1, true) and #history.items == 15)
+local today = math.floor(environment.GetServerTime() / 86400) * 86400
+local from, to = uiAddon.UI.Range(environment.GetServerTime(), 1)
+assert(from == today and to == today + 86400)
+dropdown(logbook, "30 days"):Choose(30)
+uiLedger.wall = function() return 1800000000 - 40 * 86400 end
+uiLedger:BeginCraft(502)
+assert(uiLedger:RecordResult({ operationID = 17 }))
+uiLedger.wall = environment.GetServerTime
+assert(chart.total.text:find("16 crafts", 1, true))
+dropdown(logbook, "90 days"):Choose(90)
+assert(chart.total.text:find("17 crafts", 1, true))
+dropdown(logbook, "30 days"):Choose(30)
+uiWindow:Activate("Settings")
+local settings = uiWindow.pages.Settings
+local retentionInput
+for _, frame in ipairs(frames) do
+  if frame.parent == settings and frame.kind == "EditBox" then retentionInput = frame end
+end
+assert(retentionInput and retentionInput.text == "60" and visibleText("Retained crafts: 17"))
+retentionInput:SetText("1")
+button(settings, "Save").scripts.OnClick()
+assert(uiLedger.database.retentionDays == 1)
+assert(not pcall(button, settings, "Prune now"))
+assert(environment.ArtisanLogbookManagement.Prune())
+assert(#uiLedger.database.crafts == 15)
+assert(#uiLedger.database.craftSeries == 5)
+assert(not pcall(button, settings, "Clear history"))
+assert(environment.ArtisanLogbookManagement.Clear())
+assert(#uiLedger.database.crafts == 0 and #uiLedger.database.craftSeries == 0)
+uiWindow:Activate("Logbook")
+assert(chart.total.text:find("0 crafts", 1, true))
+assert(chart.empty:IsShown() and history.empty:IsShown())
+uiWindow:Activate("Recipes")
+assert(not displayedRow(recipes, function() return true end))
+assert(catalogue.empty:IsShown())
+for index = 1, 45 do
+  uiLedger:BeginCraft(501)
+  assert(uiLedger:RecordResult({ operationID = 1000 + index }))
+end
+uiWindow:Activate("Logbook")
+assert(#history.items == 40)
+history.scroll:SetVerticalScroll(10000)
+history.scroll.scripts.OnVerticalScroll(history.scroll)
+assert(#history.items == 45)
+history.scroll.scripts.OnVerticalScroll(history.scroll)
+assert(#history.items == 45)
+local present = environment.GetServerTime
+environment.GetServerTime = function() return 1800000000 + 40 * 86400 end
+dropdown(logbook, "30 days"):Choose(30)
+assert(#history.items == 0 and history.scroll:GetVerticalScroll() == 0)
+environment.GetServerTime = present
+print("PASS unified Logbook, Recipes, filters, scrolling, detail and Settings (mocked)")
+
+local invalidTrace = { traceSchemaVersion = 999 }
+environment.ArtisanLogbookTraceDB = invalidTrace
+local noTracer = reload(nil)
+assert(noTracer.ledger and noTracer.recorder == nil and not noTracer.productionWindow)
+local noTracerUI = loadUI()
+environment.SlashCmdList.ARTISANLOGBOOK("")
+assert(noTracerUI.productionWindow:IsShown() and environment.ArtisanLogbookTraceDB == invalidTrace)
+local restoredLauncher
+for _, frame in ipairs(frames) do
+  if frame.name == "ArtisanLogbookButton" then restoredLauncher = frame end
+end
+assert(math.abs(restoredLauncher.x - 72) < .01 and math.abs(restoredLauncher.y) < .01)
+print("PASS production UI remains available when diagnostic trace storage is refused")
+
+environment.ArtisanLogbookTraceDB = nil
+local enriched = reload(nil)
+local enrichedApi = environment.ArtisanLogbookAPI
+local enrichedCommits = {}
+enrichedApi.RegisterCallback("CRAFT_COMMITTED", function(craft)
+  enrichedCommits[#enrichedCommits + 1] = craft
+end)
+environment.C_TradeSkillUI.GetRecipeInfo = function() error("recipe cache unavailable") end
+environment.C_TradeSkillUI.GetProfessionInfoByRecipeID = function() return nil end
+enriched.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
+enriched.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", {
+  operationID = 100, itemID = 212345, quantity = 2,
+  resourcesReturned = { { reagent = { itemID = 212346 }, quantity = 1 } },
+})
+local data = enriched.ledger.database
+local characterKey = enrichedApi.GetCharacters()[1].key
+assert(rowCount(data.dimensions.recipes) == 1 and rowCount(data.dimensions.items) == 2)
+assert(data.dimensions.recipes[1230869].name == nil and rowCount(data.dimensions.professions) == 0)
+assert(#enrichedApi.GetCrafts({ professions = { 171 } }).crafts == 0)
+environment.C_TradeSkillUI.GetRecipeInfo = function(id)
+  assert(id == 1230869)
+  return { recipeID = id, name = "Midnight Potion", categoryID = 81,
+    supportsQualities = true, maxQuality = 3 }
+end
+environment.C_TradeSkillUI.GetProfessionInfoByRecipeID = function(id)
+  assert(id == 1230869)
+  return { professionID = 2871, professionName = "Midnight Alchemy",
+    parentProfessionID = 171, parentProfessionName = "Alchemy", expansionName = "Unknown" }
+end
+environment.C_TradeSkillUI.GetProfessionInfoBySkillLineID = function(id)
+  assert(id == 2871)
+  return { professionID = id, parentProfessionID = 171, expansionName = "Unknown" }
+end
+environment.C_TradeSkillUI.GetAllRecipeIDs = function() return { 1230869 } end
+local itemCacheReady = false
+environment.GetItemInfo = function(id)
+  if not itemCacheReady then return nil end
+  if id == 212345 then return "Midnight Potion" end
+  if id == 212346 then return "Test Reagent" end
+end
+enriched.adapter.frame.scripts.OnEvent(enriched.adapter.frame, "TRADE_SKILL_SHOW")
+assert(data.dimensions.items[212345].name == nil)
+itemCacheReady = true
+enriched.adapter.frame.scripts.OnEvent(enriched.adapter.frame, "GET_ITEM_INFO_RECEIVED", 999999, true)
+enriched.adapter.frame.scripts.OnEvent(enriched.adapter.frame, "GET_ITEM_INFO_RECEIVED", 212345, true)
+enriched.adapter.frame.scripts.OnEvent(enriched.adapter.frame, "GET_ITEM_INFO_RECEIVED", 212346, true)
+enriched.adapter.frame.scripts.OnEvent(enriched.adapter.frame, "TRADE_SKILL_SHOW")
+assert(enriched.adapter.capabilities.events.GET_ITEM_INFO_RECEIVED)
+assert(rowCount(data.dimensions.recipes) == 1 and rowCount(data.dimensions.items) == 2)
+assert(rowCount(data.dimensions.professions) == 1 and #data.dimensions.expansions == 0)
+assert(data.dimensions.recipes[1230869].professionId == 171 and data.dimensions.professions[171].id == 171)
+assert(data.dimensions.recipes[1230869].maxQuality == 3)
+assert(enrichedApi.GetCharacters()[1].classFile == "MAGE")
+assert(enrichedApi.GetCraft(1).recipe.maxQuality == 3)
+assert(data.dimensions.items[212345].name == "Midnight Potion")
+assert(data.dimensions.items[212346].name == "Test Reagent")
+assert(enrichedApi.GetCrafts({ professions = { 171 } }).crafts[1].outputItem.name == "Midnight Potion")
+assert(enrichedApi.GetCraftSeries({ professions = { 171 } }).series[1].craftCount == 1)
+assert(enrichedApi.GetProfessions(characterKey)[1].name == "Alchemy")
+assert(enrichedApi.GetRecipeSummaries().recipes[1].recipe.name == "Midnight Potion")
+assert(enrichedApi.GetFacets(nil, { facets = { "professions" } }).professions[1].value == 171)
+local historicalCraft, historicalSeries = data.crafts[1], data.craftSeries[1]
+environment.C_TradeSkillUI.GetProfessionInfoBySkillLineID = function(id)
+  assert(id == 2871)
+  return { professionID = id, parentProfessionID = 999, expansionName = "Midnight" }
+end
+enriched.HandleRetailEvent("TRADE_SKILL_CLOSE")
+enriched.adapter.frame.scripts.OnEvent(enriched.adapter.frame, "TRADE_SKILL_SHOW")
+assert(#data.dimensions.expansions == 0)
+environment.C_TradeSkillUI.GetProfessionInfoBySkillLineID = function(id)
+  assert(id == 2871)
+  return { professionID = id, expansionName = "Midnight" }
+end
+enriched.HandleRetailEvent("TRADE_SKILL_CLOSE")
+enriched.adapter.frame.scripts.OnEvent(enriched.adapter.frame, "TRADE_SKILL_SHOW")
+assert(data.crafts[1] == historicalCraft and data.craftSeries[1] == historicalSeries)
+assert(data.dimensions.expansions[1].key == "skillLine:2871" and
+  data.dimensions.recipes[1230869].expansionDimensionId == 1)
+assert(enrichedApi.GetCraft(1).recipe.expansion.name == "Midnight")
+assert(enrichedApi.GetCraftSeries().series[1].recipe.expansion.name == "Midnight")
+assert(#enrichedApi.GetCrafts({ expansions = { "skillLine:2871" } }).crafts == 1)
+enriched.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
+enriched.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 102, itemID = 212345 })
+assert(enrichedCommits[#enrichedCommits].outputItem.name == "Midnight Potion")
+assert(rowCount(data.dimensions.recipes) == 1 and rowCount(data.dimensions.items) == 2 and
+  rowCount(data.dimensions.professions) == 1)
+local restored = reload(data)
+assert(restored.ledger and #environment.ArtisanLogbookAPI.GetCraftSeries({ professions = { 171 } }).series == 1)
+assert(rowCount(restored.ledger.database.dimensions.recipes) == 1)
+assert(environment.ArtisanLogbookAPI.GetCraft(1).recipe.expansion.name == "Midnight")
+assert(restored.ledger:SubmitCraft(1230869, 1, false, nil,
+  { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 212346 } } }))
+assert(restored.ledger:RecordResult({ operationID = 103, itemID = 212345, resourcesReturned = {} }))
+assert(#restored.ledger.database.requests == 1 and #restored.ledger.database.reagents == 2)
+print("PASS delayed Retail metadata enriches historical facts, indexes, series and reload")
+
+local oldRecipeInfo = environment.C_TradeSkillUI.GetRecipeInfo
+local oldProfessionInfo = environment.C_TradeSkillUI.GetProfessionInfoByRecipeID
+local oldRecipeIds = environment.C_TradeSkillUI.GetAllRecipeIDs
+local oldSchematic = environment.C_TradeSkillUI.GetRecipeSchematic
+local oldChanging = environment.C_TradeSkillUI.IsDataSourceChanging
+local outputsCore = reload(nil)
+for recipeId = 7001, 7005 do outputsCore.ledger:AddDimension("recipe", recipeId) end
+assert(outputsCore.adapter.frame:IsEventRegistered("TRADE_SKILL_LIST_UPDATE"))
+for index, outputItemId in ipairs({ 8101, 8102, 8104, 8105 }) do
+  outputsCore.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", {
+    operationID = 400 + index, itemID = outputItemId,
+  })
+end
+environment.C_TradeSkillUI.GetAllRecipeIDs = function() return { 7001, 7002, 7003, 7004, 7005 } end
+environment.C_TradeSkillUI.GetRecipeInfo = function(id) return { recipeID = id } end
+environment.C_TradeSkillUI.GetProfessionInfoByRecipeID = function() return nil end
+local retryOutputReady = false
+environment.C_TradeSkillUI.GetRecipeSchematic = function(id, isRecraft)
+  assert(isRecraft == false)
+  if id == 7001 then return { recipeID = id, outputItemID = 8101 } end
+  if id == 7002 then return { recipeID = id, outputItemID = 8102 } end
+  if id == 7003 then return { recipeID = id, outputItemID = 8101 } end
+  if id == 7004 and retryOutputReady then return { recipeID = id, outputItemID = 8104 } end
+  if id == 7005 then return { recipeID = 7999, outputItemID = 8105 } end
+  return { recipeID = id }
+end
+environment.C_TradeSkillUI.IsDataSourceChanging = function() return false end
+local knowledgeChangesByOutput, targetedRepairsByOutput = {}, {}
+local onKnowledgeChanged = outputsCore.OnRecipeOutputKnowledgeChanged
+outputsCore.OnRecipeOutputKnowledgeChanged = function(ledger, outputItemId, source, deferRepair)
+  local candidates = 0
+  for _ in pairs(ledger.recipeIdsByOutputItemId[outputItemId] or {}) do
+    candidates = candidates + 1
+  end
+  knowledgeChangesByOutput[outputItemId] =
+    (knowledgeChangesByOutput[outputItemId] or 0) + 1
+  assert(outputItemId ~= 8101 or candidates == 2)
+  return onKnowledgeChanged(ledger, outputItemId, source, deferRepair)
+end
+local repairUnknownRecipes = outputsCore.ledger.RepairUnknownRecipes
+outputsCore.ledger.RepairUnknownRecipes = function(ledger, outputFilter)
+  for outputItemId in pairs(outputFilter or {}) do targetedRepairsByOutput[outputItemId] = true end
+  return repairUnknownRecipes(ledger, outputFilter)
+end
+outputsCore.HandleRetailEvent("TRADE_SKILL_SHOW")
+assert(outputsCore.ledger.database.recipeOutputs[7001][8101] == true and
+  outputsCore.ledger.database.recipeOutputs[7003][8101] == true)
+assert(outputsCore.ledger.recipeOutputCount == 3)
+assert(outputsCore.ledger.unknownRecipeCount == 3)
+assert(outputsCore.ledger.craftById[2].recipeId == 7002)
+assert(outputsCore.ledger.craftById[1].recipeId == nil and
+  outputsCore.ledger.craftById[3].recipeId == nil and
+  outputsCore.ledger.craftById[4].recipeId == nil)
+assert(outputsCore.ledger.database.recipeOutputs[7005] == nil)
+assert(knowledgeChangesByOutput[8101] == 1)
+assert(targetedRepairsByOutput[8101] == nil and targetedRepairsByOutput[8102] == true)
+
+retryOutputReady = true
+environment.C_TradeSkillUI.IsDataSourceChanging = function() return true end
+outputsCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+assert(outputsCore.ledger.unknownRecipeCount == 3)
+environment.C_TradeSkillUI.IsDataSourceChanging = function() return false end
+outputsCore.HandleRetailEvent("TRADE_SKILL_LIST_UPDATE")
+assert(outputsCore.ledger.database.recipeOutputs[7004][8104] == true)
+assert(outputsCore.ledger.craftById[3].recipeId == 7004)
+assert(outputsCore.ledger.craftById[1].recipeId == nil and
+  outputsCore.ledger.craftById[4].recipeId == nil and
+  outputsCore.ledger.unknownRecipeCount == 2)
+assert(outputsCore.ledger.recipeIdsByOutputItemId[8101][7001] == true and
+  outputsCore.ledger.recipeIdsByOutputItemId[8101][7003] == true)
+environment.C_TradeSkillUI.GetRecipeInfo = oldRecipeInfo
+environment.C_TradeSkillUI.GetProfessionInfoByRecipeID = oldProfessionInfo
+environment.C_TradeSkillUI.GetAllRecipeIDs = oldRecipeIds
+environment.C_TradeSkillUI.GetRecipeSchematic = oldSchematic
+environment.C_TradeSkillUI.IsDataSourceChanging = oldChanging
+print("PASS Retail output batch exposes shared ambiguity before targeted repair")
+restored = reload(restored.ledger.database)
+
+local traceDatabase = restored.recorder.database
+restored.recorder:Start({})
+restored.recorder:Capture("TRACE_MARK", "keep")
+restored.recorder:Stop()
+local traceCount = #traceDatabase.records
+local function traceButton(text)
+  for _, frame in ipairs(frames) do
+    if frame.parent == restored.window and frame.kind == "Button" and frame.text == text then
+      return frame
+    end
+  end
+  error("Missing trace button: " .. text)
+end
+traceButton("Purge Logbook DB").scripts.OnClick()
+assert(environment.popup == "ARTISANLOGBOOK_PURGE_LOGBOOK_DB")
+assert(#restored.ledger.database.crafts == 3)
+local popup = environment.StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK_DB
+assert(popup.button2 == "Cancel" and popup.text:find("cannot be undone", 1, true))
+assert(#restored.ledger.database.crafts == 3)
+popup.OnAccept()
+local clean = restored.ledger.database
+assert(environment.ArtisanLogbookDB == clean)
+for _, collection in ipairs({ "crafts", "requests", "reagents", "craftSeries" }) do
+  assert(#clean[collection] == 0)
+end
+for _, collection in ipairs({ "recipes", "items", "professions", "expansions" }) do
+  assert(rowCount(clean.dimensions[collection]) == 0)
+end
+assert(#clean.dimensions.sessions == 1 and #clean.dimensions.characters == 1 and
+  #clean.dimensions.realms == 1)
+assert(clean.nextCraftId == 1 and clean.nextRequestId == 1 and clean.nextDimensionId.recipe == nil)
+assert(#traceDatabase.records == traceCount and environment.ArtisanLogbookTraceDB == traceDatabase)
+assert(#environment.ArtisanLogbookAPI.GetCrafts().crafts == 0)
+assert(#environment.ArtisanLogbookAPI.GetCraftSeries().series == 0)
+assert(#environment.ArtisanLogbookAPI.GetRecipeSummaries().recipes == 0)
+assert(#environment.ArtisanLogbookAPI.GetCharacters() == 0 and
+  #environment.ArtisanLogbookAPI.GetProfessions() == 0)
+restored.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
+restored.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 101, itemID = 212345 })
+assert(#clean.crafts == 1 and clean.crafts[1].id == 1)
+assert(clean.crafts[1].sessionId == clean.dimensions.sessions[1].id)
+assert(#environment.ArtisanLogbookAPI.GetCrafts({ professions = { 171 } }).crafts == 1)
+print("PASS confirmed full ledger purge preserves trace and supports immediate recapture")
+
+local reagentRuntime = reload(data)
+local reagentApi = environment.ArtisanLogbookAPI
+local itemLookups = {}
+local cacheReady = false
+environment.GetItemInfo = function(id)
+  itemLookups[id] = (itemLookups[id] or 0) + 1
+  if id == 240991 then return "Cached Herb" end
+  if id == 240992 then return cacheReady and "Delayed Herb" or nil end
+  if id == 236761 then
+    if not cacheReady then error("item cache unavailable") end
+    return "Returned Herb"
+  end
+end
+reagentRuntime.SubmitCraft(1230869, 1, false, nil, {
+  { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 240991 } },
+  { dataSlotIndex = 2, quantity = 1, reagent = { itemID = 240992 } },
+})
+assert(reagentRuntime.ledger.database.dimensions.items[240991].name == "Cached Herb")
+assert(reagentRuntime.ledger.database.dimensions.items[240992].name == nil)
+reagentRuntime.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", {
+  operationID = 203, itemID = 212345, resourcesReturned = {
+    { reagent = { itemID = 236761 }, quantity = 1 },
+  },
+})
+local reagentData = reagentRuntime.ledger.database
+local reagentCraft = reagentData.crafts[#reagentData.crafts]
+local reagentSeries = reagentData.craftSeries[1]
+local detail = reagentApi.GetCraft(reagentCraft.id)
+assert(detail.reagents[1].item.name == "Cached Herb")
+assert(detail.reagents[2].item.id == 240992 and detail.reagents[2].item.name == nil)
+assert(detail.reagents[3].item.id == 236761 and detail.reagents[3].item.name == nil)
+assert(#reagentData.crafts == 3 and #reagentData.reagents == 4)
+local lookupCount = itemLookups[240992]
+reagentRuntime.HandleRetailEvent("GET_ITEM_INFO_RECEIVED", 999999, true)
+reagentRuntime.HandleRetailEvent("GET_ITEM_INFO_RECEIVED", 240992, false)
+assert(itemLookups[240992] == lookupCount and itemLookups[999999] == nil)
+cacheReady = true
+reagentRuntime.HandleRetailEvent("GET_ITEM_INFO_RECEIVED", 240992, true)
+reagentRuntime.HandleRetailEvent("GET_ITEM_INFO_RECEIVED", 236761, true)
+reagentRuntime.HandleRetailEvent("GET_ITEM_INFO_RECEIVED", 240991, true)
+assert(itemLookups[240991] == 2)
+detail = reagentApi.GetCraft(reagentCraft.id)
+assert(detail.reagents[2].item.name == "Delayed Herb" and
+  detail.reagents[3].item.name == "Returned Herb")
+assert(reagentData.crafts[#reagentData.crafts] == reagentCraft and reagentData.craftSeries[1] == reagentSeries)
+local reagentReload = reload(reagentData)
+assert(reagentReload.ledger and environment.ArtisanLogbookAPI.GetCraft(reagentCraft.id).reagents[3].item.name ==
+  "Returned Herb")
+print("PASS selected and returned reagent names enrich without altering captured facts")
+
+local refusedData = { schemaVersion = 1, schemaIdentity = "ArtisanLogbookLedger",
+  dimensions = { recipes = { { id = 1230869, key = "old-layout" } } } }
+local refusedRuntime = reload(refusedData)
+local preservedTrace = environment.ArtisanLogbookTraceDB
+assert(not refusedRuntime.ledger and refusedRuntime.ledgerError)
+assert(environment.ArtisanLogbookDB == refusedData and refusedRuntime.recorder.database == preservedTrace)
+local refusedApi = environment.ArtisanLogbookAPI
+assert(refusedApi.GetCrafts() == nil and environment.ArtisanLogbookManagement.Status() == nil)
+local savedBuildInfo = environment.GetBuildInfo
+environment.GetBuildInfo = function() error("runtime build unavailable") end
+local purgeDialog = environment.StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK_DB
+assert(purgeDialog.button2 == "Cancel")
+purgeDialog.OnAccept()
+assert(not refusedRuntime.ledger and refusedRuntime.ledgerError:find("runtime build unavailable", 1, true))
+assert(environment.ArtisanLogbookDB == refusedData and environment.ArtisanLogbookTraceDB == preservedTrace)
+assert(notices[#notices]:find("Logbook DB purge failed:", 1, true))
+environment.GetBuildInfo = savedBuildInfo
+local savedWall = environment.GetServerTime
+environment.GetServerTime = function() return 1800000123 end
+purgeDialog.OnAccept()
+environment.GetServerTime = savedWall
+assert(refusedRuntime.ledger and not refusedRuntime.ledgerError and not refusedRuntime.ledgerCaptureError)
+assert(environment.ArtisanLogbookDB == refusedRuntime.ledger.database and
+  environment.ArtisanLogbookTraceDB == preservedTrace)
+assert(#refusedRuntime.ledger.database.dimensions.sessions == 1 and
+  #refusedRuntime.ledger.database.dimensions.characters == 1 and
+  #refusedRuntime.ledger.database.dimensions.realms == 1)
+assert(refusedRuntime.ledger.database.dimensions.sessions[1].startedAt == 1800000123)
+assert(refusedRuntime.ledger.database.schemaVersion == 1 and refusedData.dimensions.recipes[1].key ==
+  "old-layout")
+assert(#refusedApi.GetCrafts().crafts == 0 and environment.ArtisanLogbookManagement.Status().retainedCrafts == 0)
+refusedRuntime.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
+refusedRuntime.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 302, itemID = 212345 })
+assert(#refusedApi.GetCrafts().crafts == 1 and not refusedRuntime.ledgerCaptureError)
+assert(environment.ArtisanLogbookTraceDB == preservedTrace)
+print("PASS confirmed debug purge recovers refused schema without touching trace")
+
+local oldData = data
+oldData.dimensions.characters[1].classFile = nil
+oldData.dimensions.recipes[1230869].maxQuality = nil
+environment.UnitClass = function() return nil, nil end
+environment.C_TradeSkillUI.GetRecipeInfo = function() return nil end
+local oldCore = reload(oldData)
+assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 1)
+assert(oldCore.ledger.database.dimensions.characters[1].classFile == nil)
+assert(oldCore.ledger.database.dimensions.recipes[1230869].maxQuality == nil)
+environment.UnitClass = function() return "Mage", "MAGE", 8 end
+environment.C_TradeSkillUI.GetRecipeInfo = function(id)
+  return { recipeID = id, name = "Midnight Potion", supportsQualities = true, maxQuality = 3 }
+end
+local upgraded = reload(oldCore.ledger.database)
+local savedRecipeRow = upgraded.ledger.database.dimensions.recipes[1230869]
+assert(upgraded.ledger.database.dimensions.characters[1].classFile == "MAGE")
+upgraded.HandleRetailEvent("TRADE_SKILL_SHOW")
+assert(upgraded.ledger.database.dimensions.recipes[1230869] == savedRecipeRow)
+assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 1)
+local reloaded = reload(upgraded.ledger.database)
+assert(reloaded.ledger.database.dimensions.characters[1].classFile == "MAGE")
+assert(reloaded.ledger.database.dimensions.recipes[1230869].maxQuality == 3)
+assert(environment.ArtisanLogbookAPI.GetCrafts().crafts[1].recipe.maxQuality == 3)
+print("PASS optional schema-v1 class and quality enrichment reuses historical dimensions across reload")

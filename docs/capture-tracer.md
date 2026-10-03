@@ -15,11 +15,12 @@ From the repository root, with Lua 5.1, ZIP, and unzip available:
 bash src/addon/scripts/package.sh
 ```
 
-This runs the addon tests and produces
-`src/addon/dist/ArtisanLogbook.zip`. Extract its
-`ArtisanLogbook` folder into the live client's `_retail_/Interface/AddOns/`.
-The resulting path must be `Interface/AddOns/ArtisanLogbook/ArtisanLogbook.toc`,
-not an extra nested directory. Restart the client after the first installation.
+This runs the addon tests and produces Core-only `ArtisanLogbook_Core.zip`,
+UI-only `ArtisanLogbook.zip`, and `ArtisanLogbook-Bundle.zip` in `src/addon/dist/`.
+Extract the bundle's sibling `ArtisanLogbook_Core` and `ArtisanLogbook` folders
+into the live client's `_retail_/Interface/AddOns/`, or install both individual
+archives. Core's TOC must be at `Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc`;
+the UI requires Core. Restart the client after the first installation.
 Enable **Artisan Logbook** in the addon list.
 
 The TOC targets interface `120100`, based on the live UI source mirror reporting
@@ -28,27 +29,125 @@ The TOC targets interface `120100`, based on the live UI source mirror reporting
 mismatch before changing the compatibility target. Every recording start also
 stores the actual build, interface, locale, character, realm, and capabilities.
 
-Open the book button below the minimap, or use `/al`. Recording starts **paused**
+Open the tracer with `/al_trace`. Recording starts **paused**
 on every load/reload. The native window provides Start, Stop, an editable scenario
 label with Mark, Export, Diagnostics, page arrows, and confirmed Clear. Closing
 the window does not stop capture. It does not alter the crafting UI or trigger
 crafts. No third-party libraries or addons are required.
 
+The debug window also provides **Repair unknown recipes** beside the database
+purge control. It first tries to verify remaining output-name candidates through
+Blizzard metadata, learns confirmed relationships, then previews repair counts.
+Historical craft/aggregate mutation still requires confirmation; canceling keeps
+any authoritative knowledge learned, not a pending repair. Ambiguous and
+unsupported crafts stay Unknown. This is a recovery tool, not a replacement for
+correct live capture. Startup and profession-event recovery are silent and
+best effort. Diagnostics show the last discovery's candidate, confirmed,
+unavailable and unconfirmed counts, and relationships learned this session.
+
+### Recipe metadata and recovery
+
+API-contract/source review (2026-10-03; not an in-client experiment):
+
+- `C_TradeSkillUI.GetRecipeSchematic(recipeId, false)` is a direct recipe-ID
+   query. Its returned `recipeID` must match; `outputItemID` is nullable. The
+   contract does not promise availability for every recipe before opening its
+   profession, nor give a complete cache-readiness guarantee. Startup/manual
+   recovery makes one query per plausible recipe and accepts only readable,
+   explicit output identities. Missing APIs, errors and unavailable metadata
+   leave the output unsupported, without opening a profession or waiting.
+- A schematic exposes one optional output ID, not all possible outputs.
+   `GetRecipeQualityItemIDs(recipeId)` supplies an optional array of quality
+   output IDs. With a matching schematic, these IDs and its output ID form a
+   deduplicated set. There is no assumption that this enumerates every random,
+   salvage, enchanting, gathering, reagent-dependent or recraft outcome. Currency
+   or other recipes without explicit item outputs cannot be recovered this way.
+   Absence of X in a returned set is not a permanent claim that R cannot make X.
+- No general item-ID-to-recipe lookup was found in the reviewed contract.
+   `GetOriginalCraftRecipeID` requires an item GUID, not a retained output item ID.
+   Exact stored item/recipe names are therefore a discovery hint only. No fuzzy
+   matching, translation, spell-name inference or external recipe data is used.
+- `GetAllRecipeIDs()` returns the current profession's learned and unlearned
+   recipes, ignoring UI filters; before a profession opens it can return an
+   empty list. Event enrichment uses these IDs directly, without name matching
+   or scanning stored recipes from other professions. Missing enumeration does
+   not fall back to querying every stored recipe.
+- `TRADE_SKILL_SHOW` and `TRADE_SKILL_LIST_UPDATE` are existing opportunities.
+   `IsDataSourceChanging()` and `IsTradeSkillReady()` guard unstable/unloaded
+   lists. Blizzard's profession UI itself defers list handling while the data
+   source is changing. Neither flag guarantees every individual output query.
+   One open pass and the first stable list-update pass are allowed; duplicate
+   events for that settled list do no further recipe queries. A changed list,
+   an observed readiness transition, or close/reopen permits a new opportunity.
+- Queries are synchronous metadata reads. The published contract has no
+   mutation, UI-opening or user-gesture requirement for these getters. Their
+   native cache behavior and worst-case latency are not specified; Lua mocks
+   cannot measure those. We do not force loading via `OpenRecipe`, profession
+   switching, or request loops. A live client is needed to characterize which
+   unavailable recipes become readable at each opportunity.
+
+### Forever compatibility
+
+The published Forever TradeSkillUI declarations include `GetRecipeSchematic`,
+`GetRecipeQualityItemIDs`, the existing recipe/profession information getters,
+and `TRADE_SKILL_SHOW`, `TRADE_SKILL_LIST_UPDATE`, `TRADE_SKILL_CLOSE`.
+The output getters are in `Environment = "All"`, with
+`SecretArguments = "AllowedWhenUntainted"`, without a protected/limited-input
+precondition in the reviewed declarations. This annotation restricts **secret
+arguments**, not ordinary addon calls with plain recipe IDs. Recovery passes
+only validated IDs and a literal `false`; it does not request secure execution.
+
+The API references list `GetAllRecipeIDs`, `IsTradeSkillReady`, `issecretvalue`
+and `canaccesstable` for Forever 1.60.1 (69913). Forever's profession UI uses
+`IsDataSourceChanging()` with `TRADE_SKILL_LIST_UPDATE`; that getter, like some
+other established TradeSkill getters, is absent from the generated catalog.
+All getters remain feature-detected and best effort. `issecretvalue` and
+`canaccesstable` reject secret/inaccessible metadata before identity operations;
+unavailable/invalid metadata never authorizes repair. No secret values are
+decoded, persisted as evidence, or inspected through another execution context.
+
+Recovery adds no hooks into Blizzard frames, protected actions, hidden data,
+network access, timers, or polling. Existing normal item-cache events continue
+name enrichment; profession events refresh only their observed output items.
+This verifies the recovery API contract/usage pattern, not execution on an
+actual Forever client or certification of the entire addon's other features.
+Future restrictions or unavailable metadata must preserve Unknowns.
+
+Sources reviewed:
+
+- [Retail API declarations](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUIDocumentation.lua)
+   and [output structures](https://github.com/Gethe/wow-ui-source/blob/live/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUITypesDocumentation.lua).
+- [Forever API declarations](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUIDocumentation.lua)
+   and [profession event handling](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_Professions/Blizzard_ProfessionsFrame.lua).
+- [GetAllRecipeIDs](https://warcraft.wiki.gg/wiki/API_C_TradeSkillUI.GetAllRecipeIDs),
+   [IsTradeSkillReady](https://warcraft.wiki.gg/wiki/API_C_TradeSkillUI.IsTradeSkillReady),
+   [secret restrictions](https://warcraft.wiki.gg/wiki/Secret_values),
+   [issecretvalue](https://warcraft.wiki.gg/wiki/API_issecretvalue), and
+   [canaccesstable](https://warcraft.wiki.gg/wiki/API_canaccesstable).
+
+Live acceptance: load the existing schema-v1 DB without opening a profession,
+check Diagnostics, open a relevant profession and check again, then try manual
+Repair. Verify silence, readiness, ambiguous outputs remaining Unknown, cancel
+leaving craft facts untouched, and learned knowledge surviving reload. The
+actual 14-Unknown DB and a Retail/Forever client are not part of the Lua tests.
+
 Optional commands:
 
 ```text
-/al start
-/al mark basic-before
-/al mark basic-after
-/al stop
-/al status
-/al export
+/al_trace start
+/al_trace mark basic-before
+/al_trace mark basic-after
+/al_trace stop
+/al_trace status
+/al_trace export
 ```
 
-`/artisanlogbook` is an alias. The window refreshes status twice per second while
+`/al` and `/artisanlogbook` open the separate production UI. The tracer window refreshes status twice per second while
 visible, but does not overwrite export text as events arrive. Export refreshes
-the displayed data. Each page contains at most ten records; capture is bounded
-independently of rendering.
+the displayed data with the complete trace in one copyable block. Click in the
+export text, select all, and copy. The page arrows switch to ten-record pages
+as a fallback for large traces; Export returns to the complete trace. Capture
+is bounded independently of rendering.
 
 ## Controlled Trace Collection
 
@@ -62,11 +161,12 @@ independently of rendering.
 3. Perform the intended craft through the normal game UI. Mark the observed
    outcome, including visible output quantity, quality, and proc messages.
    Keep recording for several seconds after completion to retain late callbacks.
-4. Stop, check `/al status`, and inspect the export for `warnings`. Capacity
+4. Stop, check `/al_trace status`, and inspect the export for `warnings`. Capacity
    stops and omitted payloads mean the affected evidence is incomplete, not
    evidence that the game omitted a field. Report these before proceeding.
-5. Export every page, including the first page with `TRACE_START`, or preferably
-   preserve the entire account-wide SavedVariables file after a normal logout.
+5. Copy the complete Export block, or preferably preserve the entire
+   account-wide SavedVariables file after `/reload` or a normal logout. If using
+   the paged fallback, export every page, including the first with `TRACE_START`.
    Keep separate evidence copies for each controlled run before clearing.
 6. Build 69933 traces now cover a basic result flow, concentration spend with
    `hasIngenuityProc = false`, Multicraft, and Resourcefulness (including
@@ -85,7 +185,7 @@ capture and a new Start creates another metadata boundary. Do not use reload
 mid-scenario unless testing that boundary intentionally.
 
 The file is under
-`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook.lua` and contains
+`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Core.lua` and contains
 `ArtisanLogbookTraceDB`. This is account-wide, not a per-character file. Raw traces
 can include character names, GUIDs, targets, hyperlinks, and order identifiers.
 The claimed-order probe stores only an allowlisted diagnostic snapshot, not
@@ -235,9 +335,13 @@ derived from a craft that consumes it. See
 direction. Unknown metadata remains absent until supported by game data and the
 schema review.
 
-Capture stops at 2,000 records or a conservative 2 MiB payload-plus-overhead
-budget, whichever is reached first, without evicting earlier evidence. This
-budget is not an exact measurement of Lua heap or SavedVariables file size.
+Once 10,000 records are stored, a new trace cannot start until the evidence is
+exported and cleared. A trace already in progress continues until stopped, even
+if it exceeds that count; earlier evidence is never evicted. The displayed
+byte total is a payload-plus-overhead estimate, not a limit or an exact
+measurement of Lua heap or SavedVariables file size; long recordings increase
+SavedVariables size and load/save cost. Existing trace schema-2 databases below
+the count threshold can continue after reload and Start without clearing evidence.
 Individual payloads have a 16 KiB serialized ceiling, 512 traversal-node budget,
 eight-level depth limit, and 2,048-byte per-string limit. Cycles, restricted
 values, unsupported types/keys, and limit violations are explicitly diagnosed
@@ -375,10 +479,10 @@ requirements. The trace schema's own migration is independent and unchanged.
 
 Install the instrumented ZIP as above. Back up the raw SavedVariables
 privately, disable unrelated addons, work out of combat, and use a fresh
-recording **per scenario**. Open the recipe first, then `/al start`, mark
+recording **per scenario**. Open the recipe first, then `/al_trace start`, mark
 `scenario-before`, choose reagents and concentration, wait for the quote,
-mark `scenario-click`, craft normally, mark `scenario-after`, and `/al stop`.
-If quote activity fills the 2,000-record / 2 MiB budget, clear and restart
+mark `scenario-click`, craft normally, mark `scenario-after`, and `/al_trace stop`.
+If quote activity fills the 10,000-record limit, clear and restart
 immediately before selection; report any capacity or payload warnings.
 Preserve every export page or the raw SavedVariables after a normal logout,
 including `TRACE_START` and build information. Note the UI-displayed

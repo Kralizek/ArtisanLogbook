@@ -54,37 +54,53 @@ test("callbacks remain separate and snapshots do not mutate", function()
   end
 end)
 
-test("capacity stops recording without evicting earlier evidence", function()
+test("capacity lets the current trace finish but blocks a new one until cleared", function()
   local original = Trace.maxRecords
   Trace.maxRecords = 2
   local recorder = assert(Trace.New(nil, clock))
-  recorder:Start({})
-  recorder:Capture("ONE")
-  local ok, reason = recorder:Capture("TWO")
+  assert(recorder:Start({}))
+  assert(recorder:Capture("ONE") and recorder:Capture("TWO"))
+  assert(recorder.recording and #recorder.database.records == 3)
+  recorder:Stop()
+  local ok, reason = recorder:Start({})
   assert(not ok and reason and not recorder.recording)
-  assert(#recorder.database.records == 2 and recorder.database.stoppedReason == "capacity")
-  assert(recorder.database.nextSequence == 3)
+  assert(#recorder.database.records == 4 and recorder.database.stoppedReason == "capacity")
+  assert(recorder.database.nextSequence == 5)
+  local reloaded = assert(Trace.New(recorder.database, clock))
+  assert(not reloaded:Start({}) and #reloaded.database.records == 4)
+  assert(recorder:Clear() and recorder:Start({}))
   Trace.maxRecords = original
 end)
 
-test("byte capacity is enforced", function()
-  local original = Trace.maxBytes
-  Trace.maxBytes = 1
-  local recorder = assert(Trace.New(nil, clock))
-  assert(not recorder:Start({}))
-  assert(#recorder.database.records == 0 and not recorder.recording)
-  Trace.maxBytes = original
+test("previous record limit can resume after reload without clearing evidence", function()
+  assert(Trace.maxRecords == 10000)
+  local records = {}
+  for sequence = 1, 2000 do
+    records[sequence] = { sequence = sequence, event = "QUOTE_PROBE", payload = "{}" }
+  end
+  local database = { traceSchemaVersion = Trace.schemaVersion,
+    traceExportVersion = Trace.exportVersion, nextSequence = 2001,
+    records = records, bytes = 1958110, stoppedReason = "capacity" }
+  local recorder = assert(Trace.New(database, clock))
+  assert(not recorder.recording and recorder:Start({ character = "mock" }))
+  assert(database.stoppedReason == nil and #database.records == 2001)
+  assert(database.records[1] == records[1] and database.records[2001].sequence == 2001)
 end)
 
-test("large payloads count toward the byte budget without truncating accounting", function()
-  local original = Trace.maxBytes
-  Trace.maxBytes = 5000
+test("recording continues past the old total byte limit", function()
+  local recorder = assert(Trace.New(nil, clock))
+  recorder.database.bytes = 12 * 1024 * 1024 - 100
+  assert(recorder:Start({}) and recorder:Capture("EVENT"))
+  assert(recorder.recording and #recorder.database.records == 2)
+  assert(recorder.database.bytes > 12 * 1024 * 1024)
+end)
+
+test("large payloads still count toward the estimated byte total", function()
   local recorder = assert(Trace.New(nil, clock))
   recorder:Start({})
+  local before = recorder.database.bytes
   assert(recorder:Capture("LARGE", { string.rep("x", 1900), string.rep("y", 1900) }))
-  assert(recorder.database.bytes > 4000)
-  assert(not recorder:Capture("OVERFLOW", string.rep("z", 1000)))
-  Trace.maxBytes = original
+  assert(recorder.database.bytes - before == #recorder.database.records[2].payload + #"LARGE" + 512)
 end)
 
 test("reload is paused and clear does not reuse event sequence numbers", function()

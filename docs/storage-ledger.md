@@ -11,13 +11,22 @@ The stable consumer-facing Lua API is documented separately in
 
 `ArtisanLogbookDB` is account-wide SavedVariables for durable facts.
 `ArtisanLogbookTraceDB` remains the independent bounded debug trace database.
-The TOC addon's version is recorded on each session; `schemaVersion` belongs to
-the ledger and is versioned independently. The debug export version in
+Both belong to `ArtisanLogbook_Core`; their Lua tables are private persistence,
+not supported in-game consumer APIs. All addons, including the production UI,
+must use `ArtisanLogbookAPI` for factual reads. Offline exporters may have
+version-specific persistence readers without making these tables a public
+in-game API. The Core TOC addon version is recorded on each session;
+`schemaVersion` belongs to the ledger, and public API version 1 is independent
+of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
 **Schema 1 is the first supported persistence contract**, identified by both
 `schemaVersion = 1` and `schemaIdentity = "ArtisanLogbookLedger"`.
+Use authoritative WoW natural IDs directly for WoW entities where a stable
+domain ID exists. This identity layout remains schema v1: changes to earlier
+unreleased development layouts do not increment `Ledger.schemaVersion` and do
+not provide a migration path. Such layouts must be reset, not converted.
 The identity marker distinguishes it from experimental builds that also used
 the number 1. Development/prerelease schemas 0–5 were experimental and are **not
 supported upgrade sources**. There is no migration or historical backfill path
@@ -25,7 +34,7 @@ from them. Changing the version number or adding the marker manually is not a
 supported conversion.
 
 Users of development builds may need to reset SavedVariables. With WoW fully
-closed, back up the account's `ArtisanLogbook.lua` SavedVariables file before
+closed, back up the account's `ArtisanLogbook_Core.lua` SavedVariables file before
 resetting/removing `ArtisanLogbookDB` (and any backup WoW might restore).
 The addon refuses unsupported data with a clear reset-required error rather
 than deleting or rewriting it automatically. Resetting the ledger loses its
@@ -34,7 +43,8 @@ experimental history; the independent diagnostic trace is not imported.
 The supported schema contains:
 
 - `crafts` stores one row per observed Retail result callback, with a monotonic
-  local `id`, timestamp, optional request ID, session/recipe/output dimension IDs, raw game
+  local `id`, timestamp, optional request ID, session ID and WoW recipe/output
+  item IDs, raw game
   `gameOperationId` (the raw `operationID`), observed output quality/item level/quantity,
   Multicraft bonus, concentration spent/currency, Ingenuity proc flag, and
   refund field. Unsupported values are absent.
@@ -51,11 +61,13 @@ The supported schema contains:
   list or when return attribution is ambiguous; it is zero only when a return
   list establishes that this allocated item was not returned. Ownership/source
   and commodity lot provenance are never inferred.
-- `dimensions` contains append-only numeric collections for realm, character,
-  profession, recipe, item, session, and expansion. Each collection has an
-  independent monotonic ID counter. Repeated stable keys reuse their existing
-  dimension. Identity and IDs never change; pruning never removes dimensions.
-  Metadata supports monotonic enrichment as described below.
+- `dimensions.recipes`, `dimensions.items`, and `dimensions.professions` are
+  append-only numeric-keyed maps indexed by WoW recipe ID, item ID, and skill
+  line ID respectively. Their row `id` equals the map key. They have no
+  Artisan Logbook surrogate IDs, string identity keys, or local counters.
+  `dimensions.realms`, `.characters`, `.sessions`, and `.expansions` remain
+  append-only arrays with independent Core-owned monotonic ID counters and
+  stable keys. Pruning never removes metadata; known fields can be enriched.
 - `nextCraftId` and `nextRequestId` are independent of retained rows, so pruning
   never reuses either ID. The retention setting is `retentionDays`; there is no
   craft-count ceiling.
@@ -67,24 +79,76 @@ interface, project, locale, character and realm references, and the flavor
 capability snapshot. Character and realm identities use the runtime context
 described below. Profession/skill-line and recipe metadata
 not present in the observed callbacks stays absent. Expansion rows use a stable
-caller-supplied key, display name, and chronological order. Recipe/item/
+caller-supplied key, name, and optional chronological order. Recipe/item/
 profession dimensions may refer to an expansion only when that metadata is
 known; a craft obtains expansion through its recipe, and a reagent through its
 item. The consuming craft's expansion is never used to classify an item.
-The canonical reference field for recipe, item, and profession is
+The canonical expansion reference field on recipe, item, and profession metadata is
 `expansionDimensionId`; on an item it describes that item's own introduction or
 ownership expansion, not consumption context. No alternate expansion-reference
-spelling or guessed expansion mapping is accepted.
+spelling or guessed expansion mapping is accepted. The guarded recipe APIs do
+not expose a global WoW expansion ID. Expansion rows therefore keep a Core-owned
+ID and a caller-supplied key; their display names are not identity keys.
 
 ## Dimension Identity and Enrichment
 
-Dimension IDs and keys are immutable. `AddDimension` is an internal storage
-method, not a public Lua API. For the same key, a nil attribute may become known;
+Core-owned dimension IDs and keys are immutable; recipe/item/profession identity
+is the WoW ID, with no second local ID. `AddDimension` is an internal storage
+method, not a public Lua API. For the same identity, a nil attribute may become known;
 repeating a known value is a no-op. Conflicting known values return `nil, reason`
 and reject the entire update, including other new attributes. Nested metadata
-follows the same rule. Callers cannot change `id` or `key`, and valid expansion
+follows the same rule. Callers cannot change `id` or a Core-owned `key`, and valid expansion
 references may be added after sparse item/recipe/profession creation. Input
 tables are copied, so subsequent caller mutations cannot change stored metadata.
+
+On Retail, Core queries `C_TradeSkillUI.GetRecipeInfo(recipeID)` for a recipe's
+name and optional `maxQuality` when `supportsQualities` is true, and
+`C_TradeSkillUI.GetProfessionInfoByRecipeID(recipeID)` for its skill line.
+When supplied, `parentProfessionID` identifies the base profession used
+for filtering (for example, Alchemy); otherwise `professionID` is used.
+When `professionID` differs from its parent, Core asks
+`GetProfessionInfoBySkillLineID(professionID)` for that exact child. Only a
+matching child with no contradictory parent and a non-`Unknown`
+`expansionName` can classify the recipe. Its expansion key is
+`skillLine:<child ID>`: this is a
+stable, profession-scoped expansion skill-line identity, not a global expansion
+ID shared between professions. The API's expansion name is display metadata,
+never a key. Missing, mismatched, or `Unknown` child information leaves the
+recipe expansion unknown; Core does not parse recipe/category names, infer from
+item IDs, or map expansion order. Trade-skill refresh retries previously
+observed recipes in the currently opened trade skill, including those with
+known names but missing quality scales or unknown expansions. Core intersects
+`GetAllRecipeIDs()` with already tracked recipe identities at
+`TRADE_SKILL_SHOW`; it does not query every historical recipe at login or
+create dimensions for unobserved recipes from that list.
+
+Item names come from `GetItemInfo(itemID)` for output, selected, and returned
+reagent IDs after their facts or requests commit. Uncached items remain
+identity-only until a matching successful `GET_ITEM_INFO_RECEIVED` event or
+trade-skill refresh retries them; unrelated events are ignored. Unavailable or
+failed metadata queries never reject a valid craft. Enrichment preserves
+identities and rebuilds affected detailed
+craft filter indexes; durable series and character profession choices resolve
+the updated recipe association on read without rewriting history.
+
+The confirmed `/al_trace` **Purge Logbook DB** operation creates a fresh Core
+ledger with a new active session and the same runtime character/realm context.
+It removes crafts, requests, reagents, aggregates, and all prior dimensions;
+only the new session, character, and realm dimensions remain. Core-owned counters and
+retention settings reset to clean-database defaults (including craft and
+request IDs starting at 1). Diagnostic `ArtisanLogbookTraceDB` is unaffected.
+If normal ledger initialization refused an invalid or unsupported development
+database, the same confirmed purge builds a clean current schema-v1 ledger and
+current session before installing it. A failed recovery reports a diagnostic,
+leaves Core unready and does not replace SavedVariables. Valid natural-ID schema-v1
+history does not need a purge for this metadata enrichment.
+
+`UnitClass("player")` supplies the optional authoritative `classFile` token on
+the current character dimension at session creation. Existing dimensions with
+the same identity accept this missing fact in place; historical characters
+not observed on the current login remain unknown. The optional class and
+recipe-quality fields remain in the existing `schemaVersion = 1` layout,
+without a migration or destructive reset.
 
 Runtime realm keys use `project:<WOW_PROJECT_ID>:region:<GetCurrentRegion()>:`
 `realm:<GetRealmID()>` only when all three identifiers are available and positive.
@@ -129,14 +193,20 @@ discarded when the trade skill closes. Without a positive matching quote,
 allocations remain absent; the hook's own reagent table can be empty and is not
 used as a fallback. A guarded operation query supplies optional
 quote measurements, and an optional item-quality lookup supplies observed
-reagent quality. This passive path does not depend on `/al start`. Later UI
+reagent quality. This passive path does not depend on `/al_trace start`. Later UI
 quotes cannot mutate an already submitted request. Missing/mismatched quote
 arguments leave selections and quote values absent. Orders, recrafts, and
 target-dependent operations do not create request rows.
 
 The sole active submitted request can be referenced by up to `requestedCount`
-successful result callbacks. A second submission before that count is reached
-makes attribution ambiguous until trade skill close (or a new session) clears it.
+successful result callbacks. A new explicit personal `CraftRecipe` submission
+in the same session supersedes an unfinished personal request, even when the
+recipe is unchanged; the prior request and its already recorded crafts remain
+untouched. The new request is used for subsequent results unless a craft begin
+names a different recipe. Such a conflicting result remains unlinked and does
+not consume the new request. Unsupported operations (orders, recrafts, enchants,
+salvage) invalidate personal correlation rather than being treated as safe
+sequential replacements; trade skill close or a new session clears that guard.
 Generic `UNIT_SPELLCAST_FAILED`, `FAILED_QUIET`, and `INTERRUPTED` are player-wide;
 their current verified payload does not establish a safe request/recipe match,
 so they do not clear correlation. `UPDATE_TRADESKILL_CAST_STOPPED(false)` was
@@ -144,12 +214,13 @@ observed before a later successful batch result and cannot safely clear it
 either. Failure and stop callbacks never create CRAFT rows; a failure after
 one success leaves a request with fewer crafts than requested. Correlation can
 remain pending until close or the requested count is reached after a partial
-failure; distinguishing a subsequent unrelated result requires stronger evidence.
+failure; a new explicit personal submission supersedes that unfinished request.
 Neither operation
 ID nor a timing window is used to join results to requests. Repeated, zero, and
 missing operation IDs still create separate result facts. Pending attribution
-is not resumed across reloads. Late callbacks cannot always be distinguished
-from current results; overlapping submissions are deliberately left unlinked.
+is not resumed across reloads. Late callbacks without a distinguishing begin,
+especially for same-recipe restarts, cannot always be distinguished from current
+results; unsupported concurrent operation types remain unlinked until reset.
 
 Without a request link, `TRADE_SKILL_CRAFT_BEGIN` supplies a recipe candidate. Recipe attribution is
 made only when exactly one begin is pending and the result has a positive
@@ -222,7 +293,127 @@ gameplay remain queryable until next startup, and backdated results are not
 immediately deleted. The private explicit `Prune` maintenance method rebuilds
 runtime indexes if invoked after initialization; it is not a public API or normal
 capture path. Dimensions and counters never reset, even when all facts expire.
-No clear command or UI is added in this slice.
+The original ledger slice exposed no clear command or UI.
+
+The production UI uses the deliberately separate `ArtisanLogbookManagement`
+cross-addon boundary for mutable Settings operations. It is not part of the
+stable read-only factual `ArtisanLogbookAPI` and never exposes raw persistence.
+`Status` returns detached retention,
+record-count, schema and build diagnostics; `CurrentCharacter` exposes the
+active ledger identity without exposing SavedVariables. Retention changes take
+effect on the next startup or explicit prune, not on capture. `Prune` applies
+the configured age cutoff to detailed facts and rebuilds indexes, leaving daily
+series intact. Confirmed `Clear` deletes detailed crafts, requests, reagents and
+all daily totals while preserving dimensions, session identity, retention and
+monotonic ID counters. Capture can resume immediately afterward. This is distinct
+from the tracer's independent debug clear operation.
+
+The tracer also exposes **Repair unknown recipes** as a confirmed maintenance
+operation. Analysis derives `outputItemId -> recipeId set` from committed craft
+facts and authoritative Retail output metadata stored in `recipeOutputs`. A
+retained craft with no recipe is repairable only when its output has exactly
+one known recipe; ambiguous, missing-output, and unsupported outputs remain
+unchanged. Names can discover candidates but never authorize repair; only
+explicit Blizzard output IDs or attributed crafts supply evidence. Analysis
+is repeated when the confirmation is accepted, without repeating discovery.
+
+The optional schema-v1 `recipeOutputs` map stores only natural-ID relationships:
+`recipeOutputs[recipeId][outputItemId] = true`. Older schema-v1 databases without
+the field load as an empty map. Core bootstraps it idempotently from retained
+attributed crafts before startup repair, then persists it normally. New
+attributed crafts add relationships; duplicate observations do not add rows.
+The runtime reverse index is rebuilt from this map and is never persisted.
+Relationships are monotonic and survive craft retention, so storage grows with
+distinct recipe/output pairs rather than craft count. Multiple outputs for one
+recipe are supported; ambiguity occurs only when one output maps to multiple
+recipes.
+
+After successful ledger loading and index reconstruction, Core performs this
+same conservative analysis once, after recipe-output bootstrap, when retained
+Unknown crafts exist and applies any uniquely supported repairs without
+confirmation. It does not scan after each craft commit. The runtime-only
+`unknownRecipeCount` is derived from
+retained detailed craft facts, not SavedVariables or durable series, and is
+reconstructed on load/reindex and maintained by commits. Pruning, repair, clear,
+and purge therefore leave it consistent with retained detail. Startup repair is
+best-effort: a failed staged operation records a diagnostic and leaves the
+loaded ledger available. Manual confirmed repair remains useful when new
+metadata becomes available later in a session.
+
+After this normal startup repair, remaining outputs with **no** durable mapping
+get one candidate-discovery pass. Core reads `unknownCraftIdsByOutput` and item
+dimensions, builds a temporary map only for their exact stored names, and walks
+recipe dimensions once. Each matching recipe is queried once through the same
+output reader used by profession enrichment. No match or no authoritative
+confirmation means no knowledge write. If a candidate confirms a wanted output,
+its explicit output set is learned through `addon.LearnRecipeOutputs`.
+All candidates finish before learning, and the entire batch reaches the reverse
+index before any repair, so shared outputs cannot be assigned to the first
+matching recipe. Known unique outputs need no candidate queries; known ambiguous
+outputs are not reconsidered using names.
+
+Automatic batch learning invokes the existing targeted repair once for all
+newly unique affected outputs. Manual discovery uses the same learning path but
+defers repair until the existing preview is confirmed. It may persist verified
+knowledge before confirmation, but never repairs historical facts on that path.
+An entirely unverified manual attempt does not change the database. The Debug
+analysis includes Unknowns, candidates, confirmed candidates, unavailable
+metadata, unconfirmed candidates, uniquely repairable and ambiguous crafts.
+Automatic recovery produces no normal chat/UI notifications.
+
+### Recovery cost and lifetime
+
+Let U be distinct retained Unknown outputs, R recipe dimensions, C exact-name
+candidate recipes and E their returned output relationships. Extra startup/manual
+discovery costs O(U + R + C + E), with O(U + E) temporary memory, no scan of craft
+history, and at most C schematic queries plus C quality-output queries. The R
+walk is skipped entirely when no unresolved named outputs need discovery.
+Names are referenced from existing dimensions, not normalized or duplicated in
+a permanent index. Candidate tables/API results die at the end of the pass.
+
+Profession opportunities reuse the current loaded list, not global candidate
+discovery. For P loaded recipe IDs, list signature preparation is O(P log P),
+with O(P) temporary storage and one O(P)-sized signature retained to suppress
+duplicates. Only this signature and an open/list-settled boolean are kept between
+events. Actual enrichment is bounded by that loaded profession's recipes and
+outputs. Duplicate settled events compute the signature but perform no recipe
+queries, item-dimension scans or repair. Close/reopen, a changed list or observed
+data readiness transition creates another natural opportunity. There is no
+failed-candidate queue, attempt counter, retry generation, scheduler or timer.
+
+Learning retains the existing O(K) staged knowledge copy/reverse-index build for
+K durable relationships, once per nonempty batch. Actual repair intentionally
+retains the existing history-sized staging, validation and index reconstruction
+for atomicity; it is not O(U). Batching avoids one such rebuild per output. Normal
+load validation, indexing, retention and craft-knowledge bootstrap costs are
+unchanged. Core does not await caches or another event: optional candidate reads
+run synchronously once after ordinary startup repair and failures are nonfatal.
+
+The addon test fixture with 2,010 recipe dimensions, 2,000 attributed crafts and
+14 Unknowns makes exactly nine candidate schematic queries, zero profession
+enumerations and zero recipe-info queries at login; three confirm, leaving 11
+Unknowns. Mocked full startup (including load/indexing/repair) measured roughly
+0.06-0.08 seconds in the development container. This is a practical Lua check,
+not a bound on native API latency or a measurement of the user's live database.
+
+Persistent storage remains only schema-v1 `recipeOutputs` plus any item
+dimensions for newly confirmed outputs. Runtime diagnostics keep one small
+summary and a session learned-relationship count, never evidence histories or
+per-craft recovery state. No schema bump, migration prompt or purge is required.
+See [Retail/Forever API findings](capture-tracer.md#recipe-metadata-and-recovery)
+for availability and security limits.
+
+Repair stages a copy of the schema-v1 database, changes only proposed craft
+`recipeId` values, and transfers each retained craft's additive series
+contribution and per-metric observed coverage from the nil-recipe grain to the
+known recipe grain. Existing target rows merge normally; empty source grains
+are removed. It deliberately does not rebuild durable series from retained
+crafts: those rows can include older crafts already removed by retention, so
+only repaired retained contributions move and pruned historical totals remain
+in their original grain. Schema version and request relationships are unchanged.
+The staged database is validated and all runtime indexes are rebuilt before the
+live ledger is swapped, so handled planning, validation, and index-build failures
+leave the original ledger intact.
 
 ### Runtime indexes
 
@@ -237,6 +428,17 @@ objects. Startup performs the history-sized rebuild once after retention:
   recipe-based expansion/profession attribution, not surrogate dimension IDs.
 - `craftIdsByTime` contains IDs ordered by `(timestamp, craft ID)` for cursor
   boundary searches, including timestamp ties and backward clock changes.
+- `seriesDays` indexes occupied UTC days for bounded chart queries; runtime
+  recipe counts and an invalidatable alphabetical recipe-ID order serve bounded
+  catalogue pages without traversing every historical aggregate on each page.
+- Distinct character and recipe IDs from durable series are indexed globally
+  and per character for tracked selector choices. These sets are rebuilt from
+  persisted series on load/prune/clear and updated on commit. Profession
+  identity is resolved through current recipe metadata when queried, so
+  enrichment needs no historical reindex or stored projection.
+- `unknownRecipeCount` counts only retained detailed crafts with no `recipeId`;
+  it is derived during this rebuild and never persisted or inferred from durable
+  series rows.
 - The existing operation-count index supports evidence-backed recipe attribution.
 
 New requests update their map; new crafts/reagents update all relevant maps and
@@ -257,7 +459,7 @@ selection and paging behavior is described in [lua-api.md](lua-api.md).
 ### Durable daily aggregates
 
 `craftSeries` is a dense collection of rows keyed by `bucketStart`,
-optional `characterDimensionId`, and optional `recipeDimensionId`. `bucketStart`
+optional `characterDimensionId`, and optional WoW `recipeId`. `bucketStart`
 is `floor(craft.timestamp / 86400) * 86400` (Unix UTC midnight). Character derives
 through the craft session; unknown character/recipe references form unknown
 groups rather than guessed identities. Dimension references remain resolvable
@@ -303,35 +505,40 @@ preserved on reload. Public APIs expose no retention setter.
 
 ### Exact integers and exhaustion
 
-Local IDs, monotonic counters, and counts must fit Lua's exact safe-integer range,
+Core-owned IDs, monotonic counters, and counts must fit Lua's exact safe-integer range,
 up to **9,007,199,254,740,991 (2^53 − 1)**. Zero is allowed for observation counts
 but not local IDs/next-ID counters. Allocation requires room to advance the
 next-ID counter, so the maximum next-ID value is an exhausted sentinel, not
 another allocatable ID. Counts can reach the maximum but cannot increment again.
-Finite numeric measurements retain their existing signed/fractional semantics.
+Natural-ID metadata keys are finite nonnegative integers (including observed
+zero item IDs) and are not limited by local counter capacity. Finite numeric
+measurements retain their existing signed/fractional semantics.
 
 Exhausted counters/counts reject the operation before committing dimensions,
 facts, aggregates, or correlation changes. Multi-dimension requests/results and
-session creation check capacity for all needed new dimensions, not just the
-first. Reusing existing dimensions does not consume an ID. Pruning never resets
+session creation check capacity for all needed new Core-owned dimensions, not just the
+first. Natural metadata never consumes a local ID. Pruning never resets
 counters; loading never reconstructs them from retained rows.
 
 Loading runs on a deep copy inside a protected path. Missing/invalid format
 identity or versions, unsupported versions, cyclic/non-serializable data, non-finite numbers,
-sparse/non-array collections, duplicate IDs/keys, invalid counters, or broken
-references refuse the database before pruning or index construction. Craft
+sparse/non-array Core-owned collections, malformed natural-ID maps, duplicate
+IDs/keys, invalid counters, or broken references refuse the database before
+pruning or index construction. Craft
 timestamps and session references, and reagent craft/item references, are
-required. Other unknown dimension references remain absent, but if present
-must resolve to positive local IDs in the correct collection:
+required. Other unknown references remain absent, but if present must resolve
+to an existing row in the correct collection (WoW IDs for natural metadata,
+Core-owned IDs for other dimensions and facts):
 
-- Craft: `sessionDimensionId`, `recipeDimensionId`, `outputItemDimensionId`,
-  `professionDimensionId`, `requestId` (same session).
-- Request: `sessionDimensionId`, `recipeDimensionId`; allocation: `itemDimensionId`.
-- Reagent: `craftId`, `itemDimensionId`.
+- Craft: `sessionId`, `recipeId`, `outputItemId`, `professionId`, `requestId`
+  (same session).
+- Request: `sessionId`, `recipeId`; allocation: `itemId`.
+- Reagent: `craftId`, `itemId`.
 - Character: `realmDimensionId`.
 - Session: `characterDimensionId`, `realmDimensionId`.
-- Recipe: `professionDimensionId`, `expansionDimensionId`.
+- Recipe: `professionId`, `expansionDimensionId`.
 - Item and profession: `expansionDimensionId`.
+- Daily series: `characterDimensionId`, `recipeId`.
 
 The same reference checks run before live dimension creation/enrichment.
 Unsupported reference fields are refused rather than silently treated as absent.
@@ -361,7 +568,8 @@ reload and pruning. Index coverage includes rebuild after
 load/pruning, incremental updates, metadata enrichment, sorted ID/time arrays,
 history above 50,000 crafts, direct lookup/no-scan callbacks, and indexed query
 correctness. Run `bash src/addon/scripts/package.sh` from
-the repository root to test and validate `src/addon/dist/ArtisanLogbook.zip`.
+the repository root to test and validate the Core-only, UI-only, and bundle ZIPs
+in `src/addon/dist/`.
 
 Remaining evidence gaps include operation-ID reuse scope, true duplicate/late
 callback behavior, crafting-order/recraft
