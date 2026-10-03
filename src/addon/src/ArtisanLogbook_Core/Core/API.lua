@@ -36,24 +36,25 @@ local function realm(ledger, row)
 end
 
 local function character(ledger, row)
-  local result = fields(row, { "key", "name", "guid" })
+  local result = fields(row, { "key", "name", "guid", "classFile" })
   if result then result.realm = realm(ledger, dimension(ledger, "realm", row.realmDimensionId)) end
   return result
 end
 
 local function profession(ledger, row)
-  local result = fields(row, { "skillLineId", "name" })
+  local result = fields(row, { "name" })
   if result then
+    result.skillLineId = row.id
     result.expansion = expansion(ledger, dimension(ledger, "expansion", row.expansionDimensionId))
   end
   return result
 end
 
 local function recipe(ledger, row)
-  local result = fields(row, { "name" })
+  local result = fields(row, { "name", "maxQuality" })
   if result then
-    if type(row.gameRecipeId) == "number" then result.id = row.gameRecipeId end
-    result.profession = profession(ledger, dimension(ledger, "profession", row.professionDimensionId))
+    result.id = row.id
+    result.profession = profession(ledger, dimension(ledger, "profession", row.professionId))
     result.expansion = expansion(ledger, dimension(ledger, "expansion", row.expansionDimensionId))
   end
   return result
@@ -63,7 +64,7 @@ local function item(ledger, id)
   local row = dimension(ledger, "item", id)
   local result = fields(row, { "name" })
   if result then
-    if type(row.gameItemId) == "number" then result.id = row.gameItemId end
+    result.id = row.id
     result.expansion = expansion(ledger, dimension(ledger, "expansion", row.expansionDimensionId))
   end
   return result
@@ -73,28 +74,27 @@ local projectors = { characters = character, realms = realm, expansions = expans
   professions = profession, recipes = recipe }
 
 local function related(ledger, craft)
-  local session = dimension(ledger, "session", craft.sessionDimensionId)
-  local recipeRow = dimension(ledger, "recipe", craft.recipeDimensionId)
+  local session = dimension(ledger, "session", craft.sessionId)
+  local recipeRow = dimension(ledger, "recipe", craft.recipeId)
   return {
     characters = session and dimension(ledger, "character", session.characterDimensionId),
     realms = session and dimension(ledger, "realm", session.realmDimensionId),
     recipes = recipeRow,
-    professions = dimension(ledger, "profession", craft.professionDimensionId or
-      (recipeRow and recipeRow.professionDimensionId)),
+    professions = dimension(ledger, "profession", craft.professionId or
+      (recipeRow and recipeRow.professionId)),
     expansions = recipeRow and dimension(ledger, "expansion", recipeRow.expansionDimensionId),
   }
 end
 
 local function identity(facet, row)
   if not row then return nil end
-  if facet == "recipes" then return type(row.gameRecipeId) == "number" and row.gameRecipeId or nil end
-  if facet == "professions" then return type(row.skillLineId) == "number" and row.skillLineId or nil end
+  if facet == "recipes" or facet == "professions" then return row.id end
   return row.key
 end
 
 local function allocation(ledger, row)
   local result = fields(row, { "dataSlotIndex", "quality", "allocatedQuantity", "returnedQuantity", "source" })
-  result.item = item(ledger, row.itemDimensionId)
+  result.item = item(ledger, row.itemId)
   return result
 end
 
@@ -108,7 +108,7 @@ local function projectCraft(ledger, craft)
   result.profession = profession(ledger, rows.professions)
   result.recipe = recipe(ledger, rows.recipes)
   result.expansion = expansion(ledger, rows.expansions)
-  result.outputItem = item(ledger, craft.outputItemDimensionId)
+  result.outputItem = item(ledger, craft.outputItemId)
   result.reagents = {}
   for _, row in ipairs(ledger.reagentsByCraftId[craft.id] or {}) do
     result.reagents[#result.reagents + 1] = allocation(ledger, row)
@@ -117,7 +117,7 @@ local function projectCraft(ledger, craft)
   if request then
     result.request = fields(request, { "id", "timestamp", "requestedCount", "useConcentration",
       "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" })
-    result.request.recipe = recipe(ledger, dimension(ledger, "recipe", request.recipeDimensionId))
+    result.request.recipe = recipe(ledger, dimension(ledger, "recipe", request.recipeId))
     if request.allocations then
       result.request.allocations = {}
       for _, row in ipairs(request.allocations) do
@@ -351,12 +351,12 @@ end
 
 local function seriesRelated(ledger, row)
   local characterRow = dimension(ledger, "character", row.characterDimensionId)
-  local recipeRow = dimension(ledger, "recipe", row.recipeDimensionId)
+  local recipeRow = dimension(ledger, "recipe", row.recipeId)
   return {
     characters = characterRow,
     realms = characterRow and dimension(ledger, "realm", characterRow.realmDimensionId),
     recipes = recipeRow,
-    professions = recipeRow and dimension(ledger, "profession", recipeRow.professionDimensionId),
+    professions = recipeRow and dimension(ledger, "profession", recipeRow.professionId),
     expansions = recipeRow and dimension(ledger, "expansion", recipeRow.expansionDimensionId),
   }
 end
@@ -398,12 +398,12 @@ function API.GetCraftSeries(filter, options)
     local rightCharacter = dimension(ledger, "character", right.characterDimensionId)
     local leftKey, rightKey = leftCharacter and leftCharacter.key or "", rightCharacter and rightCharacter.key or ""
     if leftKey ~= rightKey then return leftKey < rightKey end
-    local leftRecipe = dimension(ledger, "recipe", left.recipeDimensionId)
-    local rightRecipe = dimension(ledger, "recipe", right.recipeDimensionId)
+    local leftRecipe = dimension(ledger, "recipe", left.recipeId)
+    local rightRecipe = dimension(ledger, "recipe", right.recipeId)
     local leftId = identity("recipes", leftRecipe) or -1
     local rightId = identity("recipes", rightRecipe) or -1
     if leftId ~= rightId then return leftId < rightId end
-    return (left.recipeDimensionId or 0) < (right.recipeDimensionId or 0)
+    return (left.recipeId or 0) < (right.recipeId or 0)
   end)
   local result = { series = {} }
   for _, row in ipairs(selected) do
@@ -424,9 +424,16 @@ end
 
 function API.GetRecipeSummaries(options)
   if options == nil then options = {} end
-  if not keysAllowed(options, { limit = true, cursor = true }) then return nil, "invalid-options" end
+  if not keysAllowed(options, { limit = true, cursor = true, character = true,
+      profession = true, sort = true }) then return nil, "invalid-options" end
   local limit = options.limit or 50
   if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
+  if options.character ~= nil and (type(options.character) ~= "string" or options.character == "") then
+    return nil, "invalid-options"
+  end
+  if options.profession ~= nil and not integer(options.profession, 0) then return nil, "invalid-options" end
+  local sort = options.sort or "name"
+  if sort ~= "name" and sort ~= "count" then return nil, "invalid-options" end
   local offset = 0
   if options.cursor ~= nil then
     if type(options.cursor) ~= "string" or not options.cursor:match("^[1-9]%d*$") then
@@ -437,20 +444,47 @@ function API.GetRecipeSummaries(options)
   end
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
-  if not ledger.recipeOrder then
+  local counts = ledger.recipeCounts
+  if options.character then
+    counts = {}
+    local characterId = ledger.dimensionIndex.character[options.character]
+    for _, row in ipairs(ledger.database.craftSeries) do
+      if row.characterDimensionId == characterId and row.recipeId then
+        counts[row.recipeId] = (counts[row.recipeId] or 0) + row.craftCount
+      end
+    end
+  end
+  if not ledger.recipeOrder or options.character or options.profession or sort ~= "name" then
     local order = {}
-    for id in pairs(ledger.recipeCounts) do
+    for id in pairs(counts) do
       local row = dimension(ledger, "recipe", id)
-      if row and type(row.gameRecipeId) == "number" then order[#order + 1] = id end
+      if row and (not options.profession or row.professionId == options.profession) then
+        order[#order + 1] = id
+      end
     end
     table.sort(order, function(left, right)
+      if sort == "count" and counts[left] ~= counts[right] then return counts[left] > counts[right] end
       local a, b = dimension(ledger, "recipe", left), dimension(ledger, "recipe", right)
-      local leftName = (a.name or "Recipe #" .. a.gameRecipeId):lower()
-      local rightName = (b.name or "Recipe #" .. b.gameRecipeId):lower()
+      local leftName = (a.name or "Recipe #" .. a.id):lower()
+      local rightName = (b.name or "Recipe #" .. b.id):lower()
       if leftName ~= rightName then return leftName < rightName end
-      return a.gameRecipeId < b.gameRecipeId
+      return a.id < b.id
     end)
-    ledger.recipeOrder = order
+    if not options.character and not options.profession and sort == "name" then ledger.recipeOrder = order end
+    if options.character or options.profession or sort ~= "name" then
+      local result = { recipes = {} }
+      if offset > #order then return nil, "invalid-cursor" end
+      for index = offset + 1, math.min(offset + limit, #order) do
+        local id = order[index]
+        local projected = recipe(ledger, dimension(ledger, "recipe", id))
+        if not projected.name then projected.name = "Recipe #" .. projected.id end
+        result.recipes[#result.recipes + 1] = {
+          recipe = projected, profession = projected.profession, craftCount = counts[id],
+        }
+      end
+      if offset + limit < #order then result.nextCursor = tostring(offset + limit) end
+      return result
+    end
   end
   local order = ledger.recipeOrder
   if offset > #order then return nil, "invalid-cursor" end
@@ -494,7 +528,7 @@ function API.GetProfessions(characterKey)
   local seen = {}
   for id in pairs(recipes or {}) do
     local row = dimension(ledger, "recipe", id)
-    local details = row and profession(ledger, dimension(ledger, "profession", row.professionDimensionId))
+    local details = row and profession(ledger, dimension(ledger, "profession", row.professionId))
     if details and details.skillLineId ~= nil and not seen[details.skillLineId] then
       seen[details.skillLineId] = true
       result[#result + 1] = details

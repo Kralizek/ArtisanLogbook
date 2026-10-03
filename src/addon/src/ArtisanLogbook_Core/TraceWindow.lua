@@ -62,7 +62,7 @@ function addon.CreateTraceWindow()
   end)
   scroll:SetScrollChild(text)
 
-  local page, pageSize = 1, 10
+  local page, pageSize = nil, 10
   local pageLabel = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   pageLabel:SetPoint("BOTTOMLEFT", 214, 24)
   pageLabel:SetSize(width - 340, 24)
@@ -70,21 +70,26 @@ function addon.CreateTraceWindow()
 
   local function updateStatus()
     local recorder = addon.recorder
-    status:SetText(string.format("%s | %d / %d events | %.0f / %.0f KiB\n%s",
+    status:SetText(string.format("%s | %d / %d events | %.0f KiB estimated\n%s",
       recorder.recording and "Recording" or "Paused", #recorder.database.records,
-      addon.Trace.maxRecords, recorder.database.bytes / 1024, addon.Trace.maxBytes / 1024,
+      addon.Trace.maxRecords, recorder.database.bytes / 1024,
       recorder.database.stoppedReason or "Capture contract: unverified"))
   end
 
   function window:Refresh(resetPage)
-    if resetPage then page = 1 end
+    if resetPage then page = nil end
     local pageCount = math.max(1, math.ceil(#addon.recorder.database.records / pageSize))
-    page = math.min(page, pageCount)
-    text:SetText(addon.recorder:Export((page - 1) * pageSize + 1, pageSize))
+    if page then
+      page = math.min(page, pageCount)
+      text:SetText(addon.recorder:Export((page - 1) * pageSize + 1, pageSize))
+      pageLabel:SetText(string.format("Export page %d / %d", page, pageCount))
+    else
+      text:SetText(addon.recorder:Export(1, #addon.recorder.database.records))
+      pageLabel:SetText(string.format("Complete export: %d events", #addon.recorder.database.records))
+    end
     text:SetCursorPosition(0)
     text:ClearFocus()
     scroll:SetVerticalScroll(0)
-    pageLabel:SetText(string.format("Export page %d / %d", page, pageCount))
     updateStatus()
   end
 
@@ -107,8 +112,8 @@ function addon.CreateTraceWindow()
     label:ClearFocus()
     updateStatus()
   end)
-  button("<", 20, -height + 40, function() page = math.max(1, page - 1); window:Refresh() end)
-  button(">", 112, -height + 40, function() page = page + 1; window:Refresh() end)
+  button("<", 20, -height + 40, function() page = math.max(1, (page or 2) - 1); window:Refresh() end)
+  button(">", 112, -height + 40, function() page = (page or 0) + 1; window:Refresh() end)
 
   StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE = {
     text = "Delete all captured trace events? Export them first. This cannot be undone.",
@@ -124,13 +129,31 @@ function addon.CreateTraceWindow()
     hideOnEscape = true,
     preferredIndex = 3,
   }
-  button("Clear", width - 108, -height + 40, function()
+  button("Clear Trace", width - 154, -height + 40, function()
     if addon.recorder.recording then
       addon.Notify("Stop recording before clearing.")
     else
       StaticPopup_Show("ARTISANLOGBOOK_CLEAR_TRACE")
     end
-  end)
+  end, 134)
+
+  StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK_DB = {
+    text = "Permanently delete all recorded Artisan Logbook crafts, requests, dimensions and historical aggregates? This cannot be undone.",
+    button1 = "Purge Logbook DB",
+    button2 = "Cancel",
+    OnAccept = function()
+      local ok, reason = addon.PurgeLogbookDB()
+      addon.Notify(ok and "Logbook DB purged." or reason)
+      window:Refresh(true)
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+  }
+  button("Purge Logbook DB", width - 328, -height + 40, function()
+    StaticPopup_Show("ARTISANLOGBOOK_PURGE_LOGBOOK_DB")
+  end, 166)
 
   local elapsed = 0
   window:SetScript("OnUpdate", function(_, delta)

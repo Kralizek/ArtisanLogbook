@@ -44,3 +44,31 @@ function management.Clear()
   if not addon.ledger then return nil, "not-ready" end
   return addon.ledger:ClearHistory()
 end
+
+function addon.PurgeLogbookDB()
+  local ledger = addon.ledger
+  local ok, reason
+  if ledger then
+    ok, reason = ledger:Purge()
+  else
+    ledger, reason = addon.Ledger.New(nil, { wall = GetServerTime })
+    if ledger then
+      local created, sessionId, sessionReason = pcall(addon.CreateCurrentSession, ledger)
+      ok = created and sessionId ~= nil
+      reason = created and sessionReason or sessionId
+      if ok then
+        ledger.onCraftCommitted = addon.PublishCraftCommitted
+        addon.ledger = ledger
+      end
+    end
+  end
+  if ok then
+    ArtisanLogbookDB = addon.ledger.database
+    addon.ledgerCaptureError = nil
+    addon.ledgerError = nil
+  else
+    reason = "Logbook DB purge failed: " .. tostring(reason or "ledger initialization unavailable")
+    addon.ledgerError = reason
+  end
+  return ok, reason
+end
