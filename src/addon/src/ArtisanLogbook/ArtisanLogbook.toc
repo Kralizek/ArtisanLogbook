@@ -1,7 +1,8 @@
 ## Interface: 120100
 ## Title: Artisan Logbook
 ## Notes: Passively records observed crafting results.
-## Version: 0.2.0-ledger
+## Version: 0.0.0-dev
+## X-Release-Tag: dev
 ## RequiredDeps: ArtisanLogbook_Core
 ## SavedVariables: ArtisanLogbookUISettings
 

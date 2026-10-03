@@ -1,0 +1,116 @@
+name: Release addon
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version component to bump
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options:
+          - alpha
+          - beta
+          - stable
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release channel
+        id: release-inputs
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [[ "$CHANNEL" == "stable" ]]; then
+            echo "channel=" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Calculate version
+        id: version
+        uses: Kralizek/github-actions/actions/calculate-next-version@v0.4.0
+        with:
+          bump: ${{ inputs.bump }}
+          channel: ${{ steps.release-inputs.outputs.channel }}
+          tag-prefix: addon-v
+
+      - name: Stamp addon metadata
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          for toc in             src/addon/src/ArtisanLogbook/ArtisanLogbook.toc             src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc
+          do
+            sed -i "s/^## Version: .*/## Version: $VERSION/" "$toc"
+            sed -i "s/^## X-Release-Tag: .*/## X-Release-Tag: $RELEASE_TAG/" "$toc"
+            grep -Fx "## Version: $VERSION" "$toc"
+            grep -Fx "## X-Release-Tag: $RELEASE_TAG" "$toc"
+          done
+
+      - name: Install Lua and packaging tools
+        run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip
+
+      - name: Test and package
+        run: bash src/addon/scripts/package.sh
+
+      - name: Prepare release artifacts
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd src/addon/dist
+          mv ArtisanLogbook_Core.zip "ArtisanLogbook_Core-$VERSION.zip"
+          mv ArtisanLogbook.zip "ArtisanLogbook-$VERSION.zip"
+          mv ArtisanLogbook-Bundle.zip "ArtisanLogbook-Bundle-$VERSION.zip"
+
+      - name: Publish tag and GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          NOTES_START_TAG: ${{ steps.version.outputs.release-notes-start-tag }}
+        run: |
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "$TAG"
+          fi
+
+          args=(
+            "$TAG"
+            src/addon/dist/ArtisanLogbook_Core-"$VERSION".zip
+            src/addon/dist/ArtisanLogbook-"$VERSION".zip
+            src/addon/dist/ArtisanLogbook-Bundle-"$VERSION".zip
+            --title "$TAG"
+            --target "$GITHUB_SHA"
+            --generate-notes
+          )
+
+          if [[ -n "$NOTES_START_TAG" ]]; then
+            args+=(--notes-start-tag "$NOTES_START_TAG")
+          fi
+
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh release create "${args[@]}"
