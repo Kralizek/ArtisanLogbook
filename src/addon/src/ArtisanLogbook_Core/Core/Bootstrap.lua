@@ -2,6 +2,8 @@ local addonName, addon = ...
 local lifecycle = CreateFrame("Frame")
 local loginStartedAt = GetServerTime()
 local loginUptime = GetTimePreciseSec()
+local professionRecipeListSignature
+local professionRecipeListSettled = false
 
 function addon.Notify(message)
   DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook: " .. message)
@@ -66,21 +68,101 @@ function addon.Emit(event, ...)
   return true
 end
 
+local function readable(value)
+  if type(issecretvalue) == "function" and issecretvalue(value) then return false end
+  if type(value) == "table" and type(canaccesstable) == "function" then
+    return canaccesstable(value)
+  end
+  return true
+end
+
 local function validId(value)
-  return type(value) == "number" and value > 0 and value < math.huge and value % 1 == 0
+  return readable(value) and type(value) == "number" and value > 0 and value < math.huge and value % 1 == 0
 end
 
 local function displayName(value)
-  return type(value) == "string" and value ~= "" and value ~= "Unknown" and value or nil
+  return readable(value) and type(value) == "string" and value ~= "" and value ~= "Unknown" and value or nil
 end
 
 local function query(method, ...)
   if type(method) ~= "function" then return nil end
   local ok, result = pcall(method, ...)
-  return ok and result or nil
+  if not ok or not readable(result) then return nil end
+  return result
 end
 
-function addon.EnrichRecipe(recipeId)
+local function recipeOutputs(recipeId)
+  local tradeSkill = C_TradeSkillUI
+  if type(tradeSkill) ~= "table" then return end
+  local schematic = query(tradeSkill.GetRecipeSchematic, recipeId, false)
+  if type(schematic) ~= "table" or not validId(schematic.recipeID) or
+      schematic.recipeID ~= recipeId then return end
+  local outputs = {}
+  if validId(schematic.outputItemID) then outputs[schematic.outputItemID] = true end
+  local qualities = query(tradeSkill.GetRecipeQualityItemIDs, recipeId)
+  for _, itemId in ipairs(type(qualities) == "table" and qualities or {}) do
+    if validId(itemId) then outputs[itemId] = true end
+  end
+  return outputs
+end
+
+local function appendRecipeOutputs(observations, recipeId, outputs)
+  for itemId in pairs(outputs or {}) do
+    if addon.ledger:AddDimension("item", itemId) then
+      observations[#observations + 1] = { recipeId = recipeId, outputItemId = itemId }
+    end
+  end
+end
+
+function addon.RecoverUnknownRecipeOutputs(deferRepair)
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  addon.lastRecoveryDiagnostic = nil
+  local summary = { unknownCount = ledger.unknownRecipeCount, candidateCount = 0,
+    verifiedCount = 0, unavailableCount = 0, unconfirmedCount = 0, learnedCount = 0 }
+  local outputsByName = {}
+  for outputItemId in pairs(ledger.unknownCraftIdsByOutput) do
+    if not ledger.recipeIdsByOutputItemId[outputItemId] then
+      local item = ledger.dimensionRows.item[outputItemId]
+      local name = item and displayName(item.name)
+      if name then
+        outputsByName[name] = outputsByName[name] or {}
+        outputsByName[name][outputItemId] = true
+      end
+    end
+  end
+  local observations = {}
+  if next(outputsByName) then
+    for recipeId, recipe in pairs(ledger.dimensionRows.recipe) do
+      local wanted = recipe.name and outputsByName[recipe.name]
+      if wanted then
+        summary.candidateCount = summary.candidateCount + 1
+        local outputs = query(recipeOutputs, recipeId)
+        local confirmed = false
+        for outputItemId in pairs(outputs or {}) do
+          if wanted[outputItemId] then confirmed = true end
+        end
+        if confirmed then
+          summary.verifiedCount = summary.verifiedCount + 1
+          appendRecipeOutputs(observations, recipeId, outputs)
+        elseif not outputs or not next(outputs) then
+          summary.unavailableCount = summary.unavailableCount + 1
+        else
+          summary.unconfirmedCount = summary.unconfirmedCount + 1
+        end
+      end
+    end
+  end
+  if #observations > 0 then
+    local learned, reason = addon.LearnRecipeOutputs(observations, "retail-candidate", deferRepair)
+    if learned == nil then return nil, reason end
+    summary.learnedCount = learned
+  end
+  addon.lastRecoverySummary = summary
+  return summary
+end
+
+function addon.EnrichRecipe(recipeId, deferKnowledge)
   if not addon.ledger or not validId(recipeId) then return end
   local tradeSkill = C_TradeSkillUI
   if type(tradeSkill) ~= "table" then return end
@@ -120,7 +202,69 @@ function addon.EnrichRecipe(recipeId)
       end
     end
   end
-  addon.ledger:AddDimension("recipe", recipeId, attributes)
+  local recipeDimensionId = addon.ledger:AddDimension("recipe", recipeId, attributes)
+  local outputs = query(recipeOutputs, recipeId)
+  if recipeDimensionId and outputs and next(outputs) then
+    local observations = {}
+    appendRecipeOutputs(observations, recipeId, outputs)
+    if not deferKnowledge then addon.LearnRecipeOutputs(observations, "retail-api") end
+    return observations
+  end
+end
+
+function addon.LearnRecipeOutputs(observations, source, deferRepair)
+  local ledger = addon.ledger
+  if not ledger then return nil, addon.ledgerError or "not-ready" end
+  local changedByOutput = {}
+  for _, observation in ipairs(observations) do
+    local existing = ledger.database.recipeOutputs[observation.recipeId]
+    if not (existing and existing[observation.outputItemId]) then
+      changedByOutput[observation.outputItemId] = true
+    end
+  end
+  local learned, reason = ledger:LearnRecipeOutputs(observations)
+  if learned == nil then return nil, reason end
+  addon.verifiedRecipeOutputsThisSession = (addon.verifiedRecipeOutputsThisSession or 0) + learned
+  local outputIds = {}
+  for outputItemId in pairs(changedByOutput) do outputIds[#outputIds + 1] = outputItemId end
+  table.sort(outputIds)
+  local repairOutputs = {}
+  for _, outputItemId in ipairs(outputIds) do
+    addon.OnRecipeOutputKnowledgeChanged(ledger, outputItemId, source, true)
+    local recipes = ledger.recipeIdsByOutputItemId[outputItemId]
+    local firstRecipe = recipes and next(recipes)
+    if firstRecipe and next(recipes, firstRecipe) == nil and
+        #(ledger.unknownCraftIdsByOutput[outputItemId] or {}) > 0 then
+      repairOutputs[outputItemId] = true
+    end
+  end
+  if not deferRepair and next(repairOutputs) then
+    local result, repairReason = ArtisanLogbookManagement.RepairUnknownRecipesForOutputs(repairOutputs)
+    if not result then
+      addon.lastRecipeOutputDiagnostic = "recipe-output knowledge targeted-repair success=false reason=" ..
+        tostring(repairReason)
+    end
+  end
+  return learned
+end
+
+function addon.OnRecipeOutputKnowledgeChanged(ledger, outputItemId, source, deferRepair)
+  if ledger ~= addon.ledger then return end
+  local recipes = ledger.recipeIdsByOutputItemId[outputItemId]
+  local recipeCount = 0
+  for _ in pairs(recipes or {}) do recipeCount = recipeCount + 1 end
+  addon.lastRecipeOutputDiagnostic = string.format(
+    "recipe-output knowledge changed output=%d candidates=%d source=%s",
+    outputItemId, recipeCount, source or "unknown")
+  if deferRepair or recipeCount ~= 1 or #(ledger.unknownCraftIdsByOutput[outputItemId] or {}) == 0 then return end
+  local result, reason = ArtisanLogbookManagement.RepairUnknownRecipesForOutputs({
+    [outputItemId] = true,
+  })
+  if not result then
+    addon.lastRecipeOutputDiagnostic = string.format(
+      "recipe-output knowledge changed output=%d candidates=%d source=%s targeted-repair success=false reason=%s",
+      outputItemId, recipeCount, source or "unknown", tostring(reason))
+  end
 end
 
 function addon.EnrichItem(itemId)
@@ -133,6 +277,50 @@ end
 
 local function tryEnrich(method, ...)
   pcall(method, ...)
+end
+
+local function enrichProfession(event)
+  local tradeSkill = C_TradeSkillUI
+  if type(tradeSkill) ~= "table" then return end
+  if query(tradeSkill.IsDataSourceChanging) == true or query(tradeSkill.IsTradeSkillReady) == false then
+    professionRecipeListSignature, professionRecipeListSettled = nil, false
+    return
+  end
+  local visible = query(tradeSkill.GetAllRecipeIDs)
+  if type(visible) ~= "table" then return end
+  local visibleIds, seen = {}, {}
+  for _, recipeId in ipairs(visible) do
+    if validId(recipeId) and not seen[recipeId] then
+      visibleIds[#visibleIds + 1] = recipeId
+      seen[recipeId] = true
+    end
+  end
+  table.sort(visibleIds)
+  local signature = table.concat(visibleIds, ",")
+  if signature == professionRecipeListSignature and
+      (event == "TRADE_SKILL_SHOW" or professionRecipeListSettled) then return end
+  professionRecipeListSignature = signature
+  professionRecipeListSettled = event == "TRADE_SKILL_LIST_UPDATE"
+  local observations = {}
+  for _, recipeId in ipairs(visibleIds) do
+    local outputs = query(addon.EnrichRecipe, recipeId, true)
+    for _, observation in ipairs(outputs or {}) do observations[#observations + 1] = observation end
+  end
+  if #observations > 0 then
+    local learned, reason = addon.LearnRecipeOutputs(observations, "retail-api")
+    if learned == nil then
+      addon.lastRecipeOutputDiagnostic = "recipe-output knowledge profession-enrichment success=false reason=" ..
+        tostring(reason)
+    end
+  end
+  seen = {}
+  for _, observation in ipairs(observations) do
+    local item = addon.ledger.dimensionRows.item[observation.outputItemId]
+    if item and not item.name and not seen[item.id] then
+      seen[item.id] = true
+      tryEnrich(addon.EnrichItem, item.id)
+    end
+  end
 end
 
 function addon.HandleRetailEvent(event, ...)
@@ -162,22 +350,12 @@ function addon.HandleRetailEvent(event, ...)
       if succeeded ~= false and item and not item.name then
         tryEnrich(addon.EnrichItem, itemId)
       end
-    elseif event == "TRADE_SKILL_SHOW" then
-      local tradeSkill = C_TradeSkillUI
-      local visible = tradeSkill and query(tradeSkill.GetAllRecipeIDs)
-      if type(visible) == "table" then
-        for _, recipeId in ipairs(visible) do
-          if addon.ledger.database.dimensions.recipes[recipeId] then
-            tryEnrich(addon.EnrichRecipe, recipeId)
-          end
-        end
-      end
-      for _, item in pairs(addon.ledger.database.dimensions.items) do
-        if not item.name then tryEnrich(addon.EnrichItem, item.id) end
-      end
+    elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_LIST_UPDATE" then
+      tryEnrich(enrichProfession, event)
     elseif event == "CRAFTING_DETAILS_UPDATE" then
       tryEnrich(addon.EnrichRecipe, addon.ledger.pendingRecipeId)
     elseif event == "TRADE_SKILL_CLOSE" then
+      professionRecipeListSignature, professionRecipeListSettled = nil, false
       addon.ledger:CancelCraft()
     end
   end
@@ -249,6 +427,30 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
     if ok and sessionId then
       ArtisanLogbookDB = addon.ledger.database
       addon.ledger.onCraftCommitted = addon.PublishCraftCommitted
+      addon.ledger.onRecipeOutputKnowledgeChanged = addon.OnRecipeOutputKnowledgeChanged
+      local bootstrapOk, knowledge, bootstrapReason = pcall(
+        ArtisanLogbookManagement.BootstrapRecipeOutputs)
+      if not bootstrapOk then
+        addon.lastRecipeOutputDiagnostic =
+          "recipe-output knowledge bootstrap success=false error=" .. tostring(knowledge)
+      elseif not knowledge then
+        addon.lastRecipeOutputDiagnostic =
+          "recipe-output knowledge bootstrap success=false reason=" .. tostring(bootstrapReason)
+      end
+      ArtisanLogbookDB = addon.ledger.database
+      local repairOk, result, reason = pcall(
+        ArtisanLogbookManagement.AutomaticRepairUnknownRecipes)
+      if not repairOk then
+        addon.lastMaintenanceDiagnostic = "unknown-recipe-repair automatic success=false error=" ..
+          tostring(result)
+      elseif not result then
+        addon.lastMaintenanceDiagnostic = "unknown-recipe-repair automatic success=false reason=" ..
+          tostring(reason)
+      end
+      local recoveryOk, recovery = pcall(addon.RecoverUnknownRecipeOutputs)
+      if not recoveryOk or not recovery then
+        addon.lastRecoveryDiagnostic = "unknown-recipe discovery startup unavailable"
+      end
     else
       addon.ledgerError = tostring(ok and reason or sessionId)
       addon.ledger = nil

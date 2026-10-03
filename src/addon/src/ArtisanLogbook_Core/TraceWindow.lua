@@ -39,7 +39,7 @@ function addon.CreateTraceWindow()
 
   local scroll = CreateFrame("ScrollFrame", nil, window, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 20, -142)
-  scroll:SetPoint("BOTTOMRIGHT", -42, 54)
+  scroll:SetPoint("BOTTOMRIGHT", -42, 98)
   local text = CreateFrame("EditBox", nil, scroll)
   text:SetMultiLine(true)
   text:SetAutoFocus(false)
@@ -64,7 +64,7 @@ function addon.CreateTraceWindow()
 
   local page, pageSize = nil, 10
   local pageLabel = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  pageLabel:SetPoint("BOTTOMLEFT", 214, 24)
+  pageLabel:SetPoint("BOTTOMLEFT", 214, 66)
   pageLabel:SetSize(width - 340, 24)
   pageLabel:SetJustifyH("LEFT")
 
@@ -101,11 +101,38 @@ function addon.CreateTraceWindow()
   button("Stop", 112, -72, function() addon.Stop(); window:Refresh() end)
   button("Export", 204, -72, function() window:Refresh(true) end)
   button("Diagnostics", 296, -72, function()
-    text:SetText(addon.Trace.Serialize(addon.adapter.capabilities))
+    local lines = { addon.Trace.Serialize(addon.adapter.capabilities) }
+    local diagnostics = ArtisanLogbookManagement.RecipeOutputDiagnostics()
+    if diagnostics then
+      lines[#lines + 1] = string.format("Known recipe/output relationships: %d",
+        diagnostics.relationshipCount)
+      lines[#lines + 1] = string.format("Unknown retained crafts: %d",
+        diagnostics.unknownCount)
+      lines[#lines + 1] = string.format("Uniquely repairable now: %d",
+        diagnostics.repairableCount)
+      lines[#lines + 1] = string.format("Ambiguous: %d | Without sufficient evidence: %d",
+        diagnostics.ambiguousCount,
+        diagnostics.insufficientCount + diagnostics.missingOutputCount)
+      if diagnostics.recovery then
+        lines[#lines + 1] = string.format("Last discovery: %d candidates, %d confirmed, %d unavailable, %d unconfirmed",
+          diagnostics.recovery.candidateCount, diagnostics.recovery.verifiedCount,
+          diagnostics.recovery.unavailableCount, diagnostics.recovery.unconfirmedCount)
+      end
+      lines[#lines + 1] = string.format("Retail relationships learned this session: %d",
+        diagnostics.verifiedRelationshipCount)
+      if diagnostics.recoveryDiagnostic then lines[#lines + 1] = diagnostics.recoveryDiagnostic end
+      if diagnostics.knowledgeDiagnostic then
+        lines[#lines + 1] = diagnostics.knowledgeDiagnostic
+      end
+      if diagnostics.maintenanceDiagnostic then
+        lines[#lines + 1] = diagnostics.maintenanceDiagnostic
+      end
+    end
+    text:SetText(table.concat(lines, "\n\n"))
     text:SetCursorPosition(0)
     text:ClearFocus()
     scroll:SetVerticalScroll(0)
-    pageLabel:SetText("Capabilities")
+    pageLabel:SetText("Diagnostics")
   end, 100)
   button("Mark", width - 108, -104, function()
     addon.Mark(label:GetText())
@@ -114,6 +141,70 @@ function addon.CreateTraceWindow()
   end)
   button("<", 20, -height + 40, function() page = math.max(1, (page or 2) - 1); window:Refresh() end)
   button(">", 112, -height + 40, function() page = (page or 0) + 1; window:Refresh() end)
+
+  local function analysisText(analysis)
+    local message = string.format("Unknown recipe repair\n\n%d unattributed crafts found.\n\n%d uniquely repairable\n%d ambiguous\n%d missing output identity\n%d outputs without a known recipe mapping",
+      analysis.unattributedCount, analysis.repairableCount, analysis.ambiguousCount,
+      analysis.missingOutputCount, analysis.insufficientEvidenceCount)
+    local recovery = analysis.recovery
+    if recovery then
+      message = message .. string.format("\n\n%d candidate recipes\n%d authoritatively confirmed\n%d metadata unavailable\n%d not confirmed by available metadata",
+        recovery.candidateCount, recovery.verifiedCount, recovery.unavailableCount, recovery.unconfirmedCount)
+    end
+    return message
+  end
+
+  StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES = {
+    text = "Repair unknown recipes?",
+    button1 = "Repair",
+    button2 = "Cancel",
+    OnAccept = function()
+      local result, reason = ArtisanLogbookManagement.RepairUnknownRecipes()
+      if not result then
+        addon.Notify("Unknown recipe repair failed: " .. tostring(reason))
+        return
+      end
+      local analysis = result.analysis
+      local insufficient = analysis.insufficientEvidenceCount + analysis.missingOutputCount
+      local message = string.format("Repaired %d crafts and reconciled affected aggregates. %d ambiguous and %d without sufficient evidence remain.",
+        result.repairedCount, analysis.ambiguousCount, insufficient)
+      addon.Notify(message)
+      text:SetText("Unknown recipe repair\n\n" .. message)
+      text:SetCursorPosition(0)
+      text:ClearFocus()
+      scroll:SetVerticalScroll(0)
+      pageLabel:SetText("Repair result")
+      updateStatus()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+  }
+  button("Repair unknown recipes", 214, -height + 40, function()
+    local analysis, reason = ArtisanLogbookManagement.AnalyzeUnknownRecipeRepair()
+    if not analysis then
+      addon.Notify("Unknown recipe repair analysis failed: " .. tostring(reason))
+      return
+    end
+    text:SetText(analysisText(analysis))
+    text:SetCursorPosition(0)
+    text:ClearFocus()
+    scroll:SetVerticalScroll(0)
+    pageLabel:SetText("Repair analysis")
+    updateStatus()
+    if analysis.repairableCount == 0 then
+      addon.Notify(string.format("No crafts can be repaired. %d ambiguous, %d without sufficient evidence.",
+        analysis.ambiguousCount, analysis.missingOutputCount + analysis.insufficientEvidenceCount))
+      return
+    end
+    StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES.text = string.format(
+      "Repair unknown recipes?\n\n%d unattributed crafts were found.\n%d can be uniquely attributed from authoritative recipe/output knowledge.\n\nAmbiguous or unsupported crafts will not be changed.",
+      analysis.unattributedCount, analysis.repairableCount)
+    StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES.button1 =
+      string.format("Repair %d crafts", analysis.repairableCount)
+    StaticPopup_Show("ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES")
+  end, 210)
 
   StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE = {
     text = "Delete all captured trace events? Export them first. This cannot be undone.",
