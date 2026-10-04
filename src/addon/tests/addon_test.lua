@@ -33,6 +33,8 @@ function methods:SetPoint(point, relative, relativePoint, x, y)
   self.x, self.y = x, y
 end
 function methods:SetEnabled(value) self.enabled = value end
+function methods:SetChecked(value) self.checked = value end
+function methods:GetChecked() return self.checked end
 function methods:SetText(value) assert(type(value) == "string"); self.text = value end
 function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
@@ -1140,6 +1142,107 @@ dropdown(logbook, "30 days"):Choose(30)
 assert(#history.items == 0 and history.scroll:GetVerticalScroll() == 0)
 environment.GetServerTime = present
 print("PASS unified Logbook, Recipes, filters, scrolling, detail and Settings (mocked)")
+
+do
+  local core = reload(nil)
+  local ledger = core.ledger
+  local ui = loadUI()
+  local window, helpers = ui.productionWindow, ui.UI
+  local api = environment.ArtisanLogbookAPI
+  environment.ArtisanLogbookUISettings.trivialReagents = {}
+  local function record(result, recipeId)
+    assert(ledger:SubmitCraft(recipeId or 9001, 1, false))
+    return assert(ledger:RecordResult(result))
+  end
+  local first = record({ quantity = 5, multicraft = 0, concentrationSpent = 0,
+    hasIngenuityProc = false, ingenuityRefund = 99, resourcesReturned = {} })
+  local second = record({ quantity = 8, multicraft = 3, concentrationSpent = 20,
+    hasIngenuityProc = true, ingenuityRefund = 12,
+    resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } })
+  record({ quantity = 5, multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false,
+    resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 }, { reagent = { itemID = 9 }, quantity = 3 } } })
+  record({ quantity = 5, multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false,
+    resourcesReturned = { { reagent = { itemID = 9 }, quantity = 2 }, { reagent = { itemID = 10 }, quantity = 3 } } })
+  assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "multicraftBonus", "outputQuantity") == "13.0%")
+  assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "ingenuityRefund", "concentrationSpent") == "60.0%")
+  record({})
+  assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "multicraftBonus", "outputQuantity") == "Unknown")
+  assert(helpers.ProcRate(nil, 0) == "Unknown\n0 observed crafts")
+  assert(helpers.ProcRate(0, 4) == "0.0%\n0 / 4 observed crafts")
+  window:Activate("Recipes")
+  local oldSeries = api.GetCraftSeries
+  api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
+  window:OpenRecipe({ id = 9001, name = "Observed recipe" })
+  local pane = window.recipeOutcomes
+  assert(pane.stats[2].text:find("25.0%%") and pane.stats[4].text:find("Refund: 12", 1, true))
+  assert(pane.stats[3].text:find("Any: 75.0%%") and pane.stats[3].text:find("Non%-trivial: 75.0%%"))
+  local recipePage = window.visiblePage
+  window:OpenCraft(second.id)
+  local detail = window.visiblePage
+  local checkbox
+  for _, frame in ipairs(frames) do
+    if frame.parent == detail and frame.kind == "CheckButton" then checkbox = frame end
+  end
+  assert(checkbox and checkbox.itemId == 8 and not checkbox:GetChecked())
+  checkbox:SetChecked(true); checkbox.scripts.OnClick(checkbox)
+  assert(helpers.IsTrivial(8))
+  button(detail, "Back").scripts.OnClick()
+  assert(window.visiblePage == recipePage and pane.stats[3].text:find("Non%-trivial: 50.0%%"))
+  local materialCheck
+  for _, frame in ipairs(frames) do
+    if frame.parent == pane and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
+  end
+  assert(materialCheck)
+  materialCheck:SetChecked(true); materialCheck.scripts.OnClick(materialCheck)
+  assert(pane.stats[3].text:find("Non%-trivial: 25.0%%"))
+  helpers.SetTrivial(10, true); pane:Refresh()
+  assert(pane.stats[3].text:find("Non%-trivial: 0.0%%"))
+  helpers.SetTrivial(9, false); pane:Refresh()
+  assert(pane.stats[3].text:find("Non%-trivial: 50.0%%"))
+  local settings = environment.ArtisanLogbookUISettings
+  local anotherUI = loadUI()
+  assert(anotherUI.UI.IsTrivial(8) and anotherUI.UI.IsTrivial(10) and not anotherUI.UI.IsTrivial(9))
+  assert(environment.ArtisanLogbookUISettings == settings and ledger.database.trivialReagents == nil)
+  assert(api.SetTrivial == nil and environment.ArtisanLogbookManagement.SetTrivial == nil)
+  local timeFunction = environment.time
+  environment.time = os.time
+  assert(helpers.ParseUTCDate("2024-02-29") and not helpers.ParseUTCDate("2025-02-29"))
+  assert(not helpers.ParseUTCDate("2026-13-01") and not helpers.ParseUTCDate("invalid"))
+  environment.time = timeFunction
+  local otherSession = assert(ledger:CreateSession({ characterName = "Second outcome crafter" }))
+  record({ resourcesReturned = {} })
+  pane:Open(9001)
+  local chosen
+  for _, entry in ipairs(api.GetCharacters()) do if entry.name == "Second outcome crafter" then chosen = entry.key end end
+  dropdown(pane, "Second outcome crafter"):Choose(chosen)
+  assert(pane.stats[1].text == "1" and pane.stats[3].text:find("Any: 0.0%%"))
+  dropdown(pane, "All"):Choose(false)
+  assert(pane.stats[1].text == "6")
+  ledger.wall = function() return 1800000000 + 61 * 86400 end
+  ledger:Prune(ledger.wall())
+  assert(#ledger.database.crafts == 0)
+  pane:Refresh()
+  assert(pane.stats[1].text == "6" and pane.stats[3].text:find("Non%-trivial: 40.0%%"))
+  for index = 1, 205 do
+    record({ resourcesReturned = { { reagent = { itemID = 1000 + index }, quantity = 1 } } }, 9002)
+  end
+  local oldSets, pages = api.GetRecipeReturnSets, 0
+  api.GetRecipeReturnSets = function(...)
+    pages = pages + 1
+    return oldSets(...)
+  end
+  window:OpenRecipe({ id = 9002 })
+  assert(pages == 1 and pane.scripts.OnUpdate and pane.stats[3].text:find("Calculating", 1, true))
+  pane.scripts.OnUpdate()
+  assert(pages == 2 and pane.scripts.OnUpdate)
+  pane.scripts.OnUpdate()
+  assert(pages == 3 and pane.scripts.OnUpdate == nil and pane.stats[3].text:find("Non%-trivial: 100.0%%"))
+  assert(#pane.chart.lines <= 59)
+  assert(environment.ArtisanLogbookManagement.Clear())
+  assert(helpers.IsTrivial(8) and helpers.IsTrivial(10))
+  api.GetCraftSeries, api.GetRecipeReturnSets = oldSeries, oldSets
+  print("PASS recipe outcomes, exact denominators, reversible UI preferences, pruning and bounded rendering")
+end
 
 local invalidTrace = { traceSchemaVersion = 999 }
 environment.ArtisanLogbookTraceDB = invalidTrace

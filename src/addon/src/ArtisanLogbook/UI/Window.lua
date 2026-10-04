@@ -102,6 +102,7 @@ function addon.CreateProductionWindow()
     detail:Hide()
     window.visiblePage = window.returnPage
     if window.returnPage then window.returnPage:Show() end
+    window:Refresh(true)
   end)
   local recipeDetail = CreateFrame("Frame", nil, body)
   recipeDetail:SetAllPoints(body)
@@ -176,33 +177,43 @@ function addon.CreateProductionWindow()
     return page and page.recipes, page and page.nextCursor or reason
   end)
 
-  local recipeHeading = UI.Text(recipeDetail, 0, -4, inner - 100, 27, "GameFontNormalLarge")
-  local recipeMetadata = UI.Text(recipeDetail, 0, -34, inner - 100, 20)
-  UI.Button(recipeDetail, "Back", inner - 92, -4, 76, function()
+  local recipeScroll = CreateFrame("ScrollFrame", nil, recipeDetail, "UIPanelScrollFrameTemplate")
+  recipeScroll:SetPoint("TOPLEFT", 0, 0)
+  recipeScroll:SetSize(inner - 24, bodyHeight)
+  local recipeContent = CreateFrame("Frame", nil, recipeScroll)
+  local recipeInner = inner - 28
+  recipeContent:SetSize(recipeInner, 920)
+  recipeScroll:SetScrollChild(recipeContent)
+  local recipeHeading = UI.Text(recipeContent, 0, -4, recipeInner - 100, 27, "GameFontNormalLarge")
+  local recipeMetadata = UI.Text(recipeContent, 0, -34, recipeInner - 100, 20)
+  UI.Button(recipeContent, "Back", recipeInner - 92, -4, 76, function()
     recipeDetail:Hide(); recipes:Show(); window.visiblePage = recipes
   end)
-  local recipeGraph = UI.Chart(recipeDetail, 0, -64, inner)
-  local recipeHistory = UI.ScrollList(recipeDetail, 0, -240, inner, bodyHeight - 244,
-    historyColumns(inner), function(craft) window:OpenCraft(craft.id) end, "No recent crafts for this recipe")
+  local resetRecipeHistory
+  local outcomes = UI.RecipeOutcomes(recipeContent, recipeInner, function()
+    if resetRecipeHistory then resetRecipeHistory() end
+  end)
+  window.recipeOutcomes = outcomes
+  UI.Text(recipeContent, 0, -644, recipeInner, 22, "GameFontNormal"):SetText("Craft history")
+  local recipeHistory = UI.ScrollList(recipeContent, 0, -674, recipeInner, 230,
+    historyColumns(recipeInner), function(craft) window:OpenCraft(craft.id) end, "No retained crafts in this period")
   local selectedRecipe
-  local resetRecipeHistory = lazyList(recipeHistory, function(cursor)
-    local from, to = UI.Range(GetServerTime(), 365)
-    local selected = population(nil, nil, selectedRecipe and selectedRecipe.id)
-    selected.time = { from = from, to = to }
+  resetRecipeHistory = lazyList(recipeHistory, function(cursor)
+    local selected = outcomes:Filter()
+    selected.recipes = { selectedRecipe.id }
     local page, reason = API.GetCrafts(selected, { limit = 40, cursor = cursor })
     return page and page.crafts, page and page.nextCursor or reason
   end)
 
   function window:OpenRecipe(recipe)
+    if not selectedRecipe or selectedRecipe.id ~= recipe.id then recipeScroll:SetVerticalScroll(0) end
     selectedRecipe = recipe
     recipeHeading:SetText(UI.Name(recipe, "Unattributed recipe"))
     local metadata = {}
     if recipe.profession then metadata[#metadata + 1] = UI.Name(recipe.profession) end
     if recipe.expansion then metadata[#metadata + 1] = UI.Name(recipe.expansion) end
     recipeMetadata:SetText(table.concat(metadata, "  -  "))
-    local from, to = UI.Range(GetServerTime(), 365)
-    local series = API.GetCraftSeries({ recipes = { recipe.id }, time = { from = from, to = to } })
-    recipeGraph:Render(series and series.series or {}, from, to)
+    outcomes:Open(recipe.id)
     resetRecipeHistory()
     recipes:Hide(); recipeDetail:Show(); self.visiblePage = recipeDetail
   end
