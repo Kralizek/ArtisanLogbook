@@ -67,6 +67,24 @@ local function lazyList(list, fetch)
   end
 end
 
+local function createModalWindow(name, title, width, height)
+  local frame = CreateFrame("Frame", name, UIParent, "BasicFrameTemplateWithInset")
+  frame:SetSize(width, height)
+  frame:SetPoint("CENTER")
+  frame:SetClampedToScreen(true)
+  frame:SetMovable(true)
+  frame:EnableMouse(true)
+  frame:SetFrameStrata("DIALOG")
+  frame:SetToplevel(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetScript("OnDragStart", frame.StartMoving)
+  frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+  frame:SetScript("OnMouseDown", function(self) self:Raise() end)
+  frame.TitleText:SetText(title)
+  tinsert(UISpecialFrames, name)
+  return frame
+end
+
 function addon.CreateProductionWindow()
   local width = math.min(940, UIParent:GetWidth() - 40)
   local height = math.min(670, UIParent:GetHeight() - 40)
@@ -97,16 +115,84 @@ function addon.CreateProductionWindow()
     pages[name]:Hide()
   end
   window.pages = pages
-  local detail
-  detail = UI.CraftDetail(body, inner, bodyHeight, function()
-    detail:Hide()
-    window.visiblePage = window.returnPage
-    if window.returnPage then window.returnPage:Show() end
-    window:Refresh(true)
-  end)
-  local recipeDetail = CreateFrame("Frame", nil, body)
-  recipeDetail:SetAllPoints(body)
+  local modalShade = CreateFrame("Frame", nil, UIParent)
+  modalShade:SetAllPoints(UIParent)
+  modalShade:SetFrameStrata("DIALOG")
+  modalShade:EnableMouse(true)
+  modalShade:SetScript("OnMouseDown", function() end)
+  local shadeTexture = modalShade:CreateTexture(nil, "BACKGROUND")
+  shadeTexture:SetAllPoints(modalShade)
+  shadeTexture:SetColorTexture(0, 0, 0, .55)
+  modalShade:Hide()
+  window.modalShade = modalShade
+
+  local recipeModalHeight = math.min(820, UIParent:GetHeight() - 32)
+  local recipeModal = createModalWindow("ArtisanLogbookRecipeDetailWindow", "Recipe Detail", width,
+    recipeModalHeight)
+  recipeModal:Hide()
+  window.recipeDetailWindow = recipeModal
+  local recipeDetail = CreateFrame("Frame", nil, recipeModal)
+  recipeDetail:SetPoint("TOPLEFT", 24, -48)
+  recipeDetail:SetSize(inner, recipeModalHeight - 72)
   recipeDetail:Hide()
+  window.recipeDetailPage = recipeDetail
+
+  local craftModalHeight = math.min(650, UIParent:GetHeight() - 32)
+  local craftModal = createModalWindow("ArtisanLogbookCraftDetailWindow", "Craft Detail", width,
+    craftModalHeight)
+  craftModal:Hide()
+  window.craftDetailWindow = craftModal
+  local craftBody = CreateFrame("Frame", nil, craftModal)
+  craftBody:SetPoint("TOPLEFT", 24, -48)
+  craftBody:SetSize(inner, craftModalHeight - 72)
+  local closingMain = false
+  local detail
+  local function showModal(frame)
+    modalShade:Show()
+    frame:Show()
+    frame:Raise()
+  end
+  local function closeRecipeModal()
+    recipeDetail:Hide()
+    recipeModal:Hide()
+    if window.visiblePage == recipeDetail then window.visiblePage = pages.Recipes end
+    if not craftModal:IsShown() then modalShade:Hide() end
+  end
+  local function restoreFromCraft()
+    if closingMain or window.visiblePage ~= detail then return end
+    window.visiblePage = window.returnPage
+    if window.returnPage == recipeDetail then
+      recipeDetail:Show()
+      showModal(recipeModal)
+    else
+      modalShade:Hide()
+    end
+    if window:IsShown() then window:Refresh(true) end
+  end
+  local function closeCraftModal()
+    if detail then detail:Hide() end
+    craftModal:Hide()
+    restoreFromCraft()
+  end
+  detail = UI.CraftDetail(craftBody, inner, craftModalHeight - 112, closeCraftModal)
+  window.craftDetailPage = detail
+  recipeModal:SetScript("OnHide", function()
+    recipeDetail:Hide()
+    if closingMain then return end
+    closeRecipeModal()
+  end)
+  craftModal:SetScript("OnHide", function()
+    detail:Hide()
+    restoreFromCraft()
+  end)
+  window:SetScript("OnHide", function()
+    closingMain = true
+    recipeModal:Hide()
+    craftModal:Hide()
+    modalShade:Hide()
+    window.visiblePage = pages[window.activeTab]
+    closingMain = false
+  end)
   window.activeTab = "Logbook"
   local buttons = {}
   for index, name in ipairs(tabs) do
@@ -179,7 +265,7 @@ function addon.CreateProductionWindow()
 
   local recipeScroll = CreateFrame("ScrollFrame", nil, recipeDetail, "UIPanelScrollFrameTemplate")
   recipeScroll:SetPoint("TOPLEFT", 0, 0)
-  recipeScroll:SetSize(inner - 24, bodyHeight)
+  recipeScroll:SetSize(inner - 24, recipeModalHeight - 96)
   local recipeContent = CreateFrame("Frame", nil, recipeScroll)
   local recipeInner = inner - 28
   recipeContent:SetSize(recipeInner, 1004)
@@ -187,7 +273,8 @@ function addon.CreateProductionWindow()
   local recipeHeading = UI.Text(recipeContent, 0, -4, recipeInner - 100, 27, "GameFontNormalLarge")
   local recipeMetadata = UI.Text(recipeContent, 0, -34, recipeInner - 100, 20)
   UI.Button(recipeContent, "Back", recipeInner - 92, -4, 76, function()
-    recipeDetail:Hide(); recipes:Show(); window.visiblePage = recipes
+    closeRecipeModal()
+    window:Refresh(true)
   end)
   local resetRecipeHistory
   local outcomes = UI.RecipeOutcomes(recipeContent, recipeInner, function()
@@ -215,7 +302,9 @@ function addon.CreateProductionWindow()
     recipeMetadata:SetText(table.concat(metadata, "  -  "))
     outcomes:Open(recipe.id)
     resetRecipeHistory()
-    recipes:Hide(); recipeDetail:Show(); self.visiblePage = recipeDetail
+    self.visiblePage = recipeDetail
+    recipeDetail:Show()
+    showModal(recipeModal)
   end
 
   local settings = pages.Settings
@@ -237,8 +326,11 @@ function addon.CreateProductionWindow()
   function window:OpenCraft(id)
     self.openCraftId = id
     if self.visiblePage ~= detail then self.returnPage = self.visiblePage end
-    if self.returnPage then self.returnPage:Hide() end
-    detail:ShowCraft(id); detail:Show(); self.visiblePage = detail
+    self.visiblePage = detail
+    detail:ShowCraft(id)
+    detail:Show()
+    showModal(craftModal)
+    if self.returnPage == recipeDetail then recipeModal:Hide() end
   end
 
   function window:Refresh(reset)
@@ -276,6 +368,9 @@ function addon.CreateProductionWindow()
   end
 
   function window:Activate(name)
+    if detail:IsShown() then closeCraftModal() end
+    if recipeModal:IsShown() then closeRecipeModal() end
+    modalShade:Hide()
     self.activeTab = name
     for title, button in pairs(buttons) do
       if title == name then button:LockHighlight() else button:UnlockHighlight() end

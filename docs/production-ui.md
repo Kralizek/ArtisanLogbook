@@ -30,9 +30,12 @@ detailed craft pruning; the factual list does not reconstruct expired crafts.
 
 Recipes has independent character and profession filters and name/count sort.
 The catalogue loads 40 durable-count summaries at a time as the user scrolls.
-Selecting a recipe opens observed outcome statistics (All time, Character: All
-by default), a bounded chart and lazily loaded factual history;
-craft rows open the same Craft Detail used by Logbook. Long labels are shortened
+Selecting a recipe opens a centered modal with observed outcome statistics
+(All time, Character: All by default), a bounded chart and lazily loaded factual
+history. Opening a craft from that history opens a second modal; closing it
+returns to the recipe modal. Craft rows in Logbook use the same Craft Detail
+modal. A dimmed overlay blocks interaction with the main window while either
+detail is open. Long labels are shortened
 in rows with full values on hover. Craft Detail shows observed output, quotes,
 and positive concentration, Multicraft, Ingenuity, and reagent-return activity
 without implying unknown consumption. Class colors use the stored, optional
@@ -49,7 +52,8 @@ the through date is inclusive in the UI and becomes an exclusive next-day API
 bound. Invalid dates leave the last valid selection in place. Character defaults
 to All and uses durable character choices, including characters whose details
 have aged out. Chart, statistics, returned materials, and retained craft history
-share the selection. The detail body scrolls independently of the native window.
+share the selection. Recipe and craft details have independent modal windows and
+scroll their own content.
 The order is recipe and filters, compact Crafts/Multicraft/Ingenuity summary,
 activity chart, Resourcefulness and returned materials, then craft history.
 

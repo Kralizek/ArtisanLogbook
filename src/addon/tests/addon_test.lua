@@ -1207,11 +1207,20 @@ do
   environment.C_TradeSkillUI.GetItemReagentQualityInfo = function(itemId)
     if itemId == 8 or itemId == 9 then return { icon = "ReagentQuality-" .. itemId } end
   end
+  window:Show()
   window:Activate("Recipes")
   local oldSeries = api.GetCraftSeries
   api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
+  assert(window.recipeDetailWindow.parent == environment.UIParent and window.recipeDetailWindow:IsShown())
+  assert(window.modalShade:IsShown() and not window.craftDetailWindow:IsShown())
+  local escapeRecipe, escapeCraft = false, false
+  for _, frameName in ipairs(environment.UISpecialFrames) do
+    if frameName == "ArtisanLogbookRecipeDetailWindow" then escapeRecipe = true end
+    if frameName == "ArtisanLogbookCraftDetailWindow" then escapeCraft = true end
+  end
+  assert(escapeRecipe and escapeCraft)
   local function finishCalculation()
     while pane.scripts.OnUpdate do pane.scripts.OnUpdate() end
   end
@@ -1253,6 +1262,8 @@ do
   local recipePage = window.visiblePage
   window:OpenCraft(second.id)
   local detail = window.visiblePage
+  assert(window.craftDetailWindow.parent == environment.UIParent and window.craftDetailWindow:IsShown())
+  assert(not window.recipeDetailWindow:IsShown() and window.modalShade:IsShown())
   local checkbox
   for _, frame in ipairs(frames) do
     if frame.parent == detail and frame.kind == "CheckButton" then checkbox = frame end
@@ -1262,7 +1273,10 @@ do
   assert(helpers.IsTrivial(8))
   button(detail, "Back").scripts.OnClick()
   finishCalculation()
-  assert(window.visiblePage == recipePage and pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
+  assert(window.visiblePage == recipePage, "craft close did not restore recipe modal")
+  assert(window.recipeDetailWindow:IsShown() and not window.craftDetailWindow:IsShown() and window.modalShade:IsShown())
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts",
+    "unexpected non-trivial summary: " .. tostring(pane.resourcefulness.nonTrivial.text))
   local materialCheck
   for _, frame in ipairs(frames) do
     if frame.parent and frame.parent.parent == pane and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
@@ -1329,6 +1343,9 @@ do
   assert(environment.ArtisanLogbookManagement.Clear())
   assert(helpers.IsTrivial(8) and helpers.IsTrivial(10))
   api.GetCraftSeries, api.GetRecipeReturnSets = oldSeries, oldSets
+  window:Hide()
+  window.scripts.OnHide(window)
+  assert(not window.recipeDetailWindow:IsShown() and not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
   print("PASS recipe outcomes, exact denominators, reversible UI preferences, pruning and bounded rendering")
 end
 

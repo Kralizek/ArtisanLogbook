@@ -147,6 +147,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   local pane = CreateFrame("Frame", nil, parent)
   pane:SetSize(width, 654)
   pane:SetPoint("TOPLEFT", 0, -62)
+  pane.calculationGeneration = 0
   local api = ArtisanLogbookAPI
   local days, character, recipeId = false, false, nil
   local fromInput, toInput, customFrom, customTo
@@ -295,6 +296,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
 
   function pane:Refresh(keepMaterialPage)
     self:SetScript("OnUpdate", nil)
+    self.calculationGeneration = self.calculationGeneration + 1
+    local generation = self.calculationGeneration
     local filter = self:Filter()
     local result, reason = api.GetRecipeOutcomes(recipeId, filter, { buckets = 60 })
     status:SetText(reason or "")
@@ -316,6 +319,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       end
     end
     showReturns(nil)
+    if generation ~= self.calculationGeneration then return end
     local craftFilter = { recipes = { recipeId } }
     for key, value in pairs(filter) do craftFilter[key] = value end
     local cursor, craftCursor, nonTrivial = nil, nil, 0
@@ -326,7 +330,9 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
         self:SetScript("OnUpdate", nil); return
       end
       for _, craft in ipairs(page.crafts) do
-        if UI.CraftHasNonTrivialReturn(craft) then nonTrivial = nonTrivial + 1 end
+        if UI.CraftHasNonTrivialReturn(craft) then
+          nonTrivial = nonTrivial + 1
+        end
       end
       craftCursor = page.nextCursor
       if not craftCursor then
@@ -335,12 +341,14 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       else self:SetScript("OnUpdate", nextCrafts) end
     end
     local function nextSets()
+      if generation ~= self.calculationGeneration then return end
       local page, pageReason = api.GetRecipeReturnSets(recipeId, filter, { limit = 100, cursor = cursor })
       if not page then
         self.resourcefulness.nonTrivial:SetText("Unavailable"); status:SetText(pageReason or "Unavailable")
         self:SetScript("OnUpdate", nil); return
       end
-      nonTrivial = nonTrivial + UI.NonTrivialCount(page.returns)
+      local setCount = UI.NonTrivialCount(page.returns)
+      nonTrivial = nonTrivial + setCount
       cursor = page.nextCursor
       if not cursor then
         craftCursor = nil
