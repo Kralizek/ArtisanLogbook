@@ -55,18 +55,19 @@ activity chart, Resourcefulness and returned materials, then craft history.
 
 - Multicraft and Ingenuity show proc rate/count and bonus/refund with the derived
    output/spend percentage. When history is incomplete, positive counts say
-   `At least N procs`, percentages are omitted, and one short note says some
-   crafts have no details. Full coverage is implicit. Derived percentages require
-   both amounts for every selected craft.
-- Resourcefulness shows Reagents saved and Non-trivial savings. Eight known
-   positives in 30 crafts read `At least 8 crafts`, not a 100% proc rate or an
-   inferred 26.7% rate. Missing figures use a dash, not a fabricated zero. A single
-   note says `Some crafts have no reagent details`; there is no coverage column
-   or confirmed/unknown/unclassified vocabulary. Percentages require outcomes
-   for every selected craft (complete return lists for non-trivial savings).
-   Incomplete non-trivial history also uses lower-bound counts rather than subset
-   percentages. Multiple materials count once per craft. Pending calculations
-   show Calculating, never a partial result.
+   `Proc recorded for N crafts`, percentages are omitted, and one short note says
+   some crafts have no details. Full coverage is implicit. Derived percentages
+   require both amounts for every selected craft.
+- Resourcefulness shows Reagents saved and Non-trivial savings. Eight return
+   records in 30 crafts read `Returns recorded for 8 crafts` and `Return results
+   missing for 22 crafts`, not a 100% proc rate or an inferred 26.7% rate. This
+   says what the log contains, not whether crafts without a saved result returned
+   reagents. Missing figures use a dash, not a fabricated zero. There is no
+   coverage column or confirmed/unknown/unclassified vocabulary. Percentages
+   require outcomes for every selected craft (complete return lists for
+   non-trivial savings). Incomplete non-trivial history shows recorded craft
+   counts rather than subset percentages. Multiple materials count once per
+   craft. Pending calculations show Calculating, never a partial result.
 - Returned materials show one total per item ID across the selected period and
   characters, three rows at a time with Previous/Next. Same-named IDs stay
   separate, with item icons, Retail reagent-quality icons when available, item
@@ -117,7 +118,7 @@ On a Retail character with crafting activity, verify:
    windows. Automated Lua mocks cannot establish these in-game behaviors.
 7. In Recipe Detail, compare All time, Today, a custom UTC period (including a
    leap day and invalid date), and individual characters. Verify proc counts and
-   coverage against known captured true/false/unknown outcomes. Check applied
+   rates against known return results. Check applied
    Ingenuity refunds rather than raw false-proc refund fields.
 8. Mark a returned reagent trivial in Craft Detail and navigate back. Mark/unmark
    materials in Recipe Detail, including trivial-only, mixed, and multiple
@@ -125,14 +126,14 @@ On a Retail character with crafting activity, verify:
    Reload, prune detailed history, and repeat; clear Core history and verify UI
    preferences remain. Test long item names and return lists spanning several pages.
 9. Before revising migration rules, replay the actual untouched pre-#21
-   SavedVariables on a copy, not the live game file. Compare retained positive
-   reagent facts by craft/item against backfilled proc counts and item totals;
-   verify recipe/character/date filters, same-named IDs, reload idempotence,
-   pruning, and unknown-recipe repair. Do not interpret legacy allocation zeros
-   as proof of a complete callback. The 30-craft/8-positive UI regression is
-   synthetic; it does not replace this audit. The original backup was not
-   available during this UI revision, so real-data backfill verification and
-   in-game visual validation remain outstanding. Persistence is unchanged.
+   SavedVariables on a copy, not the live game file. A supplied pre-#21 dump was
+   content-audited and its positive material totals agree with the visible
+   returned-material rows. Its craft denominator differs from the later UI
+   screenshot, so do not treat them as the same snapshot. This content-level
+   check is not an executable replay through `Ledger.New`. Full replay, reload
+   idempotence, pruning, and repair checks against that untouched file remain
+   outstanding. Missing return facts must not be interpreted as negative results.
+   Persistence is unchanged.
 
 The #17 implementation is validated with Lua 5.1 integration mocks and package
 checks in the container. Live Retail/Forever UI interaction, real font sizing,

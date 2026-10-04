@@ -267,13 +267,14 @@ discard unavailable entries. Zero complete-return coverage means an unknown
 non-trivial rate, even if the raw positive proc rate is known.
 
 These observations need not be a representative sample: legacy backfill may
-prove only positive outcomes. For example, 8 known positives with 8 observations
-and 30 total crafts do not establish a 100% population proc rate. The production
-UI says `At least 8 crafts` in this case. It shows an overall any-return rate
-only when all selected crafts have known outcomes. Non-trivial savings likewise
-use lower-bound counts instead of subset percentages when full return details
-are missing; missing figures display a dash. These presentation choices do not
-change the factual API's counts or observation fields.
+prove only positive outcomes. For example, 8 positive return records in 30
+crafts do not establish a 100% population proc rate. The production UI says
+`Returns recorded for 8 crafts` and `Return results missing for 22 crafts`; it
+does not claim the other crafts had no returns. It shows an overall any-return
+rate only when all selected crafts have known outcomes. Non-trivial savings
+likewise show recorded craft counts instead of subset percentages when full
+return details are missing; missing figures display a dash. These presentation
+choices do not change the factual API's counts or observation fields.
 
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
 `{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.

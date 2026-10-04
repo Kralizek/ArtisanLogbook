@@ -42,18 +42,24 @@ function UI.MeasuredShare(totals, numerator, denominator)
   return string.format("%.1f%%", 100 * totals[numerator] / totals[denominator])
 end
 
-local function outcomeText(count, observed, crafts, noun)
+local function outcomeText(count, observed, crafts, noun, partialLabel)
   count = count or 0
   noun = count == 1 and noun or noun .. "s"
   if crafts > 0 and observed == crafts then
     return string.format("%.1f%% | %d %s", 100 * count / crafts, count, noun)
   end
-  return count > 0 and string.format("At least %d %s", count, noun) or "-"
+  return count > 0 and string.format(partialLabel .. " %d %s", count, noun) or "-"
 end
 
 function UI.CompactOutcome(totals, proc, amount, denominator, amountLabel, shareLabel)
-  local observed = totals[proc .. "ObservedCount"]
-  local lines = { outcomeText(totals[proc], observed, totals.craftCount, "proc") }
+  local observed, count = totals[proc .. "ObservedCount"], totals[proc] or 0
+  local procText
+  if observed == totals.craftCount and totals.craftCount > 0 then
+    procText = string.format("%.1f%% | %d procs", 100 * count / totals.craftCount, count)
+  else
+    procText = count > 0 and string.format("Proc recorded for %d %s", count, count == 1 and "craft" or "crafts") or "-"
+  end
+  local lines = { procText }
   local amountText = amountLabel .. ": " .. (totals[amount] ~= nil and tostring(totals[amount]) or "-")
   local share = UI.MeasuredShare(totals, amount, denominator)
   if share ~= "Unknown" then amountText = amountText .. " | " .. share .. " " .. shareLabel end
@@ -70,18 +76,30 @@ function UI.ResourcefulnessSummary(totals, nonTrivial)
   local observed = totals.resourcefulnessProcCountObservedCount
   local positive = totals.resourcefulnessProcCount or 0
   local complete = totals.resourcefulnessCompleteProcCountObservedCount
-  local result = {}
+  local result = { complete = "" }
   if crafts == 0 then
     return { any = "No crafts", complete = "", nonTrivial = "-" }
   end
-  result.any = outcomeText(positive, observed, crafts, "craft")
-  result.complete = complete < crafts and "|cffffcc66Some crafts have no reagent details|r" or ""
+  if observed == crafts then
+    result.any = outcomeText(positive, observed, crafts, "craft")
+  else
+    local missing = crafts - observed
+    result.any = positive > 0 and string.format("Returns recorded for %d %s", positive,
+      positive == 1 and "craft" or "crafts") or "-"
+    result.complete = string.format("|cffffcc66Return results missing for %d %s|r", missing,
+      missing == 1 and "craft" or "crafts")
+  end
   if complete == 0 then
     result.nonTrivial = "-"
   elseif nonTrivial == nil then
     result.nonTrivial = "Calculating..."
   else
-    result.nonTrivial = outcomeText(nonTrivial, complete, crafts, "craft")
+    result.nonTrivial = outcomeText(nonTrivial, complete, crafts, "craft", "Non-trivial returns in")
+  end
+  if complete < crafts and complete > 0 then
+    local missing = crafts - complete
+    result.complete = string.format("|cffffcc66Return details missing for %d %s|r", missing,
+      missing == 1 and "craft" or "crafts")
   end
   return result
 end

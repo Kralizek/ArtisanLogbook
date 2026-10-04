@@ -1180,9 +1180,9 @@ do
     resourcefulnessCompleteProcCountObservedCount = 0,
   }
   local summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
-  assert(summary.any == "At least 8 crafts")
+  assert(summary.any == "Returns recorded for 8 crafts")
   assert(not summary.any:find("%%") and not summary.nonTrivial:find("%%"))
-  assert(summary.nonTrivial == "-" and summary.complete:find("Some crafts have no reagent details", 1, true))
+  assert(summary.nonTrivial == "-" and summary.complete:find("Return results missing for 22 crafts", 1, true))
   local multi = helpers.CompactOutcome(screenshotTotals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output")
   local ingenuity = helpers.CompactOutcome(screenshotTotals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent")
   assert(multi == "23.3% | 7 procs\nBonus: 52 | 25.7% of output")
@@ -1212,9 +1212,10 @@ do
   api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
-  assert(pane.stats[2].text:find("At least 1 proc", 1, true) and pane.stats[4].text:find("Refund: 12", 1, true))
-  assert(pane.stats[3].text == "At least 3 crafts" and not pane.stats[3].text:find("%%"))
-  assert(pane.resourcefulness.nonTrivial.text == "At least 3 crafts")
+  assert(pane.stats[2].text:find("Proc recorded for 1 craft", 1, true) and pane.stats[4].text:find("Refund: 12", 1, true))
+  assert(pane.stats[3].text == "Returns recorded for 3 crafts" and not pane.stats[3].text:find("%%"))
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 3 crafts")
+  assert(pane.resourcefulness.complete.text:find("Return details missing for 1 craft", 1, true))
   assert(pane.stats[2].text:find("Some crafts have no details", 1, true))
   for _, labels in ipairs({ pane.stats, pane.resourcefulness }) do
     for _, label in pairs(labels) do
@@ -1256,18 +1257,18 @@ do
   checkbox:SetChecked(true); checkbox.scripts.OnClick(checkbox)
   assert(helpers.IsTrivial(8))
   button(detail, "Back").scripts.OnClick()
-  assert(window.visiblePage == recipePage and pane.resourcefulness.nonTrivial.text == "At least 2 crafts")
+  assert(window.visiblePage == recipePage and pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 2 crafts")
   local materialCheck
   for _, frame in ipairs(frames) do
     if frame.parent and frame.parent.parent == pane and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
   end
   assert(materialCheck)
   materialCheck:SetChecked(true); materialCheck.scripts.OnClick(materialCheck)
-  assert(pane.resourcefulness.nonTrivial.text == "At least 1 craft")
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 1 craft")
   helpers.SetTrivial(10, true); pane:Refresh()
   assert(pane.resourcefulness.nonTrivial.text == "-")
   helpers.SetTrivial(9, false); pane:Refresh()
-  assert(pane.resourcefulness.nonTrivial.text == "At least 2 crafts")
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 2 crafts")
   local settings = environment.ArtisanLogbookUISettings
   local anotherUI = loadUI()
   assert(anotherUI.UI.IsTrivial(8) and anotherUI.UI.IsTrivial(10) and not anotherUI.UI.IsTrivial(9))
@@ -1291,7 +1292,7 @@ do
   ledger:Prune(ledger.wall())
   assert(#ledger.database.crafts == 0)
   pane:Refresh()
-  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "At least 2 crafts")
+  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 2 crafts")
   for index = 1, 205 do
     record({ resourcesReturned = { { reagent = { itemID = 1000 + index }, quantity = 1 } } }, 9002)
   end
@@ -1352,8 +1353,8 @@ do
   ui.productionWindow:Activate("Recipes")
   ui.productionWindow:OpenRecipe({ id = 9001 })
   local text = ui.productionWindow.recipeOutcomes.stats[3].text
-  assert(text == "At least 8 crafts" and not text:find("%%"))
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("Some crafts have no reagent details", 1, true))
+  assert(text == "Returns recorded for 8 crafts" and not text:find("%%"))
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("Return results missing for 22 crafts", 1, true))
   assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
   ui.UI.SetTrivial(8, false)
   ui.productionWindow.recipeOutcomes:Refresh()
