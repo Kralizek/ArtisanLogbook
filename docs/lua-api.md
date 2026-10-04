@@ -266,11 +266,19 @@ Legacy zero/nil facts cannot prove list completeness because old capture could
 discard unavailable entries. Zero complete-return coverage means an unknown
 non-trivial rate, even if the raw positive proc rate is known.
 
+These observations need not be a representative sample: legacy backfill may
+prove only positive outcomes. For example, 8 known positives with 8 observations
+and 30 total crafts do not establish a 100% population proc rate. The production
+UI shows confirmed counts and unknown crafts in this case. It shows an overall
+any-return rate only when all selected crafts have known outcomes, and explicitly
+labels non-trivial rates restricted to a fully recorded subset.
+
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
 `{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.
 Each row combines one material's positive quantities across the selected period
 and characters, including individually known quantities from partially observed
-results. No proc rate may be derived from these quantity rows.
+results. Identity is the item ID, not its name: same-named quality variants can
+legitimately have separate rows. No proc rate may be derived from these quantity rows.
 
 Return-page limits default to 50 and have a hard maximum of 200. Pass opaque
 `nextCursor` values unchanged with the same recipe, filter, and query method;

@@ -182,7 +182,7 @@ function addon.CreateProductionWindow()
   recipeScroll:SetSize(inner - 24, bodyHeight)
   local recipeContent = CreateFrame("Frame", nil, recipeScroll)
   local recipeInner = inner - 28
-  recipeContent:SetSize(recipeInner, 920)
+  recipeContent:SetSize(recipeInner, 1004)
   recipeScroll:SetScrollChild(recipeContent)
   local recipeHeading = UI.Text(recipeContent, 0, -4, recipeInner - 100, 27, "GameFontNormalLarge")
   local recipeMetadata = UI.Text(recipeContent, 0, -34, recipeInner - 100, 20)
@@ -194,8 +194,8 @@ function addon.CreateProductionWindow()
     if resetRecipeHistory then resetRecipeHistory() end
   end)
   window.recipeOutcomes = outcomes
-  UI.Text(recipeContent, 0, -644, recipeInner, 22, "GameFontNormal"):SetText("Craft history")
-  local recipeHistory = UI.ScrollList(recipeContent, 0, -674, recipeInner, 230,
+  UI.Text(recipeContent, 0, -728, recipeInner, 22, "GameFontNormal"):SetText("Craft history")
+  local recipeHistory = UI.ScrollList(recipeContent, 0, -758, recipeInner, 230,
     historyColumns(recipeInner), function(craft) window:OpenCraft(craft.id) end, "No retained crafts in this period")
   local selectedRecipe
   resetRecipeHistory = lazyList(recipeHistory, function(cursor)

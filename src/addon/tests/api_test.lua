@@ -147,6 +147,45 @@ test("recipe outcomes summarize durable evidence with bounded charts and factual
   errorIs("invalid-cursor", api.GetRecipeReturnSets(101, { characters = {} }, { cursor = page.nextCursor }))
 end)
 
+test("returned materials total each item identity across characters days and small pages", function()
+  local ledger, api, clock, addon = newLedger({ retentionDays = 1 })
+  local start = math.floor(clock.current / 86400) * 86400
+  session(ledger, "A", 1)
+  local function record(itemId, quantity)
+    assert(ledger:AddDimension("item", itemId, { name = "Same-named herb" }))
+    assert(ledger:SubmitCraft(101, 1, false))
+    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = itemId }, quantity = quantity } } }))
+  end
+  for itemId = 12, 8, -1 do record(itemId, itemId) end
+  record(8, 2)
+  local character = api.GetCharacters()[1].key
+  clock.current = clock.current + 86400
+  session(ledger, "B", 1)
+  for itemId = 8, 12 do record(itemId, 3) end
+  local function verify(filter, expected)
+    local cursor, seen = nil, {}
+    repeat
+      local page = assert(api.GetRecipeReturnedReagents(101, filter, { limit = 1, cursor = cursor }))
+      assert(#page.returns <= 1)
+      for _, row in ipairs(page.returns) do
+        assert(not seen[row.item.id], "duplicate material identity across pages")
+        assert(row.item.name == "Same-named herb")
+        seen[row.item.id] = row.returnedQuantity
+      end
+      cursor = page.nextCursor
+    until not cursor
+    equal(seen, expected)
+  end
+  verify(nil, { [8] = 13, [9] = 12, [10] = 13, [11] = 14, [12] = 15 })
+  verify({ characters = { character } }, { [8] = 10, [9] = 9, [10] = 10, [11] = 11, [12] = 12 })
+  verify({ time = { from = start + 86400, to = start + 2 * 86400 } },
+    { [8] = 3, [9] = 3, [10] = 3, [11] = 3, [12] = 3 })
+  clock.current = clock.current + 2 * 86400
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(#addon.ledger.database.crafts == 0)
+  verify(nil, { [8] = 13, [9] = 12, [10] = 13, [11] = 14, [12] = 15 })
+end)
+
 test("legacy positive evidence is separate from complete return coverage in recipe queries", function()
   local ledger, api, clock, addon = newLedger()
   session(ledger, "A", 1)

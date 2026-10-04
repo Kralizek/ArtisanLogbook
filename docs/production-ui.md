@@ -50,18 +50,27 @@ bound. Invalid dates leave the last valid selection in place. Character defaults
 to All and uses durable character choices, including characters whose details
 have aged out. Chart, statistics, returned materials, and retained craft history
 share the selection. The detail body scrolls independently of the native window.
+The order is recipe and filters, compact Crafts/Multicraft/Ingenuity summary,
+activity chart, Resourcefulness and returned materials, then craft history.
 
-- Multicraft: observed proc rate and numerator/denominator, coverage, bonus,
-   output, and extra-output share when fully observed.
-- Resourcefulness: any-return and currently non-trivial-return rates, each using
-   its explicit coverage denominator. Non-trivial rates require complete-return
-   coverage; legacy positive evidence alone does not prove an exact returned set.
-   Multiple returned materials count
-   once per craft. Partial calculations display Calculating, never a partial rate.
-- Ingenuity: authoritative observed proc rate, coverage, applied refund, spent
-   concentration, and refund/spend percentage when fully observed.
-- Returned materials: per-item quantities, three at a time with Previous/Next;
-   no total across different materials is presented as an interchangeable quantity.
+- Multicraft and Ingenuity show proc rate/count and bonus/refund with the derived
+  output/spend percentage. Complete coverage is implicit; partial observations
+  get an amber warning. Derived percentages remain unknown unless both amounts
+  cover every selected craft.
+- Resourcefulness separates Any return, Full return details, and Non-trivial
+  returns. Eight known positives in 30 crafts show `8 of 30 crafts confirmed`
+  and `22 crafts unknown`, not a 100% proc rate or an inferred 26.7% rate.
+  An overall any-return rate requires an outcome for every selected craft.
+  Non-trivial percentages for a smaller fully recorded subset explicitly say
+  `of these` and show how many crafts remain unclassified. No complete details
+  means unknown, not zero. Multiple materials count once per craft. Pending
+  calculations show Calculating, never a partial result.
+- Returned materials show one total per item ID across the selected period and
+  characters, three rows at a time with Previous/Next. Same-named IDs stay
+  separate, with item icons, Retail reagent-quality icons when available, item
+  IDs, and native item tooltips. Each Trivial checkbox belongs to its material
+  row beside the total; toggling it preserves the material page. Unavailable
+  metadata falls back to an item ID/question-mark icon, never an invented quality.
 
 Every reagent item can be marked/unmarked **Trivial** in the returned-material
 list. Shared Craft Detail also provides a reagent selector and Trivial checkbox
@@ -113,6 +122,15 @@ On a Retail character with crafting activity, verify:
    non-trivial returns. Verify each craft counts once and quantities do not change.
    Reload, prune detailed history, and repeat; clear Core history and verify UI
    preferences remain. Test long item names and return lists spanning several pages.
+9. Before revising migration rules, replay the actual untouched pre-#21
+   SavedVariables on a copy, not the live game file. Compare retained positive
+   reagent facts by craft/item against backfilled proc counts and item totals;
+   verify recipe/character/date filters, same-named IDs, reload idempotence,
+   pruning, and unknown-recipe repair. Do not interpret legacy allocation zeros
+   as proof of a complete callback. The 30-craft/8-positive UI regression is
+   synthetic; it does not replace this audit. The original backup was not
+   available during this UI revision, so real-data backfill verification and
+   in-game visual validation remain outstanding. Persistence is unchanged.
 
 The #17 implementation is validated with Lua 5.1 integration mocks and package
 checks in the container. Live Retail/Forever UI interaction, real font sizing,

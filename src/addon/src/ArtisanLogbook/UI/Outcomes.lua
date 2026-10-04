@@ -42,6 +42,54 @@ function UI.MeasuredShare(totals, numerator, denominator)
   return string.format("%.1f%%", 100 * totals[numerator] / totals[denominator])
 end
 
+function UI.CompactOutcome(totals, proc, amount, denominator, amountLabel, shareLabel)
+  local observed, count = totals[proc .. "ObservedCount"], totals[proc] or 0
+  local lines = { observed > 0 and string.format("%.1f%% | %d procs", 100 * count / observed, count) or "Proc rate unknown" }
+  if observed < totals.craftCount then
+    lines[#lines + 1] = string.format("|cffffcc66Recorded for %d of %d crafts|r", observed, totals.craftCount)
+  end
+  lines[#lines + 1] = amountLabel .. ": " .. UI.Value(totals[amount]) .. " | " ..
+    UI.MeasuredShare(totals, amount, denominator) .. " " .. shareLabel
+  if totals[amount .. "ObservedCount"] < totals.craftCount or
+      totals[denominator .. "ObservedCount"] < totals.craftCount then
+    lines[#lines + 1] = "|cffffcc66Partial amounts; share unavailable|r"
+  end
+  return table.concat(lines, "\n")
+end
+
+function UI.ResourcefulnessSummary(totals, nonTrivial)
+  local crafts = totals.craftCount
+  local observed = totals.resourcefulnessProcCountObservedCount
+  local positive = totals.resourcefulnessProcCount or 0
+  local complete = totals.resourcefulnessCompleteProcCountObservedCount
+  local result = {}
+  if crafts == 0 then
+    return { any = "No crafts", complete = "No crafts", nonTrivial = "Unknown" }
+  end
+  if observed == crafts then
+    result.any = string.format("%.1f%% | %d returns", 100 * positive / crafts, positive)
+  else
+    result.any = string.format("%d of %d crafts confirmed\n|cffffcc66%d crafts unknown|r\nProc rate unavailable",
+      positive, crafts, crafts - observed)
+  end
+  if complete == 0 then
+    result.complete = "|cffffcc66No fully recorded crafts|r"
+    result.nonTrivial = "Unknown\nFull return details unavailable"
+  else
+    result.complete = complete == crafts and "All crafts fully recorded" or
+      string.format("|cffffcc66%d of %d crafts fully recorded|r\nAny return: %.1f%% of these", complete, crafts,
+        100 * (totals.resourcefulnessCompleteProcCount or 0) / complete)
+    if nonTrivial == nil then result.nonTrivial = "Calculating..."
+    elseif complete == crafts then
+      result.nonTrivial = string.format("%.1f%% | %d returns", 100 * nonTrivial / complete, nonTrivial)
+    else
+      result.nonTrivial = string.format("%d of %d fully recorded crafts\n%.1f%% of these\n|cffffcc66%d crafts unclassified|r",
+        nonTrivial, complete, 100 * nonTrivial / complete, crafts - complete)
+    end
+  end
+  return result
+end
+
 function UI.TrivialCheckbox(parent, x, y, onChange)
   local checkbox = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
   checkbox:SetSize(24, 24)
@@ -69,7 +117,7 @@ end
 
 function UI.RecipeOutcomes(parent, width, onFilterChanged)
   local pane = CreateFrame("Frame", nil, parent)
-  pane:SetSize(width, 570)
+  pane:SetSize(width, 654)
   pane:SetPoint("TOPLEFT", 0, -62)
   local api = ArtisanLogbookAPI
   local days, character, recipeId = false, false, nil
@@ -117,46 +165,93 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   fromInput:SetScript("OnEnterPressed", applyDates)
   toInput:SetScript("OnEnterPressed", applyDates)
   local stats = {}
-  for position, title in ipairs({ "Crafts", "Multicraft", "Resourcefulness", "Ingenuity" }) do
-    local x = (position - 1) * width / 4
-    UI.Text(pane, x, -88, width / 4 - 12, 22, "GameFontNormal"):SetText(title)
-    stats[position] = UI.Text(pane, x, -112, width / 4 - 12, 136)
+  for position, entry in ipairs({ { "Crafts", 1 }, { "Multicraft", 2 }, { "Ingenuity", 4 } }) do
+    local x = (position - 1) * width / 3
+    UI.Text(pane, x, -88, width / 3 - 16, 22, "GameFontNormal"):SetText(entry[1])
+    stats[entry[2]] = UI.Text(pane, x, -112, width / 3 - 16, 76)
   end
   pane.stats = stats
-  local chart = UI.Chart(pane, 0, -252, width)
+  local chart = UI.Chart(pane, 0, -196, width)
   pane.chart = chart
-  UI.Text(pane, 0, -428, width - 230, 22, "GameFontNormal"):SetText("Returned materials")
+  UI.Text(pane, 0, -374, width, 22, "GameFontNormal"):SetText("Resourcefulness")
+  pane.resourcefulness = {}
+  for position, entry in ipairs({ { "Any return", "any" }, { "Full return details", "complete" },
+      { "Non-trivial returns", "nonTrivial" } }) do
+    local x = (position - 1) * width / 3
+    UI.Text(pane, x, -402, width / 3 - 16, 20, "GameFontNormalSmall"):SetText(entry[1])
+    pane.resourcefulness[entry[2]] = UI.Text(pane, x, -426, width / 3 - 16, 80)
+  end
+  stats[3] = pane.resourcefulness.any
+  UI.Text(pane, 0, -518, width - 230, 22, "GameFontNormal"):SetText("Returned materials")
   local materialRows, cursors, currentCursor, nextCursor = {}, {}, nil, nil
+  pane.materialRows = materialRows
+  local materialStatus = UI.Text(pane, 0, -552, width, 26)
   local function loadMaterials(cursor)
     local page, reason = api.GetRecipeReturnedReagents(recipeId, pane:Filter(), { limit = 3, cursor = cursor })
     nextCursor = page and page.nextCursor
     for position, row in ipairs(materialRows) do
       local returned = page and page.returns[position]
-      row.label:SetText(returned and UI.Elide(UI.Name(returned.item) .. "  +" .. returned.returnedQuantity,
-        math.max(8, math.floor((width - 125) / 7))) or "")
-      row.check:SetItem(returned and returned.item.id)
+      row.item = returned and returned.item
+      row.returnedQuantity = returned and returned.returnedQuantity
+      row:SetShown(returned ~= nil)
+      row.check:SetItem(row.item and row.item.id)
+      if returned then
+        row.label:SetText(UI.Elide(UI.Name(row.item), math.max(8, math.floor(row.label:GetWidth() / 7))))
+        row.identity:SetText("#" .. row.item.id)
+        row.quantity:SetText(UI.Elide(tostring(returned.returnedQuantity), 10))
+        local icon = type(GetItemIcon) == "function" and GetItemIcon(row.item.id)
+        row.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+        local qualityInfo
+        if C_TradeSkillUI and type(C_TradeSkillUI.GetItemReagentQualityInfo) == "function" then
+          local ok, info = pcall(C_TradeSkillUI.GetItemReagentQualityInfo, row.item.id)
+          if ok then qualityInfo = info end
+        end
+        row.quality:SetShown(qualityInfo ~= nil and qualityInfo.icon ~= nil)
+        if qualityInfo and qualityInfo.icon then row.quality:SetAtlas(qualityInfo.icon) end
+      end
     end
-    if not page then materialRows[1].label:SetText(reason or "Unavailable")
-    elseif #page.returns == 0 then materialRows[1].label:SetText("No observed returned materials") end
+    materialStatus:SetText(not page and (reason or "Unavailable") or
+      (#page.returns == 0 and "No confirmed returned materials" or ""))
     pane.previous:SetEnabled(#cursors > 0); pane.next:SetEnabled(nextCursor ~= nil)
   end
-  pane.previous = UI.Button(pane, "Previous", width - 190, -424, 85, function()
+  pane.previous = UI.Button(pane, "Previous", width - 190, -514, 85, function()
     currentCursor = table.remove(cursors)
     if currentCursor == false then currentCursor = nil end
     loadMaterials(currentCursor)
   end)
-  pane.next = UI.Button(pane, "Next", width - 95, -424, 85, function()
+  pane.next = UI.Button(pane, "Next", width - 95, -514, 85, function()
     if not nextCursor then return end
     cursors[#cursors + 1] = currentCursor or false
     currentCursor = nextCursor
     loadMaterials(currentCursor)
   end)
+  local nameWidth = math.min(300, width - 250)
+  UI.Text(pane, nameWidth + 44, -522, 84, 18, "GameFontNormalSmall"):SetText("Total returned")
   for position = 1, 3 do
-    local y = -456 - (position - 1) * 30
-    materialRows[position] = {
-      label = UI.Text(pane, 0, y, width - 125, 26),
-      check = UI.TrivialCheckbox(pane, width - 105, y + 4, refresh),
-    }
+    local row = CreateFrame("Frame", nil, pane)
+    row:SetSize(nameWidth + 240, 32)
+    row:SetPoint("TOPLEFT", 0, -548 - (position - 1) * 34)
+    row:EnableMouse(true)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(28, 28); row.icon:SetPoint("TOPLEFT", 0, 0)
+    row.quality = row:CreateTexture(nil, "OVERLAY")
+    row.quality:SetSize(16, 16); row.quality:SetPoint("TOPLEFT", 14, -14)
+    row.label = UI.Text(row, 36, 0, nameWidth, 16)
+    row.identity = UI.Text(row, 36, -16, nameWidth, 14)
+    row.identity:SetTextColor(0.65, 0.65, 0.65)
+    row.quantity = UI.Text(row, nameWidth + 44, -6, 84, 22)
+    row.check = UI.TrivialCheckbox(row, nameWidth + 144, -2, function() pane:Refresh(true) end)
+    row:SetScript("OnEnter", function(self)
+      if not self.item then return end
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      if type(GameTooltip.SetItemByID) == "function" then GameTooltip:SetItemByID(self.item.id)
+      else GameTooltip:SetText(UI.Name(self.item)) end
+      GameTooltip:AddLine("Item ID: " .. self.item.id)
+      GameTooltip:AddLine("Total returned: " .. self.returnedQuantity)
+      GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    materialRows[position] = row
   end
 
   function pane:Filter()
@@ -170,42 +265,40 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     return filter
   end
 
-  function pane:Refresh()
+  function pane:Refresh(keepMaterialPage)
     self:SetScript("OnUpdate", nil)
     local filter = self:Filter()
     local result, reason = api.GetRecipeOutcomes(recipeId, filter, { buckets = 60 })
     status:SetText(reason or "")
     if not result then
       for _, label in ipairs(stats) do label:SetText("Unavailable") end
+      for _, label in pairs(self.resourcefulness) do label:SetText("Unavailable") end
+      for _, row in ipairs(materialRows) do row.item = nil; row:Hide() end
+      self.previous:SetEnabled(false); self.next:SetEnabled(false)
+      chart:Render({}, 0, 86400, 86400)
       return
     end
     local totals = result.totals
-    local function coverage(metric)
-      return string.format("Coverage: %d / %d", totals[metric .. "ObservedCount"], totals.craftCount)
-    end
     stats[1]:SetText(tostring(totals.craftCount))
-    stats[2]:SetText(UI.ProcRate(totals.multicraftProcCount, totals.multicraftProcCountObservedCount) ..
-      "\n" .. coverage("multicraftProcCount") .. "\nBonus: " .. UI.Value(totals.multicraftBonus) ..
-      "\n" .. coverage("multicraftBonus") .. "\nOutput: " .. UI.Value(totals.outputQuantity) ..
-      "\n" .. coverage("outputQuantity") .. "\nOutput share: " .. UI.MeasuredShare(totals, "multicraftBonus", "outputQuantity"))
-    stats[4]:SetText(UI.ProcRate(totals.ingenuityProcCount, totals.ingenuityProcCountObservedCount) ..
-      "\n" .. coverage("ingenuityProcCount") .. "\nRefund: " .. UI.Value(totals.ingenuityRefund) ..
-      "\n" .. coverage("ingenuityRefund") .. "\nSpent: " .. UI.Value(totals.concentrationSpent) ..
-      "\n" .. coverage("concentrationSpent") .. "\nRefund / spent: " .. UI.MeasuredShare(totals, "ingenuityRefund", "concentrationSpent"))
-    local base = "Any: " .. UI.ProcRate(totals.resourcefulnessProcCount, totals.resourcefulnessProcCountObservedCount) ..
-      "\n" .. coverage("resourcefulnessProcCount") .. "\nNon-trivial: "
-    stats[3]:SetText(base .. "Calculating...")
+    stats[2]:SetText(UI.CompactOutcome(totals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output"))
+    stats[4]:SetText(UI.CompactOutcome(totals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent"))
+    local function showReturns(nonTrivial)
+      for key, text in pairs(UI.ResourcefulnessSummary(totals, nonTrivial)) do
+        self.resourcefulness[key]:SetText(text)
+      end
+    end
+    showReturns(nil)
     local cursor, nonTrivial = nil, 0
     local function nextSets()
       local page, pageReason = api.GetRecipeReturnSets(recipeId, filter, { limit = 100, cursor = cursor })
       if not page then
-        stats[3]:SetText(base .. "Unavailable"); status:SetText(pageReason or "Unavailable")
+        self.resourcefulness.nonTrivial:SetText("Unavailable"); status:SetText(pageReason or "Unavailable")
         self:SetScript("OnUpdate", nil); return
       end
       nonTrivial = nonTrivial + UI.NonTrivialCount(page.returns)
       cursor = page.nextCursor
       if not cursor then
-        stats[3]:SetText(base .. UI.ProcRate(nonTrivial, totals.resourcefulnessCompleteProcCountObservedCount))
+        showReturns(nonTrivial)
         self:SetScript("OnUpdate", nil)
       else self:SetScript("OnUpdate", nextSets) end
     end
@@ -213,8 +306,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     local start, finish = result.from, result.to
     if not start then start, finish = UI.Range(GetServerTime(), 1) end
     chart:Render(result.series, start, finish, result.bucketSeconds)
-    cursors, currentCursor = {}, nil
-    loadMaterials(nil)
+    if not keepMaterialPage then cursors, currentCursor = {}, nil end
+    loadMaterials(currentCursor)
   end
 
   function pane:Open(id)
