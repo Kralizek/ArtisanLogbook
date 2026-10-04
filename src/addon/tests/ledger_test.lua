@@ -56,6 +56,149 @@ local function newLedger(options)
   return ledger, clock, sessionId
 end
 
+local function legacyDatabase(ledger)
+  local data = ledger.database
+  data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
+  for _, craft in ipairs(data.crafts) do
+    craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil
+  end
+  for _, row in ipairs(data.craftSeries) do
+    for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }) do
+      row[metric], row[metric .. "ObservedCount"] = nil, nil
+    end
+  end
+  return data
+end
+
+test("legacy ambiguous zero plus unavailable return does not prove false", function()
+  local ledger, clock = newLedger()
+  assert(ledger:SubmitCraft(12, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 3, quantity = 2, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = {
+    { reagent = { itemID = 8 }, quantity = 0 }, { reagent = { itemID = 10 } },
+  } }))
+  local data = legacyDatabase(ledger)
+  assert(#data.reagents == 4 and data.reagents[1].returnedQuantity == nil and
+    data.reagents[2].returnedQuantity == nil and data.reagents[3].returnedQuantity == 0 and
+    data.reagents[4].returnedQuantity == 0)
+  local loaded = assert(Ledger.New(data, clock))
+  assert(loaded.database.crafts[1].hasResourcefulnessProc == nil)
+  assert(loaded.database.craftSeries[1].resourcefulnessProcCountObservedCount == 0)
+  assert(loaded.database.craftSeries[1].resourcefulnessCompleteProcCountObservedCount == 0)
+end)
+
+test("legacy partial positive return is not a complete returned item set", function()
+  local ledger, clock = newLedger()
+  assert(ledger:SubmitCraft(12, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = {
+    { reagent = { itemID = 8 }, quantity = 1 }, { reagent = { itemID = 9 } },
+  } }))
+  local data = legacyDatabase(ledger)
+  assert(data.reagents[1].returnedQuantity == 1 and data.reagents[2].returnedQuantity == 0)
+  local loaded = assert(Ledger.New(data, clock))
+  local row = loaded.database.craftSeries[1]
+  assert(row.resourcefulnessProcCount == 1 and row.resourcefulnessProcCountObservedCount == 1)
+  assert(row.resourcefulnessCompleteProcCountObservedCount == 0)
+  assert(#loaded.database.resourcefulnessSets == 0 and loaded.database.returnedReagents[1].returnedQuantity == 1)
+  assert(Ledger.New(loaded.database, clock))
+end)
+
+test("legacy positive fractional return cannot become an observed no proc", function()
+  local ledger, clock = newLedger()
+  assert(ledger:SubmitCraft(12, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 3, quantity = 2, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 0.5 } } }))
+  local data = legacyDatabase(ledger)
+  assert(data.reagents[1].returnedQuantity == nil and data.reagents[2].returnedQuantity == nil and
+    data.reagents[3].returnedQuantity == 0 and data.reagents[4].returnedQuantity == 0.5)
+  local loaded = assert(Ledger.New(data, clock))
+  assert(loaded.database.crafts[1].hasResourcefulnessProc == true)
+  assert(loaded.database.craftSeries[1].resourcefulnessProcCount == 1)
+  assert(loaded.database.craftSeries[1].resourcefulnessCompleteProcCountObservedCount == 0)
+  assert(loaded.database.returnedReagents[1].returnedQuantity == 0.5)
+end)
+
+test("rounded Multicraft aggregate cannot prove the pruned residual outcome", function()
+  local ledger, clock = newLedger({ retentionDays = 1 })
+  assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({ multicraft = 1 }))
+  clock.current = clock.current + 2
+  assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({ multicraft = 1e16 }))
+  ledger:Prune(clock.current + 86399)
+  assert(#ledger.database.crafts == 1 and ledger.database.crafts[1].multicraftBonus == 1e16)
+  local loaded = assert(Ledger.New(legacyDatabase(ledger), clock))
+  local row = loaded.database.craftSeries[1]
+  assert(row.craftCount == 2 and row.multicraftBonus == 1e16 and row.multicraftBonusObservedCount == 2)
+  assert(row.multicraftProcCount == 1 and row.multicraftProcCountObservedCount == 1)
+  local versionOne = assert(Ledger.New(loaded.database, clock)).database
+  versionOne.outcomeVersion = 1
+  versionOne.craftSeries[1].resourcefulnessCompleteProcCountObservedCount = nil
+  versionOne.craftSeries[1].multicraftProcCountObservedCount = 2
+  local corrected = assert(Ledger.New(versionOne, clock))
+  assert(corrected.database.craftSeries[1].multicraftProcCountObservedCount == 1)
+end)
+
+test("prior PR outcome backfill drops unsupported completeness without replaying quantities", function()
+  local ledger, clock = newLedger({ retentionDays = 1 })
+  local function record(result)
+    result.itemID = 100
+    local craft = assert(ledger:RecordResult(result))
+    clock.current = clock.current + 2
+    return craft
+  end
+  record({ resourcesReturned = { { reagent = { itemID = 10 }, quantity = 3 } } })
+  record({ resourcesReturned = {} })
+  record({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } })
+  local fractional = record({ resourcesReturned = { { reagent = { itemID = 9 }, quantity = 0.5 } } })
+  ledger:Prune(1800000000 + 86401)
+  local data = ledger.database
+  data.outcomeVersion = 1
+  for _, craft in ipairs(data.crafts) do craft.resourcefulnessComplete = nil end
+  fractional.hasResourcefulnessProc = false
+  local row = data.craftSeries[1]
+  row.resourcefulnessCompleteProcCount, row.resourcefulnessCompleteProcCountObservedCount = nil, nil
+  row.resourcefulnessProcCount, row.resourcefulnessProcCountObservedCount = 2, 4
+  for index, returned in ipairs(data.returnedReagents) do
+    if returned.itemId == 9 then table.remove(data.returnedReagents, index); break end
+  end
+  local loaded = assert(Ledger.New(data, clock))
+  assert(data.outcomeVersion == 1 and fractional.hasResourcefulnessProc == false)
+  assert(loaded.database.outcomeVersion == 2 and #loaded.database.resourcefulnessSets == 0)
+  row = loaded.database.craftSeries[1]
+  assert(row.resourcefulnessProcCount == 3 and row.resourcefulnessProcCountObservedCount == 3)
+  assert(row.resourcefulnessCompleteProcCountObservedCount == 0)
+  local quantities = {}
+  for _, returned in ipairs(loaded.database.returnedReagents) do quantities[returned.itemId] = returned.returnedQuantity end
+  assert(quantities[8] == 1 and quantities[9] == 0.5 and quantities[10] == 3)
+  loaded = assert(Ledger.New(loaded.database, clock))
+  assert(loaded.database.craftSeries[1].resourcefulnessProcCount == 3)
+  assert(#loaded.database.returnedReagents == 3)
+  assert(loaded:AddDimension("recipe", 12))
+  assert(loaded:LearnRecipeOutput(12, 100))
+  assert(loaded:RepairUnknownRecipes().repairedCount == 3)
+  loaded = assert(Ledger.New(loaded.database, clock))
+  local known, unknown
+  for _, aggregate in ipairs(loaded.database.craftSeries) do
+    if aggregate.recipeId == 12 then known = aggregate else unknown = aggregate end
+  end
+  assert(known.resourcefulnessProcCount == 2 and known.resourcefulnessCompleteProcCountObservedCount == 0)
+  assert(unknown.resourcefulnessProcCount == 1)
+  clock.current = clock.current + 2 * 86400
+  loaded:Prune(clock.current)
+  assert(#loaded.database.crafts == 0 and #loaded.database.returnedReagents == 3)
+  assert(Ledger.New(loaded.database, clock))
+end)
+
 test("outcomes preserve observed true false and unknown with canonical return sets", function()
   local ledger, clock = newLedger({ retentionDays = 1 })
   local function record(result)
@@ -102,20 +245,14 @@ test("legacy outcome upgrade never infers measured false Resourcefulness from ab
     { reagent = { itemID = 8 }, quantity = 2 },
   } }))
   assert(ledger:RecordResult({}))
-  local data = ledger.database
-  data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
-  for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc = nil end
-  for _, row in ipairs(data.craftSeries) do
-    row.multicraftProcCount, row.multicraftProcCountObservedCount = nil, nil
-    row.resourcefulnessProcCount, row.resourcefulnessProcCountObservedCount = nil, nil
-  end
+  local data = legacyDatabase(ledger)
   local loaded = assert(Ledger.New(data, clock))
   local row = loaded.database.craftSeries[1]
   assert(row.craftCount == 3 and row.multicraftProcCount == 1 and row.multicraftProcCountObservedCount == 2)
   assert(row.resourcefulnessProcCount == 1 and row.resourcefulnessProcCountObservedCount == 1)
   assert(data.outcomeVersion == nil and data.crafts[2].hasResourcefulnessProc == nil)
   local again = assert(Ledger.New(loaded.database, clock))
-  assert(again.database.resourcefulnessSets[1].craftCount == 1)
+  assert(#again.database.resourcefulnessSets == 0)
   assert(again.database.craftSeries[1].resourcefulnessProcCountObservedCount == 1)
   data.crafts, data.reagents = {}, {}
   local pruned = assert(Ledger.New(data, clock)).database.craftSeries[1]
@@ -123,7 +260,7 @@ test("legacy outcome upgrade never infers measured false Resourcefulness from ab
   assert(pruned.multicraftProcCountObservedCount == 0 and pruned.resourcefulnessProcCountObservedCount == 0)
 end)
 
-test("legacy backfill recovers observed zero returns and provable pruned Multicraft outcomes", function()
+test("legacy zeros lack completeness but singleton pruned Multicraft outcomes are provable", function()
   local ledger, clock = newLedger()
   assert(ledger:SubmitCraft(12, 1, false, nil, {
     { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
@@ -135,18 +272,12 @@ test("legacy backfill recovers observed zero returns and provable pruned Multicr
   assert(ledger:RecordResult({ multicraft = 5 }))
   assert(ledger:SubmitCraft(13, 1, false))
   assert(ledger:RecordResult({ multicraft = 2 }))
-  local data = ledger.database
-  data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
-  for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc = nil end
+  local data = legacyDatabase(ledger)
   table.remove(data.crafts, 3)
-  for _, row in ipairs(data.craftSeries) do
-    row.multicraftProcCount, row.multicraftProcCountObservedCount = nil, nil
-    row.resourcefulnessProcCount, row.resourcefulnessProcCountObservedCount = nil, nil
-  end
   local loaded = assert(Ledger.New(data, clock))
   local row = loaded.database.craftSeries[1]
-  assert(row.resourcefulnessProcCount == 0 and row.resourcefulnessProcCountObservedCount == 1)
-  assert(loaded.database.crafts[1].hasResourcefulnessProc == false)
+  assert(row.resourcefulnessProcCount == nil and row.resourcefulnessProcCountObservedCount == 0)
+  assert(loaded.database.crafts[1].hasResourcefulnessProc == nil)
   assert(loaded.database.crafts[2].hasResourcefulnessProc == nil)
   assert(loaded.database.craftSeries[2].multicraftProcCount == 1)
   assert(loaded.database.craftSeries[2].multicraftProcCountObservedCount == 1)
@@ -243,25 +374,20 @@ test("239-craft storage sample stays at 62 return sets and 74 item quantity rows
     return size
   end
   local currentBytes = serializedSize(data)
-  local legacy = assert(Ledger.New(data, clock)).database
-  legacy.outcomeVersion, legacy.resourcefulnessSets, legacy.returnedReagents = nil, nil, nil
-  for _, craft in ipairs(legacy.crafts) do craft.hasResourcefulnessProc = nil end
-  for _, row in ipairs(legacy.craftSeries) do
-    row.multicraftProcCount, row.multicraftProcCountObservedCount = nil, nil
-    row.resourcefulnessProcCount, row.resourcefulnessProcCountObservedCount = nil, nil
-  end
+  local legacy = legacyDatabase(assert(Ledger.New(data, clock)))
   local legacyBytes = serializedSize(legacy)
   local started = os.clock()
   local upgraded = assert(Ledger.New(legacy, clock))
   local elapsed = os.clock() - started
-  assert(#upgraded.database.resourcefulnessSets == 62 and #upgraded.database.returnedReagents == 74)
-  assert(serializedSize(upgraded.database) == currentBytes)
+  assert(#upgraded.database.resourcefulnessSets == 0 and #upgraded.database.returnedReagents == 74)
+  assert(upgraded.database.craftSeries[1].resourcefulnessProcCount == 239)
+  assert(upgraded.database.craftSeries[1].resourcefulnessCompleteProcCountObservedCount == 0)
   print(string.format("STORAGE synthetic 239 crafts: %d -> %d estimated Lua bytes (+%d); 62 sets, 74 items; upgrade %.4fs",
     legacyBytes, currentBytes, currentBytes - legacyBytes, elapsed))
   clock.current = clock.current + 61 * 86400
-  upgraded:Prune(clock.current)
-  assert(#upgraded.database.crafts == 0 and #upgraded.database.resourcefulnessSets == 62)
-  assert(#upgraded.database.returnedReagents == 74)
+  ledger:Prune(clock.current)
+  assert(#ledger.database.crafts == 0 and #ledger.database.resourcefulnessSets == 62)
+  assert(#ledger.database.returnedReagents == 74)
 end)
 
 local function replay(ledger, cases)

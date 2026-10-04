@@ -423,7 +423,8 @@ function API.GetCraftSeries(filter, options)
 end
 
 local outcomeMetrics = { "outputQuantity", "multicraftBonus", "multicraftProcCount",
-  "concentrationSpent", "ingenuityProcCount", "ingenuityRefund", "resourcefulnessProcCount" }
+  "concentrationSpent", "ingenuityProcCount", "ingenuityRefund", "resourcefulnessProcCount",
+  "resourcefulnessCompleteProcCount" }
 
 local function outcomeQuery(recipeId, filter)
   if not integer(recipeId, 0) then return nil, "invalid-id" end

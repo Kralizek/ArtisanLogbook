@@ -53,8 +53,10 @@ share the selection. The detail body scrolls independently of the native window.
 
 - Multicraft: observed proc rate and numerator/denominator, coverage, bonus,
    output, and extra-output share when fully observed.
-- Resourcefulness: any-return and currently non-trivial-return rates, sharing
-   the explicit outcome-coverage denominator. Multiple returned materials count
+- Resourcefulness: any-return and currently non-trivial-return rates, each using
+   its explicit coverage denominator. Non-trivial rates require complete-return
+   coverage; legacy positive evidence alone does not prove an exact returned set.
+   Multiple returned materials count
    once per craft. Partial calculations display Calculating, never a partial rate.
 - Ingenuity: authoritative observed proc rate, coverage, applied refund, spent
    concentration, and refund/spend percentage when fully observed.

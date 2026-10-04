@@ -1244,6 +1244,38 @@ do
   print("PASS recipe outcomes, exact denominators, reversible UI preferences, pruning and bounded rendering")
 end
 
+do
+  local core = reload(nil)
+  local ledger = core.ledger
+  assert(ledger:SubmitCraft(9001, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = {
+    { reagent = { itemID = 8 }, quantity = 1 }, { reagent = { itemID = 9 } },
+  } }))
+  local data = ledger.database
+  data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
+  for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil end
+  for _, row in ipairs(data.craftSeries) do
+    for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }) do
+      row[metric], row[metric .. "ObservedCount"] = nil, nil
+    end
+  end
+  core = reload(data)
+  local ui = loadUI()
+  ui.UI.SetTrivial(8, true)
+  ui.productionWindow:Activate("Recipes")
+  ui.productionWindow:OpenRecipe({ id = 9001 })
+  local text = ui.productionWindow.recipeOutcomes.stats[3].text
+  assert(text:find("Any: 100.0%%"))
+  assert(text:find("Non-trivial: Unknown\n0 observed crafts", 1, true))
+  ui.UI.SetTrivial(8, false)
+  ui.productionWindow.recipeOutcomes:Refresh()
+  assert(ui.productionWindow.recipeOutcomes.stats[3].text:find("Non-trivial: Unknown", 1, true))
+  print("PASS legacy incomplete positive sets never become measured non-trivial false")
+end
+
 local invalidTrace = { traceSchemaVersion = 999 }
 environment.ArtisanLogbookTraceDB = invalidTrace
 local noTracer = reload(nil)

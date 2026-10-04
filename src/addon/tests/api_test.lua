@@ -147,6 +147,41 @@ test("recipe outcomes summarize durable evidence with bounded charts and factual
   errorIs("invalid-cursor", api.GetRecipeReturnSets(101, { characters = {} }, { cursor = page.nextCursor }))
 end)
 
+test("legacy positive evidence is separate from complete return coverage in recipe queries", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitCraft(101, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = {
+    { reagent = { itemID = 8 }, quantity = 1 }, { reagent = { itemID = 9 } },
+  } }))
+  local data = ledger.database
+  data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
+  for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil end
+  for _, row in ipairs(data.craftSeries) do
+    for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }) do
+      row[metric], row[metric .. "ObservedCount"] = nil, nil
+    end
+  end
+  addon.ledger = assert(addon.Ledger.New(data, clock))
+  local totals = api.GetRecipeOutcomes(101).totals
+  assert(totals.resourcefulnessProcCount == 1 and totals.resourcefulnessProcCountObservedCount == 1)
+  assert(totals.resourcefulnessCompleteProcCount == nil and totals.resourcefulnessCompleteProcCountObservedCount == 0)
+  assert(#api.GetRecipeReturnSets(101).returns == 0)
+  assert(api.GetRecipeReturnedReagents(101).returns[1].returnedQuantity == 1)
+  session(addon.ledger, "A", 1)
+  assert(addon.ledger:SubmitCraft(101, 1, false))
+  assert(addon.ledger:RecordResult({ resourcesReturned = {} }))
+  totals = api.GetRecipeOutcomes(101).totals
+  assert(totals.resourcefulnessProcCount == 1 and totals.resourcefulnessProcCountObservedCount == 2)
+  assert(totals.resourcefulnessCompleteProcCount == 0 and totals.resourcefulnessCompleteProcCountObservedCount == 1)
+  clock.current = clock.current + 61 * 86400
+  addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
+  equal(api.GetRecipeOutcomes(101).totals, totals)
+end)
+
 test("recipe outcome queries never scan craft history or unrelated daily recipes", function()
   local ledger, api, clock = newLedger()
   session(ledger, "A", 1)

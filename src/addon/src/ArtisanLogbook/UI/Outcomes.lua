@@ -205,7 +205,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       nonTrivial = nonTrivial + UI.NonTrivialCount(page.returns)
       cursor = page.nextCursor
       if not cursor then
-        stats[3]:SetText(base .. UI.ProcRate(nonTrivial, totals.resourcefulnessProcCountObservedCount))
+        stats[3]:SetText(base .. UI.ProcRate(nonTrivial, totals.resourcefulnessCompleteProcCountObservedCount))
         self:SetScript("OnUpdate", nil)
       else self:SetScript("OnUpdate", nextSets) end
     end

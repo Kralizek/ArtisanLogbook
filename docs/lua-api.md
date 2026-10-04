@@ -226,6 +226,7 @@ not measured-zero outcomes. Invalid inputs use the existing API error codes.
     multicraftBonus = 3, multicraftBonusObservedCount = 2,
     outputQuantity = 13, outputQuantityObservedCount = 2,
     resourcefulnessProcCount = 2, resourcefulnessProcCountObservedCount = 3,
+    resourcefulnessCompleteProcCount = 1, resourcefulnessCompleteProcCountObservedCount = 2,
     ingenuityProcCount = 1, ingenuityProcCountObservedCount = 2,
     ingenuityRefund = 20, ingenuityRefundObservedCount = 2,
     concentrationSpentObservedCount = 0, -- sum absent when unobserved
@@ -253,11 +254,17 @@ alternative, not a requirement to download and sum daily history in the UI.
 Each row combines the selected days/characters for one observed positive-return
 set. Item IDs are distinct and numerically sorted. A consumer classifies the
 set once: if **any** item is currently non-trivial, add that row's `craftCount`
-once to its non-trivial numerator. The denominator is the same
-`resourcefulnessProcCountObservedCount` returned in totals, including measured
-false. Never use returned-item count, set-row count, or total crafts as a proxy
+once to its non-trivial numerator. Its denominator is
+`resourcefulnessCompleteProcCountObservedCount`, including completely observed
+false outcomes. The raw any-proc rate instead uses
+`resourcefulnessProcCountObservedCount`, which can additionally include legacy
+positive evidence without complete set coverage. Never use returned-item count,
+set-row count, or total crafts as a proxy
 for that denominator. Empty sets are represented by measured-false coverage,
-not return-set rows. Partial/unknown observations do not join that denominator.
+not return-set rows. Partial/unknown sets do not join the complete-return denominator.
+Legacy zero/nil facts cannot prove list completeness because old capture could
+discard unavailable entries. Zero complete-return coverage means an unknown
+non-trivial rate, even if the raw positive proc rate is known.
 
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
 `{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.

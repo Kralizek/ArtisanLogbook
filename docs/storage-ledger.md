@@ -88,7 +88,8 @@ use the same character and recipe identities as daily craft totals, including
 the unattributed grain. Trivial-item preferences belong exclusively to the UI
 SavedVariables and never enter these facts.
 
-Daily rows add `multicraftProcCount`, `resourcefulnessProcCount`, and their
+Daily rows add `multicraftProcCount`, `resourcefulnessProcCount`,
+`resourcefulnessCompleteProcCount`, and their
 respective `...ObservedCount` fields to the existing output, Multicraft bonus,
 concentration spent, Ingenuity proc, and applied refund measures. Each sum is
 absent at zero coverage, not a fabricated zero. A Multicraft proc is an observed
@@ -96,7 +97,10 @@ positive bonus; an observed nonpositive bonus is no proc. Ingenuity continues
 to use its authoritative boolean: false implies an applied refund of zero,
 true uses the observed refund, and unknown does not apply the reported field.
 
-New capture records `hasResourcefulnessProc` on retained craft facts. A readable,
+New capture records `hasResourcefulnessProc` and `resourcefulnessComplete` on
+retained craft facts. Complete-return proc counts and coverage supply the
+denominator for exact non-trivial classification; raw proc coverage may also
+include legacy positive evidence without a complete returned-item set. A readable,
 dense returned-item list with valid item IDs and nonnegative integer quantities
 establishes the outcome: empty/all-zero means false; any positive return means
 true. A missing, malformed, currency-only, or incomplete list leaves outcome
@@ -118,35 +122,46 @@ capture visits only the current result and touched grains, not historical rows.
 Unknown-recipe repair transfers all three aggregate contributions in the same
 staged transaction, validates, and rebuilds indexes before replacing live state.
 Pruning removes details only. Reload validates canonical identity, references,
-unique grains, and set-count agreement with daily Resourcefulness proc totals.
+unique grains, and set-count agreement with daily complete-return proc totals.
 Clear/purge removes all three aggregate collections but does not clear UI settings.
 
 ### Additive Schema-v1 Backfill
 
 `schemaVersion = 1` and `schemaIdentity` are unchanged. The optional internal
-`outcomeVersion = 1` marker records completion of additive initialization, not
+`outcomeVersion = 2` marker records completion of additive initialization, not
 a feature-start date. Older supported v1 databases are copied and backfilled
 before startup pruning, once, without modifying the supplied SavedVariables on
 failure. Unsupported experimental schemas are still refused.
 
 - Existing durable output, bonus, concentration, and Ingenuity facts/coverage
   are preserved verbatim, including already-pruned history.
-- Retained Multicraft measurements reconstruct proc counts and coverage. If
-  exactly one observed measurement remains after subtracting retained values
-  from an existing daily total, that outcome is also provable and recovered.
-  Two or more missing measurements cannot generally reveal proc frequency from
+- Retained Multicraft measurements reconstruct proc counts and coverage. A daily
+  grain with exactly one observation and no retained measurement also proves its
+  outcome directly. No residual is inferred by subtracting retained values:
+  floating-point sums can lose a positive contribution (for example `1 + 1e16`).
+  Multiple observations cannot generally reveal proc frequency from
   their sum. In particular, the existing schema accepts signed measurements,
   so a zero sum alone does not prove every individual bonus was zero. Quantity
   sums and their original coverage remain available even when proc frequency
   cannot be reconstructed.
-- Retained positive reagent facts recover Resourcefulness sets and quantities.
-  With no positive return, an observed `returnedQuantity = 0` proves measured
-  false and contributes coverage. Nil is unknown; a craft with no reagent facts
-  cannot establish measured false. This is important for legacy results whose
-  empty return list left no allocation/reagent row.
+- Retained finite positive reagent facts, including fractional quantities,
+  recover raw Resourcefulness positives and material quantities, not complete
+  sets. Legacy capture could discard an unavailable return measurement while
+  leaving allocation zeros, so neither mixed zero/nil facts nor even all-zero
+  persisted rows prove craft-level false or set completeness. Those observations
+  remain unknown. Raw positives remain useful without inventing exact historical
+  non-trivial rates.
 - Already-pruned Resourcefulness facts cannot be reconstructed from the old
   daily totals. There is no timestamp cutoff, synthetic false, or reimport from
   the diagnostic trace. Reopening the upgraded database never counts facts twice.
+
+Databases written by the earlier PR #21 `outcomeVersion = 1` are corrected once:
+unproven false/set coverage is discarded; durable positive counts and material
+quantities survive, with omitted retained fractional quantities added only once.
+Multicraft proc coverage is reconstructed from retained measurements and singleton
+daily grains, since that revision did not distinguish captured counts from unsafe
+residual inference. Pruned proc/set coverage whose provenance cannot be proved
+becomes unknown; original daily output/bonus/Ingenuity measures remain unchanged.
 
 ### Size and Cost
 
@@ -163,7 +178,7 @@ and was not independently remeasured during this implementation.
 
 The reproducible ledger test uses 239 synthetic crafts, one daily grain, 62
 sets, and 74 items. Its deterministic indented-Lua text estimate grows from
-**136,530 to 166,989 bytes (+30,459 bytes)** including new retained flags and
+**136,530 to 176,417 bytes (+39,887 bytes)** including new retained flags and
 daily fields. Backfill took about **0.006 seconds** in the development container
 (timing varies). This smaller synthetic baseline is not a percentage estimate
 for the real database. Tests also retain the existing 50,000-craft no-history-scan
