@@ -54,17 +54,19 @@ The order is recipe and filters, compact Crafts/Multicraft/Ingenuity summary,
 activity chart, Resourcefulness and returned materials, then craft history.
 
 - Multicraft and Ingenuity show proc rate/count and bonus/refund with the derived
-  output/spend percentage. Complete coverage is implicit; partial observations
-  get an amber warning. Derived percentages remain unknown unless both amounts
-  cover every selected craft.
-- Resourcefulness separates Any return, Full return details, and Non-trivial
-  returns. Eight known positives in 30 crafts show `8 of 30 crafts confirmed`
-  and `22 crafts unknown`, not a 100% proc rate or an inferred 26.7% rate.
-  An overall any-return rate requires an outcome for every selected craft.
-  Non-trivial percentages for a smaller fully recorded subset explicitly say
-  `of these` and show how many crafts remain unclassified. No complete details
-  means unknown, not zero. Multiple materials count once per craft. Pending
-  calculations show Calculating, never a partial result.
+   output/spend percentage. When history is incomplete, positive counts say
+   `At least N procs`, percentages are omitted, and one short note says some
+   crafts have no details. Full coverage is implicit. Derived percentages require
+   both amounts for every selected craft.
+- Resourcefulness shows Reagents saved and Non-trivial savings. Eight known
+   positives in 30 crafts read `At least 8 crafts`, not a 100% proc rate or an
+   inferred 26.7% rate. Missing figures use a dash, not a fabricated zero. A single
+   note says `Some crafts have no reagent details`; there is no coverage column
+   or confirmed/unknown/unclassified vocabulary. Percentages require outcomes
+   for every selected craft (complete return lists for non-trivial savings).
+   Incomplete non-trivial history also uses lower-bound counts rather than subset
+   percentages. Multiple materials count once per craft. Pending calculations
+   show Calculating, never a partial result.
 - Returned materials show one total per item ID across the selected period and
   characters, three rows at a time with Previous/Next. Same-named IDs stay
   separate, with item icons, Retail reagent-quality icons when available, item

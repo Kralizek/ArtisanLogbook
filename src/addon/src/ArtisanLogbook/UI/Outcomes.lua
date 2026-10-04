@@ -42,17 +42,25 @@ function UI.MeasuredShare(totals, numerator, denominator)
   return string.format("%.1f%%", 100 * totals[numerator] / totals[denominator])
 end
 
-function UI.CompactOutcome(totals, proc, amount, denominator, amountLabel, shareLabel)
-  local observed, count = totals[proc .. "ObservedCount"], totals[proc] or 0
-  local lines = { observed > 0 and string.format("%.1f%% | %d procs", 100 * count / observed, count) or "Proc rate unknown" }
-  if observed < totals.craftCount then
-    lines[#lines + 1] = string.format("|cffffcc66Recorded for %d of %d crafts|r", observed, totals.craftCount)
+local function outcomeText(count, observed, crafts, noun)
+  count = count or 0
+  noun = count == 1 and noun or noun .. "s"
+  if crafts > 0 and observed == crafts then
+    return string.format("%.1f%% | %d %s", 100 * count / crafts, count, noun)
   end
-  lines[#lines + 1] = amountLabel .. ": " .. UI.Value(totals[amount]) .. " | " ..
-    UI.MeasuredShare(totals, amount, denominator) .. " " .. shareLabel
-  if totals[amount .. "ObservedCount"] < totals.craftCount or
+  return count > 0 and string.format("At least %d %s", count, noun) or "-"
+end
+
+function UI.CompactOutcome(totals, proc, amount, denominator, amountLabel, shareLabel)
+  local observed = totals[proc .. "ObservedCount"]
+  local lines = { outcomeText(totals[proc], observed, totals.craftCount, "proc") }
+  local amountText = amountLabel .. ": " .. (totals[amount] ~= nil and tostring(totals[amount]) or "-")
+  local share = UI.MeasuredShare(totals, amount, denominator)
+  if share ~= "Unknown" then amountText = amountText .. " | " .. share .. " " .. shareLabel end
+  lines[#lines + 1] = amountText
+  if observed < totals.craftCount or totals[amount .. "ObservedCount"] < totals.craftCount or
       totals[denominator .. "ObservedCount"] < totals.craftCount then
-    lines[#lines + 1] = "|cffffcc66Partial amounts; share unavailable|r"
+    lines[#lines + 1] = "|cffffcc66Some crafts have no details|r"
   end
   return table.concat(lines, "\n")
 end
@@ -64,28 +72,16 @@ function UI.ResourcefulnessSummary(totals, nonTrivial)
   local complete = totals.resourcefulnessCompleteProcCountObservedCount
   local result = {}
   if crafts == 0 then
-    return { any = "No crafts", complete = "No crafts", nonTrivial = "Unknown" }
+    return { any = "No crafts", complete = "", nonTrivial = "-" }
   end
-  if observed == crafts then
-    result.any = string.format("%.1f%% | %d returns", 100 * positive / crafts, positive)
-  else
-    result.any = string.format("%d of %d crafts confirmed\n|cffffcc66%d crafts unknown|r\nProc rate unavailable",
-      positive, crafts, crafts - observed)
-  end
+  result.any = outcomeText(positive, observed, crafts, "craft")
+  result.complete = complete < crafts and "|cffffcc66Some crafts have no reagent details|r" or ""
   if complete == 0 then
-    result.complete = "|cffffcc66No fully recorded crafts|r"
-    result.nonTrivial = "Unknown\nFull return details unavailable"
+    result.nonTrivial = "-"
+  elseif nonTrivial == nil then
+    result.nonTrivial = "Calculating..."
   else
-    result.complete = complete == crafts and "All crafts fully recorded" or
-      string.format("|cffffcc66%d of %d crafts fully recorded|r\nAny return: %.1f%% of these", complete, crafts,
-        100 * (totals.resourcefulnessCompleteProcCount or 0) / complete)
-    if nonTrivial == nil then result.nonTrivial = "Calculating..."
-    elseif complete == crafts then
-      result.nonTrivial = string.format("%.1f%% | %d returns", 100 * nonTrivial / complete, nonTrivial)
-    else
-      result.nonTrivial = string.format("%d of %d fully recorded crafts\n%.1f%% of these\n|cffffcc66%d crafts unclassified|r",
-        nonTrivial, complete, 100 * nonTrivial / complete, crafts - complete)
-    end
+    result.nonTrivial = outcomeText(nonTrivial, complete, crafts, "craft")
   end
   return result
 end
@@ -175,12 +171,12 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   pane.chart = chart
   UI.Text(pane, 0, -374, width, 22, "GameFontNormal"):SetText("Resourcefulness")
   pane.resourcefulness = {}
-  for position, entry in ipairs({ { "Any return", "any" }, { "Full return details", "complete" },
-      { "Non-trivial returns", "nonTrivial" } }) do
-    local x = (position - 1) * width / 3
-    UI.Text(pane, x, -402, width / 3 - 16, 20, "GameFontNormalSmall"):SetText(entry[1])
-    pane.resourcefulness[entry[2]] = UI.Text(pane, x, -426, width / 3 - 16, 80)
+  for position, entry in ipairs({ { "Reagents saved", "any" }, { "Non-trivial savings", "nonTrivial" } }) do
+    local x = (position - 1) * width / 2
+    UI.Text(pane, x, -402, width / 2 - 16, 20, "GameFontNormalSmall"):SetText(entry[1])
+    pane.resourcefulness[entry[2]] = UI.Text(pane, x, -426, width / 2 - 16, 48)
   end
+  pane.resourcefulness.complete = UI.Text(pane, 0, -480, width, 24)
   stats[3] = pane.resourcefulness.any
   UI.Text(pane, 0, -518, width - 230, 22, "GameFontNormal"):SetText("Returned materials")
   local materialRows, cursors, currentCursor, nextCursor = {}, {}, nil, nil
@@ -211,7 +207,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       end
     end
     materialStatus:SetText(not page and (reason or "Unavailable") or
-      (#page.returns == 0 and "No confirmed returned materials" or ""))
+      (#page.returns == 0 and "No saved reagents to show" or ""))
     pane.previous:SetEnabled(#cursors > 0); pane.next:SetEnabled(nextCursor ~= nil)
   end
   pane.previous = UI.Button(pane, "Previous", width - 190, -514, 85, function()

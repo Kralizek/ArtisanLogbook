@@ -269,9 +269,11 @@ non-trivial rate, even if the raw positive proc rate is known.
 These observations need not be a representative sample: legacy backfill may
 prove only positive outcomes. For example, 8 known positives with 8 observations
 and 30 total crafts do not establish a 100% population proc rate. The production
-UI shows confirmed counts and unknown crafts in this case. It shows an overall
-any-return rate only when all selected crafts have known outcomes, and explicitly
-labels non-trivial rates restricted to a fully recorded subset.
+UI says `At least 8 crafts` in this case. It shows an overall any-return rate
+only when all selected crafts have known outcomes. Non-trivial savings likewise
+use lower-bound counts instead of subset percentages when full return details
+are missing; missing figures display a dash. These presentation choices do not
+change the factual API's counts or observation fields.
 
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
 `{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.
@@ -301,8 +303,9 @@ are **applied** refunds, not the raw reported refund on false/unknown outcomes.
 Missing coverage is unknown. Equal marginal observation counts alone do not
 prove the same crafts were measured. The production UI shows bonus/output and
 refund/spend percentages only when both measures cover the complete selected
-population and the denominator is positive; otherwise the quantities/coverage
-are shown and the percentage is unknown. Trivial-item preferences are not part
+population and the denominator is positive; otherwise quantities are shown with
+a short missing-details note where needed, and the percentage is omitted.
+Trivial-item preferences are not part
 of either the factual API or `ArtisanLogbookManagement`.
 
 ### Durable daily craft series

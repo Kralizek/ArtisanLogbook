@@ -1180,9 +1180,9 @@ do
     resourcefulnessCompleteProcCountObservedCount = 0,
   }
   local summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
-  assert(summary.any:find("8 of 30 crafts confirmed", 1, true) and summary.any:find("22 crafts unknown", 1, true))
+  assert(summary.any == "At least 8 crafts")
   assert(not summary.any:find("%%") and not summary.nonTrivial:find("%%"))
-  assert(summary.nonTrivial:find("Unknown", 1, true))
+  assert(summary.nonTrivial == "-" and summary.complete:find("Some crafts have no reagent details", 1, true))
   local multi = helpers.CompactOutcome(screenshotTotals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output")
   local ingenuity = helpers.CompactOutcome(screenshotTotals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent")
   assert(multi == "23.3% | 7 procs\nBonus: 52 | 25.7% of output")
@@ -1191,10 +1191,15 @@ do
   screenshotTotals.resourcefulnessCompleteProcCountObservedCount = 30
   screenshotTotals.resourcefulnessCompleteProcCount = 8
   summary = helpers.ResourcefulnessSummary(screenshotTotals, 4)
-  assert(summary.any == "26.7% | 8 returns" and summary.nonTrivial == "13.3% | 4 returns")
+  assert(summary.any == "26.7% | 8 crafts" and summary.nonTrivial == "13.3% | 4 crafts")
+  assert(summary.complete == "")
   screenshotTotals.resourcefulnessProcCount = 0
   summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
-  assert(summary.any == "0.0% | 0 returns")
+  assert(summary.any == "0.0% | 0 crafts")
+  screenshotTotals.resourcefulnessProcCountObservedCount = 8
+  screenshotTotals.resourcefulnessCompleteProcCountObservedCount = 8
+  summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
+  assert(summary.any == "-" and summary.nonTrivial == "-")
   assert(helpers.ResourcefulnessSummary({ craftCount = 0 }, 0).any == "No crafts")
   assert(ledger:AddDimension("item", 8, { name = "Tranquility Bloom" }))
   assert(ledger:AddDimension("item", 9, { name = "Tranquility Bloom" }))
@@ -1207,10 +1212,17 @@ do
   api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
-  assert(pane.stats[2].text:find("25.0%%") and pane.stats[4].text:find("Refund: 12", 1, true))
-  assert(pane.stats[3].text:find("3 of 5 crafts confirmed", 1, true) and not pane.stats[3].text:find("%%"))
-  assert(pane.resourcefulness.nonTrivial.text:find("75.0%% of these"))
-  assert(pane.stats[2].text:find("Recorded for 4 of 5 crafts", 1, true))
+  assert(pane.stats[2].text:find("At least 1 proc", 1, true) and pane.stats[4].text:find("Refund: 12", 1, true))
+  assert(pane.stats[3].text == "At least 3 crafts" and not pane.stats[3].text:find("%%"))
+  assert(pane.resourcefulness.nonTrivial.text == "At least 3 crafts")
+  assert(pane.stats[2].text:find("Some crafts have no details", 1, true))
+  for _, labels in ipairs({ pane.stats, pane.resourcefulness }) do
+    for _, label in pairs(labels) do
+      for _, technical in ipairs({ "confirmed", "unknown", "observed", "coverage", "unclassified", "fully recorded" }) do
+        assert(not label.text:lower():find(technical, 1, true))
+      end
+    end
+  end
   assert(pane.materialRows[1].label.text == pane.materialRows[2].label.text)
   assert(pane.materialRows[1].identity.text == "#8" and pane.materialRows[2].identity.text == "#9")
   assert(pane.materialRows[1].quantity.text == "3" and pane.materialRows[2].quantity.text == "5")
@@ -1244,18 +1256,18 @@ do
   checkbox:SetChecked(true); checkbox.scripts.OnClick(checkbox)
   assert(helpers.IsTrivial(8))
   button(detail, "Back").scripts.OnClick()
-  assert(window.visiblePage == recipePage and pane.resourcefulness.nonTrivial.text:find("50.0%% of these"))
+  assert(window.visiblePage == recipePage and pane.resourcefulness.nonTrivial.text == "At least 2 crafts")
   local materialCheck
   for _, frame in ipairs(frames) do
     if frame.parent and frame.parent.parent == pane and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
   end
   assert(materialCheck)
   materialCheck:SetChecked(true); materialCheck.scripts.OnClick(materialCheck)
-  assert(pane.resourcefulness.nonTrivial.text:find("25.0%% of these"))
+  assert(pane.resourcefulness.nonTrivial.text == "At least 1 craft")
   helpers.SetTrivial(10, true); pane:Refresh()
-  assert(pane.resourcefulness.nonTrivial.text:find("0.0%% of these"))
+  assert(pane.resourcefulness.nonTrivial.text == "-")
   helpers.SetTrivial(9, false); pane:Refresh()
-  assert(pane.resourcefulness.nonTrivial.text:find("50.0%% of these"))
+  assert(pane.resourcefulness.nonTrivial.text == "At least 2 crafts")
   local settings = environment.ArtisanLogbookUISettings
   local anotherUI = loadUI()
   assert(anotherUI.UI.IsTrivial(8) and anotherUI.UI.IsTrivial(10) and not anotherUI.UI.IsTrivial(9))
@@ -1279,7 +1291,7 @@ do
   ledger:Prune(ledger.wall())
   assert(#ledger.database.crafts == 0)
   pane:Refresh()
-  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text:find("40.0%% of these"))
+  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "At least 2 crafts")
   for index = 1, 205 do
     record({ resourcesReturned = { { reagent = { itemID = 1000 + index }, quantity = 1 } } }, 9002)
   end
@@ -1340,12 +1352,12 @@ do
   ui.productionWindow:Activate("Recipes")
   ui.productionWindow:OpenRecipe({ id = 9001 })
   local text = ui.productionWindow.recipeOutcomes.stats[3].text
-  assert(text:find("8 of 30 crafts confirmed", 1, true) and not text:find("%%"))
-  assert(text:find("22 crafts unknown", 1, true))
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text:find("Unknown\nFull return details unavailable", 1, true))
+  assert(text == "At least 8 crafts" and not text:find("%%"))
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("Some crafts have no reagent details", 1, true))
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
   ui.UI.SetTrivial(8, false)
   ui.productionWindow.recipeOutcomes:Refresh()
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text:find("Unknown", 1, true))
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
   print("PASS legacy incomplete positive sets never become measured non-trivial false")
 end
 
