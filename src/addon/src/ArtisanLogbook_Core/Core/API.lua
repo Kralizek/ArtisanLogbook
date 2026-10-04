@@ -422,6 +422,152 @@ function API.GetCraftSeries(filter, options)
   return result
 end
 
+local outcomeMetrics = { "outputQuantity", "multicraftBonus", "multicraftProcCount",
+  "concentrationSpent", "ingenuityProcCount", "ingenuityRefund", "resourcefulnessProcCount" }
+
+local function outcomeQuery(recipeId, filter)
+  if not integer(recipeId, 0) then return nil, "invalid-id" end
+  if filter ~= nil and not keysAllowed(filter, { time = true, characters = true }) then
+    return nil, "invalid-filter"
+  end
+  local normalized, signature = normalizeFilter(filter)
+  if not normalized then return nil, signature end
+  local time = normalized.time
+  if time and ((time.from and time.from % 86400 ~= 0) or (time.to and time.to % 86400 ~= 0)) then
+    return nil, "invalid-filter"
+  end
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  local days = ledger.seriesDays
+  local first, last = 1, #days + 1
+  if time and time.from then
+    while first < last do
+      local middle = math.floor((first + last) / 2)
+      if days[middle] < time.from then first = middle + 1 else last = middle end
+    end
+  end
+  return { ledger = ledger, recipeId = recipeId, filter = normalized, first = first,
+    signature = tostring(recipeId) .. ":" .. signature }
+end
+
+local function visitOutcomes(query, visit)
+  local ledger, filter = query.ledger, query.filter
+  for position = query.first, #ledger.seriesDays do
+    local day = ledger.seriesDays[position]
+    if filter.time and filter.time.to and day >= filter.time.to then break end
+    for characterId, recipes in pairs(ledger.seriesByKey[day]) do
+      local row = recipes[query.recipeId]
+      local characterRow = ledger.dimensionRows.character[characterId]
+      if row and (not filter.characters or (characterRow and filter.characters[characterRow.key])) then
+        visit(row, day, characterId)
+      end
+    end
+  end
+end
+
+function API.GetRecipeOutcomes(recipeId, filter, options)
+  local query, reason = outcomeQuery(recipeId, filter)
+  if not query then return nil, reason end
+  if options == nil then options = {} end
+  if not keysAllowed(options, { buckets = true }) or
+      (options.buckets ~= nil and (not integer(options.buckets, 1) or options.buckets > 200)) then
+    return nil, "invalid-options"
+  end
+  local totals, firstDay, lastDay = { craftCount = 0 }, nil, nil
+  for _, metric in ipairs(outcomeMetrics) do totals[metric .. "ObservedCount"] = 0 end
+  visitOutcomes(query, function(row, day)
+    firstDay, lastDay = firstDay or day, day
+    totals.craftCount = totals.craftCount + row.craftCount
+    for _, metric in ipairs(outcomeMetrics) do
+      if row[metric] ~= nil then totals[metric] = (totals[metric] or 0) + row[metric] end
+      totals[metric .. "ObservedCount"] = totals[metric .. "ObservedCount"] + row[metric .. "ObservedCount"]
+    end
+  end)
+  local result = { totals = totals, series = {} }
+  if not firstDay then return result end
+  local time = query.filter.time or {}
+  result.from, result.to = time.from or firstDay, time.to or (lastDay + 86400)
+  result.bucketSeconds = math.max(1, math.ceil((result.to - result.from) / 86400 /
+    (options.buckets or 60))) * 86400
+  local buckets = {}
+  visitOutcomes(query, function(row, day)
+    local position = math.floor((day - result.from) / result.bucketSeconds) + 1
+    buckets[position] = (buckets[position] or 0) + row.craftCount
+  end)
+  for position = 1, math.ceil((result.to - result.from) / result.bucketSeconds) do
+    result.series[#result.series + 1] = {
+      bucketStart = result.from + (position - 1) * result.bucketSeconds,
+      craftCount = buckets[position] or 0,
+    }
+  end
+  return result
+end
+
+local function returnedPage(recipeId, filter, options, kind)
+  local query, reason = outcomeQuery(recipeId, filter)
+  if not query then return nil, reason end
+  if options == nil then options = {} end
+  if not keysAllowed(options, { limit = true, cursor = true }) then return nil, "invalid-options" end
+  local limit = options.limit or 50
+  if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
+  local prefix = kind .. ":" .. query.signature .. "\n"
+  local after
+  if options.cursor ~= nil then
+    if type(options.cursor) ~= "string" or options.cursor:sub(1, #prefix) ~= prefix then
+      return nil, "invalid-cursor"
+    end
+    after = options.cursor:sub(#prefix + 1)
+    if kind == "items" then
+      after = tonumber(after)
+      if not integer(after, 1) then return nil, "invalid-cursor" end
+    elseif not after:match("^%d[%d,]*$") then return nil, "invalid-cursor" end
+  end
+  local index = kind == "sets" and query.ledger.returnSetIndex or query.ledger.returnQuantityIndex
+  local metric = kind == "sets" and "craftCount" or "returnedQuantity"
+  local selected, keys = {}, {}
+  visitOutcomes(query, function(_, day, characterId)
+    local bucket = index[day]
+    local recipes = bucket and bucket[characterId]
+    for key, row in pairs(recipes and recipes[recipeId] or {}) do
+      if (after == nil or key > after) and (#keys < limit + 1 or key <= keys[#keys]) then
+        if selected[key] == nil then
+          keys[#keys + 1] = key
+          table.sort(keys)
+          if #keys > limit + 1 then
+            selected[keys[#keys]] = nil
+            keys[#keys] = nil
+          end
+          selected[key] = 0
+        end
+        selected[key] = selected[key] + row[metric]
+      end
+    end
+  end)
+  local result = { returns = {} }
+  for position = 1, math.min(limit, #keys) do
+    local key = keys[position]
+    if kind == "sets" then
+      local itemIds = {}
+      for text in key:gmatch("[^,]+") do itemIds[#itemIds + 1] = tonumber(text) end
+      result.returns[#result.returns + 1] = { itemIds = itemIds, craftCount = selected[key] }
+    else
+      result.returns[#result.returns + 1] = {
+        item = item(query.ledger, key), returnedQuantity = selected[key],
+      }
+    end
+  end
+  if #keys > limit then result.nextCursor = prefix .. tostring(keys[limit]) end
+  return result
+end
+
+function API.GetRecipeReturnSets(recipeId, filter, options)
+  return returnedPage(recipeId, filter, options, "sets")
+end
+
+function API.GetRecipeReturnedReagents(recipeId, filter, options)
+  return returnedPage(recipeId, filter, options, "items")
+end
+
 function API.GetRecipeSummaries(options)
   if options == nil then options = {} end
   if not keysAllowed(options, { limit = true, cursor = true, character = true,
