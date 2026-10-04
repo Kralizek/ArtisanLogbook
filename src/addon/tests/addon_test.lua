@@ -1212,9 +1212,13 @@ do
   api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
+  local function finishCalculation()
+    while pane.scripts.OnUpdate do pane.scripts.OnUpdate() end
+  end
+  finishCalculation()
   assert(pane.stats[2].text:find("Proc recorded for 1 craft", 1, true) and pane.stats[4].text:find("Refund: 12", 1, true))
   assert(pane.stats[3].text == "Returns recorded for 3 crafts" and not pane.stats[3].text:find("%%"))
-  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 3 crafts")
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 3 crafts")
   assert(pane.resourcefulness.complete.text:find("Return details missing for 1 craft", 1, true))
   assert(pane.stats[2].text:find("Some crafts have no details", 1, true))
   for _, labels in ipairs({ pane.stats, pane.resourcefulness }) do
@@ -1257,18 +1261,20 @@ do
   checkbox:SetChecked(true); checkbox.scripts.OnClick(checkbox)
   assert(helpers.IsTrivial(8))
   button(detail, "Back").scripts.OnClick()
-  assert(window.visiblePage == recipePage and pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 2 crafts")
+  finishCalculation()
+  assert(window.visiblePage == recipePage and pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
   local materialCheck
   for _, frame in ipairs(frames) do
     if frame.parent and frame.parent.parent == pane and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
   end
   assert(materialCheck)
   materialCheck:SetChecked(true); materialCheck.scripts.OnClick(materialCheck)
-  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 1 craft")
-  helpers.SetTrivial(10, true); pane:Refresh()
+  finishCalculation()
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 1 craft")
+  helpers.SetTrivial(10, true); pane:Refresh(); finishCalculation()
   assert(pane.resourcefulness.nonTrivial.text == "-")
-  helpers.SetTrivial(9, false); pane:Refresh()
-  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 2 crafts")
+  helpers.SetTrivial(9, false); pane:Refresh(); finishCalculation()
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
   local settings = environment.ArtisanLogbookUISettings
   local anotherUI = loadUI()
   assert(anotherUI.UI.IsTrivial(8) and anotherUI.UI.IsTrivial(10) and not anotherUI.UI.IsTrivial(9))
@@ -1282,6 +1288,7 @@ do
   local otherSession = assert(ledger:CreateSession({ characterName = "Second outcome crafter" }))
   record({ resourcesReturned = {} })
   pane:Open(9001)
+  finishCalculation()
   local chosen
   for _, entry in ipairs(api.GetCharacters()) do if entry.name == "Second outcome crafter" then chosen = entry.key end end
   dropdown(pane, "Second outcome crafter"):Choose(chosen)
@@ -1292,7 +1299,8 @@ do
   ledger:Prune(ledger.wall())
   assert(#ledger.database.crafts == 0)
   pane:Refresh()
-  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "Non-trivial returns in 2 crafts")
+  finishCalculation()
+  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
   for index = 1, 205 do
     record({ resourcesReturned = { { reagent = { itemID = 1000 + index }, quantity = 1 } } }, 9002)
   end
@@ -1306,13 +1314,15 @@ do
   pane.scripts.OnUpdate()
   assert(pages == 2 and pane.scripts.OnUpdate)
   pane.scripts.OnUpdate()
-  assert(pages == 3 and pane.scripts.OnUpdate == nil and pane.resourcefulness.nonTrivial.text:find("100.0%%"))
+  assert(pages == 3 and pane.scripts.OnUpdate)
+  finishCalculation()
+  assert(pane.scripts.OnUpdate == nil and pane.resourcefulness.nonTrivial.text:find("100.0%%"))
   pane.next.scripts.OnClick()
   local secondPageItem = pane.materialRows[1].item.id
   local pageCheck = pane.materialRows[1].check
   pageCheck:SetChecked(true); pageCheck.scripts.OnClick(pageCheck)
+  finishCalculation()
   assert(pane.materialRows[1].item.id == secondPageItem and pane.previous.enabled)
-  while pane.scripts.OnUpdate do pane.scripts.OnUpdate() end
   pane.previous.scripts.OnClick()
   assert(pane.materialRows[1].item.id == 1001 and not pane.previous.enabled)
   assert(#pane.chart.lines <= 59)
@@ -1352,13 +1362,19 @@ do
   ui.UI.SetTrivial(8, true)
   ui.productionWindow:Activate("Recipes")
   ui.productionWindow:OpenRecipe({ id = 9001 })
+  while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
+    ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
+  end
   local text = ui.productionWindow.recipeOutcomes.stats[3].text
   assert(text == "Returns recorded for 8 crafts" and not text:find("%%"))
   assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("Return results missing for 22 crafts", 1, true))
   assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
   ui.UI.SetTrivial(8, false)
   ui.productionWindow.recipeOutcomes:Refresh()
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
+  while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
+    ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
+  end
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 8 crafts")
   print("PASS legacy incomplete positive sets never become measured non-trivial false")
 end
 

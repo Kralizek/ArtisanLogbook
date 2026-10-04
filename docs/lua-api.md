@@ -63,6 +63,7 @@ Both craft queries and callback payloads use the same shape:
   outputQuantity = 5, outputQuality = 0, outputItemLevel = 0,
   multicraftBonus = 0, concentrationSpent = 0, concentrationCurrencyId = 0,
   hasIngenuityProc = false, ingenuityRefund = 9,
+  hasResourcefulnessProc = false, resourcefulnessComplete = true,
   request = {
     id = 42, timestamp = 1800000000, recipe = recipe,
     requestedCount = 1, useConcentration = false,
@@ -85,6 +86,11 @@ retained reagent facts, not proof of no reagent consumption. `request` is absent
 without a correlated submission; `request.allocations` is absent without a
 captured selection. No context, order/customer data, or source is fabricated.
 Request quotes remain separate from observed result measurements.
+`hasResourcefulnessProc` is present only when a return outcome was captured;
+`resourcefulnessComplete` is true only when the callback's returned-item list was
+complete and valid. A positive item fact can establish a proc even when the full
+list is incomplete. These fields are factual; consumers should not treat missing
+as a negative result.
 
 Related objects have these allowlisted fields (each metadata field is optional):
 

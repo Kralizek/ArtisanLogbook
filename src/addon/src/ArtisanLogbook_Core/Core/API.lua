@@ -101,7 +101,7 @@ end
 local function projectCraft(ledger, craft)
   local result = fields(craft, { "id", "timestamp", "gameOperationId", "outputQuality", "outputItemLevel",
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
-    "hasIngenuityProc", "ingenuityRefund" })
+    "hasIngenuityProc", "ingenuityRefund", "hasResourcefulnessProc", "resourcefulnessComplete" })
   local rows = related(ledger, craft)
   result.character = character(ledger, rows.characters)
   result.realm = realm(ledger, rows.realms)

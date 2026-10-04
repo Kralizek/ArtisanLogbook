@@ -30,6 +30,17 @@ function UI.NonTrivialCount(sets)
   return count
 end
 
+function UI.CraftHasNonTrivialReturn(craft)
+  if craft.resourcefulnessComplete == true then return false end
+  for _, reagent in ipairs(craft.reagents or {}) do
+    local itemId = reagent.item and reagent.item.id
+    if itemId and reagent.returnedQuantity and reagent.returnedQuantity > 0 and not UI.IsTrivial(itemId) then
+      return true
+    end
+  end
+  return false
+end
+
 function UI.ProcRate(count, observed)
   if not observed or observed == 0 then return "Unknown\n0 observed crafts" end
   return string.format("%.1f%%\n%d / %d observed crafts", 100 * count / observed, count, observed)
@@ -89,12 +100,15 @@ function UI.ResourcefulnessSummary(totals, nonTrivial)
     result.complete = string.format("|cffffcc66Return results missing for %d %s|r", missing,
       missing == 1 and "craft" or "crafts")
   end
-  if complete == 0 then
-    result.nonTrivial = "-"
-  elseif nonTrivial == nil then
+  if nonTrivial == nil then
     result.nonTrivial = "Calculating..."
+  elseif complete == crafts and crafts > 0 then
+    result.nonTrivial = outcomeText(nonTrivial, complete, crafts, "craft")
+  elseif nonTrivial > 0 then
+    result.nonTrivial = string.format("Non-trivial returns recorded for %d %s", nonTrivial,
+      nonTrivial == 1 and "craft" or "crafts")
   else
-    result.nonTrivial = outcomeText(nonTrivial, complete, crafts, "craft", "Non-trivial returns in")
+    result.nonTrivial = "-"
   end
   if complete < crafts and complete > 0 then
     local missing = crafts - complete
@@ -302,7 +316,24 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       end
     end
     showReturns(nil)
-    local cursor, nonTrivial = nil, 0
+    local craftFilter = { recipes = { recipeId } }
+    for key, value in pairs(filter) do craftFilter[key] = value end
+    local cursor, craftCursor, nonTrivial = nil, nil, 0
+    local function nextCrafts()
+      local page, pageReason = api.GetCrafts(craftFilter, { limit = 100, cursor = craftCursor })
+      if not page then
+        self.resourcefulness.nonTrivial:SetText("Unavailable"); status:SetText(pageReason or "Unavailable")
+        self:SetScript("OnUpdate", nil); return
+      end
+      for _, craft in ipairs(page.crafts) do
+        if UI.CraftHasNonTrivialReturn(craft) then nonTrivial = nonTrivial + 1 end
+      end
+      craftCursor = page.nextCursor
+      if not craftCursor then
+        showReturns(nonTrivial)
+        self:SetScript("OnUpdate", nil)
+      else self:SetScript("OnUpdate", nextCrafts) end
+    end
     local function nextSets()
       local page, pageReason = api.GetRecipeReturnSets(recipeId, filter, { limit = 100, cursor = cursor })
       if not page then
@@ -312,8 +343,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       nonTrivial = nonTrivial + UI.NonTrivialCount(page.returns)
       cursor = page.nextCursor
       if not cursor then
-        showReturns(nonTrivial)
-        self:SetScript("OnUpdate", nil)
+        craftCursor = nil
+        self:SetScript("OnUpdate", nextCrafts)
       else self:SetScript("OnUpdate", nextSets) end
     end
     nextSets()

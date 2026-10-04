@@ -263,6 +263,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
     outputItem = { id = 201, name = "Output", expansion = oldExpansion },
     outputQuality = 0, outputQuantity = 5, outputItemLevel = 0, multicraftBonus = 0,
     concentrationSpent = 0, concentrationCurrencyId = 0, hasIngenuityProc = false, ingenuityRefund = 9,
+    hasResourcefulnessProc = false, resourcefulnessComplete = true,
     request = { id = 1, timestamp = 1800000000, requestedCount = 1, useConcentration = false,
       concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0, recipe = recipe,
       allocations = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, quality = 0 } } },
@@ -271,6 +272,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
   local unknown = assert(api.GetCraft(5))
   assert(unknown.recipe == nil and unknown.request == nil and unknown.outputItem == nil)
   assert(unknown.outputQuantity == nil and unknown.hasIngenuityProc == nil and unknown.ingenuityRefund == nil)
+  assert(unknown.hasResourcefulnessProc == nil and unknown.resourcefulnessComplete == nil)
   equal(unknown.reagents, {})
   errorIs("not-found", api.GetCraft(999))
   errorIs("invalid-id", api.GetCraft(0))

@@ -66,8 +66,10 @@ activity chart, Resourcefulness and returned materials, then craft history.
    coverage column or confirmed/unknown/unclassified vocabulary. Percentages
    require outcomes for every selected craft (complete return lists for
    non-trivial savings). Incomplete non-trivial history shows recorded craft
-   counts rather than subset percentages. Multiple materials count once per
-   craft. Pending calculations show Calculating, never a partial result.
+   counts rather than subset percentages. Known positive returns on retained
+   partial-result crafts are included alongside complete-set aggregates; complete
+   crafts are not double-counted. Multiple materials count once per craft. Pending
+   calculations show Calculating, never a partial result.
 - Returned materials show one total per item ID across the selected period and
   characters, three rows at a time with Previous/Next. Same-named IDs stay
   separate, with item icons, Retail reagent-quality icons when available, item
