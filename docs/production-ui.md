@@ -24,7 +24,12 @@ icons. Character names retain class coloring where available.
 
 The parchment has an opaque base beneath Blizzard achievement parchment artwork,
 so transparent texture padding cannot expose the dark window under long tables.
-Parchment text has no drop shadow. Compact navigation uses the native quest-title
+The grain is blended at 16% opacity rather than stretched at full opacity.
+Parchment text has no drop shadow; character text uses darker shades of its class
+hue for contrast, while sidebar/dropdown/chat colors stay native. Section headings
+on dark panels have an explicit light gold color. Dropdown widths include their
+native end caps, text is left-aligned, and captions hide with their controls.
+Compact navigation uses the native quest-title
 highlight, and local views use `TabSystemButtonArtTemplate` with its selected-state
 mixin and top-tab orientation. Activity charts include numeric gridlines and
 date labels; most-crafted summaries use the recipe's artwork.
@@ -52,6 +57,10 @@ proc counts, coverage-aware percentages, and non-trivial return interpretation.
 **Reagents** shows ten returned item identities per page, with quantities, item
 IDs, icons, available Blizzard reagent-quality visuals, item tooltips, and
 per-item Trivial checkboxes. Same-named item IDs remain separate.
+
+Recipe filters reserve the second line only for Custom dates. Preset periods
+bring the active view closer to its filters and give Craft History the remaining
+height without changing its saved position on ordinary tab navigation.
 
 Characters' two slots use `GetProfessions(characterKey)` across all available
 history, independent of the period and profession activity filters. Only primary
@@ -159,6 +168,11 @@ request count/concentration quote remain accessible below. A reagent selector
 and Trivial checkbox retain #21's reversible classification behavior. Changing
 that preference refreshes recipe statistics on return without resetting history.
 
+Crafts with no reagent facts hide the selector and its caption and reclaim that
+vertical space. The returned list uses compact empty/short heights and grows to
+four visible rows before scrolling. Resulting Items follows immediately instead
+of sitting below a fixed empty section; larger lists and metadata remain scrollable.
+
 ## Measurements and bounds
 
 - Aggregate periods use UTC calendar days: Today, 7, 30 (default), 90, and 365
@@ -238,7 +252,15 @@ illustrations exceed recorded facts:
 
 ## In-game acceptance checklist
 
-These checks are **not yet performed**. Lua mocks cover state and data semantics,
+The [second screenshot round for 35085a8](https://github.com/Kralizek/ArtisanLogbook/pull/23#issuecomment-6023970088)
+confirms full-height parchment, visible chart axes, native local tabs, recipe
+search, dated craft history, the Reagents detail pane and two profession slots.
+It also exposed excessive parchment grain, dropdown overflow, low-contrast class
+names/dark modal headings, an orphan Reagent caption and wasted modal space.
+The follow-up fixes require a new live capture, particularly an empty and a
+multi-reagent Craft Detail, preset/custom recipe periods and the rightmost filter.
+
+The full matrix below is **not yet performed**. Lua mocks cover state and data semantics,
 not Blizzard asset rendering, font metrics, hit-testing, strata, or taint. There
 is no WoW client in the development container. Capture actual screenshots of all
 pages and the modal while performing this checklist.

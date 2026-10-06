@@ -180,6 +180,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   function pane:SelectView(name)
     self.activeView = name
     for title, view in pairs(self.views) do view:SetShown(title == name) end
+    if self.LayoutFilters then self:LayoutFilters() end
   end
   pane:SelectView("Overview")
   pane.calculationGeneration = 0
@@ -194,7 +195,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   end
   local period = UI.Selector(pane, 0, 0, 125, periodChoices, function(value)
     days = value
-    fromInput:SetShown(days == "custom"); toInput:SetShown(days == "custom")
+    pane:LayoutFilters()
     refresh()
   end, "Period")
   local characters = UI.Selector(pane, 165, 0, 185, {}, function(value)
@@ -215,6 +216,17 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     return input
   end
   fromInput, toInput = dateInput(0, "From UTC (YYYY-MM-DD)"), dateInput(125, "Through UTC (YYYY-MM-DD)")
+  function pane:LayoutFilters()
+    self.viewOffset = days == "custom" and 88 or 52
+    fromInput:SetShown(days == "custom"); toInput:SetShown(days == "custom")
+    for _, view in pairs(self.views) do
+      view:ClearAllPoints(); view:SetPoint("TOPLEFT", 0, -self.viewOffset)
+    end
+    status:ClearAllPoints()
+    status:SetPoint("TOPLEFT", days == "custom" and 250 or 382, days == "custom" and -60 or -14)
+    status:SetWidth(width - (days == "custom" and 250 or 382))
+    if self.OnLayout then self:OnLayout() end
+  end
   local from, to = UI.Range(GetServerTime(), 30)
   customFrom, customTo = from, to
   fromInput:SetText(date("!%Y-%m-%d", from)); toInput:SetText(date("!%Y-%m-%d", to - 86400))
@@ -237,6 +249,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   pane.stats = stats
   local chart = UI.Chart(overview, 0, 0, width)
   pane.chart = chart
+  overview:SetHeight(348)
+  statistics:SetHeight(350)
   pane.tiles = {}
   for index, entry in ipairs({ { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
       { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
@@ -449,6 +463,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     end
     characters:Update(available, character)
     period:Update(periodChoices, days)
+    self:LayoutFilters()
     self:Refresh(state ~= nil)
   end
   UI.RegisterTrivialCallback(function()

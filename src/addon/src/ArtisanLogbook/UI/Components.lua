@@ -13,6 +13,7 @@ function UI.Surface(parent, parchment)
     local grain = parent:CreateTexture(nil, "BORDER")
     grain:SetAllPoints(parent)
     grain:SetTexture("Interface\\AchievementFrame\\UI-Achievement-Parchment-Horizontal")
+    grain:SetAlpha(.16)
     texture.grain = grain
   else
     texture:SetColorTexture(.075, .075, .07, 1)
@@ -22,6 +23,8 @@ end
 
 function UI.Section(parent, title, x, y, width)
   local label = UI.Text(parent, x, y, width, 24, "QuestTitleFont")
+  if not UI.IsParchment(parent) then label:SetTextColor(.94, .82, .55) end
+  label:SetShadowOffset(0, 0)
   label:SetText(title)
   local rule = parent:CreateTexture(nil, "ARTWORK")
   rule:SetColorTexture(.35, .27, .14, .3)
@@ -314,14 +317,18 @@ end
 
 function UI.Selector(parent, x, y, width, choices, onChoose, title)
   local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
-  if title then UI.Text(parent, x, y, width, 16, "GameFontNormalSmall"):SetText(title) end
+  if title then
+    dropdown.caption = UI.Text(dropdown, 15, 13, width, 16, "GameFontNormalSmall")
+    dropdown.caption:SetText(title)
+  end
   dropdown:SetPoint("TOPLEFT", x - 15, y + (title and -13 or 2))
-  UIDropDownMenu_SetWidth(dropdown, width)
+  UIDropDownMenu_SetWidth(dropdown, width - 35)
+  UIDropDownMenu_JustifyText(dropdown, "LEFT")
   dropdown.choices = choices
   local function display(self, label, classFile)
     self.fullLabel = label
     local color = UI.ClassColor(classFile)
-    local text = UI.Elide(label, math.max(6, math.floor(width / 7)))
+    local text = UI.Elide(label, math.max(6, math.floor((width - 60) / 6)))
     UIDropDownMenu_SetText(self, color and color.colorStr and
       ("|c" .. color.colorStr .. text .. "|r") or text)
   end
@@ -382,9 +389,26 @@ function UI.ClassColor(classFile)
   return classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile] or nil
 end
 
-function UI.CharacterName(character)
+function UI.ReadableColor(color, parent)
+  if not color or not UI.IsParchment(parent) then return color end
+  local function linear(value)
+    return value <= .04045 and value / 12.92 or ((value + .055) / 1.055) ^ 2.4
+  end
+  local function luminance(red, green, blue)
+    return .2126 * linear(red) + .7152 * linear(green) + .0722 * linear(blue)
+  end
+  local background = luminance(.86 * .84, .76 * .84, .56 * .84)
+  local red, green, blue = color.r, color.g, color.b
+  while (background + .05) / (luminance(red, green, blue) + .05) < 4.5 do
+    red, green, blue = red * .85, green * .85, blue * .85
+  end
+  return { r = red, g = green, b = blue,
+    colorStr = string.format("ff%02x%02x%02x", math.floor(red * 255), math.floor(green * 255), math.floor(blue * 255)) }
+end
+
+function UI.CharacterName(character, parent)
   local name = UI.Name(character)
-  local color = character and UI.ClassColor(character.classFile)
+  local color = character and UI.ReadableColor(UI.ClassColor(character.classFile), parent)
   return color and color.colorStr and ("|c" .. color.colorStr .. name .. "|r") or name
 end
 
@@ -476,6 +500,14 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   frame.finish:SetText("End of results")
   frame.finish:Hide()
 
+  function frame:SetViewportHeight(value)
+    if self:GetHeight() == value then return end
+    self:SetHeight(value)
+    self.scroll:SetHeight(value - 26)
+    self.child:SetHeight(math.max(value - 26, #self.items * 30 + (self.finish:IsShown() and 35 or 0)))
+    self.scroll:SetVerticalScroll(math.min(self.scroll:GetVerticalScroll(), self.child:GetHeight() - self.scroll:GetHeight()))
+  end
+
   function frame:Reset(message)
     for _, row in ipairs(self.rows) do row.item = nil; row:Hide() end
     self.items = {}
@@ -564,7 +596,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         if cell.icon then
           cell.icon:SetTexture(cell.column.icon(item) or "Interface\\Icons\\INV_Misc_QuestionMark")
         end
-        local color = cell.column.color and cell.column.color(item)
+        local color = UI.ReadableColor(cell.column.color and cell.column.color(item), frame)
         if color then cell.label:SetTextColor(color.r, color.g, color.b)
         elseif UI.IsParchment(frame) then cell.label:SetTextColor(unpack(UI.ink))
         else cell.label:SetTextColor(1, 1, 1) end

@@ -28,13 +28,18 @@ function methods:SetTexture(texture) self.texture = texture end
 function methods:SetAtlas(atlas) self.atlas = atlas end
 function methods:SetAllPoints(relative) self.allPoints = relative or self.parent end
 function methods:SetColorTexture(...) self.color = { ... } end
+function methods:SetAlpha(alpha) self.alpha = alpha end
+function methods:SetTextColor(...) self.textColor = { ... } end
 function methods:SetPoint(point, relative, relativePoint, x, y)
   if type(relative) == "number" then
     x, y, relative, relativePoint = relative, relativePoint, nil, nil
   end
   self.point, self.relative, self.relativePoint = point, relative, relativePoint
   self.x, self.y = x, y
+  self.anchors = self.anchors or {}
+  self.anchors[point] = { relative = relative, relativePoint = relativePoint, x = x, y = y }
 end
+function methods:ClearAllPoints() self.anchors = {} end
 function methods:SetEnabled(value) self.enabled = value end
 function methods:SetChecked(value) self.checked = value end
 function methods:GetChecked() return self.checked end
@@ -111,7 +116,11 @@ environment.StaticPopupDialogs = {}
 environment.SlashCmdList = {}
 environment.tinsert = table.insert
 environment.StaticPopup_Show = function(name) environment.popup = name end
-environment.UIDropDownMenu_SetWidth = function() end
+environment.UIDropDownMenu_SetWidth = function(frame, width)
+  frame.middleWidth = width
+  frame:SetWidth(width + 50)
+end
+environment.UIDropDownMenu_JustifyText = function(frame, alignment) frame.textAlignment = alignment end
 environment.UIDropDownMenu_SetText = function(frame, text) frame.text = text end
 environment.UIDropDownMenu_Initialize = function(frame, callback) frame.initialize = callback end
 environment.UIDropDownMenu_CreateInfo = function() return {} end
@@ -850,6 +859,15 @@ local paperSurface = UI.Surface(paperProbe, true)
 assert(paperSurface.color[4] == 1 and paperSurface.allPoints == paperProbe)
 assert(paperSurface.grain.allPoints == paperProbe)
 assert(paperSurface.grain.texture == "Interface\\AchievementFrame\\UI-Achievement-Parchment-Horizontal")
+assert(paperSurface.grain.alpha == .16)
+local selectorProbe = UI.Selector(paperProbe, 20, -40, 160, { { label = "All", value = false } }, function() end, "Character")
+assert(selectorProbe.x + selectorProbe:GetWidth() == 180)
+assert(selectorProbe.textAlignment == "LEFT" and selectorProbe.caption.parent == selectorProbe)
+assert(selectorProbe.caption.x == 15 and selectorProbe.caption.y == 13)
+local darkProbe = environment.CreateFrame("Frame", nil, environment.UIParent)
+UI.Surface(darkProbe, false)
+local darkHeading = UI.Section(darkProbe, "Reagents returned", 0, 0, 300)
+assert(darkHeading.textColor[1] == .94 and darkHeading.textColor[2] == .82)
 assert(#UI.Pins() == 0)
 for index = 1, 5 do assert(UI.TogglePin({ id = index, name = "Recipe " .. (6 - index) })) end
 assert(UI.Pins()[1].id == 5 and UI.Pins()[5].id == 1)
@@ -874,6 +892,13 @@ assert(UI.CraftOutput({ recipe = { name = "Potion" }, outputItem = { name = "Via
 assert(UI.ClassColor("MAGE") == environment.RAID_CLASS_COLORS.MAGE and UI.ClassColor(nil) == nil)
 assert(UI.CharacterName({ name = "TestCrafter", classFile = "MAGE" }) == "|cff3399ffTestCrafter|r")
 assert(UI.CharacterName({ name = "Other" }) == "Other")
+local parchmentMage = UI.ReadableColor(UI.ClassColor("MAGE"), paperProbe)
+assert(parchmentMage.b < UI.ClassColor("MAGE").b and parchmentMage.r < parchmentMage.b)
+assert(UI.ReadableColor(UI.ClassColor("MAGE"), darkProbe) == UI.ClassColor("MAGE"))
+assert(UI.CharacterName({ name = "TestCrafter", classFile = "MAGE" }, paperProbe) ==
+  "|c" .. parchmentMage.colorStr .. "TestCrafter|r")
+local whiteInk = UI.ReadableColor({ r = 1, g = 1, b = 1 }, paperProbe)
+assert(whiteInk.r < .26 and whiteInk.r == whiteInk.g and whiteInk.g == whiteInk.b)
 assert(UI.QualityAtlas(42, 2, 3) == "Quality-2" and UI.QualityAtlas(99, 2, 5) == nil)
 assert(UI.QualityAtlas(42, 0, 5) == nil and UI.QualityAtlas(42, 2, nil) == nil)
 local activity = UI.Activity({ recipe = { id = 42, name = "Crushing", maxQuality = 3 },
@@ -1733,6 +1758,19 @@ do
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
   assert(window.recipeDetailPage == window.pages.Recipe and window.recipeDetailPage:IsShown())
+  assert(pane.viewOffset == 52 and pane.views.Overview.y == -52)
+  dropdown(pane, "Custom (UTC)"):Choose("custom")
+  assert(pane.viewOffset == 88 and pane.views.Overview.y == -88 and window.pages.Recipe.history.y == -88)
+  local customInputs = 0
+  for _, frame in ipairs(frames) do
+    if frame.parent == pane and frame.kind == "EditBox" and frame:IsShown() then customInputs = customInputs + 1 end
+  end
+  assert(customInputs == 2)
+  dropdown(pane, "All time"):Choose(false)
+  assert(pane.viewOffset == 52 and window.pages.Recipe.history.y == -52)
+  for _, frame in ipairs(frames) do
+    if frame.parent == pane and frame.kind == "EditBox" then assert(not frame:IsShown()) end
+  end
   assert(not window.modalShade:IsShown() and not window.craftDetailWindow:IsShown())
   local escapeJournal = false
   for _, frameName in ipairs(environment.UISpecialFrames) do
@@ -1794,6 +1832,8 @@ do
   assert(helpers.IsTrivial(8))
   assert(detail.fields.Resourcefulness.text == "1 returned")
   assert(#detail.returnedReagents.items == 1 and detail.returnedReagents.items[1].item.id == 8)
+  assert(detail.returnedReagents:GetHeight() == 66 and detail.scroll.anchors.TOPLEFT.y == -116)
+  assert(-detail.scroll.anchors.TOPLEFT.y - detail.output.parent.y - detail.output.y + detail.output:GetHeight() <= 550)
   local getCraft = api.GetCraft
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -1805,6 +1845,7 @@ do
   end
   detail:ShowCraft(second.id)
   assert(#detail.returnedReagents.items == 2)
+  assert(detail.returnedReagents:GetHeight() == 86)
   assert(detail.fields.Resourcefulness.text == "2 returned (20.0% of allocated reagents)")
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -1814,6 +1855,30 @@ do
   end
   detail:ShowCraft(second.id)
   assert(detail.fields.Resourcefulness.text == "3 returned (partial details)")
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.reagents = {}
+    for index = 1, 8 do
+      craft.reagents[index] = { item = { id = index }, allocatedQuantity = 2, returnedQuantity = 1 }
+    end
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(#detail.returnedReagents.items == 8 and detail.returnedReagents:GetHeight() == 146)
+  assert(detail.returnedReagents.child:GetHeight() > detail.returnedReagents.scroll:GetHeight())
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.reagents = {}
+    craft.outputItem = { id = 4567, name = "Flask" }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(not detail.reagentSelector:IsShown() and not checkbox:IsShown())
+  assert(detail.reagentSelector.caption.parent == detail.reagentSelector)
+  assert(detail.scroll.anchors.TOPLEFT.y == -64 and detail.returnedReagents:GetHeight() == 66)
+  assert(detail.returnedReagents.child:GetHeight() == detail.returnedReagents.scroll:GetHeight())
+  assert(#detail.output.items == 1 and detail.output.items[1].item.id == 4567)
+  assert(-detail.scroll.anchors.TOPLEFT.y - detail.output.parent.y - detail.output.y + detail.output:GetHeight() <= 550)
   api.GetCraft = getCraft
   button(detail, "Close").scripts.OnClick()
   finishCalculation()

@@ -23,6 +23,11 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged)
     function(craft) openCraft(craft.id) end, "No retained crafts in this period")
   outcomes.views["Craft History"] = history
   page.history = history
+  function outcomes:OnLayout()
+    history:SetViewportHeight(math.max(280, height - 108 - self.viewOffset))
+    local view = self.views[self.activeView]
+    content:SetHeight(math.max(height, 100 + self.viewOffset + (view and view:GetHeight() or 0)))
+  end
   local buttons, offsets = {}, {}
   function page:SelectView(name)
     if self.activeView then offsets[self.activeView] = scroll:GetVerticalScroll() end
@@ -112,31 +117,49 @@ function UI.CraftDetail(parent, width, height, goBack)
   local content = CreateFrame("Frame", nil, scroll)
   content:SetWidth(width - 75)
   scroll:SetScrollChild(content)
+  detail.content, detail.scroll, detail.reagentSelector = content, scroll, reagentSelector
   local fields = {}
   local fieldNames = { "Character", "Timestamp", "Quantity", "Quality", "Concentration", "Multicraft", "Ingenuity", "Resourcefulness" }
   for index, title in ipairs(fieldNames) do
-    local offset = -(index - 1) * 26
+    local offset = -(index - 1) * 22
     UI.Text(content, 0, offset, 146, 22, "GameFontNormalSmall"):SetText(title .. ":")
     fields[title] = UI.Text(content, 154, offset, width - 229, 24)
   end
   detail.fields = fields
-  UI.Section(content, "Reagents returned", 0, -224, width - 75)
-  local reagents = UI.ScrollList(content, 0, -258, width - 75, 172, {
+  UI.Section(content, "Reagents returned", 0, -188, width - 75)
+  local reagents = UI.ScrollList(content, 0, -220, width - 75, 66, {
     { title = "Reagent", width = (width - 99) * .60, value = function(row) return UI.Name(row.item) end,
       icon = function(row) return row.item and type(GetItemIcon) == "function" and GetItemIcon(row.item.id) end },
     { title = "Quality", width = (width - 99) * .18, value = function(row) return UI.Value(row.quality) end },
     { title = "Returned", width = (width - 99) * .22, value = function(row) return tostring(row.returnedQuantity) end },
   }, function() end, "No returned reagents recorded")
+  reagents.empty:ClearAllPoints(); reagents.empty:SetPoint("TOPLEFT", 8, -32)
   detail.returnedReagents = reagents
-  UI.Section(content, "Resulting items", 0, -448, width - 75)
-  local output = UI.ScrollList(content, 0, -482, width - 75, 84, {
+  local outputSection = CreateFrame("Frame", nil, content)
+  outputSection:SetSize(width - 75, 100)
+  UI.Section(outputSection, "Resulting items", 0, 0, width - 75)
+  local output = UI.ScrollList(outputSection, 0, -34, width - 75, 66, {
     { title = "Item", width = (width - 99) * .78, value = function(row) return UI.Name(row.item) end,
       icon = function(row) return row.item and type(GetItemIcon) == "function" and GetItemIcon(row.item.id) end },
     { title = "Quantity", width = (width - 99) * .22, value = function(row) return UI.Value(row.quantity) end },
   }, function() end, "Output identity unavailable")
+  output.empty:ClearAllPoints(); output.empty:SetPoint("TOPLEFT", 8, -32)
   detail.output = output
-  local metadata = UI.Text(content, 0, -592, width - 75, 140)
-  content:SetHeight(746)
+  local metadata = UI.Text(content, 0, 0, width - 75, 140)
+  local function layout(hasReagents)
+    scroll:ClearAllPoints()
+    scroll:SetPoint("TOPLEFT", 18, hasReagents and -116 or -64)
+    scroll:SetPoint("BOTTOMRIGHT", -36, 16)
+    local listHeight = math.max(66, 26 + math.min(4, #reagents.items) * 30)
+    reagents:SetViewportHeight(listHeight)
+    local outputY = -220 - listHeight - 12
+    outputSection:ClearAllPoints(); outputSection:SetPoint("TOPLEFT", 0, outputY)
+    metadata:ClearAllPoints(); metadata:SetPoint("TOPLEFT", 0, outputY - 112)
+    metadata:SetHeight(math.max(1, metadata:GetStringHeight()))
+    content:SetHeight(-outputY + 124 + metadata:GetHeight())
+    scroll:UpdateScrollChildRect()
+    scroll:SetVerticalScroll(0)
+  end
 
   function detail:ShowCraft(id)
     local craft, reason = ArtisanLogbookAPI.GetCraft(id)
@@ -158,6 +181,7 @@ function UI.CraftDetail(parent, width, height, goBack)
       for _, field in pairs(fields) do field:SetText("-") end
       reagents:Reset(); output:Reset(); metadata:SetText("")
       identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); quality:Hide()
+      layout(false)
       return
     end
     heading:SetText(UI.Elide(UI.Name(craft.recipe, "Unattributed craft"), math.floor((width - 166) / 10)))
@@ -201,8 +225,7 @@ function UI.CraftDetail(parent, width, height, goBack)
       lines[#lines + 1] = "Quoted concentration: " .. UI.Value(craft.request.concentrationCost)
     end
     metadata:SetText(table.concat(lines, "\n"))
-    scroll:UpdateScrollChildRect()
-    scroll:SetVerticalScroll(0)
+    layout(#choices > 0)
   end
   detail:Hide()
   return detail

@@ -257,7 +257,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     end
     if identityIcon then
       identityIcon:SetTexture(kind == "Character" and "Interface\\Icons\\INV_Helmet_03" or UI.ProfessionIcon(identity.skillLineId))
-      heading:SetText(kind == "Character" and UI.CharacterName(identity) or UI.Name(identity))
+      heading:SetText(kind == "Character" and UI.CharacterName(identity, content) or UI.Name(identity))
     end
     local stale = state.revision ~= (self.revision or 0)
     if changed or not self.loaded or self.dirty or stale then
