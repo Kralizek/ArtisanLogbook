@@ -45,7 +45,7 @@ existing current-entry highlight without replacing the primary selection.
 | Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights, When. |
 | Recipes | Period/character/profession filters, explicit search/clear controls and most-crafted default sorting. Name and profession sorting remain available. Rich recipe rows navigate to Recipe Detail. |
 | Reagents | Full-width parchment catalogue with shared period/character/profession/search controls, Included/Ignored savings filters, Used/Returned quantities and entity navigation. No detail split or inline configuration. |
-| Character | Neutral helmet and class-colored identity, two horizontal Crafting professions links, summary, Overview and Craft History tabs. Full-width most-crafted table. |
+| Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
 | Reagent | First-class identity page with filters, summary, Overview, Used in Recipes and Craft History tabs. The only place to change Ignore in savings statistics. |
@@ -55,6 +55,10 @@ All entity pages follow Header, Filters, Summary, Tabs. Headers and filters stay
 fixed; lists scroll inside bounded regions. Recipe Statistics has a bounded local
 overflow region at short heights, not a whole-page scrollbar. Tabs share a native
 border/backdrop with the content they control.
+
+Summary metrics share one compact row, at most 80 UI units high, with light
+separators and extra width for the most-crafted recipe. Reagents uses a shorter
+60-unit row with bounded metric widths. Recovered space goes to charts and lists.
 
 Recipe Statistics includes total crafts/output/concentration, output per craft,
 concentration per craft, net concentration, Multicraft proc rate/bonus/output share,
@@ -70,7 +74,13 @@ Multicraft, Resourcefulness and Ingenuity all belong in compact Highlights. When
 a narrow two-line local date/time; exact timestamps are in row tooltips.
 
 Most-crafted and catalogue recipe tables use the same rich component: Recipe,
-Latest result, Crafts, Items, Multicraft %, Resource %, Ingenuity %. The result is
+Latest result, Crafts, Items, Multicraft, Resourcefulness, Ingenuity. Mechanics
+show percentages when every craft has the relevant outcome. Otherwise known
+positive counts appear as, for example, `8 procs`, rather than an unexplained
+dash or a percentage computed from a biased positive-only sample. Tooltips show
+exact sample counts and the missing outcomes preventing a rate. A genuine 100%
+from one craft explicitly reads `1 proc / 1 craft` in its tooltip. No known procs
+with incomplete outcomes remains unavailable, not zero. The result is
 the latest available craft result for that selection, not an inferred quality
 distribution. Rows and the Overview most-crafted tile open Recipe Detail.
 
@@ -137,9 +147,10 @@ recipe uses. The chart is allocated-versus-returned, not consumed-versus-returne
 Used sums retained craft allocations only; it does not claim net consumption.
 Returned sums durable positive-return facts without adding retained positives
 again. The entity chart states its craft count/date span and reports unavailable
-older use quantities when pruning is evident. Unknown values are dashes and known
-incomplete sums use a lower-bound prefix, not a vague Partial label. Exact values
-are available on hover. There is no cross-scope lifetime return percentage. After detail
+older use quantities when pruning is evident. Unknown values are dashes. Known
+quantities display normally without `>=` prefixes; exact values and an explanation
+that the total may be higher are in summary/table tooltips. This is a presentation
+change, not an assertion that missing quantities are zero. There is no cross-scope lifetime return percentage. After detail
 pruning, returns remain but allocation-only identities may disappear and
 allocations/quality may become unknown; no new historical allocation store is
 introduced. Recipe/profession associations describe recorded uses, not all game
@@ -190,8 +201,9 @@ scrollbar is required. Multiple output identities are not synthesized.
   Custom bounds are UTC `YYYY-MM-DD`; through is inclusive. Invalid input keeps
   the last valid query. Craft timestamps use the game's local display.
 - `UI.Number` formats quantities with k/M/B and at most one decimal; percentages
-  use one decimal. Exact values remain in tooltips. `>=` denotes a lower bound;
-  a dash denotes unavailable, never measured zero. Internal IDs are not abbreviated.
+  use one decimal. Summary and table amounts use ordinary numbers with exact
+  quantities and missing-data caveats in tooltips. A dash denotes unavailable,
+  never measured zero. Internal IDs are not abbreviated.
 - FilterBar caps dropdowns at 176 UI units and wraps controls into aligned rows.
   Search, dropdown and custom-date controls share baseline/spacing conventions.
 - Multicraft shows absolute bonus output and its percentage of **total produced

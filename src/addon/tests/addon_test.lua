@@ -864,7 +864,20 @@ assert(paperSurface.grain.alpha == .16)
 assert(UI.Number(34766) == "34.8k" and UI.Number(1200000) == "1.2M")
 assert(UI.Number(0) == "0" and UI.Number(nil) == "-" and UI.Number(34766, true) == "34766")
 assert(UI.Number(999999) == "1M" and UI.Number(999999999) == "1B")
-assert(UI.Amount(34766, false) == ">= 34.7k" and UI.Amount(34766, true) == "34.8k")
+assert(UI.Amount(34766, false) == "34.8k" and UI.Amount(34766, true) == "34.8k")
+assert(UI.Amount(260, false) == "260" and UI.Amount(0, false) == "-" and UI.Amount(0, true) == "0")
+assert(UI.AmountTooltip(260, false):find("total may be higher", 1, true))
+assert(UI.AmountTooltip(260, true) == "260")
+local procCases = {
+  { craftCount = 20, resourcefulnessProcCount = 5, resourcefulnessProcCountObservedCount = 20, expected = "25.0%" },
+  { craftCount = 20, resourcefulnessProcCount = 0, resourcefulnessProcCountObservedCount = 20, expected = "0.0%" },
+  { craftCount = 1, resourcefulnessProcCount = 1, resourcefulnessProcCountObservedCount = 1, expected = "100.0%" },
+  { craftCount = 30, resourcefulnessProcCount = 8, resourcefulnessProcCountObservedCount = 8, expected = "8 procs" },
+  { craftCount = 30, resourcefulnessProcCountObservedCount = 0, expected = "-" },
+}
+for _, totals in ipairs(procCases) do assert(UI.ProcValue(totals, "resourcefulnessProcCount") == totals.expected) end
+assert(UI.ProcTooltip(procCases[3], "resourcefulnessProcCount"):find("1 proc / 1 craft", 1, true))
+assert(UI.ProcTooltip(procCases[4], "resourcefulnessProcCount"):find("22 crafts have no return outcome", 1, true))
 assert(UI.Percent(1, 3) == "33.3%" and UI.Percent(1, 0) == "-")
 local filterProbe = UI.FilterBar(paperProbe, 700, 0)
 local filterChanges = 0
@@ -884,6 +897,8 @@ assert(tabsProbe.views["Craft History"]:IsShown() and not tabsProbe.views.Overvi
 local chartProbe = UI.Chart(paperProbe, 0, 0, 600)
 chartProbe:Render({ { bucketStart = 0, craftCount = 34766 } }, 0, 86400)
 assert(not chartProbe.plot:IsShown() and chartProbe.empty.text == "34.8k crafts on 01 Jan")
+chartProbe:Render({ { bucketStart = 0, craftCount = 1 } }, 0, 86400)
+assert(chartProbe.total.text == "1 craft" and chartProbe.empty.text == "1 craft on 01 Jan")
 chartProbe:Render({ { bucketStart = 0, craftCount = 2 } }, 0, 7 * 86400)
 assert(chartProbe.plot:IsShown() and chartProbe.bars[1]:GetWidth() <= 28)
 chartProbe:Layout(130)
@@ -1279,6 +1294,10 @@ uiWindow:Activate("Character", { key = currentKey, name = "TestCrafter", classFi
 assert(characterPage.chart.total.text == "45 crafts" and #characterPage.professionSlots == 2)
 assert(characterPage.professionSlots[1].entry.details.skillLineId == 171)
 assert(characterPage.professionSlots[2].entry.details == nil)
+assert(characterPage.professionSlots[1]:IsShown() and not characterPage.professionSlots[2]:IsShown())
+assert(not characterPage.professionSlots[1].label:IsShown())
+characterPage.professionSlots[1].scripts.OnEnter(characterPage.professionSlots[1])
+assert(environment.GameTooltip.text == "Alchemy")
 dropdown(characterPage.content, "7 days"):Choose(7)
 assert(characterPage.scroll == nil and characterPage.tabbed)
 characterPage.tabbed:Select("Craft History")
@@ -1362,6 +1381,8 @@ do
     assert(first and second, "Both recorded primary professions must remain visible")
     assert(first.skillLineId == 164 and second.skillLineId == 171,
       "Slots must use stable all-history primary professions, excluding secondary professions")
+    assert(page.professionSlots[1]:IsShown() and page.professionSlots[2]:IsShown())
+    assert(not page.professionSlots[1].label:IsShown() and not page.professionSlots[2].label:IsShown())
   end
   assertPrimarySlots()
   assert(page.summary.totals.craftCount == 5 and #page.topRecipes.items == 5)
@@ -1379,6 +1400,7 @@ do
   page.history.scroll:SetVerticalScroll(85)
   window:Activate("Character", { key = "missing", name = "Missing" })
   assert(not page.professionSlots[1].entry.details and not page.professionSlots[2].entry.details)
+  assert(not page.professionSlots[1]:IsShown() and not page.professionSlots[2]:IsShown())
   window:Activate("Character", character)
   assertPrimarySlots()
   assert(dropdown(page.content, "7 days").value == 7 and dropdown(page.content, "Alchemy").value == 171)
@@ -1492,6 +1514,47 @@ end
 
 do
   local core = reload(nil)
+  local ledger = core.ledger
+  for _, recipeId in ipairs({ 9741, 9742, 9743 }) do
+    ledger:AddDimension("recipe", recipeId, { name = "Proc recipe " .. recipeId })
+    for index = 1, 20 do
+      ledger:BeginCraft(recipeId)
+      local returns
+      if recipeId == 9741 then
+        returns = index <= 5 and { { reagent = { itemID = 8 }, quantity = 1 } } or {}
+      elseif recipeId == 9742 then returns = {}
+      elseif index <= 8 then returns = { { reagent = { itemID = 8 }, quantity = 1 } } end
+      assert(ledger:RecordResult({ operationID = recipeId * 100 + index, resourcesReturned = returns }))
+    end
+  end
+  local ui = loadUI()
+  local window = ui.productionWindow
+  window:Show()
+  for _, destination in ipairs({ "Overview", "Recipes" }) do
+    window:Activate(destination)
+    local page = window.pages[destination]
+    local list = page.topRecipes or page.catalogue
+    while list.worker.scripts.OnUpdate do list.worker.scripts.OnUpdate(list.worker) end
+    local expected = { [9741] = "25.0%", [9742] = "0.0%", [9743] = "8 procs" }
+    for _, row in ipairs(list.rows) do
+      if row.item then
+        local resource
+        for _, cell in ipairs(row.cells) do if cell.column.title == "Resourcefulness" then resource = cell end end
+        assert(resource and resource.label.text == expected[row.item.recipe.id])
+        if row.item.recipe.id == 9743 then
+          row.scripts.OnEnter(row)
+          local tooltip = table.concat(environment.GameTooltip.lines, "\n")
+          assert(tooltip:find("12 crafts have no return outcome", 1, true))
+        end
+      end
+    end
+  end
+  window:Hide()
+  print("PASS recipe Resourcefulness shows measured mixed rates or known procs without treating missing outcomes as failures")
+end
+
+do
+  local core = reload(nil)
   local ledger, api = core.ledger, environment.ArtisanLogbookAPI
   environment.ArtisanLogbookUISettings.trivialReagents = {}
   local ui = loadUI()
@@ -1599,7 +1662,7 @@ do
   assert(dropdown(page, "Alchemy").value == 171 and dropdown(page, "Most used").value == "allocated")
   search("not recorded")
   assert(#list.items == 0 and list.empty:IsShown())
-  assert(helpers.ReagentAmount({ allocatedQuantity = 4, allocationComplete = false }, "allocatedQuantity", "allocationComplete") == ">= 4")
+  assert(helpers.ReagentAmount({ allocatedQuantity = 4, allocationComplete = false }, "allocatedQuantity", "allocationComplete") == "4")
   assert(helpers.ReagentAmount({}, "returnedQuantity", "returnComplete") == "-")
   assert(helpers.ReagentAmount({ returnedQuantity = 0, returnComplete = true }, "returnedQuantity", "returnComplete") == "0")
   api.GetReagentSummaries = summaries
@@ -1863,6 +1926,17 @@ do
       for _, control in ipairs(filters.controls) do
         assert(control.middleWidth <= 141 and control.x + control:GetWidth() <= filters:GetWidth())
       end
+      local summary = owner.summaryRow or owner.summary
+      if summary and summary.tiles then
+        assert(summary:GetHeight() <= 80)
+        local previousRight = -16
+        for _, tile in ipairs(summary.tiles) do
+          assert(tile.y == 0 and tile.x >= previousRight + 16 - .01)
+          assert(tile.x + tile:GetWidth() <= summary:GetWidth() + .01)
+          assert(tile.title:GetWidth() > 64 and -tile.value.y + tile.value:GetHeight() <= summary:GetHeight())
+          previousRight = tile.x + tile:GetWidth()
+        end
+      end
       if owner.tabbed then
         local tabbed = owner.tabbed
         local top = -tabbed.y + (page.outcomes and 62 or 0)
@@ -1966,7 +2040,7 @@ do
     while pane.returnWorker.scripts.OnUpdate do pane.returnWorker.scripts.OnUpdate(pane.returnWorker) end
   end
   finishCalculation()
-  assert(pane.tiles[5].value.text == ">= 11" and pane.tiles[5].note.text == "")
+  assert(pane.tiles[5].value.text == "11" and pane.tiles[5].note.text == "")
   assert(pane.returnQuantity.text:find("11 reagents returned", 1, true))
   assert(pane.stats[2].text:find("At least 1 proc", 1, true) and pane.stats[4].text:find("12", 1, true))
   assert(pane.stats[3].text == "At least 3 crafts returned reagents" and not pane.stats[3].text:find("%%"))

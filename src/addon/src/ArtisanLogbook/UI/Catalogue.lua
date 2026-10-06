@@ -100,13 +100,15 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   local period = filters:Period(state, function() detail:Refresh() end, true)
   local characters = filters:Select("Character", {}, function(value) state.character = value; detail:Refresh() end)
   local professions = filters:Select("Profession", {}, function(value) state.profession = value; detail:Refresh() end)
-  local summary = CreateFrame("Frame", nil, content)
-  summary:SetPoint("TOPLEFT", 0, -110); summary:SetSize(width, 142)
+  local entries = { { "Used", "allocated" }, { "Returned", "returned" }, { "Crafts using this", "crafts" },
+    { "Crafters", "characters" }, { "Returned / used", "rate" }, { "Recipes using this", "recipes" } }
+  local metrics = {}
+  for index, entry in ipairs(entries) do metrics[index] = { entry[1], "INV_Misc_Herb_19" } end
+  local summary = UI.SummaryRow(content, width, -110, metrics)
+  detail.summary = summary
   detail.fields, detail.tiles = {}, {}
-  for index, entry in ipairs({ { "Used", "allocated" }, { "Returned", "returned" }, { "Crafts using this", "crafts" },
-      { "Crafters", "characters" }, { "Returned / used", "rate" }, { "Recipes using this", "recipes" } }) do
-    local tile = UI.Stat(summary, entry[1], "Interface\\Icons\\INV_Misc_Herb_19",
-      ((index - 1) % 3) * width / 3, -math.floor((index - 1) / 3) * 70, width / 3 - 12)
+  for index, entry in ipairs(entries) do
+    local tile = summary.tiles[index]
     detail.fields[entry[2]], detail.tiles[entry[2]] = tile.value, tile
   end
   local tabs = UI.TabbedContent(content, width, height - 260, -260, { "Overview", "Used in Recipes", "Craft History" },
@@ -143,9 +145,11 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   function filters.onLayout(filterHeight)
     local top = 64 + filterHeight
     summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -top)
-    tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top - 150); tabs:Resize(height - top - 150)
-    recipes:SetViewportHeight(height - top - 201); detail.history:SetViewportHeight(height - top - 201)
-    local chartHeight = math.min(168, height - top - 279)
+    local summaryHeight = summary:GetHeight() + 8
+    local viewHeight = height - top - summaryHeight - 51
+    tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top - summaryHeight); tabs:Resize(height - top - summaryHeight)
+    recipes:SetViewportHeight(viewHeight); detail.history:SetViewportHeight(viewHeight)
+    local chartHeight = math.min(168, viewHeight - 78)
     detail.chart:Layout(chartHeight)
     legend:ClearAllPoints(); legend:SetPoint("TOPLEFT", 0, -chartHeight)
     detail.status:ClearAllPoints(); detail.status:SetPoint("TOPLEFT", 0, -chartHeight - 28)
@@ -308,12 +312,11 @@ function UI.ReagentsPage(page, width, height, openReagent)
     { label = "Most returned", value = "returned" }, { label = "Recipe count", value = "recipes" },
   }, function(value) sort = value; page:Refresh(true) end)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
-  page.summary = {}
-  for index, entry in ipairs({ { "Reagents", "INV_Misc_Herb_19" },
-      { "Used", "INV_Misc_Bag_10" }, { "Returned", "Trade_Alchemy" } }) do
-    page.summary[index] = UI.Stat(page, entry[1], "Interface\\Icons\\" .. entry[2],
-      (index - 1) * width / 3, -142, width / 3 - 12)
-  end
+  local summary = UI.SummaryRow(page, width, -142, { { "Reagents", "INV_Misc_Herb_19" },
+    { "Used", "INV_Misc_Bag_10" }, { "Returned", "Trade_Alchemy" } })
+  summary:SetHeight(60)
+  for _, tile in ipairs(summary.tiles) do tile:SetHeight(60); tile.note:Hide() end
+  page.summary, page.summaryRow = summary.tiles, summary
   local listWidth = width
   local available = listWidth - 24
   local nameWidth = available * .40
@@ -340,18 +343,19 @@ function UI.ReagentsPage(page, width, height, openReagent)
       end },
     { title = "Used", width = available * .23, value = function(row)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
-    end },
+    end, exact = function(row) return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) end },
     { title = "Returned", width = available * .23, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
-    end },
+    end, exact = function(row) return UI.AmountTooltip(row.returnedQuantity, row.returnComplete) end },
     { title = "Savings stats", width = available * .14,
       value = function(row) return UI.IsTrivial(row.item.id) and "Ignored" or "Included" end },
   }, function(row) openReagent(row.item) end, "No reagents in this selection")
   page.catalogue = list
   function filters.onLayout(filterHeight)
     local top = 48 + filterHeight
-    for index, tile in ipairs(page.summary) do tile:ClearAllPoints(); tile:SetPoint("TOPLEFT", (index - 1) * width / 3, -top) end
-    list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -top - 82); list:SetViewportHeight(height - top - 82)
+    summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -top)
+    local listTop = top + summary:GetHeight() + 8
+    list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -listTop); list:SetViewportHeight(height - listTop)
   end
   function page:Filter()
     local filter = UI.Population(character, profession)

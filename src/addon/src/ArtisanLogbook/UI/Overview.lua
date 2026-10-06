@@ -62,21 +62,21 @@ end
 function UI.Stat(parent, title, icon, x, y, width)
   local tile = CreateFrame("Button", nil, parent)
   tile:SetPoint("TOPLEFT", x, y)
-  tile:SetSize(width, 78)
+  tile:SetSize(width, 80)
   local texture = tile:CreateTexture(nil, "ARTWORK")
-  texture:SetSize(24, 24)
-  texture:SetPoint("TOPLEFT", 0, -8)
+  texture:SetSize(18, 18)
+  texture:SetPoint("TOPLEFT", 0, -2)
   texture:SetTexture(icon)
   tile.icon = texture
-  UI.Text(tile, 32, -6, width - 38, 18, "GameFontNormalSmall"):SetText(title)
-  tile.value = UI.Text(tile, 32, -28, width - 38, 22, "GameFontNormalLarge")
-  tile.note = UI.Text(tile, 32, -52, width - 38, 34)
+  tile.title = UI.Text(tile, 24, -2, width - 24, 28, "GameFontNormalSmall")
+  tile.title:SetText(title)
+  tile.value = UI.Text(tile, 0, -32, width, 22, "GameFontNormalLarge")
+  tile.note = UI.Text(tile, 0, -56, width, 24)
   function tile:SetNumber(value, complete, note)
     self.value:SetText(UI.Amount(value, complete))
     self.note:SetText(note or "")
     self:SetScript("OnEnter", function(self)
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(title .. ": " .. UI.Value(value))
-      if not complete and value ~= nil then GameTooltip:AddLine("At least this much; some crafts have no quantity.", 1, 1, 1) end
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(title .. ": " .. UI.AmountTooltip(value, complete))
       GameTooltip:Show()
     end)
     self:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -84,21 +84,36 @@ function UI.Stat(parent, title, icon, x, y, width)
   return tile
 end
 
-function UI.ProductionSummary(parent, width, y, openRecipe)
+function UI.SummaryRow(parent, width, y, entries)
   local summary = CreateFrame("Frame", nil, parent)
-  summary:SetSize(width, 142)
+  summary:SetSize(width, 80)
   summary:SetPoint("TOPLEFT", 0, y)
+  summary.tiles = {}
+  local weight = 0
+  for _, entry in ipairs(entries) do weight = weight + (entry[3] or 1) end
+  local unit = (width - (#entries - 1) * 16) / weight
+  if #entries <= 3 then unit = math.min(unit, 192) end
+  local left = 0
+  for index, entry in ipairs(entries) do
+    local tileWidth = unit * (entry[3] or 1)
+    summary.tiles[index] = UI.Stat(summary, entry[1], "Interface\\Icons\\" .. entry[2], left, 0, tileWidth)
+    if index > 1 then
+      local rule = summary:CreateTexture(nil, "ARTWORK")
+      rule:SetPoint("TOPLEFT", left - 8, -4); rule:SetSize(1, 64)
+      rule:SetColorTexture(.35, .27, .14, .18)
+    end
+    left = left + tileWidth + 16
+  end
+  return summary
+end
+
+function UI.ProductionSummary(parent, width, y, openRecipe)
   local entries = {
     { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
     { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
-    { "Reagents returned", "INV_Misc_Herb_19" }, { "Most crafted", "INV_Misc_Book_09" },
+    { "Reagents returned", "INV_Misc_Herb_19" }, { "Most crafted", "INV_Misc_Book_09", 2 },
   }
-  summary.tiles = {}
-  local column = width / 3
-  for index, entry in ipairs(entries) do
-    summary.tiles[index] = UI.Stat(summary, entry[1], "Interface\\Icons\\" .. entry[2],
-      ((index - 1) % 3) * column, -math.floor((index - 1) / 3) * 70, column - 10)
-  end
+  local summary = UI.SummaryRow(parent, width, y, entries)
   function summary:Render(series, filter)
     local totals, recipes = UI.Aggregate(series)
     self.totals, self.recipes = totals, recipes
@@ -112,8 +127,8 @@ function UI.ProductionSummary(parent, width, y, openRecipe)
     if share ~= "Unknown" then self.tiles[4].note:SetText(share .. " of total output") end
     local top = recipes[1]
     self.tiles[6].icon:SetTexture(UI.RecipeIcon(top and top.recipe))
-    self.tiles[6].value:SetText(top and UI.Elide(UI.Name(top.recipe), math.floor((column - 38) / 10)) or "-")
-    self.tiles[6].note:SetText(top and (UI.Number(top.craftCount) .. " crafts") or "No crafts in this period")
+    self.tiles[6].value:SetText(top and UI.Elide(UI.Name(top.recipe), math.floor(self.tiles[6]:GetWidth() / 10)) or "-")
+    self.tiles[6].note:SetText(top and UI.Count(top.craftCount, "craft") or "No crafts in this period")
     self.tiles[6]:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
     self.tiles[6]:SetScript("OnClick", function() if top and top.recipe and openRecipe then openRecipe(top.recipe) end end)
     self.tiles[6]:EnableMouse(true)
@@ -142,7 +157,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     identityIcon = content:CreateTexture(nil, "ARTWORK")
     identityIcon:SetPoint("TOPLEFT", 0, -1)
     identityIcon:SetSize(30, 30)
-    heading:ClearAllPoints(); heading:SetPoint("TOPLEFT", 40, -5); heading:SetWidth(width - 420)
+    heading:ClearAllPoints(); heading:SetPoint("TOPLEFT", 40, -5); heading:SetWidth(width - 136)
   end
   local state = { days = 30, character = false, profession = false }
   local filters = UI.FilterBar(content, width, -42)
@@ -175,13 +190,15 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     page.history = UI.ScrollList(tabs.views["Craft History"], 0, 0, width - 24, height - 299,
       UI.HistoryColumns(width - 24, kind), function(craft) openCraft(craft.id) end, "No crafts in this period")
     if kind == "Character" then
-      UI.Text(content, width - 376, -2, 160, 18):SetText("Crafting professions")
       page.professionSlots = {}
       for index = 1, 2 do
-        local slot = UI.NavItem(content, 174, function(entry)
+        local slot = UI.NavItem(content, 40, function(entry)
           if entry.details then navigate("Profession", entry.details) end
         end)
-        slot:SetPoint("TOPLEFT", width - 376 + (index - 1) * 184, -18)
+        slot:SetSize(32, 30)
+        slot:SetPoint("TOPLEFT", width - 84 + (index - 1) * 36, -2)
+        slot.label:Hide()
+        slot.icon:ClearAllPoints(); slot.icon:SetPoint("CENTER"); slot.icon:SetSize(24, 24)
         page.professionSlots[index] = slot
       end
     end
@@ -199,22 +216,23 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   end
   function filters.onLayout(filterHeight)
     local top = 48 + filterHeight
+    local summaryHeight = page.summary and page.summary:GetHeight() + 8 or 0
     if page.summary then page.summary:ClearAllPoints(); page.summary:SetPoint("TOPLEFT", 0, -top) end
     if tabs then
-      tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top - 150)
-      tabs:Resize(height - top - 150)
-      page.history:SetViewportHeight(height - top - 201)
-      local viewHeight = height - top - 201
+      tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top - summaryHeight)
+      tabs:Resize(height - top - summaryHeight)
+      local viewHeight = height - top - summaryHeight - 51
+      page.history:SetViewportHeight(viewHeight)
       local chartHeight = math.min(168, viewHeight - 90)
       page.chart:Layout(chartHeight)
       recipesHeading:ClearAllPoints(); recipesHeading:SetPoint("TOPLEFT", 0, -chartHeight)
       page.topRecipes:ClearAllPoints(); page.topRecipes:SetPoint("TOPLEFT", 0, -chartHeight - 32)
       page.topRecipes:SetViewportHeight(viewHeight - chartHeight - 32)
     elseif page.chart then
-      page.chart:ClearAllPoints(); page.chart:SetPoint("TOPLEFT", 0, -top - 150)
-      recipesHeading:ClearAllPoints(); recipesHeading:SetPoint("TOPLEFT", 0, -top - 318)
-      page.topRecipes:ClearAllPoints(); page.topRecipes:SetPoint("TOPLEFT", 0, -top - 350)
-      page.topRecipes:SetViewportHeight(math.max(58, height - top - 350))
+      page.chart:ClearAllPoints(); page.chart:SetPoint("TOPLEFT", 0, -top - summaryHeight)
+      recipesHeading:ClearAllPoints(); recipesHeading:SetPoint("TOPLEFT", 0, -top - summaryHeight - 168)
+      page.topRecipes:ClearAllPoints(); page.topRecipes:SetPoint("TOPLEFT", 0, -top - summaryHeight - 200)
+      page.topRecipes:SetViewportHeight(math.max(58, height - top - summaryHeight - 200))
     else
       page.history:ClearAllPoints(); page.history:SetPoint("TOPLEFT", 0, -top)
       page.history:SetViewportHeight(height - top)
@@ -233,7 +251,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
       local available = UI.Choices("professions", character)
       if not UI.HasChoice(available, state.profession) then state.profession = false end
       professions:Update(available, state.profession)
-      status:SetText(character and #available == 1 and "No crafting professions" or "")
+      status:SetText("")
     end
     period:UpdateState(state)
     local filter = self:Filter()
@@ -257,9 +275,9 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
       end
       for index, slot in ipairs(self.professionSlots) do
         local entry = primary[index]
-        slot:Update({ label = entry and UI.Name(entry) or "No crafting history",
+        slot:Update({ label = entry and UI.Name(entry) or "",
           icon = UI.ProfessionIcon(entry and entry.skillLineId), details = entry }, false)
-        slot.label:SetTextColor(unpack(UI.ink))
+        slot:SetShown(entry ~= nil)
       end
     end
     if self.history and (reset or not self.loaded) then self.history:Reload(preserve) end

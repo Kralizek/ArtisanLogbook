@@ -181,15 +181,10 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   local characters = filters:Select("Character", {}, function(value) state.character = value; refresh() end)
   pane.filters, pane.period = filters, period
   local status = UI.Text(pane, 370, -16, width - 370, 24)
-  local summary = CreateFrame("Frame", nil, pane)
-  summary:SetSize(width, 142); summary:SetPoint("TOPLEFT", 0, -52)
-  pane.tiles = {}
-  for index, entry in ipairs({ { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
+  local summary = UI.SummaryRow(pane, width, -52, { { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
       { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
-      { "Reagents returned", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } }) do
-    pane.tiles[index] = UI.Stat(summary, entry[1], "Interface\\Icons\\" .. entry[2],
-      ((index - 1) % 3) * width / 3, -math.floor((index - 1) / 3) * 70, width / 3 - 10)
-  end
+      { "Reagents returned", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } })
+  pane.tiles, pane.summary = summary.tiles, summary
   local tabs = UI.TabbedContent(pane, width, height - 202, -202,
     { "Overview", "Statistics", "Craft History", "Reagents" }, function(name)
       pane.activeView = name
@@ -240,11 +235,13 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   end)
   function filters.onLayout(filterHeight)
     summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -filterHeight - 6)
-    tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -filterHeight - 156)
-    tabs:Resize(height - filterHeight - 156)
-    materialList:SetViewportHeight(height - filterHeight - 207)
-    statisticsScroll:SetHeight(height - filterHeight - 207)
-    if pane.OnLayout then pane:OnLayout(height - filterHeight - 207) end
+    local top = filterHeight + summary:GetHeight() + 14
+    local viewHeight = height - top - 51
+    tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top)
+    tabs:Resize(height - top)
+    materialList:SetViewportHeight(viewHeight)
+    statisticsScroll:SetHeight(viewHeight)
+    if pane.OnLayout then pane:OnLayout(viewHeight) end
   end
 
   function pane:Filter()

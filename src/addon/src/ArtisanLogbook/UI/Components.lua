@@ -30,12 +30,39 @@ end
 
 function UI.Amount(value, complete)
   if value == nil or value == 0 and not complete then return "-" end
-  return (complete and "" or ">= ") .. UI.Number(value, false, not complete)
+  return UI.Number(value)
+end
+
+function UI.AmountTooltip(value, complete)
+  if value == nil or value == 0 and not complete then return "Quantity unavailable" end
+  return tostring(value) .. (complete and "" or "\nSome crafts have no quantity; the total may be higher.")
 end
 
 function UI.Rate(totals, metric)
   if not totals or totals[metric .. "ObservedCount"] ~= totals.craftCount then return "-" end
   return UI.Percent(totals[metric], totals.craftCount)
+end
+
+function UI.ProcValue(totals, metric)
+  local rate = UI.Rate(totals, metric)
+  if rate ~= "-" then return rate end
+  local count = totals and totals[metric]
+  return count and count > 0 and UI.Count(count, "proc") or "-"
+end
+
+function UI.ProcTooltip(totals, metric)
+  if not totals then return "Results unavailable" end
+  local count, crafts = totals[metric] or 0, totals.craftCount or 0
+  local known = totals[metric .. "ObservedCount"] or 0
+  if crafts == 0 then return "No crafts in this selection" end
+  if known == crafts then
+    return UI.Rate(totals, metric) .. "\n" .. count .. (count == 1 and " proc / " or " procs / ") ..
+      crafts .. (crafts == 1 and " craft" or " crafts")
+  end
+  local missing = crafts - known
+  local outcome = metric == "resourcefulnessProcCount" and "return outcome" or "proc result"
+  return UI.Count(count, "known proc") .. " from " .. UI.Count(crafts, "craft") .. "\n" ..
+    "Rate unavailable: " .. UI.Count(missing, "craft") .. (missing == 1 and " has" or " have") .. " no " .. outcome .. "."
 end
 
 function UI.DateTime(timestamp, exact)
@@ -785,7 +812,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
           GameTooltip:SetText(UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
           for _, column in ipairs(columns) do
             if column.value and column.title ~= "Recipe" then
-              GameTooltip:AddLine(column.title .. ": " .. tostring((column.exact or column.value)(self.item)), 1, 1, 1)
+              GameTooltip:AddLine(column.title .. ": " .. tostring((column.exact or column.value)(self.item)), 1, 1, 1, true)
             end
           end
           if self.activity then
@@ -931,12 +958,12 @@ function UI.Chart(parent, x, y, width, quantities)
     for day = 0, days - 1 do
       peak = math.max(peak, daily[from + day * bucketSeconds] or 0, returned[from + day * bucketSeconds] or 0)
     end
-    self.total:SetText(quantities and "" or UI.Number(total) .. " crafts")
+    self.total:SetText(quantities and "" or UI.Count(total, "craft"))
     self.plot:SetShown(days > 1 and total > 0)
     self.empty:SetShown(days == 1 or total == 0)
     if days == 1 and total > 0 then
       self.empty:SetText(quantities and ("Used: " .. UI.Number(daily[from]) .. "   Returned: " .. UI.Number(returned[from])) or
-        UI.Number(total) .. " crafts on " .. date("!%d %b", from))
+        UI.Count(total, "craft") .. " on " .. date("!%d %b", from))
     else self.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period") end
     self.start:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", from))
     self.finish:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", to - 86400))
@@ -983,7 +1010,7 @@ function UI.Chart(parent, x, y, width, quantities)
       local visibleWidth = quantities and (groupWidth - groupGap) / 2 or groupWidth
       bar:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft, 0)
       bar:SetSize(math.max(.5, visibleWidth), math.max(1, count * (self.plot:GetHeight() - 6) / maximum))
-      bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) .. ": " .. count .. " crafts"
+      bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) .. ": " .. count .. (count == 1 and " craft" or " crafts")
       if quantities then
         local amount = returned[from + day * bucketSeconds]
         bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
@@ -1017,13 +1044,17 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe)
     { title = "Items", width = available * .10, value = function(row)
       local totals = row.totals
       return totals and UI.Amount(totals.outputQuantity, totals.outputQuantityObservedCount == totals.craftCount) or "-"
-    end, exact = function(row) return UI.Value(row.totals and row.totals.outputQuantity) end },
+    end, exact = function(row)
+      local totals = row.totals
+      return UI.AmountTooltip(totals and totals.outputQuantity, totals and totals.outputQuantityObservedCount == totals.craftCount)
+    end },
   }
-  for _, entry in ipairs({ { "Multicraft %", "multicraftProcCount" },
-      { "Resource %", "resourcefulnessProcCount" }, { "Ingenuity %", "ingenuityProcCount" } }) do
+    for _, entry in ipairs({ { "Multicraft", "multicraftProcCount" },
+      { "Resourcefulness", "resourcefulnessProcCount" }, { "Ingenuity", "ingenuityProcCount" } }) do
     local title, metric = entry[1], entry[2]
     columns[#columns + 1] = { title = title, width = available * (.38 / 3),
-      value = function(row) return UI.Rate(row.totals, metric) end }
+      value = function(row) return UI.ProcValue(row.totals, metric) end,
+      exact = function(row) return UI.ProcTooltip(row.totals, metric) end }
   end
   local list = UI.ScrollList(parent, x, y, width, height, columns,
     function(row) if row.recipe then openRecipe(row.recipe) end end, "No recipes in this period")
