@@ -58,6 +58,20 @@ function UI.NavItem(parent, width, action)
   return button
 end
 
+function UI.CopyRecipe(recipe, fallback)
+  local result = { id = recipe.id }
+  for _, key in ipairs({ "name", "maxQuality" }) do
+    result[key] = recipe[key] or (fallback and fallback[key])
+  end
+  for _, key in ipairs({ "profession", "expansion" }) do
+    local value = recipe[key] or (fallback and fallback[key])
+    if type(value) == "table" then
+      result[key] = { name = value.name, key = value.key, skillLineId = value.skillLineId }
+    end
+  end
+  return result
+end
+
 function UI.Pins()
   if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
   local stored = ArtisanLogbookUISettings.pinnedRecipes
@@ -66,7 +80,8 @@ function UI.Pins()
     for id, recipe in pairs(stored) do
       if type(id) == "number" and id > 0 and id < math.huge and id % 1 == 0 and
           type(recipe) == "table" then
-        pins[#pins + 1] = { id = id, name = type(recipe.name) == "string" and recipe.name or nil }
+        pins[#pins + 1] = UI.CopyRecipe({ id = id, name = type(recipe.name) == "string" and recipe.name or nil,
+          profession = recipe.profession, expansion = recipe.expansion, maxQuality = recipe.maxQuality })
       end
     end
   end
@@ -93,7 +108,7 @@ function UI.TogglePin(recipe)
   local stored = ArtisanLogbookUISettings.pinnedRecipes
   if stored[recipe.id] then stored[recipe.id] = nil; return true end
   if #pins >= 5 then return nil, "Five recipes are already pinned" end
-  stored[recipe.id] = { id = recipe.id, name = recipe.name }
+  stored[recipe.id] = UI.CopyRecipe(recipe)
   return true
 end
 
@@ -387,6 +402,10 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   frame:SetSize(width, height)
   frame:SetPoint("TOPLEFT", x, y)
   frame.rows, frame.items = {}, {}
+  local header = frame:CreateTexture(nil, "BACKGROUND")
+  header:SetPoint("TOPLEFT", 0, 0)
+  header:SetSize(width - 24, 24)
+  header:SetColorTexture(.45, .34, .18, .12)
   local position = 0
   for _, column in ipairs(columns) do
     UI.Text(frame, position + 3, -3, column.width - 6, 20, "GameFontNormalSmall"):SetText(column.title)
@@ -434,6 +453,9 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         row:SetSize(width - 24, 28)
         row:SetPoint("TOPLEFT", 0, -(index - 1) * 30)
         row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        local rule = row:CreateTexture(nil, "BACKGROUND")
+        rule:SetPoint("BOTTOMLEFT", 0, 0); rule:SetSize(width - 24, 1)
+        rule:SetColorTexture(.45, .34, .18, .16)
         row.cells = {}
         local left = 0
         for _, column in ipairs(columns) do
@@ -459,7 +481,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         row:SetScript("OnClick", function(self) onOpen(self.item) end)
         row:SetScript("OnEnter", function(self)
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-          GameTooltip:SetText(UI.Name(self.item.recipe, "Artisan Logbook"))
+          GameTooltip:SetText(UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
           for _, column in ipairs(columns) do
             if column.value and column.title ~= "Recipe" then
               GameTooltip:AddLine(column.title .. ": " .. tostring(column.value(self.item)), 1, 1, 1)
@@ -478,7 +500,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
       row.item = item
       for _, cell in ipairs(row.cells) do
         local text = cell.column.value(item)
-        cell.label:SetText(UI.Elide(text, math.max(3, math.floor((cell.column.width - 9) / 7))))
+        cell.label:SetText(UI.Elide(text, math.max(3, math.floor((cell.column.width - (cell.icon and 30 or 9)) / 7))))
         if cell.icon then
           cell.icon:SetTexture(cell.column.icon(item) or "Interface\\Icons\\INV_Misc_QuestionMark")
         end
@@ -491,8 +513,11 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         for _, indicator in ipairs(row.indicators or {}) do indicator:Hide() end
         row.indicators = row.indicators or {}
         local left = 0
-        for indicatorIndex, indicator in ipairs(UI.Activity(item)) do
-          local indicatorWidth = indicator.text ~= "" and 50 or 26
+        local indicators, desired = UI.Activity(item), 0
+        for _, indicator in ipairs(indicators) do desired = desired + (indicator.text ~= "" and 50 or 26) end
+        local compact = desired > row.activity:GetWidth()
+        for indicatorIndex, indicator in ipairs(indicators) do
+          local indicatorWidth = not compact and indicator.text ~= "" and 50 or 26
           if left + indicatorWidth > row.activity:GetWidth() then break end
           local button = row.indicators[indicatorIndex]
           if not button then
@@ -515,7 +540,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
           button.tooltip = indicator.tooltip
           if indicator.atlas then button.icon:SetAtlas(indicator.atlas)
           else button.icon:SetTexture(indicator.icon) end
-          button.label:SetText(indicator.text)
+          button.label:SetText(compact and "" or indicator.text)
           button:Show()
           left = left + indicatorWidth
         end
@@ -535,7 +560,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
 end
 
 function UI.Chart(parent, x, y, width)
-  local chart = CreateFrame("Frame", nil, parent, "InsetFrameTemplate3")
+  local chart = CreateFrame("Frame", nil, parent)
   chart:SetSize(width, 168)
   chart:SetPoint("TOPLEFT", x, y)
   chart.title = UI.Text(chart, 14, -10, width - 170, 22, "GameFontNormal")
@@ -551,13 +576,18 @@ function UI.Chart(parent, x, y, width)
   chart.empty = UI.Text(chart, 16, -80, width - 32, 24)
   chart.empty:SetText("No crafts in this period")
   chart.empty:SetJustifyH("CENTER")
-  chart.lines = {}
+  chart.bars = {}
+  local baseline = chart.plot:CreateTexture(nil, "BACKGROUND")
+  baseline:SetColorTexture(.35, .27, .14, .4)
+  baseline:SetPoint("BOTTOMLEFT", 0, 0); baseline:SetSize(width - 32, 1)
 
   function chart:Render(series, from, to, bucketSeconds)
     bucketSeconds = bucketSeconds or 86400
+    bucketSeconds = math.max(bucketSeconds, math.ceil((to - from) / 86400 / 60) * 86400)
     local daily, total, peak = {}, 0, 0
     for _, row in ipairs(series or {}) do
-      daily[row.bucketStart] = (daily[row.bucketStart] or 0) + row.craftCount
+      local bucket = from + math.floor((row.bucketStart - from) / bucketSeconds) * bucketSeconds
+      daily[bucket] = (daily[bucket] or 0) + row.craftCount
       total = total + row.craftCount
     end
     local days = math.max(1, math.ceil((to - from) / bucketSeconds))
@@ -566,22 +596,28 @@ function UI.Chart(parent, x, y, width)
     self.empty:SetShown(total == 0)
     self.start:SetText(date("!%d %b %Y", from))
     self.finish:SetText(date("!%d %b %Y", to - 86400))
-    for _, line in ipairs(self.lines) do line:Hide() end
-    local count = 0
-    for day = 1, days - 1 do
-      count = count + 1
-      local line = self.lines[count]
-      if not line then
-        line = self.plot:CreateLine(nil, "ARTWORK")
-        line:SetThickness(2)
-        line:SetColorTexture(0.28, 0.72, 0.58, 1)
-        self.lines[count] = line
+    for _, bar in ipairs(self.bars) do bar:Hide() end
+    local barWidth = (width - 32) / days
+    for day = 0, days - 1 do
+      local count = daily[from + day * bucketSeconds] or 0
+      local bar = self.bars[day + 1]
+      if not bar then
+        bar = CreateFrame("Frame", nil, self.plot)
+        bar.texture = bar:CreateTexture(nil, "ARTWORK")
+        bar.texture:SetAllPoints(bar)
+        bar.texture:SetColorTexture(.17, .43, .29, .9)
+        bar:EnableMouse(true)
+        bar:SetScript("OnEnter", function(self)
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.tooltip); GameTooltip:Show()
+        end)
+        bar:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self.bars[day + 1] = bar
       end
-      line:SetStartPoint("BOTTOMLEFT", self.plot,
-        (day - 1) * (width - 32) / (days - 1), (daily[from + (day - 1) * bucketSeconds] or 0) * 94 / math.max(1, peak))
-      line:SetEndPoint("BOTTOMLEFT", self.plot,
-        day * (width - 32) / (days - 1), (daily[from + day * bucketSeconds] or 0) * 94 / math.max(1, peak))
-      if total > 0 then line:Show() end
+      bar:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", day * barWidth, 0)
+      bar:SetSize(math.max(2, barWidth - 3), math.max(1, count * 94 / math.max(1, peak)))
+      bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) .. ": " .. count .. " crafts"
+      if bucketSeconds > 86400 then bar.tooltip = bar.tooltip .. " / " .. (bucketSeconds / 86400) .. " days" end
+      bar:SetShown(count > 0)
     end
   end
   return chart

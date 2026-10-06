@@ -77,7 +77,7 @@ function UI.CompactOutcome(totals, proc, amount, denominator, amountLabel, share
   lines[#lines + 1] = amountText
   if observed < totals.craftCount or totals[amount .. "ObservedCount"] < totals.craftCount or
       totals[denominator .. "ObservedCount"] < totals.craftCount then
-    lines[#lines + 1] = "|cffffcc66Some crafts have no details|r"
+    lines[#lines + 1] = "|cff8a391fSome crafts have no details|r"
   end
   return table.concat(lines, "\n")
 end
@@ -97,7 +97,7 @@ function UI.ResourcefulnessSummary(totals, nonTrivial)
     local missing = crafts - observed
     result.any = positive > 0 and string.format("Returns recorded for %d %s", positive,
       positive == 1 and "craft" or "crafts") or "-"
-    result.complete = string.format("|cffffcc66Return results missing for %d %s|r", missing,
+    result.complete = string.format("|cff8a391fReturn results missing for %d %s|r", missing,
       missing == 1 and "craft" or "crafts")
   end
   if nonTrivial == nil then
@@ -112,7 +112,7 @@ function UI.ResourcefulnessSummary(totals, nonTrivial)
   end
   if complete < crafts and complete > 0 then
     local missing = crafts - complete
-    result.complete = string.format("|cffffcc66Return details missing for %d %s|r", missing,
+    result.complete = string.format("|cff8a391fReturn details missing for %d %s|r", missing,
       missing == 1 and "craft" or "crafts")
   end
   return result
@@ -145,8 +145,21 @@ end
 
 function UI.RecipeOutcomes(parent, width, onFilterChanged)
   local pane = CreateFrame("Frame", nil, parent)
-  pane:SetSize(width, 654)
-  pane:SetPoint("TOPLEFT", 0, -62)
+  pane:SetSize(width, 600)
+  pane:SetPoint("TOPLEFT", 0, -104)
+  pane.views = {}
+  for _, name in ipairs({ "Overview", "Statistics", "Reagents" }) do
+    local view = CreateFrame("Frame", nil, pane)
+    view:SetPoint("TOPLEFT", 0, -88)
+    view:SetSize(width, 510)
+    pane.views[name] = view
+  end
+  local overview, statistics, materials = pane.views.Overview, pane.views.Statistics, pane.views.Reagents
+  function pane:SelectView(name)
+    self.activeView = name
+    for title, view in pairs(self.views) do view:SetShown(title == name) end
+  end
+  pane:SelectView("Overview")
   pane.calculationGeneration = 0
   local api = ArtisanLogbookAPI
   local days, character, recipeId = false, false, nil
@@ -196,27 +209,36 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   local stats = {}
   for position, entry in ipairs({ { "Crafts", 1 }, { "Multicraft", 2 }, { "Ingenuity", 4 } }) do
     local x = (position - 1) * width / 3
-    UI.Text(pane, x, -88, width / 3 - 16, 22, "GameFontNormal"):SetText(entry[1])
-    stats[entry[2]] = UI.Text(pane, x, -112, width / 3 - 16, 76)
+    UI.Text(statistics, x, 0, width / 3 - 16, 22, "GameFontNormal"):SetText(entry[1])
+    stats[entry[2]] = UI.Text(statistics, x, -28, width / 3 - 16, 90)
   end
   pane.stats = stats
-  local chart = UI.Chart(pane, 0, -196, width)
+  local chart = UI.Chart(overview, 0, 0, width)
   pane.chart = chart
-  UI.Text(pane, 0, -374, width, 22, "GameFontNormal"):SetText("Resourcefulness")
+  pane.tiles = {}
+  for index, entry in ipairs({ { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
+      { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
+      { "Reagents returned", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } }) do
+    pane.tiles[index] = UI.Stat(overview, entry[1], "Interface\\Icons\\" .. entry[2],
+      ((index - 1) % 3) * width / 3, -184 - math.floor((index - 1) / 3) * 102, width / 3 - 10)
+  end
+  pane.returnWorker = CreateFrame("Frame", nil, pane)
+  UI.Section(statistics, "Resourcefulness", 0, -142, width)
   pane.resourcefulness = {}
   for position, entry in ipairs({ { "Reagents saved", "any" }, { "Non-trivial savings", "nonTrivial" } }) do
     local x = (position - 1) * width / 2
-    UI.Text(pane, x, -402, width / 2 - 16, 20, "GameFontNormalSmall"):SetText(entry[1])
-    pane.resourcefulness[entry[2]] = UI.Text(pane, x, -426, width / 2 - 16, 48)
+    UI.Text(statistics, x, -184, width / 2 - 16, 20, "GameFontNormalSmall"):SetText(entry[1])
+    pane.resourcefulness[entry[2]] = UI.Text(statistics, x, -212, width / 2 - 16, 48)
   end
-  pane.resourcefulness.complete = UI.Text(pane, 0, -480, width, 24)
+  pane.resourcefulness.complete = UI.Text(statistics, 0, -270, width, 34)
+  pane.returnQuantity = UI.Text(statistics, 0, -322, width, 48, "GameFontNormal")
   stats[3] = pane.resourcefulness.any
-  UI.Text(pane, 0, -518, width - 230, 22, "GameFontNormal"):SetText("Returned materials")
+  UI.Section(materials, "Returned materials", 0, 0, width - 200)
   local materialRows, cursors, currentCursor, nextCursor = {}, {}, nil, nil
   pane.materialRows = materialRows
-  local materialStatus = UI.Text(pane, 0, -552, width, 26)
+  local materialStatus = UI.Text(materials, 0, -44, width, 26)
   local function loadMaterials(cursor)
-    local page, reason = api.GetRecipeReturnedReagents(recipeId, pane:Filter(), { limit = 3, cursor = cursor })
+    local page, reason = api.GetRecipeReturnedReagents(recipeId, pane:Filter(), { limit = 10, cursor = cursor })
     nextCursor = page and page.nextCursor
     for position, row in ipairs(materialRows) do
       local returned = page and page.returns[position]
@@ -243,23 +265,23 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       (#page.returns == 0 and "No saved reagents to show" or ""))
     pane.previous:SetEnabled(#cursors > 0); pane.next:SetEnabled(nextCursor ~= nil)
   end
-  pane.previous = UI.Button(pane, "Previous", width - 190, -514, 85, function()
+  pane.previous = UI.Button(materials, "Previous", width - 190, 0, 85, function()
     currentCursor = table.remove(cursors)
     if currentCursor == false then currentCursor = nil end
     loadMaterials(currentCursor)
   end)
-  pane.next = UI.Button(pane, "Next", width - 95, -514, 85, function()
+  pane.next = UI.Button(materials, "Next", width - 95, 0, 85, function()
     if not nextCursor then return end
     cursors[#cursors + 1] = currentCursor or false
     currentCursor = nextCursor
     loadMaterials(currentCursor)
   end)
-  local nameWidth = math.min(300, width - 250)
-  UI.Text(pane, nameWidth + 44, -522, 84, 18, "GameFontNormalSmall"):SetText("Total returned")
-  for position = 1, 3 do
-    local row = CreateFrame("Frame", nil, pane)
+  local nameWidth = math.min(300, width - 340)
+  UI.Text(materials, nameWidth + 44, -32, 84, 18, "GameFontNormalSmall"):SetText("Returned")
+  for position = 1, 10 do
+    local row = CreateFrame("Frame", nil, materials)
     row:SetSize(nameWidth + 240, 32)
-    row:SetPoint("TOPLEFT", 0, -548 - (position - 1) * 34)
+    row:SetPoint("TOPLEFT", 0, -62 - (position - 1) * 38)
     row:EnableMouse(true)
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(28, 28); row.icon:SetPoint("TOPLEFT", 0, 0)
@@ -267,7 +289,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     row.quality:SetSize(16, 16); row.quality:SetPoint("TOPLEFT", 14, -14)
     row.label = UI.Text(row, 36, 0, nameWidth, 16)
     row.identity = UI.Text(row, 36, -16, nameWidth, 14)
-    row.identity:SetTextColor(0.65, 0.65, 0.65)
+    row.identity:SetTextColor(.38, .32, .22)
     row.quantity = UI.Text(row, nameWidth + 44, -6, 84, 22)
     row.check = UI.TrivialCheckbox(row, nameWidth + 144, -2, function() pane:Refresh(true) end)
     row:SetScript("OnEnter", function(self)
@@ -296,12 +318,15 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
 
   function pane:Refresh(keepMaterialPage)
     self:SetScript("OnUpdate", nil)
+    self.returnWorker:SetScript("OnUpdate", nil)
     self.calculationGeneration = self.calculationGeneration + 1
     local generation = self.calculationGeneration
     local filter = self:Filter()
     local result, reason = api.GetRecipeOutcomes(recipeId, filter, { buckets = 60 })
     status:SetText(reason or "")
     if not result then
+      for _, tile in ipairs(self.tiles) do tile.value:SetText("Unavailable"); tile.note:SetText("") end
+      self.returnQuantity:SetText("Unavailable")
       for _, label in ipairs(stats) do label:SetText("Unavailable") end
       for _, label in pairs(self.resourcefulness) do label:SetText("Unavailable") end
       for _, row in ipairs(materialRows) do row.item = nil; row:Hide() end
@@ -310,6 +335,24 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       return
     end
     local totals = result.totals
+    self.tiles[1].value:SetText(tostring(totals.craftCount))
+    for index, metric in pairs({ [2] = "outputQuantity", [3] = "concentrationSpent",
+        [4] = "multicraftBonus", [6] = "ingenuityRefund" }) do
+      local known = totals[metric .. "ObservedCount"]
+      self.tiles[index].value:SetText(known == 0 and "-" or tostring(totals[metric]))
+      self.tiles[index].note:SetText(known < totals.craftCount and "Some crafts have no details" or "")
+    end
+    local share = UI.MeasuredShare(totals, "multicraftBonus", "outputQuantity")
+    if share ~= "Unknown" then self.tiles[4].note:SetText(share .. " of total output") end
+    self.tiles[5].value:SetText("..."); self.tiles[5].note:SetText("")
+    self.returnQuantity:SetText("Calculating returned quantity...")
+    UI.ReturnTotals(self.returnWorker, { { id = recipeId } }, filter, function(total, crafts, complete)
+      local quantity = UI.ReturnQuantity(total, crafts, complete)
+      self.tiles[5].value:SetText(quantity)
+      self.tiles[5].note:SetText(total and (complete < crafts and "Some return details missing" or "Recorded returns") or "")
+      self.returnQuantity:SetText(total and (quantity .. " reagents returned\n" ..
+        (complete < crafts and "Some return details missing" or "Recorded returns")) or "Unavailable")
+    end)
     stats[1]:SetText(tostring(totals.craftCount))
     stats[2]:SetText(UI.CompactOutcome(totals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output"))
     stats[4]:SetText(UI.CompactOutcome(totals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent"))
@@ -363,7 +406,20 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     loadMaterials(currentCursor)
   end
 
-  function pane:Open(id)
+  function pane:State()
+    return { days = days, character = character, customFrom = customFrom, customTo = customTo,
+      fromText = fromInput:GetText(), toText = toInput:GetText(), cursors = cursors, currentCursor = currentCursor }
+  end
+
+  function pane:Open(id, state)
+    if id ~= recipeId then
+      state = state or { days = false, character = false, customFrom = from, customTo = to,
+        fromText = date("!%Y-%m-%d", from), toText = date("!%Y-%m-%d", to - 86400), cursors = {} }
+      days, character, customFrom, customTo = state.days, state.character, state.customFrom, state.customTo
+      cursors, currentCursor = state.cursors, state.currentCursor
+      fromInput:SetText(state.fromText); toInput:SetText(state.toText)
+      fromInput:SetShown(days == "custom"); toInput:SetShown(days == "custom")
+    end
     recipeId = id
     local available = { { label = "All", value = false } }
     for _, entry in ipairs(api.GetCharacters() or {}) do
@@ -371,7 +427,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     end
     characters:Update(available, character)
     period:Update(periodChoices, days)
-    self:Refresh()
+    self:Refresh(state ~= nil)
   end
   return pane
 end

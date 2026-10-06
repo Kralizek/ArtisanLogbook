@@ -1,53 +1,6 @@
 local _, addon = ...
 local UI = addon.UI
 
-local function measured(total, observed, crafts)
-  if observed == 0 then return "Unknown" end
-  if observed < crafts then return total .. " measured of " .. observed .. " crafts" end
-  return tostring(total)
-end
-
-function UI.CreateLogbookSummary(parent, width)
-  local cards = {}
-  local titles = { "Crafts", "Concentration spent", "Multicraft bonus", "Most crafted" }
-  local cardWidth = (width - 30) / 4
-  for index, title in ipairs(titles) do
-    local card = CreateFrame("Frame", nil, parent, "InsetFrameTemplate3")
-    card:SetSize(cardWidth, 76)
-    card:SetPoint("TOPLEFT", (index - 1) * (cardWidth + 10), -250)
-    UI.Text(card, 10, -9, cardWidth - 20, 18, "GameFontNormalSmall"):SetText(title)
-    cards[index] = UI.Text(card, 10, -31, cardWidth - 20, 35, "GameFontHighlight")
-    cards[index]:SetWordWrap(false)
-    cards[index]:SetMaxLines(1)
-  end
-
-  return function(series)
-    local crafts, spent, spentKnown, multi, multiKnown = 0, 0, 0, 0, 0
-    local recipes = {}
-    for _, row in ipairs(series or {}) do
-      crafts = crafts + row.craftCount
-      spent = spent + (row.concentrationSpent or 0)
-      spentKnown = spentKnown + (row.concentrationSpentObservedCount or 0)
-      multi = multi + (row.multicraftBonus or 0)
-      multiKnown = multiKnown + (row.multicraftBonusObservedCount or 0)
-      if row.recipe and row.recipe.id then
-        local entry = recipes[row.recipe.id] or { name = UI.Name(row.recipe), count = 0 }
-        entry.count = entry.count + row.craftCount
-        recipes[row.recipe.id] = entry
-      end
-    end
-    local top
-    for _, entry in pairs(recipes) do
-      if not top or entry.count > top.count or
-          (entry.count == top.count and entry.name < top.name) then top = entry end
-    end
-    cards[1]:SetText(tostring(crafts))
-    cards[2]:SetText(UI.Elide(measured(spent, spentKnown, crafts), 25))
-    cards[3]:SetText(UI.Elide(measured(multi, multiKnown, crafts), 25))
-    cards[4]:SetText(top and UI.Elide(top.name, 22) or "None yet")
-  end
-end
-
 function UI.Aggregate(series)
   local totals = { craftCount = 0 }
   local recipes, professions = {}, {}
@@ -112,6 +65,12 @@ function UI.ReturnTotals(owner, recipes, filter, onResult)
   end)
 end
 
+function UI.ReturnQuantity(total, crafts, complete)
+  if total == nil then return "Unavailable" end
+  if total == 0 and complete < crafts then return "-" end
+  return tostring(total)
+end
+
 function UI.Stat(parent, title, icon, x, y, width)
   local tile = CreateFrame("Frame", nil, parent)
   tile:SetPoint("TOPLEFT", x, y)
@@ -166,7 +125,7 @@ function UI.ProductionSummary(parent, width, y)
     self.tiles[5].value:SetText("...")
     self.tiles[5].note:SetText("")
     UI.ReturnTotals(self, recipes, { time = filter.time, characters = filter.characters }, function(total, crafts, complete)
-      self.tiles[5].value:SetText(total and tostring(total) or "Unavailable")
+      self.tiles[5].value:SetText(UI.ReturnQuantity(total, crafts, complete))
       self.tiles[5].note:SetText(total and (complete < crafts and "Some return details missing" or "Recorded returns") or "")
     end)
   end
@@ -284,8 +243,9 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     self.loaded = true
   end
   function page:Open(identity)
-    if self.identity ~= identity and (not self.identity or not identity or
-        (self.identity.key or self.identity.skillLineId) ~= (identity.key or identity.skillLineId)) then
+    local changed = self.identity ~= identity and (not self.identity or not identity or
+      (self.identity.key or self.identity.skillLineId) ~= (identity.key or identity.skillLineId))
+    if changed then
       if self.identity then
         state.offset = scroll and scroll:GetVerticalScroll() or 0
         state.history = self.history and self.history:Save()
@@ -302,6 +262,10 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
       identityIcon:SetTexture(kind == "Character" and "Interface\\Icons\\INV_Helmet_03" or UI.ProfessionIcon(identity.skillLineId))
       heading:SetText(kind == "Character" and UI.CharacterName(identity) or UI.Name(identity))
     end
-    if not self.loaded or self.dirty then self:Refresh(self.dirty, true); self.dirty = false end
+    local stale = state.revision ~= (self.revision or 0)
+    if changed or not self.loaded or self.dirty or stale then
+      self:Refresh(self.dirty or stale, true)
+      self.dirty, state.revision = false, self.revision or 0
+    end
   end
 end

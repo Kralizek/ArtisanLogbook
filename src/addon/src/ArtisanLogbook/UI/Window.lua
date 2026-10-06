@@ -186,6 +186,9 @@ function addon.CreateProductionWindow()
     if not pages[name] then return end
     if (name == "Character" or name == "Profession" or name == "Recipe") and not identity then return end
     if self.openCraftId then closeCraft() end
+    local status = management.Status()
+    local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)
+    if signature ~= self.dataSignature then self:Invalidate(); self.dataSignature = signature end
     for _, page in pairs(pages) do page:Hide() end
     self.activeTab, self.identity = name, identity
     pages[name]:Open(identity)
@@ -195,6 +198,12 @@ function addon.CreateProductionWindow()
   function window:Refresh()
     self:RefreshSidebar()
     if not self.openCraftId then pages[self.activeTab]:Open(self.identity) end
+  end
+  function window:Invalidate()
+    for _, page in pairs(pages) do
+      page.dirty = true
+      page.revision = (page.revision or 0) + 1
+    end
   end
   local escape = CreateFrame("Frame", "ArtisanLogbookEscapeFrame", UIParent)
   escape:Hide()
@@ -214,9 +223,22 @@ function addon.CreateProductionWindow()
   window:SetScript("OnShow", function(self)
     self:Activate(self.activeTab, self.identity); escape:Show()
   end)
-  API.RegisterCallback("CRAFT_COMMITTED", function()
-    for _, page in pairs(pages) do page.dirty = true end
+  API.RegisterCallback("CRAFT_COMMITTED", function(craft)
+    if craft.recipe and UI.IsPinned(craft.recipe.id) then
+      ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id] = UI.CopyRecipe(craft.recipe,
+        ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id])
+    end
+    window:Invalidate()
     if window:IsShown() then window:Refresh() end
+  end)
+  window:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
+  window:RegisterEvent("PLAYER_ENTERING_WORLD")
+  window:SetScript("OnEvent", function(self)
+    self:Invalidate()
+    self:SetScript("OnUpdate", function(self)
+      self:SetScript("OnUpdate", nil)
+      if self:IsShown() then self:Refresh() end
+    end)
   end)
   window:Hide()
 

@@ -852,6 +852,8 @@ reloadComponents("ArtisanLogbook", reloadedUI)
 assert(#reloadedUI.UI.Pins() == 5 and reloadedUI.UI.IsPinned(1))
 for index = 1, 5 do assert(UI.TogglePin({ id = index })) end
 assert(#UI.Pins() == 0 and not uiAddon.ledger)
+assert(UI.ReturnQuantity(0, 5, 0) == "-" and UI.ReturnQuantity(0, 5, 5) == "0")
+assert(UI.ReturnQuantity(7, 5, 0) == "7" and UI.ReturnQuantity(nil) == "Unavailable")
 print("PASS UI-owned alphabetical pins, five-pin limit and reload persistence")
 assert(UI.Elide("Silvermoon Health Potion", 10) == "Silvermoon...")
 assert(UI.Elide("caf\195\169 noir", 4) == "caf\195\169...")
@@ -1025,11 +1027,11 @@ recentFirst.scripts.OnClick(recentFirst)
 assert(uiWindow.openCraftId == 14 and uiWindow.visiblePage ~= logbook)
 local sharedDetail = uiWindow.visiblePage
 assert(visibleText("Quantity:") and not visibleText("Ingenuity proc: Unknown"))
-button(sharedDetail, "Back").scripts.OnClick()
+button(sharedDetail, "Close").scripts.OnClick()
 assert(uiWindow.visiblePage == logbook and logbook:IsShown() and not sharedDetail:IsShown())
 recentFirst.scripts.OnClick(recentFirst)
 uiWindow:OpenCraft(13)
-button(sharedDetail, "Back").scripts.OnClick()
+button(sharedDetail, "Close").scripts.OnClick()
 assert(uiWindow.visiblePage == logbook and logbook:IsShown() and not sharedDetail:IsShown())
 uiWindow:Activate("Recipes")
 local recipes = uiWindow.pages.Recipes
@@ -1056,7 +1058,7 @@ local recipeCraft = displayedRow(recipePage, function(item) return item.id == 13
 assert(recipeCraft)
 recipeCraft.scripts.OnClick(recipeCraft)
 assert(uiWindow.visiblePage == sharedDetail and uiWindow.returnPage == recipePage and uiWindow.openCraftId == 13)
-button(sharedDetail, "Back").scripts.OnClick()
+button(sharedDetail, "Close").scripts.OnClick()
 assert(uiWindow.visiblePage == recipePage and recipePage:IsShown() and not sharedDetail:IsShown())
 uiWindow:Activate("Logbook")
 dropdown(logbook, "TestCrafter"):Choose(currentKey)
@@ -1123,6 +1125,10 @@ assert(#history.items == 16)
 dropdown(logbook, "90 days"):Choose(90)
 assert(#history.items == 17)
 dropdown(logbook, "30 days"):Choose(30)
+uiWindow:Activate("Settings")
+uiWindow:Activate("Character", { key = currentKey, name = "TestCrafter" })
+assert(#uiWindow.pages.Character.professionSlots == 2)
+assert(uiWindow.pages.Character.professionSlots[1].entry.details and uiWindow.pages.Character.professionSlots[2].entry.details)
 uiWindow:Activate("Settings")
 local settings = uiWindow.pages.Settings
 local retentionInput
@@ -1299,8 +1305,11 @@ do
   assert(escapeJournal)
   local function finishCalculation()
     while pane.scripts.OnUpdate do pane.scripts.OnUpdate() end
+    while pane.returnWorker.scripts.OnUpdate do pane.returnWorker.scripts.OnUpdate(pane.returnWorker) end
   end
   finishCalculation()
+  assert(pane.tiles[5].value.text == "11" and pane.tiles[5].note.text == "Some return details missing")
+  assert(pane.returnQuantity.text:find("11 reagents returned", 1, true))
   assert(pane.stats[2].text:find("Proc recorded for 1 craft", 1, true) and pane.stats[4].text:find("Refund: 12", 1, true))
   assert(pane.stats[3].text == "Returns recorded for 3 crafts" and not pane.stats[3].text:find("%%"))
   assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 3 crafts")
@@ -1331,10 +1340,10 @@ do
   pane:Refresh()
   assert(not material.quality:IsShown() and material.identity.text == "#8")
   environment.C_TradeSkillUI.GetItemReagentQualityInfo = oldQuality
-  assert(pane.stats[2].y - pane.stats[2].height > pane.chart.y)
-  assert(pane.chart.y - pane.chart.height > pane.resourcefulness.any.y)
-  assert(pane.resourcefulness.any.y - pane.resourcefulness.any.height > material.y)
-  assert(-pane.materialRows[3].y + pane.materialRows[3].height <= pane.height)
+  window.pages.Recipe:SelectView("Statistics")
+  assert(pane.views.Statistics:IsShown() and not pane.views.Overview:IsShown())
+  window.pages.Recipe:SelectView("Reagents")
+  assert(pane.views.Reagents:IsShown() and not pane.views.Statistics:IsShown())
   local recipePage = window.visiblePage
   window:OpenCraft(second.id)
   local detail = window.visiblePage
@@ -1347,7 +1356,30 @@ do
   assert(checkbox and checkbox.itemId == 8 and not checkbox:GetChecked())
   checkbox:SetChecked(true); checkbox.scripts.OnClick(checkbox)
   assert(helpers.IsTrivial(8))
-  button(detail, "Back").scripts.OnClick()
+  assert(detail.fields.Resourcefulness.text == "1 returned")
+  assert(#detail.returnedReagents.items == 1 and detail.returnedReagents.items[1].item.id == 8)
+  local getCraft = api.GetCraft
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.reagents = {
+      { item = { id = 8, name = "Bloom" }, allocatedQuantity = 8, returnedQuantity = 1 },
+      { item = { id = 9, name = "Petal" }, allocatedQuantity = 2, returnedQuantity = 1 },
+    }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(#detail.returnedReagents.items == 2)
+  assert(detail.fields.Resourcefulness.text == "2 returned (20.0% of allocated reagents)")
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.resourcefulnessComplete = false
+    craft.reagents = { { item = { id = 8 }, returnedQuantity = 3 } }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(detail.fields.Resourcefulness.text == "3 returned (partial details)")
+  api.GetCraft = getCraft
+  button(detail, "Close").scripts.OnClick()
   finishCalculation()
   assert(window.visiblePage == recipePage, "craft close did not restore recipe page")
   assert(window.recipeDetailPage:IsShown() and not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
@@ -1355,7 +1387,7 @@ do
     "unexpected non-trivial summary: " .. tostring(pane.resourcefulness.nonTrivial.text))
   local materialCheck
   for _, frame in ipairs(frames) do
-    if frame.parent and frame.parent.parent == pane and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
+    if frame.parent and frame.parent.parent == pane.views.Reagents and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
   end
   assert(materialCheck)
   materialCheck:SetChecked(true); materialCheck.scripts.OnClick(materialCheck)
@@ -1415,7 +1447,24 @@ do
   assert(pane.materialRows[1].item.id == secondPageItem and pane.previous.enabled)
   pane.previous.scripts.OnClick()
   assert(pane.materialRows[1].item.id == 1001 and not pane.previous.enabled)
-  assert(#pane.chart.lines <= 59)
+  assert(#pane.chart.bars <= 60)
+  window:OpenRecipe({ id = 9001, name = "Observed recipe" })
+  dropdown(pane, "7 days"):Choose(7)
+  window.pages.Recipe:SelectView("Craft History")
+  window.pages.Recipe.history.scroll:SetVerticalScroll(60)
+  window.pages.Recipe.scroll:SetVerticalScroll(45)
+  window:OpenRecipe({ id = 9002 })
+  assert(dropdown(pane, "All time").value == false)
+  assert(window.pages.Recipe.activeView == "Overview")
+  window:OpenRecipe({ id = 9001 })
+  assert(dropdown(pane, "7 days").value == 7)
+  assert(window.pages.Recipe.activeView == "Craft History" and pane.views["Craft History"]:IsShown())
+  assert(window.pages.Recipe.history.scroll:GetVerticalScroll() == 60 and window.pages.Recipe.scroll:GetVerticalScroll() == 45)
+  window:OpenCraft(second.id)
+  window.craftDetailWindow:Hide()
+  assert(window.pages.Recipe.activeView == "Craft History" and window.pages.Recipe.scroll:GetVerticalScroll() == 45)
+  assert(window.pages.Recipe.history.scroll:GetVerticalScroll() == 60)
+  print("PASS recipe-local views and filters, per-recipe state, durable returned quantities and guarded allocation ratios")
   assert(environment.ArtisanLogbookManagement.Clear())
   assert(helpers.IsTrivial(8) and helpers.IsTrivial(10))
   api.GetCraftSeries, api.GetRecipeReturnSets = oldSeries, oldSets
