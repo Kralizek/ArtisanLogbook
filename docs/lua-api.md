@@ -451,10 +451,11 @@ the display name, applied before sorting and pagination. Recipe and
 profession are detached domain projections.
 
 The default page size is 50, maximum 200. Only `limit`, `cursor`, `character`,
-`profession`, `sort`, and `search` are accepted; invalid options return
+`profession`, `sort`, `search`, and `time` are accepted; invalid options return
 `"invalid-options"`. Without search the cursor retains its positive-offset
-format. Nonempty search uses an opaque cursor bound to the search, character,
-profession and sort; do not construct cursors. Malformed/out-of-range cursors
+format when no time filter is present. Nonempty search or a time filter uses an
+opaque cursor bound to search, character, profession, sort and time; do not
+construct cursors. Malformed/out-of-range cursors
 return `"invalid-cursor"`. No cursor means the first page; an empty catalogue
 returns `{ recipes = {} }` without a cursor. This is not a snapshot: new recipes
 or metadata enrichment can change ordering between pages, so restart at page one
@@ -463,6 +464,13 @@ order; filtered/count/profession-sorted calls derive an order from durable total
 project only the requested page. The name `GetRecipeSummaries` distinguishes
 these lifetime counts from full recipe or craft facts. This query does not add a general statistics
 or write API; for filtered activity use `GetCraftSeries`.
+
+`time` accepts half-open `{ from, to }` bounds aligned to UTC days, matching
+`GetReagentSummaries` and the UI's shared period selector. Missing bounds are
+unbounded. Invalid/reversed/non-day-aligned bounds return `invalid-options`.
+Time-filtered counts use durable daily craft series and survive detail pruning.
+The default API sort remains name; the production Recipes page explicitly asks
+for count order as its default.
 
 ### Reagent catalogue
 

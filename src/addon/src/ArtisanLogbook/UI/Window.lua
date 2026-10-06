@@ -40,7 +40,7 @@ function addon.CreateProductionWindow()
   body:SetPoint("TOPLEFT", 14, -16)
   body:SetSize(inner, bodyHeight)
   local pages = {}
-  for _, name in ipairs({ "Overview", "Logbook", "Recipes", "Reagents", "Character", "Profession", "Recipe", "Settings" }) do
+  for _, name in ipairs({ "Overview", "Logbook", "Recipes", "Reagents", "Character", "Profession", "Recipe", "Reagent", "Settings" }) do
     pages[name] = CreateFrame("Frame", nil, body)
     pages[name]:SetAllPoints(body)
     pages[name]:Hide()
@@ -77,7 +77,7 @@ function addon.CreateProductionWindow()
       entries[#entries + 1] = { label = UI.Name(character), page = "Character", identity = character,
         classFile = character.classFile, icon = "Interface\\Icons\\INV_Helmet_03" }
     end
-    if #characters == 0 then entries[#entries + 1] = { section = "None recorded" } end
+    if #characters == 0 then entries[#entries + 1] = { section = "No crafts yet" } end
     entries[#entries + 1] = { section = "PROFESSIONS" }
     local professions = API.GetProfessions() or {}
     table.sort(professions, function(left, right) return UI.Name(left) < UI.Name(right) end)
@@ -85,7 +85,7 @@ function addon.CreateProductionWindow()
       entries[#entries + 1] = { label = UI.Name(profession), page = "Profession", identity = profession,
         icon = UI.ProfessionIcon(profession.skillLineId) }
     end
-    if #professions == 0 then entries[#entries + 1] = { section = "None recorded" } end
+    if #professions == 0 then entries[#entries + 1] = { section = "No crafts yet" } end
     for _, item in ipairs(self.navItems) do item:Hide() end
     for _, heading in ipairs(headings) do heading:Hide() end
     local offset, itemCount, headingCount = 0, 0, 0
@@ -104,7 +104,8 @@ function addon.CreateProductionWindow()
         self.navItems[itemCount] = item
         item:ClearAllPoints(); item:SetPoint("TOPLEFT", 0, -offset)
         local selected = self.activeTab == entry.page or
-          (self.activeTab == "Recipe" and entry.page == "Recipes")
+          (self.activeTab == "Recipe" and entry.page == "Recipes") or
+          (self.activeTab == "Reagent" and entry.page == "Reagents")
         if selected and entry.identity then
           local current = self.identity
           selected = current and (current.key or current.skillLineId or current.id) ==
@@ -145,7 +146,7 @@ function addon.CreateProductionWindow()
     if not closingMain and window.activeTab == "Recipe" then pages.Recipe.outcomes:Refresh(true) end
     closingCraft = false
   end
-  detail = UI.CraftDetail(craftBody, 676, 550, closeCraft)
+  detail = UI.CraftDetail(craftBody, 676, 550, closeCraft, function(item) window:Activate("Reagent", item) end)
   window.craftDetailPage = detail
   craftModal:SetScript("OnHide", closeCraft)
   function window:OpenCraft(id)
@@ -160,34 +161,35 @@ function addon.CreateProductionWindow()
     UI.PopulationPage(pages[name], name, inner, bodyHeight, navigate, openCraft)
   end
   UI.CataloguePage(pages.Recipes, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end)
-  UI.ReagentsPage(pages.Reagents, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end)
-  UI.RecipePage(pages.Recipe, inner, bodyHeight, openCraft, function() window:RefreshSidebar() end)
+  local function openReagent(item) window:Activate("Reagent", item) end
+  UI.ReagentsPage(pages.Reagents, inner, bodyHeight, openReagent)
+  UI.ReagentPage(pages.Reagent, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end, openCraft)
+  UI.RecipePage(pages.Recipe, inner, bodyHeight, openCraft, function() window:RefreshSidebar() end, openReagent)
   window.recipeDetailPage, window.recipeOutcomes = pages.Recipe, pages.Recipe.outcomes
   function window:OpenRecipe(recipe) self:Activate("Recipe", recipe) end
 
   local settings = pages.Settings
   UI.Section(settings, "History settings", 0, -2, inner)
   local settingsStatus = UI.Text(settings, 0, -46, inner, 70)
-  UI.Text(settings, 0, -132, 160, 24):SetText("Retention (days)")
+  UI.Text(settings, 0, -132, 170, 32):SetText("Keep craft history (days)")
   local retention = CreateFrame("EditBox", nil, settings, "InputBoxTemplate")
   retention:SetSize(78, 24); retention:SetPoint("TOPLEFT", 175, -127)
   retention:SetAutoFocus(false); retention:SetNumeric(true)
   retention:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
   UI.Button(settings, "Save", 275, -127, 76, function()
     local ok, reason = management.SetRetentionDays(tonumber(retention:GetText()))
-    addon.Notify(ok and "Retention updated." or reason)
+    addon.Notify(ok and "Craft history setting updated." or reason)
     settings:Open()
   end)
   function settings:Open()
     local status, reason = management.Status()
     if not status then settingsStatus:SetText(reason or "Unavailable"); return end
     retention:SetText(tostring(status.retentionDays))
-    settingsStatus:SetText(string.format("Retained crafts: %d\nDaily totals: %d\nAddon version: %s",
-      status.retainedCrafts, status.dailyRows, UI.Value(status.addonVersion)))
+    settingsStatus:SetText("Craft history: " .. UI.Number(status.retainedCrafts) .. " crafts\nAddon version: " .. UI.Value(status.addonVersion))
   end
   function window:Activate(name, identity)
     if not pages[name] then return end
-    if (name == "Character" or name == "Profession" or name == "Recipe") and not identity then return end
+    if (name == "Character" or name == "Profession" or name == "Recipe" or name == "Reagent") and not identity then return end
     if self.openCraftId then closeCraft() end
     local status = management.Status()
     local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)

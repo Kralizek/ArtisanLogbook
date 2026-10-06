@@ -19,6 +19,7 @@ for _, name in ipairs({
   "SetFrameStrata", "RegisterForClicks", "ClearAllPoints", "SetTexture", "SetTexCoord",
   "LockHighlight", "UnlockHighlight", "SetToplevel", "Raise", "SetAtlas",
   "SetTextColor", "AddMaskTexture", "SetScale", "SetShadowOffset", "SetBlendMode",
+  "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor",
 }) do
   methods[name] = function() end
 end
@@ -860,6 +861,34 @@ assert(paperSurface.color[4] == 1 and paperSurface.allPoints == paperProbe)
 assert(paperSurface.grain.allPoints == paperProbe)
 assert(paperSurface.grain.texture == "Interface\\AchievementFrame\\UI-Achievement-Parchment-Horizontal")
 assert(paperSurface.grain.alpha == .16)
+assert(UI.Number(34766) == "34.8k" and UI.Number(1200000) == "1.2M")
+assert(UI.Number(0) == "0" and UI.Number(nil) == "-" and UI.Number(34766, true) == "34766")
+assert(UI.Number(999999) == "1M" and UI.Number(999999999) == "1B")
+assert(UI.Amount(34766, false) == ">= 34.7k" and UI.Amount(34766, true) == "34.8k")
+assert(UI.Percent(1, 3) == "33.3%" and UI.Percent(1, 0) == "-")
+local filterProbe = UI.FilterBar(paperProbe, 700, 0)
+local filterChanges = 0
+local periodProbe = filterProbe:Period({ days = 30 }, function() filterChanges = filterChanges + 1 end)
+periodProbe:Choose("custom")
+assert(filterProbe:GetHeight() == 92 and periodProbe:Time().from < periodProbe:Time().to)
+periodProbe:Choose(1)
+assert(filterProbe:GetHeight() == 46 and periodProbe:Time().to - periodProbe:Time().from == 86400)
+local searchProbe = filterProbe:Search(function(value) filterProbe.search = value end)
+searchProbe:SetText("Potion"); searchProbe.searchButton.scripts.OnClick()
+assert(filterProbe.search == "Potion")
+searchProbe.clearButton.scripts.OnClick()
+assert(filterProbe.search == "")
+local tabsProbe = UI.TabbedContent(paperProbe, 700, 400, -100, { "Overview", "Craft History" })
+tabsProbe:Select("Craft History")
+assert(tabsProbe.views["Craft History"]:IsShown() and not tabsProbe.views.Overview:IsShown())
+local chartProbe = UI.Chart(paperProbe, 0, 0, 600)
+chartProbe:Render({ { bucketStart = 0, craftCount = 34766 } }, 0, 86400)
+assert(not chartProbe.plot:IsShown() and chartProbe.empty.text == "34.8k crafts on 01 Jan")
+chartProbe:Render({ { bucketStart = 0, craftCount = 2 } }, 0, 7 * 86400)
+assert(chartProbe.plot:IsShown() and chartProbe.bars[1]:GetWidth() <= 28)
+chartProbe:Layout(130)
+chartProbe:Render({ { bucketStart = 0, craftCount = 2 } }, 0, 7 * 86400)
+assert(chartProbe.bars[1]:GetHeight() <= chartProbe.plot:GetHeight() and chartProbe.start.y == -102)
 local selectorProbe = UI.Selector(paperProbe, 20, -40, 160, { { label = "All", value = false } }, function() end, "Character")
 assert(selectorProbe.x + selectorProbe:GetWidth() == 180)
 assert(selectorProbe.textAlignment == "LEFT" and selectorProbe.caption.parent == selectorProbe)
@@ -908,7 +937,7 @@ local activity = UI.Activity({ recipe = { id = 42, name = "Crushing", maxQuality
 assert(#activity == 6 and activity[1].atlas == "Quality-2")
 assert(activity[2].tooltip:find("Gemdust", 1, true) and
   activity[4].tooltip == "Multicraft: produced 11 additional items" and
-  activity[6].tooltip:find("Azeroot: 4 returned (allocation unknown)", 1, true))
+  activity[6].tooltip:find("Azeroot: 4 returned (quantity used unavailable)", 1, true))
 assert(#UI.Activity({ recipe = { name = "Potion", maxQuality = 5 },
   outputItem = { name = "Potion" }, outputQuality = 0, multicraftBonus = 0,
   concentrationSpent = 0, reagents = {} }) == 0)
@@ -919,10 +948,10 @@ local highlights = table.concat(UI.CraftHighlights({ concentrationSpent = 323,
   reagents = { { returnedQuantity = 4 }, { returnedQuantity = 0 } } }), "; ")
 assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Reagents returned: 4")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 5,
-  returnedQuantity = 1 }) == "Azeroot: 5 allocated, 1 returned")
+  returnedQuantity = 1 }) == "Azeroot: 5 used, 1 returned")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
-  "Azeroot: 4 returned (allocation unknown)")
-assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) == "#100: 2 allocated")
+  "Azeroot: 4 returned (quantity used unavailable)")
+assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) == "#100: 2 used")
 local longName = "Silvermoon Health Potion of the Long Night"
 local sampleTable = UI.ScrollList(environment.CreateFrame("Frame"), 0, 0, 140, 140,
   { { title = "Recipe", width = 116, value = function(row) return row.name end } }, function() end)
@@ -962,7 +991,9 @@ assert(uiLedger:CreateSession({ startedAt = 1800000000, projectId = 1, regionId 
 
 local function dropdown(parent, label)
   for _, frame in ipairs(frames) do
-    if frame.parent == parent and frame.choices then
+    local ancestor = frame.parent
+    while ancestor and ancestor ~= parent do ancestor = ancestor.parent end
+    if ancestor == parent and frame.choices then
       for _, choice in ipairs(frame.choices) do
         if choice.label == label then return frame end
       end
@@ -1080,7 +1111,7 @@ uiWindow:Activate("Recipes")
 local recipes = uiWindow.pages.Recipes
 local catalogue
 for _, frame in ipairs(frames) do if frame.parent == recipes and frame.scroll then catalogue = frame end end
-assert(catalogue and catalogue.items[1].recipe.name == "Apple Mix")
+assert(catalogue and catalogue.items[1].recipe.name == "Zebra Brew")
 local apple = displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 502 end)
 assert(apple and apple.item.craftCount == 2)
 assert(displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 501 end).item.craftCount == 12)
@@ -1111,10 +1142,10 @@ assert(not UI.IsPinned(502))
 assertRecipesSelected()
 assert(recipePage ~= recipes and visibleText("Apple Mix") and visibleText("Enchanting"))
 assert(recipePage.tabs[recipePage.activeView].selected)
-assert(recipePage.history.rows[1].cells[1].column.title == "Date")
-assert(recipePage.history.rows[1].cells[1].label.text ==
-  os.date("%d %b %y %H:%M", recipePage.history.items[1].timestamp))
-assert(recipePage.history.rows[1].cells[3].column.title == "Result")
+assert(recipePage.history.rows[1].cells[3].column.title == "When")
+assert(recipePage.history.rows[1].cells[3].label.text == UI.DateTime(recipePage.history.items[1].timestamp))
+assert(recipePage.history.rows[1].widgets[1].column.title == "Result")
+assert(recipePage.history.rows[1].activity.extrasOnly)
 local recipeCraft = displayedRow(recipePage, function(item) return item.id == 13 end)
 assert(recipeCraft)
 recipeCraft.scripts.OnClick(recipeCraft)
@@ -1197,7 +1228,7 @@ local retentionInput
 for _, frame in ipairs(frames) do
   if frame.parent == settings and frame.kind == "EditBox" then retentionInput = frame end
 end
-assert(retentionInput and retentionInput.text == "60" and visibleText("Retained crafts: 17"))
+assert(retentionInput and retentionInput.text == "60" and visibleText("Craft history: 17 crafts"))
 retentionInput:SetText("1")
 button(settings, "Save").scripts.OnClick()
 assert(uiLedger.database.retentionDays == 1)
@@ -1249,12 +1280,15 @@ assert(characterPage.chart.total.text == "45 crafts" and #characterPage.professi
 assert(characterPage.professionSlots[1].entry.details.skillLineId == 171)
 assert(characterPage.professionSlots[2].entry.details == nil)
 dropdown(characterPage.content, "7 days"):Choose(7)
-characterPage.scroll:SetVerticalScroll(85)
+assert(characterPage.scroll == nil and characterPage.tabbed)
+characterPage.tabbed:Select("Craft History")
+characterPage.history.scroll:SetVerticalScroll(85)
 uiWindow:Activate("Character", { key = "missing", name = "Missing" })
 assert(characterPage.chart.total.text == "0 crafts")
 assert(characterPage.professionSlots[1].entry.details == nil and characterPage.professionSlots[2].entry.details == nil)
 uiWindow:Activate("Character", { key = currentKey, name = "TestCrafter" })
-assert(dropdown(characterPage.content, "7 days").value == 7 and characterPage.scroll:GetVerticalScroll() == 85)
+assert(dropdown(characterPage.content, "7 days").value == 7 and characterPage.history.scroll:GetVerticalScroll() == 85)
+assert(characterPage.tabbed.activeView == "Craft History")
 uiWindow:Activate("Profession", { skillLineId = 171, name = "Alchemy" })
 assert(professionPage.chart.total.text == "45 crafts" and #professionPage.history.items == 40)
 professionPage.history.scroll:SetVerticalScroll(95)
@@ -1283,7 +1317,7 @@ assert(not UI.IsPinned(501))
 assertRecipesSelected()
 uiWindow:Activate("Overview")
 while overview.summary.scripts.OnUpdate do overview.summary.scripts.OnUpdate(overview.summary) end
-assert(overview.summary.tiles[5].note.text == "Some return details missing")
+assert(overview.summary.tiles[5].note.text == "")
 uiWindow:Activate("Logbook")
 print("PASS sidebar destinations, independent filters, list preservation, pins and modal Escape")
 local present = environment.GetServerTime
@@ -1342,13 +1376,13 @@ do
   dropdown(page.content, "Alchemy"):Choose(171)
   assertPrimarySlots()
   assert(page.summary.totals.craftCount == 1 and #page.topRecipes.items == 1)
-  page.scroll:SetVerticalScroll(85)
+  page.history.scroll:SetVerticalScroll(85)
   window:Activate("Character", { key = "missing", name = "Missing" })
   assert(not page.professionSlots[1].entry.details and not page.professionSlots[2].entry.details)
   window:Activate("Character", character)
   assertPrimarySlots()
   assert(dropdown(page.content, "7 days").value == 7 and dropdown(page.content, "Alchemy").value == 171)
-  assert(page.scroll:GetVerticalScroll() == 85)
+  assert(page.history.scroll:GetVerticalScroll() == 85)
   assert(ledger:Prune(now + 400 * 86400))
   assert(#api.GetCrafts().crafts == 0)
   local serverTime = environment.GetServerTime
@@ -1386,14 +1420,14 @@ end
     page.searchInput.scripts.OnTextChanged(page.searchInput)
     page.catalogue:LoadNext()
     assert(#page.catalogue.items == 45)
-    page.scripts.OnUpdate(page, .3)
+    page.searchInput.scripts.OnUpdate(page.searchInput, .3)
     assert(#page.catalogue.items == 1 and page.catalogue.items[1].recipe.id == 9645)
     window:Activate("Overview"); window:Activate("Recipes")
     assert(page.searchInput:GetText() == "Recipe 45" and #page.catalogue.items == 1)
     page.searchInput:SetText("")
     page.searchInput.scripts.OnTextChanged(page.searchInput)
     page.searchInput.scripts.OnEnterPressed(page.searchInput)
-    assert(#page.catalogue.items == 40 and not page.scripts.OnUpdate)
+    assert(#page.catalogue.items == 40 and not page.searchInput.scripts.OnUpdate)
     window:Hide()
     print("PASS recipe search spans lazy pages and survives navigation")
   end
@@ -1440,14 +1474,14 @@ do
   page.searchInput.scripts.OnTextChanged(page.searchInput)
   list.scroll:SetVerticalScroll(1200); list.scroll.scripts.OnVerticalScroll(list.scroll)
   assert(#list.items == 47)
-  page.scripts.OnUpdate(page, .3)
+  page.searchInput.scripts.OnUpdate(page.searchInput, .3)
   assert(#list.items == 2)
   page.searchInput:SetText("")
   page.searchInput.scripts.OnTextChanged(page.searchInput)
-  page.scripts.OnUpdate(page, .3)
+  page.searchInput.scripts.OnUpdate(page.searchInput, .3)
   dropdown(page, "Most returned"):Choose("returned")
   assert(#list.items == 40 and list.items[1].item.id == 4145)
-  dropdown(page, "Most allocated"):Choose("allocated")
+  dropdown(page, "Most used"):Choose("allocated")
   assert(list.items[1].item.id == 4145)
   dropdown(page, "Recipe count"):Choose("recipes")
   assert(list.items[1].item.id == 4008)
@@ -1458,20 +1492,17 @@ do
   local function search(text)
     page.searchInput:SetText(text)
     page.searchInput.scripts.OnTextChanged(page.searchInput)
-    page.scripts.OnUpdate(page, .3)
+    page.searchInput.scripts.OnUpdate(page.searchInput, .3)
   end
   search("BLOOM")
   assert(#list.items == 2)
-  local function check(row)
-    return list.rows[row].widgets[2].widget
-  end
-  check(1):SetChecked(true); check(1).scripts.OnClick(check(1))
+  helpers.SetTrivial(4008, true)
   assert(helpers.IsTrivial(4008) and environment.ArtisanLogbookUISettings.trivialReagents[4008])
-  dropdown(page, "Trivial"):Choose("trivial")
+  dropdown(page, "Ignored"):Choose("trivial")
   assert(#list.items == 1 and list.items[1].item.id == 4008)
-  dropdown(page, "Non-trivial"):Choose("non-trivial")
+  dropdown(page, "Included"):Choose("non-trivial")
   assert(#list.items == 1 and list.items[1].item.id == 4009)
-  dropdown(page, "Trivial"):Choose("all")
+  dropdown(page, "Ignored"):Choose("all")
   assert(#list.items == 2)
   window:OpenRecipe({ id = 9701 })
   local outcomes = window.recipeOutcomes
@@ -1479,42 +1510,39 @@ do
     while outcomes.scripts.OnUpdate do outcomes.scripts.OnUpdate() end
   end
   finish()
-  assert(outcomes.materialRows[1].check:GetChecked())
+  assert(helpers.IsTrivial(outcomes.materialList.items[1].item.id))
   local before = outcomes.resourcefulness.nonTrivial.text
   window:Activate("Reagents")
   assert(#list.items == 2 and page.searchInput:GetText() == "BLOOM")
-  check(1):SetChecked(false); check(1).scripts.OnClick(check(1))
+  helpers.SetTrivial(4008, false)
   finish()
-  assert(not outcomes.materialRows[1].check:GetChecked() and outcomes.resourcefulness.nonTrivial.text ~= before)
-  window:OpenRecipe({ id = 9701 }); window:OpenCraft(firstCraft.id)
-  local detail, preference = window.craftDetailPage
-  for _, frame in ipairs(frames) do
-    if frame.parent == detail and frame.kind == "CheckButton" then preference = frame end
-  end
+  assert(not helpers.IsTrivial(4008) and outcomes.resourcefulness.nonTrivial.text ~= before)
+  list.rows[1].scripts.OnClick(list.rows[1])
+  assert(window.activeTab == "Reagent" and window.identity.id == 4008)
+  local preference = window.pages.Reagent.classification
   assert(preference and preference.itemId == 4008 and not preference:GetChecked())
   preference:SetChecked(true); preference.scripts.OnClick(preference)
-  assert(helpers.IsTrivial(4008) and outcomes.materialRows[1].check:GetChecked())
-  window.craftDetailWindow:Hide()
+  assert(helpers.IsTrivial(4008))
   window:Activate("Reagents")
-  assert(check(1):GetChecked())
-  dropdown(page, "Trivial"):Choose("trivial")
+  assert(helpers.IsTrivial(4008))
+  dropdown(page, "Ignored"):Choose("trivial")
   assert(#list.items == 1)
-  check(1):SetChecked(false); check(1).scripts.OnClick(check(1))
+  helpers.SetTrivial(4008, false)
   assert(#list.items == 0 and list.empty:IsShown() and not preference:GetChecked())
-  dropdown(page, "Trivial"):Choose("all")
+  dropdown(page, "Ignored"):Choose("all")
   search("Herb")
   dropdown(page, "Alchemy"):Choose(171)
-  dropdown(page, "Most allocated"):Choose("allocated")
+  dropdown(page, "Most used"):Choose("allocated")
   list.scroll:SetVerticalScroll(1200); list.scroll.scripts.OnVerticalScroll(list.scroll)
   assert(#list.items == 45)
   list.scroll:SetVerticalScroll(150)
   window:Activate("Recipes"); window:Activate("Reagents")
   assert(#list.items == 45 and list.scroll:GetVerticalScroll() == 150 and page.searchInput:GetText() == "Herb")
-  assert(dropdown(page, "Alchemy").value == 171 and dropdown(page, "Most allocated").value == "allocated")
+  assert(dropdown(page, "Alchemy").value == 171 and dropdown(page, "Most used").value == "allocated")
   search("not recorded")
   assert(#list.items == 0 and list.empty:IsShown())
-  assert(helpers.ReagentAmount({ allocatedQuantity = 4, allocationComplete = false }, "allocatedQuantity", "allocationComplete") == "4 (partial)")
-  assert(helpers.ReagentAmount({}, "returnedQuantity", "returnComplete") == "Unknown")
+  assert(helpers.ReagentAmount({ allocatedQuantity = 4, allocationComplete = false }, "allocatedQuantity", "allocationComplete") == ">= 4")
+  assert(helpers.ReagentAmount({}, "returnedQuantity", "returnComplete") == "-")
   assert(helpers.ReagentAmount({ returnedQuantity = 0, returnComplete = true }, "returnedQuantity", "returnComplete") == "0")
   api.GetReagentSummaries = summaries
   window:Hide()
@@ -1541,14 +1569,15 @@ do
   local ui = loadUI()
   local window = ui.productionWindow
   window:Show(); window:Activate("Reagents")
-  local page, detail = window.pages.Reagents, window.pages.Reagents.detail
+  local page, detail = window.pages.Reagents, window.pages.Reagent
+  page.catalogue.rows[1].scripts.OnClick(page.catalogue.rows[1])
   local crafts, calls = api.GetCrafts, 0
   api.GetCrafts = function(filter, options)
     assert(options.limit == 100 or options.limit == 40)
     if options.limit == 100 then calls = calls + 1 end
     return crafts(filter, options)
   end
-  assert(page.selectedItemId == 4501 and page.catalogue.rows[1].selection:IsShown())
+  assert(window.activeTab == "Reagent" and detail.item.id == 4501 and page.detail == nil)
   assert(page.summary[1].value.text == "2" and page.summary[2].value.text == "508")
   detail.worker.scripts.OnUpdate(detail.worker)
   assert(calls == 1 and detail.worker.scripts.OnUpdate and detail.fields.crafts.text == "-")
@@ -1558,35 +1587,35 @@ do
   assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
   assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
-  assert(detail.chart.bars[1].tooltip:find("Allocated (recorded): 505", 1, true))
+  assert(detail.chart.bars[1].tooltip:find("Used: 505", 1, true))
   detail:SelectView("Used in Recipes")
   assert(detail.tabs["Used in Recipes"].selected and detail.recipes:IsShown())
   detail.recipes.rows[1].scripts.OnClick(detail.recipes.rows[1])
   assert(window.activeTab == "Recipe" and window.identity.id == 9751)
   window:Activate("Reagents")
-  assert(page.selectedItemId == 4501 and detail.activeView == "Used in Recipes")
+  assert(detail.item.id == 4501 and detail.activeView == "Used in Recipes")
   page.catalogue.rows[2].scripts.OnClick(page.catalogue.rows[2])
   detail:SelectView("Overview")
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
-  assert(page.selectedItemId == 4502 and detail.totals.crafts == 1)
-  assert(detail.fields.rate.text == "-" and detail.fields.returned.text == "Unknown")
+  assert(detail.item.id == 4502 and detail.totals.crafts == 1)
+  assert(detail.fields.rate.text == "-" and detail.fields.returned.text == "-")
   assert(not detail.chart.bars[1].returned:IsShown())
-  assert(detail.chart.bars[1].tooltip:find("Returned (recorded): Unknown", 1, true))
+  assert(detail.chart.bars[1].tooltip:find("Returned: Unknown", 1, true))
   page.catalogue.rows[1].scripts.OnClick(page.catalogue.rows[1])
   detail.worker.scripts.OnUpdate(detail.worker)
   page.catalogue.rows[2].scripts.OnClick(page.catalogue.rows[2])
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
   assert(detail.row.item.id == 4502 and detail.totals.crafts == 1)
-  dropdown(page, "Today"):Choose(1)
+  dropdown(detail, "Today"):Choose(1)
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
-  assert(page:Filter().time.to - page:Filter().time.from == 86400)
-  dropdown(page, "All time"):Choose(false)
-  page:SelectReagent(page.catalogue.items[1])
+  assert(detail:Filter().time.to - detail:Filter().time.from == 86400)
+  dropdown(detail, "All time"):Choose(false)
+  window:Activate("Reagent", page.catalogue.items[1].item)
   ledger:Prune(ledger.wall() + 61 * 86400)
-  page:Refresh(true)
+  detail:Refresh(true)
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
   assert(detail.fields.crafts.text == "0" and detail.fields.returned.text:find("202", 1, true))
-  assert(detail.fields.allocated.text == "Unknown" and detail.fields.rate.text == "-")
+  assert(detail.fields.allocated.text == "-" and detail.fields.rate.text == "-")
   assert(#detail.recipes.items == 0 and detail.chart.empty:IsShown())
   api.GetCrafts = crafts
   window:Hide()
@@ -1670,7 +1699,7 @@ do
   assert(queries == queriesBeforeEvent and list.items == items and list.scroll:GetVerticalScroll() == 45)
   assert(window.activeTab == "Reagents" and dropdown(page, "Most returned").value == "returned")
   page.searchInput:SetText("5102")
-  page.searchInput.scripts.OnTextChanged(page.searchInput); page.scripts.OnUpdate(page, .3)
+  page.searchInput.scripts.OnTextChanged(page.searchInput); page.searchInput.scripts.OnUpdate(page.searchInput, .3)
   assert(#list.items == 1 and cell(5102).icon.texture == "Icon-5102")
   assert(iconCalls[5102] == 2 and qualityCalls[5102] == 3)
   local visibleCell = cell(5102)
@@ -1679,7 +1708,7 @@ do
   assert(visibleCell.icon.texture == "Icon-5102" and visibleCell.quality.atlas == "Quality-5102")
   assert(iconCalls[5101] == 1 and qualityCalls[5101] == 1 and qualityCalls[5103] == 2)
   page.searchInput:SetText("")
-  page.searchInput.scripts.OnTextChanged(page.searchInput); page.scripts.OnUpdate(page, .3)
+  page.searchInput.scripts.OnTextChanged(page.searchInput); page.searchInput.scripts.OnUpdate(page.searchInput, .3)
   assert(cell(5103).quality.atlas == "Quality-5103" and qualityCalls[5103] == 2)
   assert(core.Trace.Serialize(environment.ArtisanLogbookUISettings) == savedSettings)
   assert(core.Trace.Serialize(ledger.database) == savedFacts)
@@ -1687,6 +1716,111 @@ do
   api.GetReagentSummaries = savedSummaries
   window:Hide()
   print("PASS session reagent metadata reuse, delayed item/quality events, targeted row updates and no persistence")
+end
+
+do
+  local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  ledger:AddDimension("profession", 171, { name = "Alchemy" })
+  ledger:AddDimension("recipe", 9850, { name = "Test potion", professionId = 171, maxQuality = 3 })
+  ledger:AddDimension("item", 5301, { name = "Bloom" })
+  ledger:AddDimension("item", 5302, { name = "Potion" })
+  ledger:SubmitCraft(9850, 1, true, nil, { { dataSlotIndex = 1, quantity = 10, reagent = { itemID = 5301 } } })
+  local craft = assert(ledger:RecordResult({ operationID = 1, itemID = 5302, quantity = 4, craftingQuality = 2,
+    multicraft = 1, concentrationSpent = 100, hasIngenuityProc = true, ingenuityRefund = 20,
+    resourcesReturned = { { reagent = { itemID = 5301 }, quantity = 2 } } }))
+  local ui = loadUI()
+  local window = ui.productionWindow
+  window:Show()
+  local overview = window.pages.Overview
+  while overview.topRecipes.worker.scripts.OnUpdate do overview.topRecipes.worker.scripts.OnUpdate(overview.topRecipes.worker) end
+  assert(not overview.scroll and #overview.topRecipes.items == 1)
+  local ranked = overview.topRecipes.items[1]
+  assert(ranked.result.outputItem.id == 5302 and ranked.totals.outputQuantity == 4)
+  assert(ui.UI.Rate(ranked.totals, "multicraftProcCount") == "100.0%")
+  overview.summary.tiles[6].scripts.OnClick()
+  assert(window.activeTab == "Recipe" and window.identity.id == 9850)
+  local recipe = window.pages.Recipe
+  while recipe.outcomes.returnWorker.scripts.OnUpdate do recipe.outcomes.returnWorker.scripts.OnUpdate(recipe.outcomes.returnWorker) end
+  assert(recipe.outcomes.production.averageOutput.text == "4")
+  assert(recipe.outcomes.production.averageConcentration.text == "100")
+  assert(recipe.outcomes.production.netConcentration.text == "80")
+  assert(recipe.outcomes.tiles[6].note.text == "100.0% proc rate")
+  recipe:SelectView("Reagents")
+  local reagentRow = recipe.outcomes.materialList.rows[1]
+  reagentRow.scripts.OnClick(reagentRow)
+  assert(window.activeTab == "Reagent" and window.identity.id == 5301)
+  local reagent = window.pages.Reagent
+  while reagent.worker.scripts.OnUpdate do reagent.worker.scripts.OnUpdate(reagent.worker) end
+  assert(reagent.fields.rate.text == "20.0%" and #reagent.history.items == 1)
+  reagent:SelectView("Craft History")
+  reagent.history.rows[1].scripts.OnClick(reagent.history.rows[1])
+  assert(window.openCraftId == craft.id and window.craftDetailPage.result.item.id == 5302)
+  assert(not window.craftDetailPage.reagentSelector)
+  window.craftDetailWindow:Hide()
+  assert(window.activeTab == "Reagent" and reagent.activeView == "Craft History")
+  reagent:SelectView("Used in Recipes")
+  reagent.recipes.rows[1].scripts.OnClick(reagent.recipes.rows[1])
+  assert(window.activeTab == "Recipe" and recipe.activeView == "Reagents")
+  local character = api.GetCharacters()[1]
+  for _, entry in ipairs({ { "Character", character }, { "Profession", { skillLineId = 171, name = "Alchemy" } } }) do
+    window:Activate(entry[1], entry[2])
+    local page = window.pages[entry[1]]
+    assert(not page.scroll and page.tabbed and page.history)
+    page.tabbed:Select("Craft History")
+    assert(#page.history.items == 1 and page.history.items[1].id == craft.id)
+    dropdown(page, "Custom dates"):Choose("custom")
+    assert(page:Filter().time and page.filters:GetHeight() == 92)
+  end
+  local bar = reagent.filters.controls[1]
+  local previousTime = environment.time
+  environment.time = os.time
+  window:Activate("Reagent", { id = 5301, name = "Bloom" })
+  bar:Choose("custom")
+  local oldFrom = reagent:Filter().time.from
+  bar.inputs[1]:SetText("invalid")
+  bar.inputs[1].scripts.OnEnterPressed(bar.inputs[1])
+  assert(reagent:Filter().time.from == oldFrom)
+  bar.inputs[1]:SetText("2024-02-29"); bar.inputs[2]:SetText("2024-02-29")
+  bar.inputs[2].scripts.OnEnterPressed(bar.inputs[2])
+  assert(reagent:Filter().time.to - reagent:Filter().time.from == 86400)
+  environment.time = previousTime
+  window:Hide()
+  print("PASS shared entity navigation, enriched recipe analytics, inspect-only modal and custom periods")
+  local parentWidth, parentHeight = environment.UIParent.width, environment.UIParent.height
+  for _, dimensions in ipairs({ { 1000, 680 }, { 2560, 1440 } }) do
+    environment.UIParent:SetSize(dimensions[1], dimensions[2])
+    local compact = loadUI().productionWindow
+    compact:Show()
+    local bodyHeight = compact:GetHeight() - 64
+    for _, destination in ipairs({ { "Overview" }, { "Logbook" }, { "Recipes" }, { "Reagents" },
+        { "Recipe", { id = 9850 } }, { "Character", character },
+        { "Profession", { skillLineId = 171, name = "Alchemy" } }, { "Reagent", { id = 5301, name = "Bloom" } } }) do
+      compact:Activate(destination[1], destination[2])
+      local page = compact.pages[destination[1]]
+      assert(not page.scroll)
+      local owner = page.outcomes or page
+      dropdown(owner, "Custom dates"):Choose("custom")
+      local filters = owner.filters
+      for _, control in ipairs(filters.controls) do
+        assert(control.middleWidth <= 141 and control.x + control:GetWidth() <= filters:GetWidth())
+      end
+      if owner.tabbed then
+        local tabbed = owner.tabbed
+        local top = -tabbed.y + (page.outcomes and 62 or 0)
+        assert(top + tabbed:GetHeight() <= bodyHeight)
+        if owner.topRecipes then
+          assert(-owner.topRecipes.y + owner.topRecipes:GetHeight() <= tabbed.views.Overview:GetHeight())
+        end
+        if destination[1] == "Reagent" then
+          assert(-owner.status.y + owner.status:GetHeight() <= tabbed.views.Overview:GetHeight())
+        end
+      end
+    end
+    compact:Hide()
+  end
+  environment.UIParent.width, environment.UIParent.height = parentWidth, parentHeight
+  print("PASS bounded filters and entity panels at short and tall window sizes")
 end
 
 do
@@ -1713,8 +1847,8 @@ do
   assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "ingenuityRefund", "concentrationSpent") == "60.0%")
   record({})
   assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "multicraftBonus", "outputQuantity") == "Unknown")
-  assert(helpers.ProcRate(nil, 0) == "Unknown\n0 observed crafts")
-  assert(helpers.ProcRate(0, 4) == "0.0%\n0 / 4 observed crafts")
+  assert(helpers.ProcRate(nil, 0) == "-")
+  assert(helpers.ProcRate(0, 4) == "0.0%\n0 / 4 crafts")
   local screenshotTotals = {
     craftCount = 30, multicraftProcCount = 7, multicraftProcCountObservedCount = 30,
     multicraftBonus = 52, multicraftBonusObservedCount = 30, outputQuantity = 202, outputQuantityObservedCount = 30,
@@ -1724,9 +1858,9 @@ do
     resourcefulnessCompleteProcCountObservedCount = 0,
   }
   local summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
-  assert(summary.any == "Returns recorded for 8 crafts")
+  assert(summary.any == "At least 8 crafts returned reagents")
   assert(not summary.any:find("%%") and not summary.nonTrivial:find("%%"))
-  assert(summary.nonTrivial == "-" and summary.complete:find("Return results missing for 22 crafts", 1, true))
+  assert(summary.nonTrivial == "-" and summary.complete:find("22 crafts have no return outcome", 1, true))
   local multi = helpers.CompactOutcome(screenshotTotals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output")
   local ingenuity = helpers.CompactOutcome(screenshotTotals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent")
   assert(multi == "23.3% | 7 procs\nBonus: 52 | 25.7% of output")
@@ -1758,19 +1892,11 @@ do
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
   assert(window.recipeDetailPage == window.pages.Recipe and window.recipeDetailPage:IsShown())
-  assert(pane.viewOffset == 52 and pane.views.Overview.y == -52)
-  dropdown(pane, "Custom (UTC)"):Choose("custom")
-  assert(pane.viewOffset == 88 and pane.views.Overview.y == -88 and window.pages.Recipe.history.y == -88)
-  local customInputs = 0
-  for _, frame in ipairs(frames) do
-    if frame.parent == pane and frame.kind == "EditBox" and frame:IsShown() then customInputs = customInputs + 1 end
-  end
-  assert(customInputs == 2)
+  assert(pane.filters:GetHeight() == 46 and window.pages.Recipe.scroll == nil)
+  dropdown(pane, "Custom dates"):Choose("custom")
+  assert(pane.filters:GetHeight() == 92 and pane.period.inputs[1].parent:IsShown())
   dropdown(pane, "All time"):Choose(false)
-  assert(pane.viewOffset == 52 and window.pages.Recipe.history.y == -52)
-  for _, frame in ipairs(frames) do
-    if frame.parent == pane and frame.kind == "EditBox" then assert(not frame:IsShown()) end
-  end
+  assert(pane.filters:GetHeight() == 46 and not pane.period.inputs[1].parent:IsShown())
   assert(not window.modalShade:IsShown() and not window.craftDetailWindow:IsShown())
   local escapeJournal = false
   for _, frameName in ipairs(environment.UISpecialFrames) do
@@ -1782,13 +1908,13 @@ do
     while pane.returnWorker.scripts.OnUpdate do pane.returnWorker.scripts.OnUpdate(pane.returnWorker) end
   end
   finishCalculation()
-  assert(pane.tiles[5].value.text == "11" and pane.tiles[5].note.text == "Some return details missing")
+  assert(pane.tiles[5].value.text == ">= 11" and pane.tiles[5].note.text == "")
   assert(pane.returnQuantity.text:find("11 reagents returned", 1, true))
-  assert(pane.stats[2].text:find("Proc recorded for 1 craft", 1, true) and pane.stats[4].text:find("Refund: 12", 1, true))
-  assert(pane.stats[3].text == "Returns recorded for 3 crafts" and not pane.stats[3].text:find("%%"))
-  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 3 crafts")
-  assert(pane.resourcefulness.complete.text:find("Return details missing for 1 craft", 1, true))
-  assert(pane.stats[2].text:find("Some crafts have no details", 1, true))
+  assert(pane.stats[2].text:find("At least 1 proc", 1, true) and pane.stats[4].text:find("12", 1, true))
+  assert(pane.stats[3].text == "At least 3 crafts returned reagents" and not pane.stats[3].text:find("%%"))
+  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 3 crafts")
+  assert(pane.resourcefulness.complete.text:find("1 craft has no return outcome", 1, true))
+  assert(pane.stats[2].text:find("craft has no proc result", 1, true))
   for _, labels in ipairs({ pane.stats, pane.resourcefulness }) do
     for _, label in pairs(labels) do
       for _, technical in ipairs({ "confirmed", "unknown", "observed", "coverage", "unclassified", "fully recorded" }) do
@@ -1796,23 +1922,18 @@ do
       end
     end
   end
-  assert(pane.materialRows[1].label.text == pane.materialRows[2].label.text)
-  assert(pane.materialRows[1].identity.text == "#8" and pane.materialRows[2].identity.text == "#9")
-  assert(pane.materialRows[1].quantity.text == "3" and pane.materialRows[2].quantity.text == "5")
-  assert(pane.materialRows[1].icon.texture and pane.materialRows[1].quality.atlas == "ReagentQuality-8")
-  assert(pane.materialRows[2].quality.atlas == "ReagentQuality-9" and not pane.materialRows[3].quality:IsShown())
-  local material = pane.materialRows[1]
-  assert(material.check.parent == material and material.check.x + 96 <= material.width)
-  material.scripts.OnEnter(material)
-  assert(environment.GameTooltip.itemId == 8 and environment.GameTooltip.lines[1] == "Item ID: 8")
-  local nativeTooltip = environment.GameTooltip.SetItemByID
-  environment.GameTooltip.SetItemByID = nil
-  material.scripts.OnEnter(material)
-  assert(environment.GameTooltip.text == "Tranquility Bloom" and environment.GameTooltip.lines[1] == "Item ID: 8")
-  environment.GameTooltip.SetItemByID = nativeTooltip
+  local materialRows = pane.materialList.rows
+  local material = materialRows[1].widgets[1].widget
+  assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
+  assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
+  assert(materialRows[1].item.returnedQuantity == 3 and materialRows[2].item.returnedQuantity == 5)
+  assert(material.icon.texture and material.quality.atlas == "ReagentQuality-8")
+  assert(materialRows[2].widgets[1].widget.quality.atlas == "ReagentQuality-9")
+  assert(not materialRows[3].widgets[1].widget.quality:IsShown())
+  assert(not pane.previous and not pane.next)
   environment.C_TradeSkillUI.GetItemReagentQualityInfo = nil
   pane:Refresh()
-  assert(not material.quality:IsShown() and material.identity.text == "#8")
+  assert(material.quality:IsShown() and materialRows[1].item.item.id == 8)
   environment.C_TradeSkillUI.GetItemReagentQualityInfo = oldQuality
   window.pages.Recipe:SelectView("Statistics")
   assert(pane.views.Statistics:IsShown() and not pane.views.Overview:IsShown())
@@ -1827,13 +1948,12 @@ do
   for _, frame in ipairs(frames) do
     if frame.parent == detail and frame.kind == "CheckButton" then checkbox = frame end
   end
-  assert(checkbox and checkbox.itemId == 8 and not checkbox:GetChecked())
-  checkbox:SetChecked(true); checkbox.scripts.OnClick(checkbox)
+  assert(not checkbox and not detail.reagentSelector and not detail.scroll)
+  helpers.SetTrivial(8, true)
   assert(helpers.IsTrivial(8))
   assert(detail.fields.Resourcefulness.text == "1 returned")
   assert(#detail.returnedReagents.items == 1 and detail.returnedReagents.items[1].item.id == 8)
-  assert(detail.returnedReagents:GetHeight() == 66 and detail.scroll.anchors.TOPLEFT.y == -116)
-  assert(-detail.scroll.anchors.TOPLEFT.y - detail.output.parent.y - detail.output.y + detail.output:GetHeight() <= 550)
+  assert(detail.returnedReagents:GetHeight() >= 170 and detail.result)
   local getCraft = api.GetCraft
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -1845,8 +1965,7 @@ do
   end
   detail:ShowCraft(second.id)
   assert(#detail.returnedReagents.items == 2)
-  assert(detail.returnedReagents:GetHeight() == 86)
-  assert(detail.fields.Resourcefulness.text == "2 returned (20.0% of allocated reagents)")
+  assert(detail.fields.Resourcefulness.text == "2 returned (20.0% of used)")
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.resourcefulnessComplete = false
@@ -1854,7 +1973,7 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(detail.fields.Resourcefulness.text == "3 returned (partial details)")
+  assert(detail.fields.Resourcefulness.text == ">= 3 returned")
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.reagents = {}
@@ -1864,7 +1983,7 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(#detail.returnedReagents.items == 8 and detail.returnedReagents:GetHeight() == 146)
+  assert(#detail.returnedReagents.items == 8 and detail.returnedReagents:GetHeight() >= 170)
   assert(detail.returnedReagents.child:GetHeight() > detail.returnedReagents.scroll:GetHeight())
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -1873,31 +1992,23 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(not detail.reagentSelector:IsShown() and not checkbox:IsShown())
-  assert(detail.reagentSelector.caption.parent == detail.reagentSelector)
-  assert(detail.scroll.anchors.TOPLEFT.y == -64 and detail.returnedReagents:GetHeight() == 66)
+  assert(not detail.reagentSelector and not checkbox)
   assert(detail.returnedReagents.child:GetHeight() == detail.returnedReagents.scroll:GetHeight())
-  assert(#detail.output.items == 1 and detail.output.items[1].item.id == 4567)
-  assert(-detail.scroll.anchors.TOPLEFT.y - detail.output.parent.y - detail.output.y + detail.output:GetHeight() <= 550)
+  assert(detail.result.item.id == 4567 and detail.result.label.text == "Flask")
   api.GetCraft = getCraft
   button(detail, "Close").scripts.OnClick()
   finishCalculation()
   assert(window.visiblePage == recipePage, "craft close did not restore recipe page")
   assert(window.recipeDetailPage:IsShown() and not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
-  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts",
+  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 2 crafts",
     "unexpected non-trivial summary: " .. tostring(pane.resourcefulness.nonTrivial.text))
-  local materialCheck
-  for _, frame in ipairs(frames) do
-    if frame.parent and frame.parent.parent == pane.views.Reagents and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
-  end
-  assert(materialCheck)
-  materialCheck:SetChecked(true); materialCheck.scripts.OnClick(materialCheck)
+  helpers.SetTrivial(9, true)
   finishCalculation()
-  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 1 craft")
+  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 1 craft")
   helpers.SetTrivial(10, true); pane:Refresh(); finishCalculation()
   assert(pane.resourcefulness.nonTrivial.text == "-")
   helpers.SetTrivial(9, false); pane:Refresh(); finishCalculation()
-  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
+  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 2 crafts")
   local settings = environment.ArtisanLogbookUISettings
   local anotherUI = loadUI()
   assert(anotherUI.UI.IsTrivial(8) and anotherUI.UI.IsTrivial(10) and not anotherUI.UI.IsTrivial(9))
@@ -1923,7 +2034,7 @@ do
   assert(#ledger.database.crafts == 0)
   pane:Refresh()
   finishCalculation()
-  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
+  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "Savings in at least 2 crafts")
   for index = 1, 205 do
     record({ resourcesReturned = { { reagent = { itemID = 1000 + index }, quantity = 1 } } }, 9002)
   end
@@ -1940,30 +2051,31 @@ do
   assert(pages == 3 and pane.scripts.OnUpdate)
   finishCalculation()
   assert(pane.scripts.OnUpdate == nil and pane.resourcefulness.nonTrivial.text:find("100.0%%"))
-  pane.next.scripts.OnClick()
-  local secondPageItem = pane.materialRows[1].item.id
-  local pageCheck = pane.materialRows[1].check
-  pageCheck:SetChecked(true); pageCheck.scripts.OnClick(pageCheck)
+  pane.materialList:LoadNext()
+  assert(#pane.materialList.items == 80)
+  local secondPageItem = pane.materialList.items[41].item.id
+  pane.materialList.scroll:SetVerticalScroll(1200)
+  helpers.SetTrivial(secondPageItem, true)
   finishCalculation()
-  assert(pane.materialRows[1].item.id == secondPageItem and pane.previous.enabled)
-  pane.previous.scripts.OnClick()
-  assert(pane.materialRows[1].item.id == 1001 and not pane.previous.enabled)
+  while pane.materialList.scripts.OnUpdate do pane.materialList.scripts.OnUpdate(pane.materialList) end
+  assert(pane.materialList.items[41].item.id == secondPageItem and pane.materialList.scroll:GetVerticalScroll() == 1200)
+  assert(pane.materialList.items[1].item.id == 1001)
   assert(#pane.chart.bars <= 60)
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   dropdown(pane, "7 days"):Choose(7)
   window.pages.Recipe:SelectView("Craft History")
   window.pages.Recipe.history.scroll:SetVerticalScroll(60)
-  window.pages.Recipe.scroll:SetVerticalScroll(45)
+  assert(window.pages.Recipe.scroll == nil)
   window:OpenRecipe({ id = 9002 })
   assert(dropdown(pane, "All time").value == false)
   assert(window.pages.Recipe.activeView == "Overview")
   window:OpenRecipe({ id = 9001 })
   assert(dropdown(pane, "7 days").value == 7)
   assert(window.pages.Recipe.activeView == "Craft History" and pane.views["Craft History"]:IsShown())
-  assert(window.pages.Recipe.history.scroll:GetVerticalScroll() == 60 and window.pages.Recipe.scroll:GetVerticalScroll() == 45)
+  assert(window.pages.Recipe.history.scroll:GetVerticalScroll() == 60)
   window:OpenCraft(second.id)
   window.craftDetailWindow:Hide()
-  assert(window.pages.Recipe.activeView == "Craft History" and window.pages.Recipe.scroll:GetVerticalScroll() == 45)
+  assert(window.pages.Recipe.activeView == "Craft History")
   assert(window.pages.Recipe.history.scroll:GetVerticalScroll() == 60)
   print("PASS recipe-local views and filters, per-recipe state, durable returned quantities and guarded allocation ratios")
   assert(environment.ArtisanLogbookManagement.Clear())
@@ -2009,15 +2121,15 @@ do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
   end
   local text = ui.productionWindow.recipeOutcomes.stats[3].text
-  assert(text == "Returns recorded for 8 crafts" and not text:find("%%"))
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("Return results missing for 22 crafts", 1, true))
+  assert(text == "At least 8 crafts returned reagents" and not text:find("%%"))
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("22 crafts have no return outcome", 1, true))
   assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
   ui.UI.SetTrivial(8, false)
   ui.productionWindow.recipeOutcomes:Refresh()
   while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
   end
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 8 crafts")
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "Savings in at least 8 crafts")
   print("PASS legacy incomplete positive sets never become measured non-trivial false")
 end
 

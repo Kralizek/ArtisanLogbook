@@ -4,6 +4,44 @@ addon.UI = UI
 
 UI.ink = { .20, .16, .10 }
 
+function UI.Number(value, exact, lowerBound)
+  if type(value) ~= "number" then return "-" end
+  if exact then return tostring(value) end
+  local absolute, divisor, suffix = math.abs(value), 1, ""
+  for _, unit in ipairs({ { 1e9, "B" }, { 1e6, "M" }, { 1e3, "k" } }) do
+    if absolute >= unit[1] then divisor, suffix = unit[1], unit[2]; break end
+  end
+  local scaled = value / divisor
+  if lowerBound then scaled = math.floor(scaled * 10) / 10 end
+  local text = string.format("%.1f", scaled):gsub("%.0$", "")
+  if suffix == "k" and math.abs(tonumber(text)) >= 1000 then return string.format("%.1f", value / 1e6):gsub("%.0$", "") .. "M" end
+  if suffix == "M" and math.abs(tonumber(text)) >= 1000 then return string.format("%.1f", value / 1e9):gsub("%.0$", "") .. "B" end
+  return text .. suffix
+end
+
+function UI.Percent(numerator, denominator)
+  if type(numerator) ~= "number" or type(denominator) ~= "number" or denominator <= 0 then return "-" end
+  return string.format("%.1f%%", numerator / denominator * 100)
+end
+
+function UI.Count(value, singular, plural)
+  return UI.Number(value) .. " " .. (value == 1 and singular or plural or singular .. "s")
+end
+
+function UI.Amount(value, complete)
+  if value == nil or value == 0 and not complete then return "-" end
+  return (complete and "" or ">= ") .. UI.Number(value, false, not complete)
+end
+
+function UI.Rate(totals, metric)
+  if not totals or totals[metric .. "ObservedCount"] ~= totals.craftCount then return "-" end
+  return UI.Percent(totals[metric], totals.craftCount)
+end
+
+function UI.DateTime(timestamp, exact)
+  return timestamp and date(exact and "%Y-%m-%d %H:%M:%S" or "%d %b\n%H:%M", timestamp) or "-"
+end
+
 function UI.Surface(parent, parchment)
   parent.parchment, parent.dark = parchment, not parchment
   local texture = parent:CreateTexture(nil, "BACKGROUND")
@@ -183,17 +221,56 @@ function UI.Choices(facet, character)
   return result
 end
 
-function UI.HistoryColumns(width)
-  local available = width - 24
-  return {
-    { title = "Recipe", width = available * .30, value = function(row) return UI.Name(row.recipe) end,
-      icon = function(row) return UI.RecipeIcon(row.recipe) end },
-    { title = "Character", width = available * .18, value = function(row) return UI.Name(row.character) end,
-      color = function(row) return UI.ClassColor(row.character and row.character.classFile) end },
-    { title = "Profession", width = available * .17, value = function(row) return UI.Name(row.profession) end },
-    { title = "Qty", width = available * .07, value = function(row) return UI.Value(row.outputQuantity) end },
-    { title = "Highlights", width = available * .28, activity = true },
-  }
+function UI.ItemCell(parent, left, width)
+  local cell = CreateFrame("Frame", nil, parent)
+  cell:SetPoint("TOPLEFT", left, 0); cell:SetSize(width, 28)
+  cell.icon = cell:CreateTexture(nil, "ARTWORK")
+  cell.icon:SetSize(22, 22); cell.icon:SetPoint("TOPLEFT", 2, -3)
+  cell.quality = cell:CreateTexture(nil, "OVERLAY")
+  cell.quality:SetSize(14, 14); cell.quality:SetPoint("TOPLEFT", 13, -15)
+  cell.label = UI.Text(cell, 30, -5, width - 34, 22)
+  cell.label:SetWordWrap(false)
+  function cell:Update(item, atlas, icon)
+    self.item = item
+    self.icon:SetTexture(icon or (item and type(GetItemIcon) == "function" and GetItemIcon(item.id)) or
+      "Interface\\Icons\\INV_Misc_QuestionMark")
+    self.quality:SetShown(atlas ~= nil)
+    if atlas then self.quality:SetAtlas(atlas) end
+    self.label:SetText(UI.Elide(UI.Name(item), math.max(4, math.floor((width - 34) / 6))))
+  end
+  return cell
+end
+
+function UI.HistoryColumns(width, context)
+  local available, columns = width - 24, {}
+  local fixed = 38 + 88 + 72
+  local textWeight = (context ~= "Recipe" and 1.15 or 0) + 1.25 +
+    (context ~= "Character" and .65 or 0) + (context ~= "Profession" and context ~= "Recipe" and .70 or 0)
+  local unit = (available - fixed) / textWeight
+  if context ~= "Recipe" then
+    columns[#columns + 1] = { title = "Recipe", width = unit * 1.15,
+      value = function(row) return UI.Name(row.recipe) end }
+  end
+  columns[#columns + 1] = { title = "Result", width = unit * 1.25,
+    value = function(row) return UI.Name(row.outputItem) .. (row.outputQuality and " (quality " .. row.outputQuality .. ")" or "") end,
+    create = function(parent, left) return UI.ItemCell(parent, left, unit * 1.25) end,
+    update = function(cell, row)
+      cell:Update(row.outputItem, UI.QualityAtlas(row.recipe and row.recipe.id, row.outputQuality, row.recipe and row.recipe.maxQuality))
+    end }
+  if context ~= "Character" then
+    columns[#columns + 1] = { title = "Character", width = unit * .65,
+      value = function(row) return UI.Name(row.character) end,
+      color = function(row) return UI.ClassColor(row.character and row.character.classFile) end }
+  end
+  if context ~= "Profession" and context ~= "Recipe" then
+    columns[#columns + 1] = { title = "Profession", width = unit * .70, value = function(row) return UI.Name(row.profession) end }
+  end
+  columns[#columns + 1] = { title = "Qty", width = 38, value = function(row) return UI.Number(row.outputQuantity) end,
+    exact = function(row) return UI.Value(row.outputQuantity) end }
+  columns[#columns + 1] = { title = "Highlights", width = 88, activity = true, extrasOnly = true }
+  columns[#columns + 1] = { title = "When", width = 72, lines = 2,
+    value = function(row) return UI.DateTime(row.timestamp) end, exact = function(row) return UI.DateTime(row.timestamp, true) end }
+  return columns
 end
 
 function UI.LazyList(list, fetch)
@@ -247,18 +324,7 @@ function UI.LazyList(list, fetch)
 end
 
 function UI.RecipeHistoryColumns(width)
-  local available = width - 24
-  return {
-    { title = "Date", width = available * .22, value = function(row) return date("%d %b %y %H:%M", row.timestamp) end },
-    { title = "Character", width = available * .16, value = function(row) return UI.Name(row.character) end,
-      color = function(row) return UI.ClassColor(row.character and row.character.classFile) end },
-    { title = "Result", width = available * .22, value = function(row) return UI.Name(row.outputItem) end,
-      icon = function(row) return row.outputItem and type(GetItemIcon) == "function" and GetItemIcon(row.outputItem.id) end },
-    { title = "Qty", width = available * .06, value = function(row) return UI.Value(row.outputQuantity) end },
-    { title = "Quality", width = available * .09, value = function(row) return UI.Value(row.outputQuality) end },
-    { title = "Conc.", width = available * .09, value = function(row) return UI.Value(row.concentrationSpent) end },
-    { title = "Extras", width = available * .16, activity = true, extrasOnly = true },
-  }
+  return UI.HistoryColumns(width, "Recipe")
 end
 
 function UI.PageScroll(parent, width, height, contentHeight)
@@ -268,6 +334,9 @@ function UI.PageScroll(parent, width, height, contentHeight)
   local content = CreateFrame("Frame", nil, scroll)
   content:SetSize(width - 28, math.max(height, contentHeight))
   scroll:SetScrollChild(content)
+  scroll:HookScript("OnScrollRangeChanged", function(self, _, range)
+    if self.ScrollBar then self.ScrollBar:SetShown((range or 0) > 0) end
+  end)
   return content, scroll
 end
 
@@ -300,6 +369,140 @@ function UI.Tab(parent, title, x, y, width, action)
   end
   tab:Select(false)
   return tab
+end
+
+function UI.FilterBar(parent, width, y)
+  local bar = CreateFrame("Frame", nil, parent)
+  bar:SetPoint("TOPLEFT", 0, y or 0); bar:SetSize(width, 46)
+  bar.controls, bar.nextX, bar.row = {}, 0, 0
+  function bar:Slot(size)
+    if self.nextX + size > width then self.nextX, self.row = 0, self.row + 1 end
+    local left, top = self.nextX, -self.row * 46
+    self.nextX = self.nextX + size + 14
+    self:SetHeight((self.row + 1) * 46)
+    return left, top
+  end
+  function bar:Select(title, choices, onChoose, size)
+    size = math.min(size or 156, 176)
+    local left, top = self:Slot(size)
+    local control = UI.Selector(self, left, top, size, choices, onChoose, title)
+    self.controls[#self.controls + 1] = control
+    return control
+  end
+  function bar:Search(onSearch)
+    local size = 210
+    local left, top = self:Slot(size)
+    UI.Text(self, left, top, size, 16, "GameFontNormalSmall"):SetText("Search")
+    local input = CreateFrame("EditBox", nil, self, "InputBoxTemplate")
+    input:SetPoint("TOPLEFT", left + 4, top - 16); input:SetSize(150, 24)
+    input:SetAutoFocus(false); input:SetMaxLetters(120)
+    local function apply() input:SetScript("OnUpdate", nil); input:ClearFocus(); onSearch(input:GetText()) end
+    input:SetScript("OnEnterPressed", apply)
+    input:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    input:SetScript("OnTextChanged", function(self)
+      self.delay = .2
+      self:SetScript("OnUpdate", function(self, elapsed)
+        self.delay = self.delay - elapsed
+        if self.delay <= 0 then self:SetScript("OnUpdate", nil); onSearch(self:GetText()) end
+      end)
+    end)
+    local search = CreateFrame("Button", nil, self)
+    search:SetSize(24, 24); search:SetPoint("TOPLEFT", left + 156, top - 16)
+    search:SetNormalTexture("Interface\\Common\\UI-Searchbox-Icon"); search:SetScript("OnClick", apply)
+    local clear = CreateFrame("Button", nil, self, "UIPanelCloseButton")
+    clear:SetSize(24, 24); clear:SetPoint("TOPLEFT", left + 184, top - 16)
+    clear:SetScript("OnClick", function() input:SetText(""); apply() end)
+    for button, text in pairs({ [search] = "Search", [clear] = "Clear search" }) do
+      button:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(text); GameTooltip:Show()
+      end)
+      button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+    input.searchButton, input.clearButton = search, clear
+    return input
+  end
+  function bar:Period(state, onChange, includeAll)
+    local choices = includeAll and { { label = "All time", value = false } } or {}
+    for _, choice in ipairs(UI.ranges) do choices[#choices + 1] = choice end
+    choices[#choices + 1] = { label = "Custom dates", value = "custom" }
+    local control
+    control = self:Select("Period", choices, function(value)
+      control.state.days = value; control:UpdateState(); onChange()
+    end)
+    local dates = CreateFrame("Frame", nil, self)
+    dates:SetSize(width, 46); dates:Hide()
+    local inputs = {}
+    for index, title in ipairs({ "From (UTC)", "Through (UTC)" }) do
+      local left = (index - 1) * 138
+      UI.Text(dates, left, 0, 130, 16, "GameFontNormalSmall"):SetText(title)
+      local input = CreateFrame("EditBox", nil, dates, "InputBoxTemplate")
+      input:SetPoint("TOPLEFT", left + 4, -16); input:SetSize(124, 24)
+      input:SetAutoFocus(false); input:SetMaxLetters(10)
+      inputs[index] = input
+    end
+    local errorText = UI.Text(dates, 284, -18, width - 284, 24)
+    local function apply(input)
+      input:ClearFocus()
+      local from, through = UI.ParseUTCDate(inputs[1]:GetText()), UI.ParseUTCDate(inputs[2]:GetText())
+      if not from or not through or from > through then errorText:SetText("Enter valid dates: YYYY-MM-DD"); return end
+      control.state.customFrom, control.state.customTo = from, through + 86400
+      errorText:SetText(""); onChange()
+    end
+    inputs[1]:SetScript("OnEnterPressed", apply); inputs[2]:SetScript("OnEnterPressed", apply)
+    function control:UpdateState(replacement)
+      if replacement then self.state = replacement end
+      local from, to = UI.Range(GetServerTime(), 30)
+      self.state.customFrom, self.state.customTo = self.state.customFrom or from, self.state.customTo or to
+      inputs[1]:SetText(date("!%Y-%m-%d", self.state.customFrom))
+      inputs[2]:SetText(date("!%Y-%m-%d", self.state.customTo - 86400))
+      self:Update(choices, self.state.days)
+      dates:SetShown(self.state.days == "custom")
+      dates:ClearAllPoints(); dates:SetPoint("TOPLEFT", 0, -(bar.row + 1) * 46)
+      bar:SetHeight((bar.row + 1) * 46 + (self.state.days == "custom" and 46 or 0))
+      if bar.onLayout then bar.onLayout(bar:GetHeight()) end
+    end
+    function control:Time()
+      if self.state.days == false then return nil end
+      if self.state.days == "custom" then return { from = self.state.customFrom, to = self.state.customTo } end
+      local from, to = UI.Range(GetServerTime(), self.state.days or 30)
+      return { from = from, to = to }
+    end
+    control.state, control.inputs = state, inputs
+    control:UpdateState()
+    return control
+  end
+  return bar
+end
+
+function UI.TabbedContent(parent, width, height, y, names, onSelect)
+  local tabs = CreateFrame("Frame", nil, parent)
+  tabs:SetPoint("TOPLEFT", 0, y); tabs:SetSize(width, height)
+  tabs.buttons, tabs.views = {}, {}
+  tabs.body = CreateFrame("Frame", nil, tabs, "BackdropTemplate")
+  tabs.body:SetPoint("TOPLEFT", 0, -27); tabs.body:SetSize(width, height - 27)
+  tabs.body:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+  tabs.body:SetBackdropColor(.86, .76, .56, .6)
+  tabs.body:SetBackdropBorderColor(.45, .36, .20, .8)
+  function tabs:Select(name)
+    self.activeView = name
+    for title, view in pairs(self.views) do view:SetShown(title == name) end
+    for title, button in pairs(self.buttons) do button:Select(title == name) end
+    if onSelect then onSelect(name) end
+  end
+  for index, name in ipairs(names) do
+    tabs.buttons[name] = UI.Tab(tabs, name, (index - 1) * 128 + 4, 0, 124, function() tabs:Select(name) end)
+    local view = CreateFrame("Frame", nil, tabs.body)
+    view:SetPoint("TOPLEFT", 12, -12); view:SetSize(width - 24, height - 51)
+    tabs.views[name] = view
+  end
+  function tabs:Resize(newHeight)
+    self:SetHeight(newHeight); self.body:SetHeight(newHeight - 27)
+    for _, view in pairs(self.views) do view:SetHeight(newHeight - 51) end
+  end
+  tabs:Select(names[1])
+  return tabs
 end
 
 function UI.Elide(value, maxCharacters)
@@ -436,17 +639,17 @@ function UI.Activity(craft, extrasOnly)
     add(icon or "Interface\\Icons\\INV_Misc_QuestionMark", "",
       "Output: " .. output .. " (" .. UI.Value(craft.outputQuantity) .. " total)")
   end
-  if not extrasOnly and craft.concentrationSpent and craft.concentrationSpent > 0 then
-    add("Interface\\Icons\\Spell_Arcane_Arcane01", tostring(craft.concentrationSpent),
+  if craft.concentrationSpent and craft.concentrationSpent > 0 then
+    add("Interface\\Icons\\Spell_Arcane_Arcane01", UI.Number(craft.concentrationSpent),
       "Concentration: " .. craft.concentrationSpent .. " spent")
   end
   if craft.multicraftBonus and craft.multicraftBonus > 0 then
-    add("Interface\\Icons\\Trade_Engineering", "+" .. craft.multicraftBonus,
+    add("Interface\\Icons\\Trade_Engineering", "+" .. UI.Number(craft.multicraftBonus),
       "Multicraft: produced " .. craft.multicraftBonus .. " additional items")
   end
   if craft.hasIngenuityProc then
     add("Interface\\Icons\\Spell_Holy_MindVision", craft.ingenuityRefund and craft.ingenuityRefund > 0 and
-      "+" .. craft.ingenuityRefund or "", craft.ingenuityRefund and craft.ingenuityRefund > 0 and
+      "+" .. UI.Number(craft.ingenuityRefund) or "", craft.ingenuityRefund and craft.ingenuityRefund > 0 and
       "Ingenuity: refunded " .. craft.ingenuityRefund .. " concentration" or "Ingenuity proc")
   end
   local returned = 0
@@ -460,7 +663,7 @@ function UI.Activity(craft, extrasOnly)
         lines[#lines + 1] = UI.ReagentDescription(reagent)
       end
     end
-    add("Interface\\Icons\\INV_Misc_Herb_19", tostring(returned), table.concat(lines, "\n"))
+    add("Interface\\Icons\\INV_Misc_Herb_19", UI.Number(returned), table.concat(lines, "\n"))
   end
   return indicators
 end
@@ -492,6 +695,9 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   local child = CreateFrame("Frame", nil, scroll)
   child:SetSize(width - 24, height - 26)
   scroll:SetScrollChild(child)
+  scroll:HookScript("OnScrollRangeChanged", function(self, _, range)
+    if self.ScrollBar then self.ScrollBar:SetShown((range or 0) > 0) end
+  end)
   frame.scroll, frame.child = scroll, child
   frame.empty = UI.Text(frame, 8, -48, width - 40, 30)
   frame.empty:SetText(emptyMessage or "No entries yet")
@@ -506,6 +712,13 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
     self.scroll:SetHeight(value - 26)
     self.child:SetHeight(math.max(value - 26, #self.items * 30 + (self.finish:IsShown() and 35 or 0)))
     self.scroll:SetVerticalScroll(math.min(self.scroll:GetVerticalScroll(), self.child:GetHeight() - self.scroll:GetHeight()))
+  end
+
+  function frame:Repaint()
+    local items, offset, finished = self.items, self.scroll:GetVerticalScroll(), self.finish:IsShown()
+    self:Reset(); self:Append(items)
+    if finished then self:SetFinished() end
+    self.scroll:SetVerticalScroll(offset)
   end
 
   function frame:Reset(message)
@@ -562,8 +775,9 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
             end
             local padding = icon and 24 or 2
             local label = UI.Text(row, left + padding, -5, column.width - padding - 4, 20)
-            label:SetWordWrap(false)
-            label:SetMaxLines(1)
+            label:SetWordWrap(column.lines == 2)
+            label:SetMaxLines(column.lines or 1)
+            if column.lines == 2 then label:SetHeight(28); label:ClearAllPoints(); label:SetPoint("TOPLEFT", left + padding, 0) end
             row.cells[#row.cells + 1] = { label = label, column = column, icon = icon }
           end
           left = left + column.width
@@ -574,7 +788,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
           GameTooltip:SetText(UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
           for _, column in ipairs(columns) do
             if column.value and column.title ~= "Recipe" then
-              GameTooltip:AddLine(column.title .. ": " .. tostring(column.value(self.item)), 1, 1, 1)
+              GameTooltip:AddLine(column.title .. ": " .. tostring((column.exact or column.value)(self.item)), 1, 1, 1)
             end
           end
           if self.activity then
@@ -592,7 +806,8 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
       for _, cell in ipairs(row.widgets) do cell.column.update(cell.widget, item) end
       for _, cell in ipairs(row.cells) do
         local text = cell.column.value(item)
-        cell.label:SetText(UI.Elide(text, math.max(3, math.floor((cell.column.width - (cell.icon and 30 or 9)) / 7))))
+        cell.label:SetText(cell.column.lines == 2 and text or
+          UI.Elide(text, math.max(3, math.floor((cell.column.width - (cell.icon and 30 or 9)) / 6))))
         if cell.icon then
           cell.icon:SetTexture(cell.column.icon(item) or "Interface\\Icons\\INV_Misc_QuestionMark")
         end
@@ -609,7 +824,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         for _, indicator in ipairs(indicators) do desired = desired + (indicator.text ~= "" and 50 or 26) end
         local compact = desired > row.activity:GetWidth()
         for indicatorIndex, indicator in ipairs(indicators) do
-          local indicatorWidth = not compact and indicator.text ~= "" and 50 or 26
+          local indicatorWidth = compact and 20 or (indicator.text ~= "" and 50 or 26)
           if left + indicatorWidth > row.activity:GetWidth() then break end
           local button = row.indicators[indicatorIndex]
           if not button then
@@ -656,7 +871,7 @@ function UI.Chart(parent, x, y, width, quantities)
   chart:SetSize(width, 168)
   chart:SetPoint("TOPLEFT", x, y)
   chart.title = UI.Text(chart, 14, -10, width - 170, 22, "GameFontNormal")
-  chart.title:SetText(quantities and "Retained quantities" or "Craft activity")
+  chart.title:SetText(quantities and "Reagent use" or "Craft activity")
   if quantities then chart.title:SetWidth(width - 28) end
   chart.total = UI.Text(chart, width - 152, -10, 136, 22, "GameFontHighlightSmall")
   chart.total:SetJustifyH("RIGHT")
@@ -667,13 +882,14 @@ function UI.Chart(parent, x, y, width, quantities)
   chart.finish = UI.Text(chart, width - 126, -140, 110, 20)
   chart.finish:SetJustifyH("RIGHT")
   chart.empty = UI.Text(chart, 16, -80, width - 32, 24)
-  chart.empty:SetText(quantities and "No retained quantities" or "No crafts in this period")
+  chart.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period")
   chart.empty:SetJustifyH("CENTER")
-  chart.bars, chart.axisLabels, chart.dateLabels = {}, {}, {}
+  chart.bars, chart.axisLabels, chart.dateLabels, chart.gridLines = {}, {}, {}, {}
   for index = 0, 2 do
     local line = chart.plot:CreateTexture(nil, "BACKGROUND")
     line:SetColorTexture(.35, .27, .14, .25)
     line:SetPoint("BOTTOMLEFT", 0, index * 47); line:SetSize(width - 64, 1)
+    chart.gridLines[index + 1] = line
     local label = UI.Text(chart, 0, -130 + index * 47, 38, 16)
     label:SetJustifyH("RIGHT")
     chart.axisLabels[index + 1] = label
@@ -682,6 +898,21 @@ function UI.Chart(parent, x, y, width, quantities)
     local label = UI.Text(chart, 46 + (width - 64) * index / 3 - 40, -140, 80, 20)
     label:SetJustifyH("CENTER")
     chart.dateLabels[index] = label
+  end
+
+  function chart:Layout(newHeight)
+    self:SetHeight(newHeight); self.plot:SetHeight(newHeight - 68)
+    self.empty:ClearAllPoints(); self.empty:SetPoint("TOPLEFT", 16, -newHeight / 2)
+    for index, label in ipairs(self.axisLabels) do
+      label:ClearAllPoints(); label:SetPoint("TOPLEFT", 0, -newHeight + 38 + (index - 1) * (newHeight - 74) / 2)
+      self.gridLines[index]:ClearAllPoints()
+      self.gridLines[index]:SetPoint("BOTTOMLEFT", 0, (index - 1) * (newHeight - 74) / 2)
+    end
+    self.start:ClearAllPoints(); self.start:SetPoint("TOPLEFT", 46, -newHeight + 28)
+    self.finish:ClearAllPoints(); self.finish:SetPoint("TOPLEFT", width - 126, -newHeight + 28)
+    for index, label in ipairs(self.dateLabels) do
+      label:ClearAllPoints(); label:SetPoint("TOPLEFT", 46 + (width - 64) * index / 3 - 40, -newHeight + 28)
+    end
   end
 
   function chart:Render(series, from, to, bucketSeconds)
@@ -701,18 +932,27 @@ function UI.Chart(parent, x, y, width, quantities)
     for day = 0, days - 1 do
       peak = math.max(peak, daily[from + day * bucketSeconds] or 0, returned[from + day * bucketSeconds] or 0)
     end
-    self.total:SetText(quantities and "" or string.format("%d crafts", total))
-    self.empty:SetShown(total == 0)
+    self.total:SetText(quantities and "" or UI.Number(total) .. " crafts")
+    self.plot:SetShown(days > 1 and total > 0)
+    self.empty:SetShown(days == 1 or total == 0)
+    if days == 1 and total > 0 then
+      self.empty:SetText(quantities and ("Used: " .. UI.Number(daily[from]) .. "   Returned: " .. UI.Number(returned[from])) or
+        UI.Number(total) .. " crafts on " .. date("!%d %b", from))
+    else self.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period") end
     self.start:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", from))
     self.finish:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", to - 86400))
     local maximum = math.max(2, math.ceil(peak / 2) * 2)
-    for index, label in ipairs(self.axisLabels) do label:SetText(tostring((index - 1) * maximum / 2)) end
+    for index, label in ipairs(self.axisLabels) do
+      label:SetText(UI.Number((index - 1) * maximum / 2)); label:SetShown(days > 1 and total > 0)
+    end
     for index, label in ipairs(self.dateLabels) do
       label:SetText(date("!%d %b", from + math.floor((days - 1) * index / 3) * bucketSeconds))
       label:SetShown(days >= 4 and width >= 400)
     end
     for _, bar in ipairs(self.bars) do bar:Hide(); if bar.returned then bar.returned:Hide() end end
     local barWidth = (width - 64) / days
+    local groupWidth = math.min(quantities and 26 or 28, barWidth * .62)
+    local groupGap = quantities and math.min(3, groupWidth * .1) or 0
     for day = 0, days - 1 do
       local count = daily[from + day * bucketSeconds] or 0
       local bar = self.bars[day + 1]
@@ -740,17 +980,19 @@ function UI.Chart(parent, x, y, width, quantities)
         bar:SetScript("OnLeave", function() GameTooltip:Hide() end)
         self.bars[day + 1] = bar
       end
-      bar:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", day * barWidth, 0)
-      bar:SetSize(math.max(1, (quantities and barWidth / 2 or barWidth) - 2), math.max(1, count * 94 / maximum))
+      local groupLeft = day * barWidth + (barWidth - groupWidth) / 2
+      local visibleWidth = quantities and (groupWidth - groupGap) / 2 or groupWidth
+      bar:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft, 0)
+      bar:SetSize(math.max(.5, visibleWidth), math.max(1, count * (self.plot:GetHeight() - 6) / maximum))
       bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) .. ": " .. count .. " crafts"
       if quantities then
         local amount = returned[from + day * bucketSeconds]
         bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
-          "\nAllocated (recorded): " .. UI.Value(daily[from + day * bucketSeconds]) ..
-          "\nReturned (recorded): " .. UI.Value(amount)
+          "\nUsed: " .. UI.Value(daily[from + day * bucketSeconds]) ..
+          "\nReturned: " .. UI.Value(amount)
         bar.returned.tooltip = bar.tooltip
-        bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", day * barWidth + barWidth / 2, 0)
-        bar.returned:SetSize(math.max(1, barWidth / 2 - 2), math.max(1, (amount or 0) * 94 / maximum))
+        bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft + visibleWidth + groupGap, 0)
+        bar.returned:SetSize(math.max(.5, visibleWidth), math.max(1, (amount or 0) * (self.plot:GetHeight() - 6) / maximum))
         bar.returned:SetShown(amount ~= nil and amount > 0)
       end
       if bucketSeconds > 86400 then bar.tooltip = bar.tooltip .. " / " .. (bucketSeconds / 86400) .. " days" end
@@ -758,6 +1000,63 @@ function UI.Chart(parent, x, y, width, quantities)
     end
   end
   return chart
+end
+
+function UI.RecipeTable(parent, x, y, width, height, openRecipe)
+  local available = width - 24
+  local columns = {
+    { title = "Recipe", width = available * .22, value = function(row) return UI.Name(row.recipe) end,
+      icon = function(row) return UI.RecipeIcon(row.recipe) end },
+    { title = "Latest result", width = available * .22, value = function(row) return UI.Name(row.result and row.result.outputItem) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, available * .22) end,
+      update = function(cell, row)
+        local craft = row.result
+        cell:Update(craft and craft.outputItem, craft and UI.QualityAtlas(row.recipe.id, craft.outputQuality, row.recipe.maxQuality))
+      end },
+    { title = "Crafts", width = available * .08, value = function(row) return UI.Number(row.craftCount) end,
+      exact = function(row) return UI.Value(row.craftCount) end },
+    { title = "Items", width = available * .10, value = function(row)
+      local totals = row.totals
+      return totals and UI.Amount(totals.outputQuantity, totals.outputQuantityObservedCount == totals.craftCount) or "-"
+    end, exact = function(row) return UI.Value(row.totals and row.totals.outputQuantity) end },
+  }
+  for _, entry in ipairs({ { "Multicraft %", "multicraftProcCount" },
+      { "Resource %", "resourcefulnessProcCount" }, { "Ingenuity %", "ingenuityProcCount" } }) do
+    local title, metric = entry[1], entry[2]
+    columns[#columns + 1] = { title = title, width = available * (.38 / 3),
+      value = function(row) return UI.Rate(row.totals, metric) end }
+  end
+  local list = UI.ScrollList(parent, x, y, width, height, columns,
+    function(row) if row.recipe then openRecipe(row.recipe) end end, "No recipes in this period")
+  list.worker = CreateFrame("Frame", nil, list)
+  function list:Enrich(filter)
+    local index = 1
+    self.worker:SetScript("OnUpdate", function(worker)
+      local row = list.items[index]
+      if not row then worker:SetScript("OnUpdate", nil); return end
+      index = index + 1
+      if row.recipe and not row.enriched then
+        row.enriched = true
+        local outcome = ArtisanLogbookAPI.GetRecipeOutcomes(row.recipe.id,
+          { time = filter.time, characters = filter.characters }, { buckets = 1 })
+        row.totals = outcome and outcome.totals
+        local result = ArtisanLogbookAPI.GetCrafts({ recipes = { row.recipe.id },
+          time = filter.time, characters = filter.characters }, { limit = 1 })
+        row.result = result and result.crafts[1]
+        list:Repaint()
+      end
+    end)
+  end
+  function list:Render(rows, filter)
+    UI.LazyList(self, function(cursor)
+      local offset, page = cursor or 0, {}
+      for index = offset + 1, math.min(offset + 40, #rows) do page[#page + 1] = rows[index] end
+      self:Enrich(filter)
+      return page, offset + 40 < #rows and offset + 40 or nil
+    end)
+    self:Reload()
+  end
+  return list
 end
 
 function UI.CraftOutput(craft)
@@ -791,12 +1090,12 @@ end
 function UI.ReagentDescription(reagent)
   local description = UI.Name(reagent.item) .. ": "
   if reagent.allocatedQuantity ~= nil then
-    description = description .. reagent.allocatedQuantity .. " allocated"
+    description = description .. reagent.allocatedQuantity .. " used"
     if reagent.returnedQuantity ~= nil then
       description = description .. ", " .. reagent.returnedQuantity .. " returned"
     end
   elseif reagent.returnedQuantity ~= nil then
-    description = description .. reagent.returnedQuantity .. " returned (allocation unknown)"
+    description = description .. reagent.returnedQuantity .. " returned (quantity used unavailable)"
   else
     description = description .. "quantity unknown"
   end

@@ -663,6 +663,18 @@ test("profession sort orders the full catalogue before paging", function()
   assert(api.GetRecipeSummaries({ sort = "profession", limit = 1 }).recipes[1].recipe.name == "Old potion")
 end)
 
+test("recipe periods share day-aligned bounds and query-bound cursors", function()
+  local ledger, api, clock = fixture()
+  local day = math.floor(clock.current / 86400) * 86400
+  local first = assert(api.GetRecipeSummaries({ time = { from = day, to = day + 86400 }, sort = "count", limit = 1 }))
+  assert(first.recipes[1].recipe.id == 101 and first.recipes[1].craftCount == 2)
+  assert(#api.GetRecipeSummaries({ time = { from = day + 86400 } }).recipes == 0)
+  errorIs("invalid-cursor", api.GetRecipeSummaries({ time = { from = day }, sort = "count", cursor = first.nextCursor }))
+  errorIs("invalid-options", api.GetRecipeSummaries({ time = { from = day + 1 } }))
+  ledger:Prune(clock.current + 61 * 86400)
+  assert(api.GetRecipeSummaries({ time = { from = day }, sort = "count" }).recipes[1].craftCount == 2)
+end)
+
 test("first craft for an existing recipe invalidates the catalogue order", function()
   local ledger, api = fixture()
   assert(ledger:AddDimension("recipe", 105))

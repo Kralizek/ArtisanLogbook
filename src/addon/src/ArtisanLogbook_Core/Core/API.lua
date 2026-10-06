@@ -737,7 +737,7 @@ end
 function API.GetRecipeSummaries(options)
   if options == nil then options = {} end
   if not keysAllowed(options, { limit = true, cursor = true, character = true,
-      profession = true, sort = true, search = true }) then return nil, "invalid-options" end
+      profession = true, sort = true, search = true, time = true }) then return nil, "invalid-options" end
   local limit = options.limit or 50
   if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
   if options.character ~= nil and (type(options.character) ~= "string" or options.character == "") then
@@ -747,10 +747,13 @@ function API.GetRecipeSummaries(options)
   local sort = options.sort or "name"
   if sort ~= "name" and sort ~= "count" and sort ~= "profession" then return nil, "invalid-options" end
   if options.search ~= nil and type(options.search) ~= "string" then return nil, "invalid-options" end
+  local normalized, timeSignature = normalizeFilter({ time = options.time })
+  if not normalized then return nil, "invalid-options" end
+  for _, bound in pairs(normalized.time or {}) do if bound % 86400 ~= 0 then return nil, "invalid-options" end end
   local search = (options.search or ""):lower()
   local characterKey = options.character or ""
-  local prefix = search ~= "" and ("recipe-search:" .. #search .. ":" .. search .. ":" ..
-    #characterKey .. ":" .. characterKey .. ":" .. tostring(options.profession or "") .. ":" .. sort .. "\n") or ""
+  local prefix = (search ~= "" or options.time ~= nil) and ("recipe-search:" .. #search .. ":" .. search .. ":" ..
+    #characterKey .. ":" .. characterKey .. ":" .. tostring(options.profession or "") .. ":" .. sort .. ":" .. timeSignature .. "\n") or ""
   local offset = 0
   if options.cursor ~= nil then
     if type(options.cursor) ~= "string" or options.cursor:sub(1, #prefix) ~= prefix then
@@ -764,16 +767,18 @@ function API.GetRecipeSummaries(options)
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
   local counts = ledger.recipeCounts
-  if options.character then
+  if options.character or options.time then
     counts = {}
     local characterId = ledger.dimensionIndex.character[options.character]
     for _, row in ipairs(ledger.database.craftSeries) do
-      if row.characterDimensionId == characterId and row.recipeId then
+      if (not options.character or row.characterDimensionId == characterId) and row.recipeId and
+          (not normalized.time or (not normalized.time.from or row.bucketStart >= normalized.time.from) and
+            (not normalized.time.to or row.bucketStart < normalized.time.to)) then
         counts[row.recipeId] = (counts[row.recipeId] or 0) + row.craftCount
       end
     end
   end
-  if not ledger.recipeOrder or options.character or options.profession or sort ~= "name" or search ~= "" then
+  if not ledger.recipeOrder or options.character or options.profession or options.time or sort ~= "name" or search ~= "" then
     local order = {}
     for id in pairs(counts) do
       local row = dimension(ledger, "recipe", id)
@@ -797,8 +802,8 @@ function API.GetRecipeSummaries(options)
       if leftName ~= rightName then return leftName < rightName end
       return a.id < b.id
     end)
-    if not options.character and not options.profession and sort == "name" and search == "" then ledger.recipeOrder = order end
-    if options.character or options.profession or sort ~= "name" or search ~= "" then
+    if not options.character and not options.profession and not options.time and sort == "name" and search == "" then ledger.recipeOrder = order end
+    if options.character or options.profession or options.time or sort ~= "name" or search ~= "" then
       local result = { recipes = {} }
       if offset > #order then return nil, "invalid-cursor" end
       for index = offset + 1, math.min(offset + limit, #order) do

@@ -11,7 +11,8 @@ UI neither accesses Core's private namespace nor reads/writes its SavedVariables
 Confirmed destructive maintenance stays in the debug tracer. Storage, retention,
 and the durable outcomes introduced by #21 are unchanged. Additive API changes
 include recipe profession sorting/name search and reagent character/day filters
-with selection-wide totals. These remain read-only API v1 catalogue queries.
+with selection-wide totals. Recipe summaries also accept day-aligned time bounds.
+These remain read-only API v1 catalogue queries; capture and storage are unchanged.
 
 ## Pages and navigation
 
@@ -41,26 +42,37 @@ existing current-entry highlight without replacing the primary selection.
 | Destination | Presentation and behavior |
 | --- | --- |
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, returned reagents, and most-crafted recipe. No factual craft list. |
-| Logbook | Independent period/character/profession filters above a dense newest-first ledger. Recipe, Character, Profession, Qty, and Highlights columns. Factual history loads 40 crafts per page as the user scrolls. |
-| Recipes | Recorded-recipe catalogue with character/profession filters and debounced literal name search. Filtering and name/profession/craft-count sorting precede 40-row paging. Rows navigate to Recipe Detail. |
-| Reagents | Filtered master/detail ledger with period, character, profession, trivial-state and name controls. Selection-wide totals, item/quality artwork, quantities and shared Trivial checkboxes; selected-item Overview and Used in Recipes tabs. |
-| Character | Neutral helmet icon and class-colored identity; period and optional profession filter, graph, production totals, five most-crafted recipes, and exactly two primary-profession slots. Empty slots say Not recorded. |
-| Profession | Profession icon and identity; period and optional character filter, graph, production totals, five most-crafted recipes, and a lazy-loaded recent-craft ledger. |
-| Recipe Detail | Identity, profession/expansion metadata when known, pin control, shared period/character filters, and four local views: Overview, Craft History, Statistics, Reagents. This is a main-content page, not a modal. |
-| Settings | Retained-craft/daily-row counts, addon version, and retention days. Saving retention applies pruning at the next startup. |
+| Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights, When. |
+| Recipes | Period/character/profession filters, explicit search/clear controls and most-crafted default sorting. Name and profession sorting remain available. Rich recipe rows navigate to Recipe Detail. |
+| Reagents | Full-width parchment catalogue with shared period/character/profession/search controls, Included/Ignored savings filters, Used/Returned quantities and entity navigation. No detail split or inline configuration. |
+| Character | Neutral helmet and class-colored identity, two horizontal Crafting professions links, summary, Overview and Craft History tabs. Full-width most-crafted table. |
+| Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
+| Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
+| Reagent | First-class identity page with filters, summary, Overview, Used in Recipes and Craft History tabs. The only place to change Ignore in savings statistics. |
+| Settings | Craft-history count, addon version, and Keep craft history (days). Saving applies pruning at the next startup. |
 
-Recipe Detail's **Overview** has a bounded activity graph and production tiles:
-crafts, total output, concentration, Multicraft, reagents returned, and Ingenuity
-refund. **Craft History** uses Date, Character, Result, Qty, Quality, Concentration
-and Extras columns, rather than repeating the selected recipe/profession. **Statistics** keeps the #21
-proc counts, coverage-aware percentages, and non-trivial return interpretation.
-**Reagents** shows ten returned item identities per page, with quantities, item
-IDs, icons, available Blizzard reagent-quality visuals, item tooltips, and
-per-item Trivial checkboxes. Same-named item IDs remain separate.
+All entity pages follow Header, Filters, Summary, Tabs. Headers and filters stay
+fixed; lists scroll inside bounded regions. Recipe Statistics has a bounded local
+overflow region at short heights, not a whole-page scrollbar. Tabs share a native
+border/backdrop with the content they control.
 
-Recipe filters reserve the second line only for Custom dates. Preset periods
-bring the active view closer to its filters and give Craft History the remaining
-height without changing its saved position on ordinary tab navigation.
+Recipe Statistics includes total crafts/output/concentration, output per craft,
+concentration per craft, net concentration, Multicraft proc rate/bonus/output share,
+Resourcefulness rate/returned quantities/useful savings, and Ingenuity rate/refund.
+The three mechanics have peer headings. Summary tiles remain visible above every
+tab; Ingenuity includes its proc percentage. Missing denominators leave a dash,
+with a specific missing-result explanation when a rate cannot be calculated.
+
+The shared craft table omits columns made redundant by its context. Recipe history
+omits Recipe and Profession; Character history omits Character; Profession history
+omits Profession. Result combines item and native quality artwork. Concentration,
+Multicraft, Resourcefulness and Ingenuity all belong in compact Highlights. When is
+a narrow two-line local date/time; exact timestamps are in row tooltips.
+
+Most-crafted and catalogue recipe tables use the same rich component: Recipe,
+Latest result, Crafts, Items, Multicraft %, Resource %, Ingenuity %. The result is
+the latest available craft result for that selection, not an inferred quality
+distribution. Rows and the Overview most-crafted tile open Recipe Detail.
 
 Characters' two slots use `GetProfessions(characterKey)` across all available
 history, independent of the period and profession activity filters. Only primary
@@ -72,7 +84,7 @@ sidebar. No remote-character portrait, race, level, or faction is invented.
 
 Page filters and scroll positions are independent for the session. Character,
 profession, and recipe destinations remember their own state when switching
-identities; recipe-local views, material pagination, and factual-history position
+identities; recipe-local views, reagent tables, and factual-history position
 are included. Ordinary navigation does not discard loaded history. New data marks
 cached pages stale and reloads lists in bounded batches while retaining position.
 Profession metadata events refresh safely on the next frame. Page selections are
@@ -81,8 +93,9 @@ session state, not reload-persistent preferences.
 ## Global Reagents catalogue
 
 Reagents is a top-level sibling directly after Recipes, separate from Recipe
-Detail's contextual Reagents view. A compact dark ledger sits beside a parchment
-selected-item pane, with thin separators and item/quality artwork, not a card grid.
+Detail's contextual Reagents view. Both use the standard parchment table. Clicking
+a reagent opens the standalone Reagent page; Recipes and craft inspection can
+navigate there too, and its recipe/craft lists link back into those workflows.
 Each row includes the item ID, so identical names and distinct quality IDs never
 merge. Missing artwork uses the existing question-mark fallback; unavailable
 quality is not invented.
@@ -97,22 +110,23 @@ repaint only matching reagent cells, including mounted cells on a hidden page,
 without re-querying aggregates or resetting filters/scroll. The cache is never
 persisted or stored in Core, and contains no craft totals or trivial preferences.
 
-Filters are Period (All time by default), Character, Profession, Trivial state
-(All, Trivial, Non-trivial), and literal case-insensitive name search. Search is briefly debounced without changing an
-in-flight paging cursor. Name is the default sort; Most allocated, Most returned
-and Recipe count sort descending across the entire selection before 40-row lazy
-paging. Filters, loaded rows, selected item, local tab and scroll offset survive
-navigation away and back. Recipe catalogue search follows the same debounce rule.
+Filters are Period (All time by default), Character, Profession, Savings statistics
+(All, Ignored, Included), and literal case-insensitive name search. Search has
+explicit search/clear buttons and Enter support, plus a short debounce. The typed
+term does not change a paging query until applied. Name is the default reagent
+sort; Most used, Most returned and Recipe count sort the full selection before
+40-row lazy paging. Recipe catalogue defaults to Most crafted. Filters, rows and
+scroll offsets survive navigation. No user-facing Prev/Next controls remain.
 
-The header totals cover the complete filtered selection, not just loaded rows.
-Selecting a reagent shows identity/professions, retained allocations, recorded
-returns, retained craft/character counts, and native Overview/Used in Recipes tabs.
-Recipe uses navigate to Recipe Detail. The usage worker reads at most 100 crafts
-per frame; changing the selection/filter replaces the pending calculation. Display
-metadata events update the selected artwork without restarting data queries.
+Header totals cover the complete filtered selection, not just loaded rows. The
+Reagent page shows identity/professions, quantities used/returned, craft and crafter
+counts, return efficiency where measurable, recipe uses and craft history. The
+usage worker reads at most 100 crafts per frame; changing the selection replaces
+pending calculations. Histories and recipe uses render 40 rows at a time. Metadata
+events repaint item artwork without restarting aggregate queries.
 
-The two-color chart compares **recorded allocations and returns on retained craft
-details**, with at most 60 buckets and quantity/date tooltips. The recipe list and
+The two-color chart compares **allocations and returns on retained craft
+details**, shown as Used and Returned, with at most 60 buckets and quantity/date tooltips. The recipe list and
 counts use that same retained population, not inferred historical uses. A return
 percentage is shown only for matched retained uses when every matching allocation
 and return is known, each craft's return result is complete, the allocation is
@@ -120,21 +134,23 @@ positive, and returns do not exceed allocations. Missing quantities never become
 zero. Pruned detail leaves recorded durable totals but no reconstructed chart or
 recipe uses. The chart is allocated-versus-returned, not consumed-versus-returned.
 
-Allocated sums retained craft allocations only. Returned sums existing durable
-positive return facts without double-counting retained rows. The footer states
-the different scopes. Unknown quantities say Unknown rather than zero; known
-amounts with incomplete coverage are marked partial. Full cell values and item
-identity are available on hover. There is no cross-scope lifetime return percentage. After detail
+Used sums retained craft allocations only; it does not claim net consumption.
+Returned sums durable positive-return facts without adding retained positives
+again. The entity chart states its craft count/date span and reports unavailable
+older use quantities when pruning is evident. Unknown values are dashes and known
+incomplete sums use a lower-bound prefix, not a vague Partial label. Exact values
+are available on hover. There is no cross-scope lifetime return percentage. After detail
 pruning, returns remain but allocation-only identities may disappear and
 allocations/quality may become unknown; no new historical allocation store is
 introduced. Recipe/profession associations describe recorded uses, not all game
 recipes capable of using the item.
 
-The checkbox writes only `ArtisanLogbookUISettings.trivialReagents`, the same
-item-ID preference used by Craft Detail and Recipe Detail. Those contextual
-controls remain. A UI-only change notification synchronizes controls and
-invalidates/restarts relevant Resourcefulness classification immediately,
-preserving recipe material pagination. Filtering by Trivial/Non-trivial happens
+Ignore in savings statistics lives only on the standalone Reagent page and writes
+`ArtisanLogbookUISettings.trivialReagents`. Analytics and craft inspection contain
+no classification controls. Its tooltip explains that quantities and the overall
+Resourcefulness rate do not change; it excludes this reagent from useful-savings
+craft counts. Notifications update affected statistics immediately while preserving
+list positions. Filtering by Included/Ignored happens
 before pagination via generic included/excluded item IDs passed to Core; Core
 has no knowledge of UI classification. A toggled row may leave the current
 filtered population. Quantities are unaffected by classification.
@@ -160,33 +176,31 @@ exact page without rebuilding its list. A single Escape registration closes the
 modal first; a second Escape closes the journal. Closing the main window also
 cleans up the shade and modal.
 
-The modal shows recipe/output artwork, character, timestamp, quantity, quality,
-concentration, Multicraft, Ingenuity, and Resourcefulness. Returned reagents are
-individual rows with identity, quality when known, and quantity. Resulting item
-identity/quantity are separate. Recipe, realm, expansion, craft ID, and available
-request count/concentration quote remain accessible below. A reagent selector
-and Trivial checkbox retain #21's reversible classification behavior. Changing
-that preference refreshes recipe statistics on return without resetting history.
-
-Crafts with no reagent facts hide the selector and its caption and reclaim that
-vertical space. The returned list uses compact empty/short heights and grows to
-four visible rows before scrolling. Resulting Items follows immediately instead
-of sitting below a fixed empty section; larger lists and metadata remain scrollable.
+The modal is inspection only. A prominent result row combines item, quality,
+quantity and Multicraft contribution. Paired facts show character, timestamp,
+concentration and outcomes. A separate returned-reagents section has breathing
+room and its own bounded list; rows open Reagent pages after closing the modal.
+There is no classification dropdown or duplicate metadata footer. No full-modal
+scrollbar is required. Multiple output identities are not synthesized.
 
 ## Measurements and bounds
 
-- Aggregate periods use UTC calendar days: Today, 7, 30 (default), 90, and 365
-  days. Craft timestamps use the game's local display. Recipe Detail also offers
-  All time (default) and Custom (UTC); enter `YYYY-MM-DD` from/through dates and
-  press Enter. The through date is inclusive in the UI. Invalid input leaves the
-  last valid filter in place.
+- Every period control shares Today, 7/30/90/365 days and Custom dates. Recipe,
+  Recipes and reagent pages also offer All time where their query supports it.
+  Custom bounds are UTC `YYYY-MM-DD`; through is inclusive. Invalid input keeps
+  the last valid query. Craft timestamps use the game's local display.
+- `UI.Number` formats quantities with k/M/B and at most one decimal; percentages
+  use one decimal. Exact values remain in tooltips. `>=` denotes a lower bound;
+  a dash denotes unavailable, never measured zero. Internal IDs are not abbreviated.
+- FilterBar caps dropdowns at 176 UI units and wraps controls into aligned rows.
+  Search, dropdown and custom-date controls share baseline/spacing conventions.
 - Multicraft shows absolute bonus output and its percentage of **total produced
   output**, never craft count. The percentage is omitted unless both quantities
   are observed for every selected craft and the denominator is positive.
 - Ingenuity uses applied proc/refund semantics from #21, not raw refund values
   on false-proc records. Partial outcomes do not become measured zero.
-- Resourcefulness quantities sum durable returned-item facts. Partial positive
-  amounts are labeled with missing details. No returned quantities with incomplete
+- Resourcefulness quantities sum durable returned-item facts. Incomplete positive
+  amounts are lower bounds. No returned quantities with incomplete
   coverage display a dash; complete known zero displays zero. Lifetime pages do
   not show returned/allocated percentages because the durable APIs do not expose
   a complete allocation denominator. Proc percentages remain distinct and require
@@ -200,14 +214,16 @@ of sitting below a fixed empty section; larger lists and metadata remain scrolla
   retained partial-result crafts, without double counting. Missing result facts
   never become negative observations. Trivial preferences only change UI
   interpretation and never rewrite facts or aggregates.
-- Charts render at most 60 bars, with multi-day buckets for longer periods and
-  date/count tooltips. A one-day population still has a visible bar when nonempty.
-  Population graphs read date-bounded daily series. Recipe charts use the bounded
-  outcome API, not an unbounded daily-series request.
+- Charts render at most 60 date groups with daily/multi-day buckets. Daily-only
+  data for Today renders a concise dated total, never invented hourly activity or
+  a full-width bar. Bar widths are capped; reagent pairs stay close within a day
+  with wider gaps between days. Chart scales and labels use shared formatting.
+  Population charts use bounded daily series; recipes use the bounded outcome API.
 - Return-quantity workers process one outcome query or one 100-item page per
   render frame. Non-trivial classification processes 100 sets/crafts per frame;
-  recipe reagent tables render ten rows per page. History and catalogue requests remain
-  40-row pages. No heavyweight UI framework or external service is introduced.
+  recipe outcome/result enrichment advances one recipe per frame. All large
+  history/catalogue/returned-item/recipe-use lists render 40 rows per load. No
+  heavyweight UI framework or external service is introduced.
 
 ## Visual references and deviations
 
@@ -217,10 +233,9 @@ The [earlier six-screen mockup](https://github.com/Kralizek/ArtisanLogbook/issue
 supplies context for the other pages and Craft Detail.
 
 The [Reagents mockup](https://github.com/Kralizek/ArtisanLogbook/issues/22#issuecomment-6017262856)
-now informs its master/detail composition, population filters, summary area and
-local usage tabs. At the journal's narrower width, profession metadata is in the
-detail identity and recipe uses have their own tab instead of squeezing every
-column into the master list. Unsupported lifetime consumption rates are not added.
+informed earlier versions. The [third-round review](https://github.com/Kralizek/ArtisanLogbook/pull/23#issuecomment-6024413086)
+and consolidated design-system review supersede its master/detail split, inline
+classification, page scrolling and inconsistent table/filter conventions.
 
 [JourneyTracker](https://github.com/skittlenicks/JourneyTracker/blob/main/JourneyTracker/JourneyTrackerUI.lua)
 informs the native composition: opaque parchment base plus achievement artwork,
@@ -243,22 +258,17 @@ illustrations exceed recorded facts:
   is on Recipe Detail rather than a separate catalogue-row control.
 - Native controls and textures replace the generated ornate border work. Dense
   outcome indicators collapse to icons with full tooltips when space is limited.
-- Data-heavy pages and Craft Detail scroll at shorter window heights rather than
-  shrinking text or discarding facts. The journal scales down to fit smaller UI
-  parents. There is no free-form resizer.
-- Factual history is lazily scrolled rather than numbered pages; returned materials
-  retain bounded Previous/Next paging. One captured output identity is shown per
-  craft fact; additional resulting items are not synthesized.
+- Headers, filters and summaries stay fixed. Tables and the statistics overflow
+  region scroll locally; the whole content pane does not. The journal scales down
+  to fit smaller UI parents. There is no free-form resizer.
+- All large lists use lazy internal scrolling. One captured output identity is
+  shown per craft fact; additional resulting items are not synthesized.
 
 ## In-game acceptance checklist
 
-The [second screenshot round for 35085a8](https://github.com/Kralizek/ArtisanLogbook/pull/23#issuecomment-6023970088)
-confirms full-height parchment, visible chart axes, native local tabs, recipe
-search, dated craft history, the Reagents detail pane and two profession slots.
-It also exposed excessive parchment grain, dropdown overflow, low-contrast class
-names/dark modal headings, an orphan Reagent caption and wasted modal space.
-The follow-up fixes require a new live capture, particularly an empty and a
-multi-reagent Craft Detail, preset/custom recipe periods and the rightmost filter.
+The third screenshot round is the baseline for this redesign, not visual proof of
+the redesigned screens. Automated tests cover state, bounded rendering and frame
+geometry at short/tall sizes. A fresh live capture is required for every destination.
 
 The full matrix below is **not yet performed**. Lua mocks cover state and data semantics,
 not Blizzard asset rendering, font metrics, hit-testing, strata, or taint. There
@@ -271,7 +281,7 @@ pages and the modal while performing this checklist.
   Inspect parchment, text contrast, dropdown labels, graph bars, native borders,
   and access to all controls without overlaps/clipped labels.
 - [ ] Confirm parchment covers the entire viewport and all scrolled rows; inspect
-  top-tab selected states, dark-ledger contrast, numeric chart scales and dates.
+  attached-tab selected states, shared table contrast, numeric scales and dates.
 - [ ] Drag/raise the journal beside Blizzard profession windows and other addons.
   Verify the modal is above its shade, the shade blocks the page, tooltips and
   dropdowns remain usable, and closing leaves no invisible input blocker.
@@ -283,10 +293,10 @@ pages and the modal while performing this checklist.
   directly from a pin, reload, and verify alphabetical order and persistence.
 - [ ] Overview must have no craft list. Verify all filters, graph and totals,
   including complete, zero, unknown, and partial Multicraft/Resourcefulness data.
-- [ ] Logbook must have no graph. Inspect Highlights for quality, output,
+- [ ] Logbook must have no graph. Inspect Result item/quality and Highlights for
   concentration, Multicraft, Ingenuity and returned reagents, including narrow
   layouts. Load more than 40 rows; verify full tooltips and the end/empty states.
-- [ ] Verify catalogue default name sort, profession sort and most-crafted sort
+- [ ] Verify catalogue default most-crafted sort, profession sort and name sort
   across multiple pages. Search for a recipe beyond the first 40 rows; change
   search while paging and return from Recipe Detail to the preserved selection.
   Recipes must remain selected throughout Recipe Detail, including pin navigation,
@@ -294,7 +304,7 @@ pages and the modal while performing this checklist.
 - [ ] Open the top-level Reagents destination directly after Recipes. Test no
   reagents, one reagent, identical names with different item/quality IDs, missing
   metadata, long names, multiple professions and more than 40 rows. Check identity,
-  quality artwork, tooltips and row checkbox hit areas at every UI scale.
+  quality artwork, tooltips and row navigation at every UI scale.
 - [ ] With uncached item metadata, verify fallback artwork initially, then live
   icon/quality enrichment after item info or profession metadata arrives. Filters,
   scroll and row quantities must not reset; repeat while Reagents is hidden and
@@ -302,11 +312,11 @@ pages and the modal while performing this checklist.
 - [ ] Exercise every Reagents filter/sort across multiple pages, including search
   while scrolling. Navigate away/back and verify filters, rows and offset persist.
   Confirm allocations/returns display unknown and partial evidence honestly.
-- [ ] Select reagents while usage loads; verify the final chart and recipes belong
-  to the current item. Exercise character/period scopes, both local tabs, selected
-  row restoration, recipe navigation, incomplete rates and the pruned-detail state.
-- [ ] Toggle Trivial globally and in both detail views. Verify shared checkbox
-  state, immediate non-trivial Resourcefulness recalculation, unchanged quantities,
+- [ ] Open different Reagent pages while usage loads; verify the final chart,
+  recipes and history belong to the current item. Exercise shared custom periods,
+  all tabs, navigation back, list restoration, incomplete rates and pruning.
+- [ ] Toggle Ignore in savings statistics on a Reagent page. Verify immediate
+  useful-savings recalculation, unchanged quantities/overall Resourcefulness rate,
   and a row leaving Trivial/Non-trivial selections. Reload to verify persistence.
   Prune a copy of history and verify durable returns remain without inventing
   missing allocation totals. Compare with the attached Reagents mockup.
@@ -324,9 +334,9 @@ pages and the modal while performing this checklist.
   Inspect every outcome, multiple individual returns and the resulting item.
   Close with Close, X and Escape; verify the exact originating view and offsets.
   A second Escape closes the journal. Closing the journal while modal must clean up.
-- [ ] Mark/unmark trivial materials in Recipe Reagents and Craft Detail, including
-  mixed/trivial-only returns and several reagent pages. Quantities stay unchanged,
-  each craft counts once, and returning from Craft Detail keeps history position.
+- [ ] Recipe Reagents and Craft Detail must be inspect-only. Their reagent rows
+  open Reagent pages; returning preserves filters and list positions. Test mixed
+  and ignored-only returns; quantities stay unchanged and each craft counts once.
 - [ ] Craft while the journal is open, including while a modal covers a scrolled
   list. Verify safe sidebar refresh, delayed metadata enrichment, and updates on
   subsequent navigation without lost filters or fabricated values.

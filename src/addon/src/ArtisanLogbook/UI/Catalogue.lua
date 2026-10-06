@@ -1,6 +1,7 @@
 local _, addon = ...
 local UI = addon.UI
 local reagentMetadata = {}
+local reagentCells = setmetatable({}, { __mode = "k" })
 
 local function resolveReagentMetadata(itemId, entry, qualityOnly)
   if not qualityOnly and entry.icon == nil and type(GetItemIcon) == "function" then
@@ -29,51 +30,42 @@ local function updateReagentVisuals(cell, metadata)
   if metadata.qualityAtlas then cell.quality:SetAtlas(metadata.qualityAtlas) end
 end
 
+function UI.ReagentVisual(cell, itemId)
+  reagentCells[cell] = itemId
+  updateReagentVisuals(cell, reagentDisplay(itemId))
+end
+
 function UI.CataloguePage(page, width, height, openRecipe)
   UI.Section(page, "Recipes", 0, -2, width)
-  local character, profession, sort, search = false, false, "name", ""
-  local filterWidth = (width - 96) / 4
-  local characters = UI.Selector(page, 0, -42, filterWidth, {}, function(value)
+  local character, profession, sort, search = false, false, "count", ""
+  local filters = UI.FilterBar(page, width, -42)
+  page.filters = filters
+  local period = filters:Period({ days = false }, function() page:Refresh(true) end, true)
+  local characters = filters:Select("Character", {}, function(value)
     character, profession = value, false; page:Refresh(true)
-  end, "Character")
-  local professions = UI.Selector(page, filterWidth + 32, -42, filterWidth, {}, function(value)
+  end)
+  local professions = filters:Select("Profession", {}, function(value)
     profession = value; page:Refresh(true)
-  end, "Profession")
-  local sorts = UI.Selector(page, 2 * (filterWidth + 32), -42, filterWidth, {
+  end)
+  local sorts = filters:Select("Sort", {
     { label = "Recipe name", value = "name" }, { label = "Profession", value = "profession" },
     { label = "Most crafted", value = "count" },
-  }, function(value) sort = value; page:Refresh(true) end, "Sort")
-  UI.Text(page, 3 * (filterWidth + 32), -42, filterWidth, 16, "GameFontNormalSmall"):SetText("Search")
-  local searchInput = CreateFrame("EditBox", nil, page, "InputBoxTemplate")
-  searchInput:SetPoint("TOPLEFT", 3 * (filterWidth + 32) + 4, -60)
-  searchInput:SetSize(filterWidth - 8, 24)
-  searchInput:SetAutoFocus(false); searchInput:SetMaxLetters(120)
-  searchInput:SetScript("OnEnterPressed", function(self) self:ClearFocus(); page:Refresh(true) end)
-  searchInput:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-  searchInput:SetScript("OnTextChanged", function(self)
-    page.pendingSearch, page.searchDelay = self:GetText(), .2
-    page:SetScript("OnUpdate", function(self, elapsed)
-      self.searchDelay = self.searchDelay - elapsed
-      if self.searchDelay <= 0 then self:Refresh(true) end
-    end)
-  end)
-  page.searchInput = searchInput
-  local availableWidth = width - 24
-  local list = UI.ScrollList(page, 0, -110, width, height - 110, {
-    { title = "Recipe", width = availableWidth * .53, value = function(row) return UI.Name(row.recipe) end,
-      icon = function(row) return UI.RecipeIcon(row.recipe) end },
-    { title = "Profession", width = availableWidth * .32, value = function(row) return UI.Name(row.profession) end },
-    { title = "Crafts", width = availableWidth * .15, value = function(row) return tostring(row.craftCount) end },
-  }, function(row) openRecipe(row.recipe) end, "No recipes in this selection")
+  }, function(value) sort = value; page:Refresh(true) end)
+  page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
+  local list = UI.RecipeTable(page, 0, -144, width, height - 144, openRecipe)
   page.catalogue = list
+  function filters.onLayout(filterHeight)
+    list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -48 - filterHeight)
+    list:SetViewportHeight(height - 48 - filterHeight)
+  end
   UI.LazyList(list, function(cursor)
     local result, reason = ArtisanLogbookAPI.GetRecipeSummaries({ character = character or nil,
-      profession = profession or nil, sort = sort, search = search, limit = 40, cursor = cursor })
+      profession = profession or nil, time = period:Time(), sort = sort, search = search, limit = 40, cursor = cursor })
+    list:Enrich({ time = period:Time(), characters = character and { character } or nil })
     return result and result.recipes, result and result.nextCursor or reason
   end)
   function page:Refresh(reset, preserve)
-    self:SetScript("OnUpdate", nil)
-    if self.pendingSearch ~= nil then search = self.pendingSearch; self.pendingSearch = nil end
+    period:UpdateState()
     characters:Update(UI.Choices("characters"), character)
     local available = UI.Choices("professions", character)
     if not UI.HasChoice(available, profession) then profession = false end
@@ -83,86 +75,111 @@ function UI.CataloguePage(page, width, height, openRecipe)
     self.loaded = true
   end
   function page:Open()
-    if self.pendingSearch ~= nil then self:Refresh(true)
+    if self.searchInput:GetScript("OnUpdate") then self.searchInput:GetScript("OnEnterPressed")(self.searchInput)
     elseif not self.loaded or self.dirty then self:Refresh(self.dirty, true); self.dirty = false end
   end
 end
 
 function UI.ReagentAmount(row, amount, complete)
-  if row[amount] == nil then return "Unknown" end
-  return tostring(row[amount]) .. (row[complete] and "" or " (partial)")
+  return UI.Amount(row[amount], row[complete])
 end
 
-function UI.ReagentDetail(parent, width, height, openRecipe)
-  local detail = CreateFrame("Frame", nil, parent)
-  detail:SetSize(width, height)
-  local content, scroll = UI.PageScroll(detail, width, height, 510)
-  detail.scroll = scroll
-  local inner = width - 28
+function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
+  local content, inner = detail, width - 24
+  local state = { days = false, character = false, profession = false }
+  detail.states = {}
   detail.icon = content:CreateTexture(nil, "ARTWORK")
   detail.icon:SetSize(32, 32); detail.icon:SetPoint("TOPLEFT", 0, 0)
   detail.quality = content:CreateTexture(nil, "OVERLAY")
   detail.quality:SetSize(16, 16); detail.quality:SetPoint("TOPLEFT", 18, -18)
-  local heading = UI.Text(content, 40, 0, inner - 40, 36, "GameFontNormal")
-  local identity = UI.Text(content, 0, -40, inner, 18)
-  local overview = CreateFrame("Frame", nil, content)
-  overview:SetPoint("TOPLEFT", 0, -104); overview:SetSize(inner, 400)
-  local recipes = UI.ScrollList(content, 0, -104, inner, 380, {
-    { title = "Recipe", width = (inner - 24) * .50, value = function(row) return UI.Name(row.recipe) end,
+  local heading = UI.Text(content, 40, 0, width - 320, 28, "GameFontNormalLarge")
+  local identity = UI.Text(content, 40, -30, width - 40, 18)
+  detail.classification = UI.TrivialCheckbox(content, width - 250, 0, function() end)
+  local filters = UI.FilterBar(content, width, -58)
+  detail.filters = filters
+  local period = filters:Period(state, function() detail:Refresh() end, true)
+  local characters = filters:Select("Character", {}, function(value) state.character = value; detail:Refresh() end)
+  local professions = filters:Select("Profession", {}, function(value) state.profession = value; detail:Refresh() end)
+  local summary = CreateFrame("Frame", nil, content)
+  summary:SetPoint("TOPLEFT", 0, -110); summary:SetSize(width, 142)
+  detail.fields, detail.tiles = {}, {}
+  for index, entry in ipairs({ { "Used", "allocated" }, { "Returned", "returned" }, { "Crafts using this", "crafts" },
+      { "Crafters", "characters" }, { "Returned / used", "rate" }, { "Recipes using this", "recipes" } }) do
+    local tile = UI.Stat(summary, entry[1], "Interface\\Icons\\INV_Misc_Herb_19",
+      ((index - 1) % 3) * width / 3, -math.floor((index - 1) / 3) * 70, width / 3 - 12)
+    detail.fields[entry[2]], detail.tiles[entry[2]] = tile.value, tile
+  end
+  local tabs = UI.TabbedContent(content, width, height - 260, -260, { "Overview", "Used in Recipes", "Craft History" },
+    function(name) detail.activeView = name; state.view = name end)
+  detail.tabbed, detail.tabs = tabs, tabs.buttons
+  local overview = tabs.views.Overview
+  local recipes = UI.ScrollList(tabs.views["Used in Recipes"], 0, 0, inner, height - 311, {
+    { title = "Recipe", width = (inner - 24) * .46, value = function(row) return UI.Name(row.recipe) end,
       icon = function(row) return UI.RecipeIcon(row.recipe) end },
-    { title = "Crafts", width = (inner - 24) * .18, value = function(row) return tostring(row.crafts) end },
-    { title = "Returned", width = (inner - 24) * .32, value = function(row)
+    { title = "Crafts", width = (inner - 24) * .14, value = function(row) return UI.Number(row.crafts) end },
+    { title = "Used", width = (inner - 24) * .20, value = function(row) return UI.ReagentAmount(row, "allocatedQuantity", "returnComplete") end },
+    { title = "Returned", width = (inner - 24) * .20, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end },
-  }, function(row) if row.recipe then openRecipe(row.recipe) end end, "No retained recipe uses")
-  detail.recipes, detail.tabs = recipes, {}
-  function detail:SelectView(name)
-    self.activeView = name
-    overview:SetShown(name == "Overview"); recipes:SetShown(name == "Used in Recipes")
-    for title, tab in pairs(self.tabs) do tab:Select(title == name) end
-  end
-  for index, title in ipairs({ "Overview", "Used in Recipes" }) do
-    detail.tabs[title] = UI.Tab(content, title, (index - 1) * inner / 2, -66, inner / 2 - 2,
-      function() detail:SelectView(title) end)
-  end
-  detail:SelectView("Overview")
-  detail.fields = {}
-  for index, entry in ipairs({ { "Allocated (retained)", "allocated" }, { "Returned (recorded)", "returned" },
-      { "Uses (retained)", "crafts" }, { "Characters (retained)", "characters" },
-      { "Return / allocation (retained)", "rate" } }) do
-    UI.Text(overview, 0, -(index - 1) * 26, inner * .67, 24):SetText(entry[1])
-    local value = UI.Text(overview, inner * .67, -(index - 1) * 26, inner * .33, 24)
-    value:SetJustifyH("RIGHT")
-    detail.fields[entry[2]] = value
-  end
-  detail.chart = UI.Chart(overview, 0, -142, inner, true)
-  UI.Text(overview, 0, -308, inner, 18):SetText("|cff2787c2Allocated|r   |cff287040Returned|r")
-  detail.status = UI.Text(overview, 0, -336, inner, 54)
+  }, function(row) if row.recipe then openRecipe(row.recipe) end end, "No crafts with ingredient details")
+  detail.recipes = recipes
+  function detail:SelectView(name) tabs:Select(name) end
+  detail.history = UI.ScrollList(tabs.views["Craft History"], 0, 0, inner, height - 311, UI.HistoryColumns(inner),
+    function(craft) openCraft(craft.id) end, "No crafts with ingredient details")
+  UI.LazyList(detail.history, function(cursor)
+    local rows, offset = {}, cursor or 0
+    local ids = detail.historyIds or {}
+    for index = offset + 1, math.min(offset + 40, #ids) do
+      local craft = ArtisanLogbookAPI.GetCraft(ids[index])
+      if craft then rows[#rows + 1] = craft end
+    end
+    return rows, offset + 40 < #ids and offset + 40 or nil
+  end)
+  detail.chart = UI.Chart(overview, 0, 0, inner, true)
+  local legend = UI.Text(overview, 0, -168, inner, 18)
+  legend:SetText("|cff2787c2Used|r   |cff287040Returned|r")
+  detail.status = UI.Text(overview, 0, -196, inner, 54)
   detail.worker = CreateFrame("Frame", nil, detail)
+  function filters.onLayout(filterHeight)
+    local top = 64 + filterHeight
+    summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -top)
+    tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top - 150); tabs:Resize(height - top - 150)
+    recipes:SetViewportHeight(height - top - 201); detail.history:SetViewportHeight(height - top - 201)
+    local chartHeight = math.min(168, height - top - 279)
+    detail.chart:Layout(chartHeight)
+    legend:ClearAllPoints(); legend:SetPoint("TOPLEFT", 0, -chartHeight)
+    detail.status:ClearAllPoints(); detail.status:SetPoint("TOPLEFT", 0, -chartHeight - 28)
+    detail.status:SetHeight(50)
+  end
+  function detail:Filter()
+    return { time = period:Time(), characters = state.character and { state.character } or nil,
+      professions = state.profession and { state.profession } or nil }
+  end
   local function accumulate(target, allocated, returned, complete)
     target.crafts = (target.crafts or 0) + 1
     if allocated ~= nil then target.allocatedQuantity = (target.allocatedQuantity or 0) + allocated end
     if returned ~= nil then target.returnedQuantity = (target.returnedQuantity or 0) + returned end
     target.returnComplete = target.returnComplete ~= false and complete
   end
-  function detail:Open(row, filter)
+  function detail:Render(row, filter, preserve)
     self.worker:SetScript("OnUpdate", nil)
-    local changed = not self.row or not row or self.row.item.id ~= row.item.id
     self.row = row
-    if changed then scroll:SetVerticalScroll(0) end
     heading:SetText(row and UI.Elide(UI.Name(row.item), math.floor((inner - 40) / 7) * 2) or "Select a reagent")
     local professions = {}
     for _, entry in ipairs(row and row.professions or {}) do professions[#professions + 1] = UI.Name(entry) end
     identity:SetText(row and UI.Elide("#" .. row.item.id .. "  " .. table.concat(professions, ", "), math.floor(inner / 6)) or "")
-    if row then updateReagentVisuals(self, reagentDisplay(row.item.id))
+    if row then UI.ReagentVisual(self, row.item.id)
     else self.icon:SetTexture(nil); self.quality:Hide() end
     for _, field in pairs(self.fields) do field:SetText("-") end
+    local recipeCount, recipeOffset = #recipes.items, recipes.scroll:GetVerticalScroll()
     recipes:Reset(); self.chart:Hide(); self.status:SetText("")
+    self.historyState = preserve and self.history:Save() or nil
+    self.history:Reset("Loading crafts...")
     if not row then return end
-    self.fields.allocated:SetText(UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete"))
-    self.fields.returned:SetText(UI.ReagentAmount(row, "returnedQuantity", "returnComplete"))
-    self.status:SetText("Loading retained craft details...")
-    local cursor, totals, characters, byRecipe, days = nil, { crafts = 0, returnComplete = true }, {}, {}, {}
+    self.tiles.allocated:SetNumber(row.allocatedQuantity, row.allocationComplete)
+    self.tiles.returned:SetNumber(row.returnedQuantity, row.returnComplete)
+    self.status:SetText("Loading craft history...")
+    local cursor, totals, characters, byRecipe, days, ids = nil, { crafts = 0, returnComplete = true }, {}, {}, {}, {}
     self.worker:SetScript("OnUpdate", function(worker)
       local result, reason = ArtisanLogbookAPI.GetCrafts(filter, { limit = 100, cursor = cursor })
       if not result then
@@ -180,6 +197,7 @@ function UI.ReagentDetail(parent, width, height, openRecipe)
           end
         end
         if matched then
+          ids[#ids + 1] = craft.id
           if allocated and returned and returned > allocated then complete = false end
           accumulate(totals, allocated, returned, complete)
           if craft.character then characters[craft.character.key] = true end
@@ -204,74 +222,99 @@ function UI.ReagentDetail(parent, width, height, openRecipe)
       for _, day in pairs(days) do series[#series + 1] = day end
       table.sort(series, function(left, right) return left.bucketStart < right.bucketStart end)
       detail.totals, detail.series = totals, series
-      detail.fields.crafts:SetText(tostring(totals.crafts))
-      detail.fields.characters:SetText(tostring(characterCount))
+      detail.fields.crafts:SetText(UI.Number(totals.crafts))
+      detail.fields.characters:SetText(UI.Number(characterCount))
+      detail.fields.recipes:SetText(UI.Number(#ranked))
       if totals.returnComplete and totals.allocatedQuantity and totals.allocatedQuantity > 0 and
           totals.allocatedQuantity < math.huge and totals.returnedQuantity and totals.returnedQuantity < math.huge then
-        detail.fields.rate:SetText(string.format("%.1f%%", 100 * totals.returnedQuantity / totals.allocatedQuantity))
+        detail.fields.rate:SetText(UI.Percent(totals.returnedQuantity, totals.allocatedQuantity))
       end
-      recipes:Append(ranked)
+      UI.LazyList(recipes, function(cursor)
+        local offset, rows = cursor or 0, {}
+        for index = offset + 1, math.min(offset + 40, #ranked) do rows[#rows + 1] = ranked[index] end
+        return rows, offset + 40 < #ranked and offset + 40 or nil
+      end)
+      recipes:Reload()
+      if preserve then
+        recipes.restoreCount, recipes.restoreOffset = recipeCount, recipeOffset
+        recipes:SetScript("OnUpdate", function(self)
+          if #self.items < math.min(recipeCount, #ranked) then self:LoadNext()
+          else self.scroll:SetVerticalScroll(recipeOffset); self:SetScript("OnUpdate", nil) end
+        end)
+      end
+      detail.historyIds = ids
+      if detail.historyState then detail.history:Restore(detail.historyState) end
+      detail.history:Reload(detail.historyState ~= nil)
       local from, to = UI.Range(GetServerTime(), 30)
       from = filter.time and filter.time.from or (series[1] and series[1].bucketStart) or from
       to = filter.time and filter.time.to or (series[#series] and series[#series].bucketStart + 86400) or to
       detail.chart:Render(series, from, to); detail.chart:Show()
-      detail.status:SetText(totals.crafts == 0 and "No retained uses. Recorded returns may outlive craft details." or
-        (totals.returnComplete and "Chart and recipe uses: retained craft details." or "Chart and recipe uses: partial retained details."))
+      detail.status:SetText(totals.crafts == 0 and "No crafts with ingredient quantities in this period." or
+        "Ingredient use from " .. UI.Number(totals.crafts) .. " crafts, " .. date("!%d %b %Y", series[1].bucketStart) ..
+        " to " .. date("!%d %b %Y", series[#series].bucketStart) .. "." ..
+        (row.hasPrunedReturns and " Older ingredient-use quantities are unavailable." or ""))
     end)
   end
+  function detail:Refresh(preserve)
+    if not self.item then return end
+    period:UpdateState(state)
+    characters:Update(UI.Choices("characters"), state.character)
+    professions:Update(UI.Choices("professions", state.character), state.profession)
+    local result = ArtisanLogbookAPI.GetReagentSummaries({ items = { self.item.id }, limit = 40,
+      time = period:Time(), character = state.character or nil, profession = state.profession or nil })
+    self:Render(result and result.reagents[1] or { item = self.item, professions = {} }, self:Filter(), preserve)
+    self.classification:SetItem(self.item.id)
+    self.loaded, self.dirty = true, false
+  end
+  function detail:Open(item)
+    if not self.item or self.item.id ~= item.id then
+      if self.item then
+        state.history = self.history:Save(); state.recipeOffset = recipes.scroll:GetVerticalScroll()
+        self.states[self.item.id] = state
+      end
+      self.item = item
+      state = self.states[item.id] or { days = false, character = false, profession = false }
+      tabs:Select(state.view or "Overview")
+      if state.history then self.history:Restore(state.history) end
+      self:Refresh(state.history ~= nil)
+      recipes.scroll:SetVerticalScroll(state.recipeOffset or 0)
+    elseif self.dirty or not self.loaded then self:Refresh(true) end
+  end
+  UI.RegisterTrivialCallback(function() if detail.item then detail.classification:SetItem(detail.item.id) end end)
   return detail
 end
 
-function UI.ReagentsPage(page, width, height, openRecipe)
+function UI.ReagentsPage(page, width, height, openReagent)
   UI.Section(page, "Reagents", 0, -2, width)
-  local profession, trivial, sort, search, character, days = false, "all", "name", "", false, false
-  local filterWidth = (width - 64) / 3
-  local periods = { { label = "All time", value = false } }
-  for _, entry in ipairs(UI.ranges) do periods[#periods + 1] = entry end
-  local period = UI.Selector(page, 0, -42, filterWidth, periods, function(value)
-    days = value; page:Refresh(true)
-  end, "Period")
-  local characters = UI.Selector(page, filterWidth + 32, -42, filterWidth, {}, function(value)
+  local profession, trivial, sort, search, character = false, "all", "name", "", false
+  local filters = UI.FilterBar(page, width, -42)
+  page.filters = filters
+  local period = filters:Period({ days = false }, function() page:Refresh(true) end, true)
+  local characters = filters:Select("Character", {}, function(value)
     character, profession = value, false; page:Refresh(true)
-  end, "Character")
-  local professions = UI.Selector(page, 2 * (filterWidth + 32), -42, filterWidth, {}, function(value)
-    profession = value; page:Refresh(true)
-  end, "Profession")
-  local trivialChoices = {
-    { label = "All", value = "all" }, { label = "Trivial", value = "trivial" },
-    { label = "Non-trivial", value = "non-trivial" },
-  }
-  local trivialFilter = UI.Selector(page, 0, -88, filterWidth, trivialChoices, function(value)
-    trivial = value; page:Refresh(true)
-  end, "Trivial state")
-  UI.Text(page, 2 * (filterWidth + 32), -88, filterWidth, 16, "GameFontNormalSmall"):SetText("Search")
-  local searchInput = CreateFrame("EditBox", nil, page, "InputBoxTemplate")
-  searchInput:SetPoint("TOPLEFT", 2 * (filterWidth + 32) + 4, -106)
-  searchInput:SetSize(filterWidth - 4, 24)
-  searchInput:SetAutoFocus(false)
-  searchInput:SetMaxLetters(120)
-  searchInput:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-  searchInput:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-  searchInput:SetScript("OnTextChanged", function(self)
-    page.pendingSearch = self:GetText()
-    page.searchDelay = .2
-    page:SetScript("OnUpdate", function(self, elapsed)
-      self.searchDelay = self.searchDelay - elapsed
-      if self.searchDelay <= 0 then self:SetScript("OnUpdate", nil); self:Refresh(true) end
-    end)
   end)
-  page.searchInput = searchInput
-  local sorts = UI.Selector(page, filterWidth + 32, -88, filterWidth, {
-    { label = "Name", value = "name" }, { label = "Most allocated", value = "allocated" },
+  local professions = filters:Select("Profession", {}, function(value)
+    profession = value; page:Refresh(true)
+  end)
+  local trivialChoices = {
+    { label = "All", value = "all" }, { label = "Ignored", value = "trivial" },
+    { label = "Included", value = "non-trivial" },
+  }
+  local trivialFilter = filters:Select("Savings statistics", trivialChoices, function(value)
+    trivial = value; page:Refresh(true)
+  end)
+  local sorts = filters:Select("Sort", {
+    { label = "Name", value = "name" }, { label = "Most used", value = "allocated" },
     { label = "Most returned", value = "returned" }, { label = "Recipe count", value = "recipes" },
-  }, function(value) sort = value; page:Refresh(true) end, "Sort")
+  }, function(value) sort = value; page:Refresh(true) end)
+  page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
   page.summary = {}
   for index, entry in ipairs({ { "Reagents", "INV_Misc_Herb_19" },
-      { "Allocated (retained)", "INV_Misc_Bag_10" }, { "Returned (recorded)", "Trade_Alchemy" } }) do
+      { "Used", "INV_Misc_Bag_10" }, { "Returned", "Trade_Alchemy" } }) do
     page.summary[index] = UI.Stat(page, entry[1], "Interface\\Icons\\" .. entry[2],
       (index - 1) * width / 3, -142, width / 3 - 12)
   end
-  local listWidth = math.floor(width * .55)
+  local listWidth = width
   local available = listWidth - 24
   local nameWidth = available * .40
   local list = UI.ScrollList(page, 0, -224, listWidth, height - 258, {
@@ -291,48 +334,29 @@ function UI.ReagentsPage(page, width, height, openRecipe)
         return cell
       end,
       update = function(cell, row)
-        updateReagentVisuals(cell, reagentDisplay(row.item.id))
+        UI.ReagentVisual(cell, row.item.id)
         cell.name:SetText(UI.Elide(UI.Name(row.item), math.max(3, math.floor((nameWidth - 34) / 7))))
         cell.identity:SetText("#" .. row.item.id .. (row.quality ~= nil and " | Quality " .. row.quality or ""))
       end },
-    { title = "Allocated", width = available * .23, value = function(row)
+    { title = "Used", width = available * .23, value = function(row)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
     end },
     { title = "Returned", width = available * .23, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end },
-    { title = "Trivial", width = available * .14, value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
-      create = function(parent, left)
-        local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-        check:SetPoint("TOPLEFT", left + 8, -2); check:SetSize(24, 24)
-        check:SetScript("OnClick", function(self) UI.SetTrivial(self.itemId, self:GetChecked() == true) end)
-        check:SetScript("OnEnter", function(self)
-          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-          GameTooltip:SetText("Trivial reagent #" .. self.itemId)
-          GameTooltip:AddLine("Excluded from non-trivial return statistics", 1, 1, 1)
-          GameTooltip:Show()
-        end)
-        check:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        return check
-      end,
-      update = function(check, row) check.itemId = row.item.id; check:SetChecked(UI.IsTrivial(row.item.id)) end },
-  }, function(row) page:SelectReagent(row) end, "No recorded reagents in this selection", true)
+    { title = "Savings stats", width = available * .14,
+      value = function(row) return UI.IsTrivial(row.item.id) and "Ignored" or "Included" end },
+  }, function(row) openReagent(row.item) end, "No reagents in this selection")
   page.catalogue = list
-  local detail = UI.ReagentDetail(page, width - listWidth - 16, height - 258, openRecipe)
-  detail:SetPoint("TOPLEFT", listWidth + 16, -224)
-  page.detail = detail
+  function filters.onLayout(filterHeight)
+    local top = 48 + filterHeight
+    for index, tile in ipairs(page.summary) do tile:ClearAllPoints(); tile:SetPoint("TOPLEFT", (index - 1) * width / 3, -top) end
+    list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -top - 82); list:SetViewportHeight(height - top - 82)
+  end
   function page:Filter()
     local filter = UI.Population(character, profession)
-    if days then
-      local from, to = UI.Range(GetServerTime(), days)
-      filter.time = { from = from, to = to }
-    end
+    filter.time = period:Time()
     return filter
-  end
-  function page:SelectReagent(row)
-    self.selectedItemId = row and row.item.id
-    list:SetSelection(self.selectedItemId)
-    detail:Open(row, self:Filter())
   end
   local function refreshMetadata(itemId, qualityOnly)
     local entry = reagentMetadata[itemId]
@@ -340,10 +364,9 @@ function UI.ReagentsPage(page, width, height, openRecipe)
     local icon, atlas = entry.icon, entry.qualityAtlas
     resolveReagentMetadata(itemId, entry, qualityOnly)
     if icon == entry.icon and atlas == entry.qualityAtlas then return end
-    for _, row in ipairs(list.rows) do
-      if row.item and row.item.item.id == itemId then updateReagentVisuals(row.widgets[1].widget, entry) end
+    for cell, id in pairs(reagentCells) do
+      if id == itemId then updateReagentVisuals(cell, entry) end
     end
-    if detail.row and detail.row.item.id == itemId then updateReagentVisuals(detail, entry) end
   end
   page:RegisterEvent("GET_ITEM_INFO_RECEIVED")
   page:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
@@ -356,25 +379,21 @@ function UI.ReagentsPage(page, width, height, openRecipe)
       end
     end
   end)
-  UI.Text(page, 0, -height + 26, width, 22):SetText("Allocated: retained craft facts. Returned: recorded totals.")
   local selectedItems, excludedItems
   UI.LazyList(list, function(cursor)
     local result, reason = ArtisanLogbookAPI.GetReagentSummaries({ profession = profession or nil,
       character = character or nil, time = page:Filter().time,
       search = search, sort = sort, items = selectedItems, excludeItems = excludedItems, limit = 40, cursor = cursor })
-    page.summary[1].value:SetText(result and tostring(result.totalCount) or "-")
+    page.summary[1]:SetNumber(result and result.totalCount, true)
     for index, metric in ipairs({ "allocatedQuantity", "returnedQuantity" }) do
       local totals = result and result.totals or {}
-      page.summary[index + 1].value:SetText(UI.Value(totals[metric]))
       local complete = index == 1 and totals.allocationComplete or index == 2 and totals.returnComplete
-      page.summary[index + 1].note:SetText(totals[metric] and not complete and "Partial details" or "")
+      page.summary[index + 1]:SetNumber(totals[metric], complete)
     end
     return result and result.reagents, result and result.nextCursor or reason
   end)
   function page:Refresh(reset, preserve)
-    self:SetScript("OnUpdate", nil)
-    if self.pendingSearch ~= nil then search = self.pendingSearch; self.pendingSearch = nil end
-    period:Update(periods, days)
+    period:UpdateState()
     characters:Update(UI.Choices("characters"), character)
     local availableProfessions = UI.Choices("professions", character)
     if not UI.HasChoice(availableProfessions, profession) then profession = false end
@@ -384,20 +403,10 @@ function UI.ReagentsPage(page, width, height, openRecipe)
     selectedItems = trivial == "trivial" and UI.TrivialItemIds() or nil
     excludedItems = trivial == "non-trivial" and UI.TrivialItemIds() or nil
     if reset or not self.loaded then list:Reload(preserve) end
-    local selected
-    for _, row in ipairs(list.items) do if row.item.id == self.selectedItemId then selected = row; break end end
-    if not selected and self.selectedItemId and
-        (trivial == "all" or (trivial == "trivial") == UI.IsTrivial(self.selectedItemId)) then
-      local result = ArtisanLogbookAPI.GetReagentSummaries({ profession = profession or nil,
-        character = character or nil, time = self:Filter().time, search = search,
-        items = { self.selectedItemId }, limit = 40 })
-      selected = result and result.reagents[1]
-    end
-    self:SelectReagent(selected or list.items[1])
     self.loaded, self.dirty = true, false
   end
   function page:Open()
-    if self.pendingSearch ~= nil then self:Refresh(true)
+    if self.searchInput:GetScript("OnUpdate") then self.searchInput:GetScript("OnEnterPressed")(self.searchInput)
     elseif not self.loaded or self.dirty then self:Refresh(true, true) end
   end
   UI.RegisterTrivialCallback(function()
