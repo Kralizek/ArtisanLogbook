@@ -93,8 +93,9 @@ function UI.Section(parent, title, x, y, width)
   label:SetText(title)
   local rule = parent:CreateTexture(nil, "ARTWORK")
   rule:SetColorTexture(.35, .27, .14, .3)
-  rule:SetPoint("TOPLEFT", x, y - 25)
-  rule:SetSize(width, 1)
+  rule:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -1)
+  rule:SetPoint("TOPRIGHT", label, "BOTTOMRIGHT", 0, -1)
+  rule:SetHeight(1)
   return label
 end
 
