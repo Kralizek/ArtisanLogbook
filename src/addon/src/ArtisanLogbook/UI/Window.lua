@@ -94,9 +94,9 @@ function addon.CreateProductionWindow()
         headingCount = headingCount + 1
         local heading = headings[headingCount] or UI.Text(navContent, 4, 0, sideWidth - 36, 20)
         headings[headingCount] = heading
-        heading:ClearAllPoints(); heading:SetPoint("TOPLEFT", 4, -offset - 10)
+        heading:ClearAllPoints(); heading:SetPoint("TOPLEFT", 4, -offset - 6)
         heading:SetText(entry.section); heading:SetTextColor(.65, .64, .58); heading:Show()
-        offset = offset + 34
+        offset = offset + 24
       else
         itemCount = itemCount + 1
         local item = self.navItems[itemCount] or UI.NavItem(navContent, sideWidth - 30,
@@ -111,7 +111,7 @@ function addon.CreateProductionWindow()
             (entry.identity.key or entry.identity.skillLineId or entry.identity.id)
         end
         item:Update(entry, selected); item:Show()
-        offset = offset + 30
+        offset = offset + 24
       end
     end
     navContent:SetHeight(math.max(navScroll:GetHeight(), offset + 8))
@@ -160,7 +160,7 @@ function addon.CreateProductionWindow()
     UI.PopulationPage(pages[name], name, inner, bodyHeight, navigate, openCraft)
   end
   UI.CataloguePage(pages.Recipes, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end)
-  UI.ReagentsPage(pages.Reagents, inner, bodyHeight)
+  UI.ReagentsPage(pages.Reagents, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end)
   UI.RecipePage(pages.Recipe, inner, bodyHeight, openCraft, function() window:RefreshSidebar() end)
   window.recipeDetailPage, window.recipeOutcomes = pages.Recipe, pages.Recipe.outcomes
   function window:OpenRecipe(recipe) self:Activate("Recipe", recipe) end

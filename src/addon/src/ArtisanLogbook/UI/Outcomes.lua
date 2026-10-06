@@ -167,13 +167,13 @@ end
 
 function UI.RecipeOutcomes(parent, width, onFilterChanged)
   local pane = CreateFrame("Frame", nil, parent)
-  pane:SetSize(width, 600)
-  pane:SetPoint("TOPLEFT", 0, -104)
+  pane:SetSize(width, 526)
+  pane:SetPoint("TOPLEFT", 0, -100)
   pane.views = {}
   for _, name in ipairs({ "Overview", "Statistics", "Reagents" }) do
     local view = CreateFrame("Frame", nil, pane)
     view:SetPoint("TOPLEFT", 0, -88)
-    view:SetSize(width, 510)
+    view:SetSize(width, 438)
     pane.views[name] = view
   end
   local overview, statistics, materials = pane.views.Overview, pane.views.Statistics, pane.views.Reagents
@@ -232,7 +232,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
   for position, entry in ipairs({ { "Crafts", 1 }, { "Multicraft", 2 }, { "Ingenuity", 4 } }) do
     local x = (position - 1) * width / 3
     UI.Text(statistics, x, 0, width / 3 - 16, 22, "GameFontNormal"):SetText(entry[1])
-    stats[entry[2]] = UI.Text(statistics, x, -28, width / 3 - 16, 90)
+    stats[entry[2]] = UI.Text(statistics, x, -28, width / 3 - 16, 60)
   end
   pane.stats = stats
   local chart = UI.Chart(overview, 0, 0, width)
@@ -242,18 +242,18 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
       { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
       { "Reagents returned", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } }) do
     pane.tiles[index] = UI.Stat(overview, entry[1], "Interface\\Icons\\" .. entry[2],
-      ((index - 1) % 3) * width / 3, -184 - math.floor((index - 1) / 3) * 102, width / 3 - 10)
+      ((index - 1) % 3) * width / 3, -174 - math.floor((index - 1) / 3) * 84, width / 3 - 10)
   end
   pane.returnWorker = CreateFrame("Frame", nil, pane)
-  UI.Section(statistics, "Resourcefulness", 0, -142, width)
+  UI.Section(statistics, "Resourcefulness", 0, -108, width)
   pane.resourcefulness = {}
   for position, entry in ipairs({ { "Reagents saved", "any" }, { "Non-trivial savings", "nonTrivial" } }) do
     local x = (position - 1) * width / 2
-    UI.Text(statistics, x, -184, width / 2 - 16, 20, "GameFontNormalSmall"):SetText(entry[1])
-    pane.resourcefulness[entry[2]] = UI.Text(statistics, x, -212, width / 2 - 16, 48)
+    UI.Text(statistics, x, -146, width / 2 - 16, 20, "GameFontNormalSmall"):SetText(entry[1])
+    pane.resourcefulness[entry[2]] = UI.Text(statistics, x, -174, width / 2 - 16, 48)
   end
-  pane.resourcefulness.complete = UI.Text(statistics, 0, -270, width, 34)
-  pane.returnQuantity = UI.Text(statistics, 0, -322, width, 48, "GameFontNormal")
+  pane.resourcefulness.complete = UI.Text(statistics, 0, -230, width, 34)
+  pane.returnQuantity = UI.Text(statistics, 0, -278, width, 48, "GameFontNormal")
   stats[3] = pane.resourcefulness.any
   UI.Section(materials, "Returned materials", 0, 0, width - 200)
   local materialRows, cursors, currentCursor, nextCursor = {}, {}, nil, nil

@@ -18,7 +18,7 @@ for _, name in ipairs({
   "SetStartPoint", "SetEndPoint", "SetWordWrap", "SetMaxLines",
   "SetFrameStrata", "RegisterForClicks", "ClearAllPoints", "SetTexture", "SetTexCoord",
   "LockHighlight", "UnlockHighlight", "SetToplevel", "Raise", "SetAtlas",
-  "SetTextColor", "AddMaskTexture", "SetScale",
+  "SetTextColor", "AddMaskTexture", "SetScale", "SetShadowOffset", "SetBlendMode",
 }) do
   methods[name] = function() end
 end
@@ -26,6 +26,8 @@ function methods:SetSize(width, height) self.width, self.height = width, height 
 function methods:SetWidth(width) self.width = width end
 function methods:SetTexture(texture) self.texture = texture end
 function methods:SetAtlas(atlas) self.atlas = atlas end
+function methods:SetAllPoints(relative) self.allPoints = relative or self.parent end
+function methods:SetColorTexture(...) self.color = { ... } end
 function methods:SetPoint(point, relative, relativePoint, x, y)
   if type(relative) == "number" then
     x, y, relative, relativePoint = relative, relativePoint, nil, nil
@@ -89,8 +91,13 @@ function methods:CreateFontString()
 end
 environment.CreateFrame = function(kind, name, parent, template)
   local frame = object()
-  frame.kind, frame.name, frame.parent = kind, name, parent
+  frame.kind, frame.name, frame.parent, frame.template = kind, name, parent, template
   if template == "BasicFrameTemplateWithInset" then frame.TitleText = object() end
+  if template == "TabSystemButtonArtTemplate" then
+    frame.Text = object()
+    frame.HandleRotation = function(self) self.rotated = self.isTabOnTop end
+    frame.SetTabSelected = function(self, selected) self.isSelected = selected end
+  end
   frames[#frames + 1] = frame
   return frame
 end
@@ -838,6 +845,11 @@ local uiAddon = loadUI()
 assert(not uiAddon.ledger and not uiAddon.recorder and not uiAddon.Ledger and not uiAddon.Trace)
 local uiWindow = uiAddon.productionWindow
 local UI = uiAddon.UI
+local paperProbe = environment.CreateFrame("Frame", nil, environment.UIParent)
+local paperSurface = UI.Surface(paperProbe, true)
+assert(paperSurface.color[4] == 1 and paperSurface.allPoints == paperProbe)
+assert(paperSurface.grain.allPoints == paperProbe)
+assert(paperSurface.grain.texture == "Interface\\AchievementFrame\\UI-Achievement-Parchment-Horizontal")
 assert(#UI.Pins() == 0)
 for index = 1, 5 do assert(UI.TogglePin({ id = index, name = "Recipe " .. (6 - index) })) end
 assert(UI.Pins()[1].id == 5 and UI.Pins()[5].id == 1)
@@ -993,6 +1005,12 @@ assert(uiWindow:IsShown())
 local overview = uiWindow.pages.Overview
 local chart = overview.chart
 assert(chart and chart.title.text == "Craft activity" and chart.total.text == "14 crafts")
+assert(#chart.axisLabels == 3 and chart.axisLabels[1].text == "0")
+assert(tonumber(chart.axisLabels[3].text) > 0 and #chart.dateLabels == 2)
+assert(chart.dateLabels[1]:IsShown() and chart.dateLabels[1].text ~= "")
+assert(uiWindow.pages.Recipe.tabs.Overview and uiWindow.navItems[1]:GetHeight() == 24)
+assert(uiWindow.pages.Recipe.tabs.Overview.template == "TabSystemButtonArtTemplate")
+assert(uiWindow.pages.Recipe.tabs.Overview.rotated)
 assert(not overview.history and not uiWindow.pages.Logbook.chart)
 uiWindow:Activate("Logbook")
 local logbook = uiWindow.pages.Logbook
@@ -1067,6 +1085,11 @@ end
 assert(not UI.IsPinned(502))
 assertRecipesSelected()
 assert(recipePage ~= recipes and visibleText("Apple Mix") and visibleText("Enchanting"))
+assert(recipePage.tabs[recipePage.activeView].selected)
+assert(recipePage.history.rows[1].cells[1].column.title == "Date")
+assert(recipePage.history.rows[1].cells[1].label.text ==
+  os.date("%d %b %y %H:%M", recipePage.history.items[1].timestamp))
+assert(recipePage.history.rows[1].cells[3].column.title == "Result")
 local recipeCraft = displayedRow(recipePage, function(item) return item.id == 13 end)
 assert(recipeCraft)
 recipeCraft.scripts.OnClick(recipeCraft)
@@ -1321,6 +1344,35 @@ do
   print("PASS character primary professions survive period/profession filters, state restoration and detail pruning")
 end
 
+  do
+    local core = reload(nil)
+    local ledger = core.ledger
+    for index = 1, 45 do
+      ledger:AddDimension("recipe", 9600 + index, { name = string.format("Recipe %02d", index) })
+      ledger:BeginCraft(9600 + index)
+      assert(ledger:RecordResult({ operationID = index }))
+    end
+    local ui = loadUI()
+    local window = ui.productionWindow
+    window:Show(); window:Activate("Recipes")
+    local page = window.pages.Recipes
+    assert(#page.catalogue.items == 40)
+    page.searchInput:SetText("Recipe 45")
+    page.searchInput.scripts.OnTextChanged(page.searchInput)
+    page.catalogue:LoadNext()
+    assert(#page.catalogue.items == 45)
+    page.scripts.OnUpdate(page, .3)
+    assert(#page.catalogue.items == 1 and page.catalogue.items[1].recipe.id == 9645)
+    window:Activate("Overview"); window:Activate("Recipes")
+    assert(page.searchInput:GetText() == "Recipe 45" and #page.catalogue.items == 1)
+    page.searchInput:SetText("")
+    page.searchInput.scripts.OnTextChanged(page.searchInput)
+    page.searchInput.scripts.OnEnterPressed(page.searchInput)
+    assert(#page.catalogue.items == 40 and not page.scripts.OnUpdate)
+    window:Hide()
+    print("PASS recipe search spans lazy pages and survives navigation")
+  end
+
 do
   local core = reload(nil)
   local ledger, api = core.ledger, environment.ArtisanLogbookAPI
@@ -1442,6 +1494,78 @@ do
   api.GetReagentSummaries = summaries
   window:Hide()
   print("PASS Reagents navigation, global filters/sorts, quality identities, shared preferences and scroll restoration")
+end
+
+do
+  local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  ledger:AddDimension("recipe", 9751, { name = "Test potion" })
+  ledger:AddDimension("item", 4501, { name = "First herb" })
+  ledger:AddDimension("item", 4502, { name = "Second herb" })
+  for index = 1, 101 do
+    ledger:SubmitCraft(9751, 1, false, nil, {
+      { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 4501 } },
+    })
+    assert(ledger:RecordResult({ operationID = index,
+      resourcesReturned = { { reagent = { itemID = 4501 }, quantity = 2 } } }))
+  end
+  ledger:SubmitCraft(9751, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 4502 } },
+  })
+  assert(ledger:RecordResult({ operationID = 102 }))
+  local ui = loadUI()
+  local window = ui.productionWindow
+  window:Show(); window:Activate("Reagents")
+  local page, detail = window.pages.Reagents, window.pages.Reagents.detail
+  local crafts, calls = api.GetCrafts, 0
+  api.GetCrafts = function(filter, options)
+    assert(options.limit == 100 or options.limit == 40)
+    if options.limit == 100 then calls = calls + 1 end
+    return crafts(filter, options)
+  end
+  assert(page.selectedItemId == 4501 and page.catalogue.rows[1].selection:IsShown())
+  assert(page.summary[1].value.text == "2" and page.summary[2].value.text == "508")
+  detail.worker.scripts.OnUpdate(detail.worker)
+  assert(calls == 1 and detail.worker.scripts.OnUpdate and detail.fields.crafts.text == "-")
+  detail.worker.scripts.OnUpdate(detail.worker)
+  assert(calls == 2 and not detail.worker.scripts.OnUpdate)
+  assert(detail.totals.crafts == 101 and detail.fields.rate.text == "40.0%")
+  assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
+  assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
+  assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
+  assert(detail.chart.bars[1].tooltip:find("Allocated (recorded): 505", 1, true))
+  detail:SelectView("Used in Recipes")
+  assert(detail.tabs["Used in Recipes"].selected and detail.recipes:IsShown())
+  detail.recipes.rows[1].scripts.OnClick(detail.recipes.rows[1])
+  assert(window.activeTab == "Recipe" and window.identity.id == 9751)
+  window:Activate("Reagents")
+  assert(page.selectedItemId == 4501 and detail.activeView == "Used in Recipes")
+  page.catalogue.rows[2].scripts.OnClick(page.catalogue.rows[2])
+  detail:SelectView("Overview")
+  while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
+  assert(page.selectedItemId == 4502 and detail.totals.crafts == 1)
+  assert(detail.fields.rate.text == "-" and detail.fields.returned.text == "Unknown")
+  assert(not detail.chart.bars[1].returned:IsShown())
+  assert(detail.chart.bars[1].tooltip:find("Returned (recorded): Unknown", 1, true))
+  page.catalogue.rows[1].scripts.OnClick(page.catalogue.rows[1])
+  detail.worker.scripts.OnUpdate(detail.worker)
+  page.catalogue.rows[2].scripts.OnClick(page.catalogue.rows[2])
+  while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
+  assert(detail.row.item.id == 4502 and detail.totals.crafts == 1)
+  dropdown(page, "Today"):Choose(1)
+  while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
+  assert(page:Filter().time.to - page:Filter().time.from == 86400)
+  dropdown(page, "All time"):Choose(false)
+  page:SelectReagent(page.catalogue.items[1])
+  ledger:Prune(ledger.wall() + 61 * 86400)
+  page:Refresh(true)
+  while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
+  assert(detail.fields.crafts.text == "0" and detail.fields.returned.text:find("202", 1, true))
+  assert(detail.fields.allocated.text == "Unknown" and detail.fields.rate.text == "-")
+  assert(#detail.recipes.items == 0 and detail.chart.empty:IsShown())
+  api.GetCrafts = crafts
+  window:Hide()
+  print("PASS reagent detail bounded work, selection, native tabs, quantities, partial rates and pruning")
 end
 
 do

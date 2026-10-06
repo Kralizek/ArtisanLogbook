@@ -431,10 +431,10 @@ The production Recipes catalogue uses one read-only factual query:
 ```lua
 local page, reason = ArtisanLogbookAPI.GetRecipeSummaries({
   limit = 40, cursor = nil, character = characterKey,
-  profession = 171, sort = "count",
+  profession = 171, sort = "count", search = "potion",
 })
 -- { recipes = { { recipe = recipe, profession = profession, craftCount = 12 } },
---   nextCursor = "40" }
+--   nextCursor = "opaque cursor" }
 ```
 
 This catalogue includes recipes with a known WoW recipe ID and at least one
@@ -446,13 +446,15 @@ Unnamed recipes display as `Recipe #<ID>`. `sort = "name"` (the default) is
 case-insensitive by display name with ID as a tie-breaker; `sort = "count"`
 orders most-crafted first, using name and ID to break ties. `sort = "profession"`
 orders by case-insensitive profession name (missing names use `Unknown`), then
-recipe name and ID. Sorting applies before pagination. Recipe and
+recipe name and ID. Optional `search` is a literal case-insensitive substring of
+the display name, applied before sorting and pagination. Recipe and
 profession are detached domain projections.
 
 The default page size is 50, maximum 200. Only `limit`, `cursor`, `character`,
-`profession`, and `sort` are accepted; invalid options return
-`"invalid-options"`. The cursor is a positive offset in the current selected
-order; malformed/out-of-range cursors
+`profession`, `sort`, and `search` are accepted; invalid options return
+`"invalid-options"`. Without search the cursor retains its positive-offset
+format. Nonempty search uses an opaque cursor bound to the search, character,
+profession and sort; do not construct cursors. Malformed/out-of-range cursors
 return `"invalid-cursor"`. No cursor means the first page; an empty catalogue
 returns `{ recipes = {} }` without a cursor. This is not a snapshot: new recipes
 or metadata enrichment can change ordering between pages, so restart at page one
@@ -471,6 +473,7 @@ storage, inventory queries, valuation, external dependencies, or UI preferences.
 ```lua
 local page, reason = ArtisanLogbookAPI.GetReagentSummaries({
   profession = 171, search = "bloom", sort = "allocated", limit = 40,
+  character = characterKey, time = { from = utcDayStart, to = nextUtcDayStart },
   cursor = nil, items = nil, excludeItems = nil,
 })
 -- {
@@ -486,6 +489,8 @@ local page, reason = ArtisanLogbookAPI.GetReagentSummaries({
 --     },
 --   },
 --   totalCount = 45, nextCursor = "opaque cursor",
+--   totals = { allocatedQuantity = 120, returnedQuantity = 30,
+--     allocationComplete = false, returnComplete = true },
 -- }
 ```
 
@@ -497,6 +502,12 @@ item-quality metadata; the query does not call live inventory or trade APIs.
 
 Options:
 
+- `character`: optional opaque character key. Unknown characters yield no rows.
+- `time`: optional half-open `{ from, to }` UTC bounds, each aligned to a whole
+  UTC day because durable returns are daily facts. Missing bounds are unbounded.
+  Reversed, nonfinite, or non-day-aligned bounds return `invalid-options`.
+  Character/time filters apply to retained allocations, durable returns and
+  completeness evidence together.
 - `profession`: optional nonnegative skill-line ID. Selects facts associated with
   that recorded profession, so quantities and recipe counts are scoped too.
   Unknown professions yield no rows. Unattributed facts only appear unfiltered.
@@ -524,6 +535,12 @@ distinct known recipe IDs associated with the reagent through retained facts or
 durable positive returns; no association is inferred from names, output items,
 or recipe schematics. Unknown recipe attribution does not increment it.
 `professions` lists the matching recorded associations, sorted by skill-line ID.
+
+`totals` sums known allocated/returned quantities over the **entire filtered
+selection**, not only this page. No known amount stays absent. Completeness
+flags require every included row to meet the corresponding coverage rule. These
+totals retain their different storage scopes and do not establish a shared
+denominator for a return percentage. Quantity overflow returns `quantity-overflow`.
 
 Quantity/coverage semantics:
 

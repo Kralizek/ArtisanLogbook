@@ -2,7 +2,7 @@ local _, addon = ...
 local UI = addon.UI
 
 function UI.RecipePage(page, width, height, openCraft, pinsChanged)
-  local content, scroll = UI.PageScroll(page, width, height, 710)
+  local content, scroll = UI.PageScroll(page, width, height, 626)
   width = width - 28
   page.content, page.scroll, page.states = content, scroll, {}
   local heading = UI.Text(content, 42, -4, width - 174, 26, "GameFontNormalLarge")
@@ -19,7 +19,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged)
   local history
   local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end)
   page.outcomes = outcomes
-  history = UI.ScrollList(outcomes, 0, -88, width, math.max(280, height - 210), UI.HistoryColumns(width),
+  history = UI.ScrollList(outcomes, 0, -88, width, math.max(280, height - 210), UI.RecipeHistoryColumns(width),
     function(craft) openCraft(craft.id) end, "No retained crafts in this period")
   outcomes.views["Craft History"] = history
   page.history = history
@@ -29,13 +29,14 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged)
     self.activeView = name
     outcomes:SelectView(name)
     for title, button in pairs(buttons) do
-      if title == name then button:LockHighlight() else button:UnlockHighlight() end
+      button:Select(title == name)
     end
     scroll:SetVerticalScroll(offsets[name] or 0)
   end
   for index, name in ipairs({ "Overview", "Craft History", "Statistics", "Reagents" }) do
-    buttons[name] = UI.Button(content, name, (index - 1) * 128, -66, 122, function() page:SelectView(name) end)
+    buttons[name] = UI.Tab(content, name, (index - 1) * 124, -62, 120, function() page:SelectView(name) end)
   end
+  page.tabs = buttons
   UI.LazyList(history, function(cursor)
     local filter = outcomes:Filter()
     filter.recipes = { page.recipe.id }

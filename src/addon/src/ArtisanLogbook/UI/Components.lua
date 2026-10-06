@@ -9,8 +9,11 @@ function UI.Surface(parent, parchment)
   local texture = parent:CreateTexture(nil, "BACKGROUND")
   texture:SetAllPoints(parent)
   if parchment then
-    texture:SetTexture("Interface\\QuestFrame\\QuestBG")
-    texture:SetTexCoord(0, .585, 0, .9)
+    texture:SetColorTexture(.86, .76, .56, 1)
+    local grain = parent:CreateTexture(nil, "BORDER")
+    grain:SetAllPoints(parent)
+    grain:SetTexture("Interface\\AchievementFrame\\UI-Achievement-Parchment-Horizontal")
+    texture.grain = grain
   else
     texture:SetColorTexture(.075, .075, .07, 1)
   end
@@ -18,7 +21,7 @@ function UI.Surface(parent, parchment)
 end
 
 function UI.Section(parent, title, x, y, width)
-  local label = UI.Text(parent, x, y, width, 24, "GameFontNormal")
+  local label = UI.Text(parent, x, y, width, 24, "QuestTitleFont")
   label:SetText(title)
   local rule = parent:CreateTexture(nil, "ARTWORK")
   rule:SetColorTexture(.35, .27, .14, .3)
@@ -29,15 +32,16 @@ end
 
 function UI.NavItem(parent, width, action)
   local button = CreateFrame("Button", nil, parent)
-  button:SetSize(width, 30)
+  button:SetSize(width, 24)
   button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   button.selection = button:CreateTexture(nil, "BACKGROUND")
   button.selection:SetAllPoints(button)
-  button.selection:SetColorTexture(.55, .38, .08, .45)
+  button.selection:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+  button.selection:SetBlendMode("ADD")
   button.icon = button:CreateTexture(nil, "ARTWORK")
-  button.icon:SetSize(18, 18)
-  button.icon:SetPoint("TOPLEFT", 6, -6)
-  button.label = UI.Text(button, 30, -7, width - 36, 20)
+  button.icon:SetSize(16, 16)
+  button.icon:SetPoint("TOPLEFT", 6, -4)
+  button.label = UI.Text(button, 28, -4, width - 34, 18)
   button.label:SetWordWrap(false)
   button:SetScript("OnClick", function(self) action(self.entry) end)
   button:SetScript("OnEnter", function(self)
@@ -118,7 +122,10 @@ function UI.Text(parent, x, y, width, height, font)
   label:SetSize(width, height)
   label:SetJustifyH("LEFT")
   label:SetJustifyV("TOP")
-  if UI.IsParchment(parent) then label:SetTextColor(unpack(UI.ink)) end
+  if UI.IsParchment(parent) then
+    label:SetTextColor(unpack(UI.ink))
+    label:SetShadowOffset(0, 0)
+  end
   return label
 end
 
@@ -236,6 +243,21 @@ function UI.LazyList(list, fetch)
   return list
 end
 
+function UI.RecipeHistoryColumns(width)
+  local available = width - 24
+  return {
+    { title = "Date", width = available * .22, value = function(row) return date("%d %b %y %H:%M", row.timestamp) end },
+    { title = "Character", width = available * .16, value = function(row) return UI.Name(row.character) end,
+      color = function(row) return UI.ClassColor(row.character and row.character.classFile) end },
+    { title = "Result", width = available * .22, value = function(row) return UI.Name(row.outputItem) end,
+      icon = function(row) return row.outputItem and type(GetItemIcon) == "function" and GetItemIcon(row.outputItem.id) end },
+    { title = "Qty", width = available * .06, value = function(row) return UI.Value(row.outputQuantity) end },
+    { title = "Quality", width = available * .09, value = function(row) return UI.Value(row.outputQuality) end },
+    { title = "Conc.", width = available * .09, value = function(row) return UI.Value(row.concentrationSpent) end },
+    { title = "Extras", width = available * .16, activity = true, extrasOnly = true },
+  }
+end
+
 function UI.PageScroll(parent, width, height, contentHeight)
   local scroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 0, 0)
@@ -253,6 +275,28 @@ function UI.Button(parent, title, x, y, width, action)
   button:SetText(title)
   button:SetScript("OnClick", action)
   return button
+end
+
+function UI.Tab(parent, title, x, y, width, action)
+  local tab = CreateFrame("Button", nil, parent, "TabSystemButtonArtTemplate")
+  tab.isTabOnTop = true
+  tab:HandleRotation()
+  tab:SetSize(width, 28)
+  tab:SetPoint("TOPLEFT", x, y)
+  tab:SetText(title)
+  tab.Text:SetWidth(width - 12)
+  tab.Text:SetWordWrap(false)
+  tab:SetScript("OnClick", action)
+  tab:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(title); GameTooltip:Show()
+  end)
+  tab:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  function tab:Select(selected)
+    self.selected = selected
+    self:SetTabSelected(selected)
+  end
+  tab:Select(false)
+  return tab
 end
 
 function UI.Elide(value, maxCharacters)
@@ -353,22 +397,22 @@ function UI.QualityAtlas(recipeID, quality, maxQuality)
   end
 end
 
-function UI.Activity(craft)
+function UI.Activity(craft, extrasOnly)
   local indicators = {}
   local function add(icon, text, tooltip, atlas)
     indicators[#indicators + 1] = { icon = icon, text = text or "", tooltip = tooltip, atlas = atlas }
   end
   local recipe = craft.recipe
   local atlas = UI.QualityAtlas(recipe and recipe.id, craft.outputQuality, recipe and recipe.maxQuality)
-  if atlas then add(nil, "", "Crafting quality " .. craft.outputQuality .. " of " .. recipe.maxQuality, atlas) end
+  if atlas and not extrasOnly then add(nil, "", "Crafting quality " .. craft.outputQuality .. " of " .. recipe.maxQuality, atlas) end
   local output = UI.CraftOutput(craft)
-  if output ~= "" then
+  if output ~= "" and not extrasOnly then
     local item = craft.outputItem
     local icon = item and item.id and type(GetItemIcon) == "function" and GetItemIcon(item.id)
     add(icon or "Interface\\Icons\\INV_Misc_QuestionMark", "",
       "Output: " .. output .. " (" .. UI.Value(craft.outputQuantity) .. " total)")
   end
-  if craft.concentrationSpent and craft.concentrationSpent > 0 then
+  if not extrasOnly and craft.concentrationSpent and craft.concentrationSpent > 0 then
     add("Interface\\Icons\\Spell_Arcane_Arcane01", tostring(craft.concentrationSpent),
       "Concentration: " .. craft.concentrationSpent .. " spent")
   end
@@ -397,11 +441,18 @@ function UI.Activity(craft)
   return indicators
 end
 
-function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessage)
+function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessage, dark)
   local frame = CreateFrame("Frame", nil, parent)
   frame:SetSize(width, height)
   frame:SetPoint("TOPLEFT", x, y)
+  if dark then UI.Surface(frame, false) end
   frame.rows, frame.items = {}, {}
+  function frame:SetSelection(itemId)
+    self.selectedItemId = itemId
+    for _, row in ipairs(self.rows) do
+      row.selection:SetShown(row.item and row.item.item and row.item.item.id == itemId or false)
+    end
+  end
   local header = frame:CreateTexture(nil, "BACKGROUND")
   header:SetPoint("TOPLEFT", 0, 0)
   header:SetSize(width - 24, 24)
@@ -453,6 +504,10 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         row:SetSize(width - 24, 28)
         row:SetPoint("TOPLEFT", 0, -(index - 1) * 30)
         row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        row.selection = row:CreateTexture(nil, "BACKGROUND")
+        row.selection:SetAllPoints(row)
+        row.selection:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+        row.selection:SetBlendMode("ADD")
         local rule = row:CreateTexture(nil, "BACKGROUND")
         rule:SetPoint("BOTTOMLEFT", 0, 0); rule:SetSize(width - 24, 1)
         rule:SetColorTexture(.45, .34, .18, .16)
@@ -463,6 +518,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
             row.widgets[#row.widgets + 1] = { widget = column.create(row, left), column = column }
           elseif column.activity then
             row.activity = CreateFrame("Frame", nil, row)
+            row.activity.extrasOnly = column.extrasOnly
             row.activity:SetSize(column.width - 4, 24)
             row.activity:SetPoint("TOPLEFT", left + 2, -2)
           else
@@ -490,7 +546,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
             end
           end
           if self.activity then
-            for _, indicator in ipairs(UI.Activity(self.item)) do
+            for _, indicator in ipairs(UI.Activity(self.item, self.activity.extrasOnly)) do
               GameTooltip:AddLine(indicator.tooltip, 1, 1, 1)
             end
           end
@@ -500,6 +556,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         self.rows[index] = row
       end
       row.item = item
+      row.selection:SetShown(item.item and item.item.id == self.selectedItemId or false)
       for _, cell in ipairs(row.widgets) do cell.column.update(cell.widget, item) end
       for _, cell in ipairs(row.cells) do
         local text = cell.column.value(item)
@@ -516,7 +573,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         for _, indicator in ipairs(row.indicators or {}) do indicator:Hide() end
         row.indicators = row.indicators or {}
         local left = 0
-        local indicators, desired = UI.Activity(item), 0
+        local indicators, desired = UI.Activity(item, row.activity.extrasOnly), 0
         for _, indicator in ipairs(indicators) do desired = desired + (indicator.text ~= "" and 50 or 26) end
         local compact = desired > row.activity:GetWidth()
         for indicatorIndex, indicator in ipairs(indicators) do
@@ -562,45 +619,68 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   return frame
 end
 
-function UI.Chart(parent, x, y, width)
+function UI.Chart(parent, x, y, width, quantities)
   local chart = CreateFrame("Frame", nil, parent)
   chart:SetSize(width, 168)
   chart:SetPoint("TOPLEFT", x, y)
   chart.title = UI.Text(chart, 14, -10, width - 170, 22, "GameFontNormal")
-  chart.title:SetText("Craft activity")
+  chart.title:SetText(quantities and "Retained quantities" or "Craft activity")
+  if quantities then chart.title:SetWidth(width - 28) end
   chart.total = UI.Text(chart, width - 152, -10, 136, 22, "GameFontHighlightSmall")
   chart.total:SetJustifyH("RIGHT")
   chart.plot = CreateFrame("Frame", nil, chart)
-  chart.plot:SetSize(width - 32, 100)
-  chart.plot:SetPoint("TOPLEFT", 16, -36)
-  chart.start = UI.Text(chart, 16, -140, 110, 20)
+  chart.plot:SetSize(width - 64, 100)
+  chart.plot:SetPoint("TOPLEFT", 46, -36)
+  chart.start = UI.Text(chart, 46, -140, 100, 20)
   chart.finish = UI.Text(chart, width - 126, -140, 110, 20)
   chart.finish:SetJustifyH("RIGHT")
   chart.empty = UI.Text(chart, 16, -80, width - 32, 24)
-  chart.empty:SetText("No crafts in this period")
+  chart.empty:SetText(quantities and "No retained quantities" or "No crafts in this period")
   chart.empty:SetJustifyH("CENTER")
-  chart.bars = {}
-  local baseline = chart.plot:CreateTexture(nil, "BACKGROUND")
-  baseline:SetColorTexture(.35, .27, .14, .4)
-  baseline:SetPoint("BOTTOMLEFT", 0, 0); baseline:SetSize(width - 32, 1)
+  chart.bars, chart.axisLabels, chart.dateLabels = {}, {}, {}
+  for index = 0, 2 do
+    local line = chart.plot:CreateTexture(nil, "BACKGROUND")
+    line:SetColorTexture(.35, .27, .14, .25)
+    line:SetPoint("BOTTOMLEFT", 0, index * 47); line:SetSize(width - 64, 1)
+    local label = UI.Text(chart, 0, -130 + index * 47, 38, 16)
+    label:SetJustifyH("RIGHT")
+    chart.axisLabels[index + 1] = label
+  end
+  for index = 1, 2 do
+    local label = UI.Text(chart, 46 + (width - 64) * index / 3 - 40, -140, 80, 20)
+    label:SetJustifyH("CENTER")
+    chart.dateLabels[index] = label
+  end
 
   function chart:Render(series, from, to, bucketSeconds)
     bucketSeconds = bucketSeconds or 86400
     bucketSeconds = math.max(bucketSeconds, math.ceil((to - from) / 86400 / 60) * 86400)
-    local daily, total, peak = {}, 0, 0
+    local daily, returned, total, peak = {}, {}, 0, 0
     for _, row in ipairs(series or {}) do
       local bucket = from + math.floor((row.bucketStart - from) / bucketSeconds) * bucketSeconds
-      daily[bucket] = (daily[bucket] or 0) + row.craftCount
-      total = total + row.craftCount
+      local value = quantities and row.allocatedQuantity or (not quantities and row.craftCount or nil)
+      if value ~= nil then daily[bucket] = (daily[bucket] or 0) + value; total = total + value end
+      if quantities and row.returnedQuantity ~= nil then
+        returned[bucket] = (returned[bucket] or 0) + row.returnedQuantity
+        total = total + row.returnedQuantity
+      end
     end
     local days = math.max(1, math.ceil((to - from) / bucketSeconds))
-    for day = 0, days - 1 do peak = math.max(peak, daily[from + day * bucketSeconds] or 0) end
-    self.total:SetText(string.format("%d crafts", total))
+    for day = 0, days - 1 do
+      peak = math.max(peak, daily[from + day * bucketSeconds] or 0, returned[from + day * bucketSeconds] or 0)
+    end
+    self.total:SetText(quantities and "" or string.format("%d crafts", total))
     self.empty:SetShown(total == 0)
-    self.start:SetText(date("!%d %b %Y", from))
-    self.finish:SetText(date("!%d %b %Y", to - 86400))
-    for _, bar in ipairs(self.bars) do bar:Hide() end
-    local barWidth = (width - 32) / days
+    self.start:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", from))
+    self.finish:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", to - 86400))
+    local maximum = math.max(2, math.ceil(peak / 2) * 2)
+    for index, label in ipairs(self.axisLabels) do label:SetText(tostring((index - 1) * maximum / 2)) end
+    for index, label in ipairs(self.dateLabels) do
+      label:SetText(date("!%d %b", from + math.floor((days - 1) * index / 3) * bucketSeconds))
+      label:SetShown(days >= 4 and width >= 400)
+    end
+    for _, bar in ipairs(self.bars) do bar:Hide(); if bar.returned then bar.returned:Hide() end end
+    local barWidth = (width - 64) / days
     for day = 0, days - 1 do
       local count = daily[from + day * bucketSeconds] or 0
       local bar = self.bars[day + 1]
@@ -609,6 +689,18 @@ function UI.Chart(parent, x, y, width)
         bar.texture = bar:CreateTexture(nil, "ARTWORK")
         bar.texture:SetAllPoints(bar)
         bar.texture:SetColorTexture(.17, .43, .29, .9)
+        if quantities then
+          bar.texture:SetColorTexture(.12, .42, .68, .9)
+          bar.returned = CreateFrame("Frame", nil, self.plot)
+          bar.returned.texture = bar.returned:CreateTexture(nil, "ARTWORK")
+          bar.returned.texture:SetAllPoints(bar.returned)
+          bar.returned.texture:SetColorTexture(.17, .43, .29, .9)
+          bar.returned:EnableMouse(true)
+          bar.returned:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.tooltip); GameTooltip:Show()
+          end)
+          bar.returned:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        end
         bar:EnableMouse(true)
         bar:SetScript("OnEnter", function(self)
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.tooltip); GameTooltip:Show()
@@ -617,8 +709,18 @@ function UI.Chart(parent, x, y, width)
         self.bars[day + 1] = bar
       end
       bar:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", day * barWidth, 0)
-      bar:SetSize(math.max(2, barWidth - 3), math.max(1, count * 94 / math.max(1, peak)))
+      bar:SetSize(math.max(1, (quantities and barWidth / 2 or barWidth) - 2), math.max(1, count * 94 / maximum))
       bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) .. ": " .. count .. " crafts"
+      if quantities then
+        local amount = returned[from + day * bucketSeconds]
+        bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
+          "\nAllocated (recorded): " .. UI.Value(daily[from + day * bucketSeconds]) ..
+          "\nReturned (recorded): " .. UI.Value(amount)
+        bar.returned.tooltip = bar.tooltip
+        bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", day * barWidth + barWidth / 2, 0)
+        bar.returned:SetSize(math.max(1, barWidth / 2 - 2), math.max(1, (amount or 0) * 94 / maximum))
+        bar.returned:SetShown(amount ~= nil and amount > 0)
+      end
       if bucketSeconds > 86400 then bar.tooltip = bar.tooltip .. " / " .. (bucketSeconds / 86400) .. " days" end
       bar:SetShown(count > 0)
     end

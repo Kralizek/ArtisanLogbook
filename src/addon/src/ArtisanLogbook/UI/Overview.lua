@@ -62,11 +62,12 @@ end
 function UI.Stat(parent, title, icon, x, y, width)
   local tile = CreateFrame("Frame", nil, parent)
   tile:SetPoint("TOPLEFT", x, y)
-  tile:SetSize(width, 88)
+  tile:SetSize(width, 78)
   local texture = tile:CreateTexture(nil, "ARTWORK")
   texture:SetSize(24, 24)
   texture:SetPoint("TOPLEFT", 0, -8)
   texture:SetTexture(icon)
+  tile.icon = texture
   UI.Text(tile, 32, -6, width - 38, 18, "GameFontNormalSmall"):SetText(title)
   tile.value = UI.Text(tile, 32, -28, width - 38, 22, "GameFontNormalLarge")
   tile.note = UI.Text(tile, 32, -52, width - 38, 34)
@@ -75,7 +76,7 @@ end
 
 function UI.ProductionSummary(parent, width, y)
   local summary = CreateFrame("Frame", nil, parent)
-  summary:SetSize(width, 186)
+  summary:SetSize(width, 166)
   summary:SetPoint("TOPLEFT", 0, y)
   local entries = {
     { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
@@ -86,7 +87,7 @@ function UI.ProductionSummary(parent, width, y)
   local column = width / 3
   for index, entry in ipairs(entries) do
     summary.tiles[index] = UI.Stat(summary, entry[1], "Interface\\Icons\\" .. entry[2],
-      ((index - 1) % 3) * column, -math.floor((index - 1) / 3) * 94, column - 10)
+      ((index - 1) % 3) * column, -math.floor((index - 1) / 3) * 84, column - 10)
   end
   function summary:Render(series, filter)
     local totals, recipes = UI.Aggregate(series)
@@ -101,6 +102,7 @@ function UI.ProductionSummary(parent, width, y)
     local share = UI.MeasuredShare(totals, "multicraftBonus", "outputQuantity")
     if share ~= "Unknown" then self.tiles[4].note:SetText(share .. " of total output") end
     local top = recipes[1]
+    self.tiles[6].icon:SetTexture(UI.RecipeIcon(top and top.recipe))
     self.tiles[6].value:SetText(top and UI.Elide(UI.Name(top.recipe), math.floor((column - 38) / 10)) or "-")
     self.tiles[6].note:SetText(top and (top.craftCount .. " crafts") or "No crafts in this period")
     self.tiles[6]:EnableMouse(true)
@@ -123,7 +125,7 @@ end
 function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   local content, scroll = page, nil
   if kind ~= "Logbook" then
-    content, scroll = UI.PageScroll(page, width, height, kind == "Overview" and 492 or 790)
+    content, scroll = UI.PageScroll(page, width, height, kind == "Overview" and 436 or 652)
     width = width - 28
   end
   page.content, page.scroll, page.states = content, scroll, {}
@@ -159,31 +161,31 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     return filter
   end
   if kind ~= "Logbook" then
-    page.chart = UI.Chart(content, 0, -112, width)
-    page.summary = UI.ProductionSummary(content, width, -292)
+    page.chart = UI.Chart(content, 0, -94, width)
+    page.summary = UI.ProductionSummary(content, width, -268)
   end
   if kind == "Character" or kind == "Profession" then
     local rankedWidth = kind == "Character" and width * .54 or width
-    UI.Section(content, "Most-crafted recipes", kind == "Character" and width * .46 or 0, -490, rankedWidth)
-    page.topRecipes = UI.ScrollList(content, kind == "Character" and width * .46 or 0, -523, rankedWidth, 218, {
+    UI.Section(content, "Most-crafted recipes", kind == "Character" and width * .46 or 0, -446, rankedWidth)
+    page.topRecipes = UI.ScrollList(content, kind == "Character" and width * .46 or 0, -478, rankedWidth, 174, {
       { title = "Recipe", width = (rankedWidth - 24) * .78, value = function(row) return UI.Name(row.recipe) end,
         icon = function(row) return UI.RecipeIcon(row.recipe) end },
       { title = "Crafts", width = (rankedWidth - 24) * .22, value = function(row) return tostring(row.craftCount) end },
     }, function(row) if row.recipe then navigate("Recipe", row.recipe) end end, "No recipes in this period")
     if kind == "Character" then
-      UI.Section(content, "Recorded primary professions", 0, -490, width * .43)
+      UI.Section(content, "Recorded primary professions", 0, -446, width * .43)
       page.professionSlots = {}
       for index = 1, 2 do
         local slot = UI.NavItem(content, width * .43, function(entry)
           if entry.details then navigate("Profession", entry.details) end
         end)
-        slot:SetPoint("TOPLEFT", 0, -535 - (index - 1) * 76)
+        slot:SetPoint("TOPLEFT", 0, -486 - (index - 1) * 40)
         page.professionSlots[index] = slot
       end
     else
-      content:SetHeight(math.max(height, 1050))
-      UI.Section(content, "Recent crafts", 0, -768, width)
-      page.history = UI.ScrollList(content, 0, -804, width, 230, UI.HistoryColumns(width),
+      content:SetHeight(math.max(height, 930))
+      UI.Section(content, "Recent crafts", 0, -668, width)
+      page.history = UI.ScrollList(content, 0, -700, width, 230, UI.HistoryColumns(width),
         function(craft) openCraft(craft.id) end, "No retained crafts in this period")
     end
   elseif kind == "Logbook" then
