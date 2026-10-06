@@ -102,7 +102,8 @@ function addon.CreateProductionWindow()
           function(selected) self:Activate(selected.page, selected.identity) end)
         self.navItems[itemCount] = item
         item:ClearAllPoints(); item:SetPoint("TOPLEFT", 0, -offset)
-        local selected = self.activeTab == entry.page
+        local selected = self.activeTab == entry.page or
+          (self.activeTab == "Recipe" and entry.page == "Recipes")
         if selected and entry.identity then
           local current = self.identity
           selected = current and (current.key or current.skillLineId or current.id) ==

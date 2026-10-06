@@ -3,7 +3,7 @@ local UI = addon.UI
 
 function UI.Aggregate(series)
   local totals = { craftCount = 0 }
-  local recipes, professions = {}, {}
+  local recipes = {}
   local metrics = { "outputQuantity", "concentrationSpent", "multicraftBonus", "ingenuityRefund" }
   for _, metric in ipairs(metrics) do totals[metric], totals[metric .. "ObservedCount"] = 0, 0 end
   for _, row in ipairs(series) do
@@ -16,27 +16,15 @@ function UI.Aggregate(series)
     local recipe = recipes[id] or { recipe = row.recipe, craftCount = 0, id = id }
     recipe.craftCount = recipe.craftCount + row.craftCount
     recipes[id] = recipe
-    local professionId = row.profession and row.profession.skillLineId
-    if UI.professionIcons[professionId] then
-      local profession = professions[professionId] or { details = row.profession, craftCount = 0, latest = 0 }
-      profession.craftCount = profession.craftCount + row.craftCount
-      profession.latest = math.max(profession.latest, row.bucketStart)
-      professions[professionId] = profession
-    end
   end
-  local ranked, primary = {}, {}
+  local ranked = {}
   for _, recipe in pairs(recipes) do ranked[#ranked + 1] = recipe end
   table.sort(ranked, function(left, right)
     if left.craftCount ~= right.craftCount then return left.craftCount > right.craftCount end
     if UI.Name(left.recipe) == UI.Name(right.recipe) then return left.id < right.id end
     return UI.Name(left.recipe) < UI.Name(right.recipe)
   end)
-  for _, profession in pairs(professions) do primary[#primary + 1] = profession end
-  table.sort(primary, function(left, right)
-    if left.latest ~= right.latest then return left.latest > right.latest end
-    return UI.Name(left.details) < UI.Name(right.details)
-  end)
-  return totals, ranked, primary
+  return totals, ranked
 end
 
 function UI.ReturnTotals(owner, recipes, filter, onResult)
@@ -101,8 +89,8 @@ function UI.ProductionSummary(parent, width, y)
       ((index - 1) % 3) * column, -math.floor((index - 1) / 3) * 94, column - 10)
   end
   function summary:Render(series, filter)
-    local totals, recipes, professions = UI.Aggregate(series)
-    self.totals, self.recipes, self.professions = totals, recipes, professions
+    local totals, recipes = UI.Aggregate(series)
+    self.totals, self.recipes = totals, recipes
     self.tiles[1].value:SetText(tostring(totals.craftCount))
     self.tiles[1].note:SetText("")
     for index, metric in pairs({ [2] = "outputQuantity", [3] = "concentrationSpent", [4] = "multicraftBonus" }) do
@@ -190,7 +178,6 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
           if entry.details then navigate("Profession", entry.details) end
         end)
         slot:SetPoint("TOPLEFT", 0, -535 - (index - 1) * 76)
-        slot.count = UI.Text(content, 30, -569 - (index - 1) * 76, width * .43 - 30, 28)
         page.professionSlots[index] = slot
       end
     else
@@ -231,12 +218,20 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
         for index = 1, math.min(5, #self.summary.recipes) do top[index] = self.summary.recipes[index] end
         self.topRecipes:Reset(); self.topRecipes:Append(top)
       end
-      for index, slot in ipairs(self.professionSlots or {}) do
-        local entry = self.summary.professions[index]
-        slot:Update({ label = entry and UI.Name(entry.details) or "Not recorded",
-          icon = UI.ProfessionIcon(entry and entry.details.skillLineId), details = entry and entry.details }, false)
+    end
+    if self.professionSlots then
+      local primary = {}
+      for _, profession in ipairs(ArtisanLogbookAPI.GetProfessions(self.identity.key) or {}) do
+        if UI.professionIcons[profession.skillLineId] then
+          primary[#primary + 1] = profession
+          if #primary == 2 then break end
+        end
+      end
+      for index, slot in ipairs(self.professionSlots) do
+        local entry = primary[index]
+        slot:Update({ label = entry and UI.Name(entry) or "Not recorded",
+          icon = UI.ProfessionIcon(entry and entry.skillLineId), details = entry }, false)
         slot.label:SetTextColor(unpack(UI.ink))
-        slot.count:SetText(entry and entry.craftCount .. " crafts" or "")
       end
     end
     if self.history and (reset or not self.loaded) then self.history:Reload(preserve) end

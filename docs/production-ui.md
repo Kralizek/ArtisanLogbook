@@ -21,6 +21,10 @@ names are shortened with full labels on hover. The main surface uses Blizzard
 parchment, dark text, light ledger separators, native controls, and item/profession
 icons. Character names retain class coloring where available.
 
+Recipe Detail belongs to the Recipes section: the primary Recipes entry stays
+selected whether opened from the catalogue or a pin. A matching pin retains its
+existing current-entry highlight without replacing the primary selection.
+
 | Destination | Presentation and behavior |
 | --- | --- |
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, returned reagents, and most-crafted recipe. No factual craft list. |
@@ -39,12 +43,13 @@ proc counts, coverage-aware percentages, and non-trivial return interpretation.
 IDs, icons, available Blizzard reagent-quality visuals, item tooltips, and
 per-item Trivial checkboxes. Same-named item IDs remain separate.
 
-Characters' two slots show the most recently recorded primary professions within
-the selected population, not an assertion about currently learned professions.
-Secondary professions do not occupy these slots. If history spans profession
-changes, at most two appear; all recorded professions remain available through
-filters and the account sidebar. No remote-character portrait, race, level, or
-faction is invented.
+Characters' two slots use `GetProfessions(characterKey)` across all available
+history, independent of the period and profession activity filters. Only primary
+professions occupy these slots, in the API's stable skill-line ID order. If
+history spans profession changes, the first two appear; this is not an assertion
+about currently learned professions. Slots do not show period-based craft counts.
+All recorded professions remain available through filters and the account
+sidebar. No remote-character portrait, race, level, or faction is invented.
 
 Page filters and scroll positions are independent for the session. Character,
 profession, and recipe destinations remember their own state when switching
@@ -173,9 +178,13 @@ pages and the modal while performing this checklist.
   layouts. Load more than 40 rows; verify full tooltips and the end/empty states.
 - [ ] Verify catalogue default name sort, profession sort and most-crafted sort
   across multiple pages. Open a recipe and return to the preserved catalogue.
+  Recipes must remain selected throughout Recipe Detail, including pin navigation,
+  pin/unpin changes, local recipe views, and Craft Detail modal return.
 - [ ] Visit characters with 0, 1 and 2 recorded primary professions, including
   secondary professions and historical profession changes. There must never be
   more than two primary slots or an invented portrait. Test per-character filters.
+  Switch periods where one profession has no crafts, then an empty period: the
+  slots stay unchanged while the chart, totals, and most-crafted recipes update.
 - [ ] Visit professions across characters; verify graph, aggregate figures, top
   recipes and recent crafts. Navigate to recipes and back without losing state.
 - [ ] Inspect every Recipe Detail view. Test All time, Today, 7/30/90/365 days,

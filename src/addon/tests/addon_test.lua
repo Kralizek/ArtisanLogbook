@@ -1053,6 +1053,19 @@ assert(#catalogue.items == 2)
 apple = displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 502 end)
 apple.scripts.OnClick(apple)
 local recipePage = uiWindow.visiblePage
+local function assertRecipesSelected()
+  local found = false
+  for _, item in ipairs(uiWindow.navItems) do
+    if item:IsShown() and not item.entry.identity then
+      local selected = item.entry.page == "Recipes"
+      assert(item.selection:IsShown() == selected, "Recipe Detail must keep Recipes selected")
+      found = found or selected
+    end
+  end
+  assert(found)
+end
+assert(not UI.IsPinned(502))
+assertRecipesSelected()
 assert(recipePage ~= recipes and visibleText("Apple Mix") and visibleText("Enchanting"))
 local recipeCraft = displayedRow(recipePage, function(item) return item.id == 13 end)
 assert(recipeCraft)
@@ -1060,6 +1073,7 @@ recipeCraft.scripts.OnClick(recipeCraft)
 assert(uiWindow.visiblePage == sharedDetail and uiWindow.returnPage == recipePage and uiWindow.openCraftId == 13)
 button(sharedDetail, "Close").scripts.OnClick()
 assert(uiWindow.visiblePage == recipePage and recipePage:IsShown() and not sharedDetail:IsShown())
+assertRecipesSelected()
 uiWindow:Activate("Logbook")
 dropdown(logbook, "TestCrafter"):Choose(currentKey)
 local characterCraft = displayedRow(logbook, function(item) return item.id == 12 end)
@@ -1209,13 +1223,16 @@ for _, item in ipairs(uiWindow.navItems) do
   if item:IsShown() and item.entry.page == "Recipe" and item.entry.identity.id == 501 then pinNav = item end
 end
 assert(pinNav and UI.IsPinned(501))
+assertRecipesSelected()
 uiWindow:Activate("Recipes")
 dropdown(recipes, "All"):Choose(otherKey)
 assert(#catalogue.items == 0)
 pinNav.scripts.OnClick(pinNav)
 assert(uiWindow.activeTab == "Recipe" and uiWindow.pages.Recipe.recipe.id == 501)
+assertRecipesSelected()
 button(uiWindow.pages.Recipe.content, "Unpin recipe").scripts.OnClick()
 assert(not UI.IsPinned(501))
+assertRecipesSelected()
 uiWindow:Activate("Overview")
 while overview.summary.scripts.OnUpdate do overview.summary.scripts.OnUpdate(overview.summary) end
 assert(overview.summary.tiles[5].note.text == "Some return details missing")
@@ -1227,6 +1244,82 @@ dropdown(logbook, "30 days"):Choose(30)
 assert(#history.items == 0 and history.scroll:GetVerticalScroll() == 0)
 environment.GetServerTime = present
 print("PASS unified Logbook, Recipes, filters, scrolling, detail and Settings (mocked)")
+
+do
+  local core = reload(nil)
+  local ledger = core.ledger
+  local api = environment.ArtisanLogbookAPI
+  local now = environment.GetServerTime()
+  local professions = {
+    { id = 171, name = "Alchemy", days = 0 },
+    { id = 164, name = "Blacksmithing", days = 45 },
+    { id = 129, name = "First Aid", days = 0 },
+    { id = 185, name = "Cooking", days = 0 },
+    { id = 356, name = "Fishing", days = 0 },
+    { id = 794, name = "Archaeology", days = 0 },
+  }
+  for index, profession in ipairs(professions) do
+    local professionId = assert(ledger:AddDimension("profession", profession.id, { name = profession.name }))
+    local recipeId = 9500 + index
+    assert(ledger:AddDimension("recipe", recipeId, { name = profession.name .. " recipe", professionId = professionId }))
+    ledger.wall = function() return now - profession.days * 86400 end
+    ledger:BeginCraft(recipeId)
+    assert(ledger:RecordResult({ operationID = index, quantity = 1 }))
+  end
+  ledger.wall = environment.GetServerTime
+  local character = api.GetCharacters()[1]
+  assert(#api.GetProfessions(character.key) == 6)
+  local ui = loadUI()
+  local window, page = ui.productionWindow, ui.productionWindow.pages.Character
+  window:Show()
+  window:Activate("Character", character)
+  local function assertPrimarySlots()
+    assert(#page.professionSlots == 2)
+    local first = page.professionSlots[1].entry.details
+    local second = page.professionSlots[2].entry.details
+    assert(first and second, "Both recorded primary professions must remain visible")
+    assert(first.skillLineId == 164 and second.skillLineId == 171,
+      "Slots must use stable all-history primary professions, excluding secondary professions")
+  end
+  assertPrimarySlots()
+  assert(page.summary.totals.craftCount == 5 and #page.topRecipes.items == 5)
+  dropdown(page.content, "90 days"):Choose(90)
+  assertPrimarySlots()
+  assert(page.chart.total.text == "6 crafts" and page.summary.totals.craftCount == 6)
+  dropdown(page.content, "Today"):Choose(1)
+  assertPrimarySlots()
+  assert(page.chart.total.text == "5 crafts" and page.summary.totals.craftCount == 5)
+  for _, row in ipairs(page.topRecipes.items) do assert(row.recipe.id ~= 9502) end
+  dropdown(page.content, "7 days"):Choose(7)
+  dropdown(page.content, "Alchemy"):Choose(171)
+  assertPrimarySlots()
+  assert(page.summary.totals.craftCount == 1 and #page.topRecipes.items == 1)
+  page.scroll:SetVerticalScroll(85)
+  window:Activate("Character", { key = "missing", name = "Missing" })
+  assert(not page.professionSlots[1].entry.details and not page.professionSlots[2].entry.details)
+  window:Activate("Character", character)
+  assertPrimarySlots()
+  assert(dropdown(page.content, "7 days").value == 7 and dropdown(page.content, "Alchemy").value == 171)
+  assert(page.scroll:GetVerticalScroll() == 85)
+  assert(ledger:Prune(now + 400 * 86400))
+  assert(#api.GetCrafts().crafts == 0)
+  local serverTime = environment.GetServerTime
+  environment.GetServerTime = function() return now + 400 * 86400 end
+  dropdown(page.content, "Today"):Choose(1)
+  assertPrimarySlots()
+  assert(page.chart.total.text == "0 crafts" and #page.topRecipes.items == 0)
+  environment.GetServerTime = serverTime
+  local tailoring = assert(ledger:AddDimension("profession", 197, { name = "Tailoring" }))
+  assert(ledger:AddDimension("recipe", 9507, { name = "Tailoring recipe", professionId = tailoring }))
+  ledger:BeginCraft(9507)
+  assert(ledger:RecordResult({ operationID = 7, quantity = 1 }))
+  assert(#api.GetProfessions(character.key) == 7)
+  assertPrimarySlots()
+  page.professionSlots[1].scripts.OnClick(page.professionSlots[1])
+  assert(window.activeTab == "Profession" and window.identity.skillLineId == 164)
+  window:Hide()
+  print("PASS character primary professions survive period/profession filters, state restoration and detail pruning")
+end
 
 do
   local core = reload(nil)
