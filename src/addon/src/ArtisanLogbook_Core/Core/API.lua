@@ -569,6 +569,140 @@ function API.GetRecipeReturnedReagents(recipeId, filter, options)
   return returnedPage(recipeId, filter, options, "items")
 end
 
+function API.GetReagentSummaries(options)
+  if options == nil then options = {} end
+  if not keysAllowed(options, { profession = true, search = true, sort = true, limit = true,
+      cursor = true, items = true, excludeItems = true }) then return nil, "invalid-options" end
+  local limit, sort = options.limit or 50, options.sort or "name"
+  if not integer(limit, 1) or limit > 200 or
+      (options.profession ~= nil and not integer(options.profession, 0)) or
+      (options.search ~= nil and type(options.search) ~= "string") or
+      (sort ~= "name" and sort ~= "allocated" and sort ~= "returned" and sort ~= "recipes") then
+    return nil, "invalid-options"
+  end
+  local selections, signature = {}, { tostring(options.profession or ""), sort }
+  for _, field in ipairs({ "items", "excludeItems" }) do
+    local values, encoded, selected = options[field], {}, {}
+    if values ~= nil then
+      if type(values) ~= "table" or getmetatable(values) ~= nil then return nil, "invalid-options" end
+      local count = 0
+      for key, value in pairs(values) do
+        if not integer(key, 1) or not integer(value, 1) then return nil, "invalid-options" end
+        count = count + 1
+        if not selected[value] then selected[value] = true; encoded[#encoded + 1] = value end
+      end
+      for index = 1, count do if values[index] == nil then return nil, "invalid-options" end end
+      selections[field] = selected
+    end
+    table.sort(encoded)
+    for index, value in ipairs(encoded) do encoded[index] = string.format("%.17g", value) end
+    signature[#signature + 1] = values and ("[" .. table.concat(encoded, ",") .. "]") or "-"
+  end
+  local search = (options.search or ""):lower()
+  local prefix = "reagents:" .. table.concat(signature, ":") .. ":" .. #search .. ":" .. search .. "\n"
+  local offset = 0
+  if options.cursor ~= nil then
+    if type(options.cursor) ~= "string" or options.cursor:sub(1, #prefix) ~= prefix then return nil, "invalid-cursor" end
+    local text = options.cursor:sub(#prefix + 1)
+    if not text:match("^[1-9]%d*$") then return nil, "invalid-cursor" end
+    offset = tonumber(text)
+    if not integer(offset, 1) then return nil, "invalid-cursor" end
+  end
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  local selected, coverage = {}, {}
+  for _, row in ipairs(ledger.database.craftSeries) do
+    local id = row.recipeId or 0
+    local counts = coverage[id] or { crafts = 0, complete = 0 }
+    counts.crafts = counts.crafts + row.craftCount
+    counts.complete = counts.complete + row.resourcefulnessCompleteProcCountObservedCount
+    coverage[id] = counts
+  end
+  local function reagent(itemId, recipeId, professionId)
+    if selections.items and not selections.items[itemId] or selections.excludeItems and selections.excludeItems[itemId] then return end
+    local recipeRow = dimension(ledger, "recipe", recipeId)
+    professionId = professionId or (recipeRow and recipeRow.professionId)
+    if options.profession and options.profession ~= professionId then return end
+    local identity = item(ledger, itemId)
+    local name = identity and identity.name or ("Item #" .. itemId)
+    if not name:lower():find(search, 1, true) then return end
+    local row = selected[itemId]
+    if not row then
+      row = { item = identity, name = name:lower(), recipeIds = {}, professionIds = {},
+        allocationObservedCount = 0, allocationUnknownCount = 0, returnObservedCount = 0,
+        returnUnknownCount = 0, retainedReturned = 0, recipeCount = 0 }
+      selected[itemId] = row
+    end
+    if recipeId and recipeId ~= 0 and not row.recipeIds[recipeId] then row.recipeCount = row.recipeCount + 1 end
+    row.recipeIds[recipeId or 0] = true
+    if professionId then row.professionIds[professionId] = true end
+    return row
+  end
+  for _, fact in ipairs(ledger.database.reagents) do
+    local craft = ledger.craftById[fact.craftId]
+    local row = reagent(fact.itemId, craft.recipeId, craft.professionId)
+    if row then
+      if fact.allocatedQuantity ~= nil then
+        row.allocatedQuantity = (row.allocatedQuantity or 0) + fact.allocatedQuantity
+        row.allocationObservedCount = row.allocationObservedCount + 1
+      else row.allocationUnknownCount = row.allocationUnknownCount + 1 end
+      if fact.returnedQuantity ~= nil and fact.returnedQuantity >= 0 then
+        row.returnObservedCount = row.returnObservedCount + 1
+        row.retainedReturned = row.retainedReturned + fact.returnedQuantity
+      else row.returnUnknownCount = row.returnUnknownCount + 1 end
+      if fact.quality ~= nil then
+        if row.quality ~= nil and row.quality ~= fact.quality then row.conflictingQuality = true end
+        row.quality = fact.quality
+      end
+    end
+  end
+  for _, fact in ipairs(ledger.database.returnedReagents) do
+    local row = reagent(fact.itemId, fact.recipeId)
+    if row then row.returnedQuantity = (row.returnedQuantity or 0) + fact.returnedQuantity end
+  end
+  local order = {}
+  for _, row in pairs(selected) do
+    row.hasPrunedReturns = (row.returnedQuantity or 0) > row.retainedReturned
+    row.allocationComplete = row.allocationObservedCount > 0 and row.allocationUnknownCount == 0 and not row.hasPrunedReturns
+    row.returnComplete = row.returnUnknownCount == 0
+    for recipeId in pairs(row.recipeIds) do
+      local counts = coverage[recipeId]
+      if not counts or counts.complete < counts.crafts then row.returnComplete = false end
+    end
+    if row.returnedQuantity == nil and row.returnObservedCount > 0 and row.returnComplete then row.returnedQuantity = 0 end
+    if row.conflictingQuality then row.quality = nil end
+    if (row.allocatedQuantity and not finite(row.allocatedQuantity)) or
+        (row.returnedQuantity and not finite(row.returnedQuantity)) then return nil, "quantity-overflow" end
+    order[#order + 1] = row
+  end
+  local metric = ({ allocated = "allocatedQuantity", returned = "returnedQuantity", recipes = "recipeCount" })[sort]
+  table.sort(order, function(left, right)
+    if metric and left[metric] ~= right[metric] then
+      if left[metric] == nil then return false end
+      if right[metric] == nil then return true end
+      return left[metric] > right[metric]
+    end
+    if left.name ~= right.name then return left.name < right.name end
+    return left.item.id < right.item.id
+  end)
+  if offset > #order then return nil, "invalid-cursor" end
+  local result = { reagents = {}, totalCount = #order }
+  for index = offset + 1, math.min(offset + limit, #order) do
+    local row = order[index]
+    local projected = fields(row, { "quality", "recipeCount", "allocatedQuantity", "returnedQuantity",
+      "allocationObservedCount", "allocationUnknownCount", "returnObservedCount", "returnUnknownCount",
+      "allocationComplete", "returnComplete", "hasPrunedReturns" })
+    projected.item, projected.professions = row.item, {}
+    for id in pairs(row.professionIds) do
+      projected.professions[#projected.professions + 1] = profession(ledger, dimension(ledger, "profession", id))
+    end
+    table.sort(projected.professions, function(left, right) return left.skillLineId < right.skillLineId end)
+    result.reagents[#result.reagents + 1] = projected
+  end
+  if offset + limit < #order then result.nextCursor = prefix .. (offset + limit) end
+  return result
+end
+
 function API.GetRecipeSummaries(options)
   if options == nil then options = {} end
   if not keysAllowed(options, { limit = true, cursor = true, character = true,
