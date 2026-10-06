@@ -332,14 +332,15 @@ function UI.Chart(parent, x, y, width)
   chart.empty:SetJustifyH("CENTER")
   chart.lines = {}
 
-  function chart:Render(series, from, to)
+  function chart:Render(series, from, to, bucketSeconds)
+    bucketSeconds = bucketSeconds or 86400
     local daily, total, peak = {}, 0, 0
     for _, row in ipairs(series or {}) do
       daily[row.bucketStart] = (daily[row.bucketStart] or 0) + row.craftCount
       total = total + row.craftCount
     end
-    local days = math.max(1, math.ceil((to - from) / 86400))
-    for day = 0, days - 1 do peak = math.max(peak, daily[from + day * 86400] or 0) end
+    local days = math.max(1, math.ceil((to - from) / bucketSeconds))
+    for day = 0, days - 1 do peak = math.max(peak, daily[from + day * bucketSeconds] or 0) end
     self.total:SetText(string.format("%d crafts", total))
     self.empty:SetShown(total == 0)
     self.start:SetText(date("!%d %b %Y", from))
@@ -356,9 +357,9 @@ function UI.Chart(parent, x, y, width)
         self.lines[count] = line
       end
       line:SetStartPoint("BOTTOMLEFT", self.plot,
-        (day - 1) * (width - 32) / (days - 1), (daily[from + (day - 1) * 86400] or 0) * 94 / math.max(1, peak))
+        (day - 1) * (width - 32) / (days - 1), (daily[from + (day - 1) * bucketSeconds] or 0) * 94 / math.max(1, peak))
       line:SetEndPoint("BOTTOMLEFT", self.plot,
-        day * (width - 32) / (days - 1), (daily[from + day * 86400] or 0) * 94 / math.max(1, peak))
+        day * (width - 32) / (days - 1), (daily[from + day * bucketSeconds] or 0) * 94 / math.max(1, peak))
       if total > 0 then line:Show() end
     end
   end

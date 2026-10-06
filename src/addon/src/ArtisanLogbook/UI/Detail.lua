@@ -6,8 +6,13 @@ function UI.CraftDetail(parent, width, height, goBack)
   detail:SetAllPoints(parent)
   local heading = UI.Text(detail, 16, -8, width - 120, 28, "GameFontNormalLarge")
   UI.Button(detail, "Back", width - 92, -8, 76, goBack)
+  local preference
+  local reagentSelector = UI.Selector(detail, 18, -43, width - 200, {}, function(value)
+    preference:SetItem(value)
+  end, "Reagent")
+  preference = UI.TrivialCheckbox(detail, width - 145, -58, function() end)
   local scroll = CreateFrame("ScrollFrame", nil, detail, "UIPanelScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", 18, -44)
+  scroll:SetPoint("TOPLEFT", 18, -100)
   scroll:SetPoint("BOTTOMRIGHT", -36, 16)
   local content = CreateFrame("Frame", nil, scroll)
   content:SetWidth(width - 75)
@@ -16,6 +21,18 @@ function UI.CraftDetail(parent, width, height, goBack)
 
   function detail:ShowCraft(id)
     local craft, reason = ArtisanLogbookAPI.GetCraft(id)
+    local choices, seen = {}, {}
+    for _, reagent in ipairs(craft and craft.reagents or {}) do
+      local item = reagent.item
+      if item and item.id and not seen[item.id] then
+        seen[item.id] = true
+        choices[#choices + 1] = { label = UI.Name(item), value = item.id }
+      end
+    end
+    local selected = seen[reagentSelector.value] and reagentSelector.value or (choices[1] and choices[1].value)
+    reagentSelector:Update(choices, selected)
+    preference:SetItem(selected)
+    reagentSelector:SetShown(#choices > 0)
     if not craft then
       heading:SetText("Craft unavailable")
       text:SetText(reason or "Unknown craft")

@@ -25,6 +25,7 @@ end
 function methods:SetSize(width, height) self.width, self.height = width, height end
 function methods:SetWidth(width) self.width = width end
 function methods:SetTexture(texture) self.texture = texture end
+function methods:SetAtlas(atlas) self.atlas = atlas end
 function methods:SetPoint(point, relative, relativePoint, x, y)
   if type(relative) == "number" then
     x, y, relative, relativePoint = relative, relativePoint, nil, nil
@@ -33,6 +34,8 @@ function methods:SetPoint(point, relative, relativePoint, x, y)
   self.x, self.y = x, y
 end
 function methods:SetEnabled(value) self.enabled = value end
+function methods:SetChecked(value) self.checked = value end
+function methods:GetChecked() return self.checked end
 function methods:SetText(value) assert(type(value) == "string"); self.text = value end
 function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
@@ -102,6 +105,7 @@ environment.UIDropDownMenu_CreateInfo = function() return {} end
 environment.UIDropDownMenu_AddButton = function() end
 environment.GameTooltip = { SetOwner = function() end,
   SetText = function(self, text) self.text, self.lines = text, {} end,
+  SetItemByID = function(self, itemId) self.itemId, self.lines = itemId, {} end,
   AddLine = function(self, text) self.lines[#self.lines + 1] = text end,
   Show = function() end, Hide = function() end }
 environment.date = os.date
@@ -1140,6 +1144,256 @@ dropdown(logbook, "30 days"):Choose(30)
 assert(#history.items == 0 and history.scroll:GetVerticalScroll() == 0)
 environment.GetServerTime = present
 print("PASS unified Logbook, Recipes, filters, scrolling, detail and Settings (mocked)")
+
+do
+  local core = reload(nil)
+  local ledger = core.ledger
+  local ui = loadUI()
+  local window, helpers = ui.productionWindow, ui.UI
+  local api = environment.ArtisanLogbookAPI
+  environment.ArtisanLogbookUISettings.trivialReagents = {}
+  local function record(result, recipeId)
+    assert(ledger:SubmitCraft(recipeId or 9001, 1, false))
+    return assert(ledger:RecordResult(result))
+  end
+  local first = record({ quantity = 5, multicraft = 0, concentrationSpent = 0,
+    hasIngenuityProc = false, ingenuityRefund = 99, resourcesReturned = {} })
+  local second = record({ quantity = 8, multicraft = 3, concentrationSpent = 20,
+    hasIngenuityProc = true, ingenuityRefund = 12,
+    resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } })
+  record({ quantity = 5, multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false,
+    resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 }, { reagent = { itemID = 9 }, quantity = 3 } } })
+  record({ quantity = 5, multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false,
+    resourcesReturned = { { reagent = { itemID = 9 }, quantity = 2 }, { reagent = { itemID = 10 }, quantity = 3 } } })
+  assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "multicraftBonus", "outputQuantity") == "13.0%")
+  assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "ingenuityRefund", "concentrationSpent") == "60.0%")
+  record({})
+  assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "multicraftBonus", "outputQuantity") == "Unknown")
+  assert(helpers.ProcRate(nil, 0) == "Unknown\n0 observed crafts")
+  assert(helpers.ProcRate(0, 4) == "0.0%\n0 / 4 observed crafts")
+  local screenshotTotals = {
+    craftCount = 30, multicraftProcCount = 7, multicraftProcCountObservedCount = 30,
+    multicraftBonus = 52, multicraftBonusObservedCount = 30, outputQuantity = 202, outputQuantityObservedCount = 30,
+    ingenuityProcCount = 5, ingenuityProcCountObservedCount = 30, ingenuityRefund = 800, ingenuityRefundObservedCount = 30,
+    concentrationSpent = 7130, concentrationSpentObservedCount = 30,
+    resourcefulnessProcCount = 8, resourcefulnessProcCountObservedCount = 8,
+    resourcefulnessCompleteProcCountObservedCount = 0,
+  }
+  local summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
+  assert(summary.any == "Returns recorded for 8 crafts")
+  assert(not summary.any:find("%%") and not summary.nonTrivial:find("%%"))
+  assert(summary.nonTrivial == "-" and summary.complete:find("Return results missing for 22 crafts", 1, true))
+  local multi = helpers.CompactOutcome(screenshotTotals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output")
+  local ingenuity = helpers.CompactOutcome(screenshotTotals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent")
+  assert(multi == "23.3% | 7 procs\nBonus: 52 | 25.7% of output")
+  assert(ingenuity == "16.7% | 5 procs\nRefund: 800 | 11.2% of spent")
+  screenshotTotals.resourcefulnessProcCountObservedCount = 30
+  screenshotTotals.resourcefulnessCompleteProcCountObservedCount = 30
+  screenshotTotals.resourcefulnessCompleteProcCount = 8
+  summary = helpers.ResourcefulnessSummary(screenshotTotals, 4)
+  assert(summary.any == "26.7% | 8 crafts" and summary.nonTrivial == "13.3% | 4 crafts")
+  assert(summary.complete == "")
+  screenshotTotals.resourcefulnessProcCount = 0
+  summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
+  assert(summary.any == "0.0% | 0 crafts")
+  screenshotTotals.resourcefulnessProcCountObservedCount = 8
+  screenshotTotals.resourcefulnessCompleteProcCountObservedCount = 8
+  summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
+  assert(summary.any == "-" and summary.nonTrivial == "-")
+  assert(helpers.ResourcefulnessSummary({ craftCount = 0 }, 0).any == "No crafts")
+  assert(ledger:AddDimension("item", 8, { name = "Tranquility Bloom" }))
+  assert(ledger:AddDimension("item", 9, { name = "Tranquility Bloom" }))
+  local oldQuality = environment.C_TradeSkillUI.GetItemReagentQualityInfo
+  environment.C_TradeSkillUI.GetItemReagentQualityInfo = function(itemId)
+    if itemId == 8 or itemId == 9 then return { icon = "ReagentQuality-" .. itemId } end
+  end
+  window:Show()
+  window:Activate("Recipes")
+  local oldSeries = api.GetCraftSeries
+  api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
+  window:OpenRecipe({ id = 9001, name = "Observed recipe" })
+  local pane = window.recipeOutcomes
+  assert(window.recipeDetailWindow.parent == environment.UIParent and window.recipeDetailWindow:IsShown())
+  assert(window.modalShade:IsShown() and not window.craftDetailWindow:IsShown())
+  local escapeRecipe, escapeCraft = false, false
+  for _, frameName in ipairs(environment.UISpecialFrames) do
+    if frameName == "ArtisanLogbookRecipeDetailWindow" then escapeRecipe = true end
+    if frameName == "ArtisanLogbookCraftDetailWindow" then escapeCraft = true end
+  end
+  assert(escapeRecipe and escapeCraft)
+  local function finishCalculation()
+    while pane.scripts.OnUpdate do pane.scripts.OnUpdate() end
+  end
+  finishCalculation()
+  assert(pane.stats[2].text:find("Proc recorded for 1 craft", 1, true) and pane.stats[4].text:find("Refund: 12", 1, true))
+  assert(pane.stats[3].text == "Returns recorded for 3 crafts" and not pane.stats[3].text:find("%%"))
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 3 crafts")
+  assert(pane.resourcefulness.complete.text:find("Return details missing for 1 craft", 1, true))
+  assert(pane.stats[2].text:find("Some crafts have no details", 1, true))
+  for _, labels in ipairs({ pane.stats, pane.resourcefulness }) do
+    for _, label in pairs(labels) do
+      for _, technical in ipairs({ "confirmed", "unknown", "observed", "coverage", "unclassified", "fully recorded" }) do
+        assert(not label.text:lower():find(technical, 1, true))
+      end
+    end
+  end
+  assert(pane.materialRows[1].label.text == pane.materialRows[2].label.text)
+  assert(pane.materialRows[1].identity.text == "#8" and pane.materialRows[2].identity.text == "#9")
+  assert(pane.materialRows[1].quantity.text == "3" and pane.materialRows[2].quantity.text == "5")
+  assert(pane.materialRows[1].icon.texture and pane.materialRows[1].quality.atlas == "ReagentQuality-8")
+  assert(pane.materialRows[2].quality.atlas == "ReagentQuality-9" and not pane.materialRows[3].quality:IsShown())
+  local material = pane.materialRows[1]
+  assert(material.check.parent == material and material.check.x + 96 <= material.width)
+  material.scripts.OnEnter(material)
+  assert(environment.GameTooltip.itemId == 8 and environment.GameTooltip.lines[1] == "Item ID: 8")
+  local nativeTooltip = environment.GameTooltip.SetItemByID
+  environment.GameTooltip.SetItemByID = nil
+  material.scripts.OnEnter(material)
+  assert(environment.GameTooltip.text == "Tranquility Bloom" and environment.GameTooltip.lines[1] == "Item ID: 8")
+  environment.GameTooltip.SetItemByID = nativeTooltip
+  environment.C_TradeSkillUI.GetItemReagentQualityInfo = nil
+  pane:Refresh()
+  assert(not material.quality:IsShown() and material.identity.text == "#8")
+  environment.C_TradeSkillUI.GetItemReagentQualityInfo = oldQuality
+  assert(pane.stats[2].y - pane.stats[2].height > pane.chart.y)
+  assert(pane.chart.y - pane.chart.height > pane.resourcefulness.any.y)
+  assert(pane.resourcefulness.any.y - pane.resourcefulness.any.height > material.y)
+  assert(-pane.materialRows[3].y + pane.materialRows[3].height <= pane.height)
+  local recipePage = window.visiblePage
+  window:OpenCraft(second.id)
+  local detail = window.visiblePage
+  assert(window.craftDetailWindow.parent == environment.UIParent and window.craftDetailWindow:IsShown())
+  assert(not window.recipeDetailWindow:IsShown() and window.modalShade:IsShown())
+  local checkbox
+  for _, frame in ipairs(frames) do
+    if frame.parent == detail and frame.kind == "CheckButton" then checkbox = frame end
+  end
+  assert(checkbox and checkbox.itemId == 8 and not checkbox:GetChecked())
+  checkbox:SetChecked(true); checkbox.scripts.OnClick(checkbox)
+  assert(helpers.IsTrivial(8))
+  button(detail, "Back").scripts.OnClick()
+  finishCalculation()
+  assert(window.visiblePage == recipePage, "craft close did not restore recipe modal")
+  assert(window.recipeDetailWindow:IsShown() and not window.craftDetailWindow:IsShown() and window.modalShade:IsShown())
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts",
+    "unexpected non-trivial summary: " .. tostring(pane.resourcefulness.nonTrivial.text))
+  local materialCheck
+  for _, frame in ipairs(frames) do
+    if frame.parent and frame.parent.parent == pane and frame.kind == "CheckButton" and frame.itemId == 9 then materialCheck = frame end
+  end
+  assert(materialCheck)
+  materialCheck:SetChecked(true); materialCheck.scripts.OnClick(materialCheck)
+  finishCalculation()
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 1 craft")
+  helpers.SetTrivial(10, true); pane:Refresh(); finishCalculation()
+  assert(pane.resourcefulness.nonTrivial.text == "-")
+  helpers.SetTrivial(9, false); pane:Refresh(); finishCalculation()
+  assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
+  local settings = environment.ArtisanLogbookUISettings
+  local anotherUI = loadUI()
+  assert(anotherUI.UI.IsTrivial(8) and anotherUI.UI.IsTrivial(10) and not anotherUI.UI.IsTrivial(9))
+  assert(environment.ArtisanLogbookUISettings == settings and ledger.database.trivialReagents == nil)
+  assert(api.SetTrivial == nil and environment.ArtisanLogbookManagement.SetTrivial == nil)
+  local timeFunction = environment.time
+  environment.time = os.time
+  assert(helpers.ParseUTCDate("2024-02-29") and not helpers.ParseUTCDate("2025-02-29"))
+  assert(not helpers.ParseUTCDate("2026-13-01") and not helpers.ParseUTCDate("invalid"))
+  environment.time = timeFunction
+  local otherSession = assert(ledger:CreateSession({ characterName = "Second outcome crafter" }))
+  record({ resourcesReturned = {} })
+  pane:Open(9001)
+  finishCalculation()
+  local chosen
+  for _, entry in ipairs(api.GetCharacters()) do if entry.name == "Second outcome crafter" then chosen = entry.key end end
+  dropdown(pane, "Second outcome crafter"):Choose(chosen)
+  assert(pane.stats[1].text == "1" and pane.stats[3].text:find("0.0%%"))
+  dropdown(pane, "All"):Choose(false)
+  assert(pane.stats[1].text == "6")
+  ledger.wall = function() return 1800000000 + 61 * 86400 end
+  ledger:Prune(ledger.wall())
+  assert(#ledger.database.crafts == 0)
+  pane:Refresh()
+  finishCalculation()
+  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts")
+  for index = 1, 205 do
+    record({ resourcesReturned = { { reagent = { itemID = 1000 + index }, quantity = 1 } } }, 9002)
+  end
+  local oldSets, pages = api.GetRecipeReturnSets, 0
+  api.GetRecipeReturnSets = function(...)
+    pages = pages + 1
+    return oldSets(...)
+  end
+  window:OpenRecipe({ id = 9002 })
+  assert(pages == 1 and pane.scripts.OnUpdate and pane.resourcefulness.nonTrivial.text:find("Calculating", 1, true))
+  pane.scripts.OnUpdate()
+  assert(pages == 2 and pane.scripts.OnUpdate)
+  pane.scripts.OnUpdate()
+  assert(pages == 3 and pane.scripts.OnUpdate)
+  finishCalculation()
+  assert(pane.scripts.OnUpdate == nil and pane.resourcefulness.nonTrivial.text:find("100.0%%"))
+  pane.next.scripts.OnClick()
+  local secondPageItem = pane.materialRows[1].item.id
+  local pageCheck = pane.materialRows[1].check
+  pageCheck:SetChecked(true); pageCheck.scripts.OnClick(pageCheck)
+  finishCalculation()
+  assert(pane.materialRows[1].item.id == secondPageItem and pane.previous.enabled)
+  pane.previous.scripts.OnClick()
+  assert(pane.materialRows[1].item.id == 1001 and not pane.previous.enabled)
+  assert(#pane.chart.lines <= 59)
+  assert(environment.ArtisanLogbookManagement.Clear())
+  assert(helpers.IsTrivial(8) and helpers.IsTrivial(10))
+  api.GetCraftSeries, api.GetRecipeReturnSets = oldSeries, oldSets
+  window:Hide()
+  window.scripts.OnHide(window)
+  assert(not window.recipeDetailWindow:IsShown() and not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
+  print("PASS recipe outcomes, exact denominators, reversible UI preferences, pruning and bounded rendering")
+end
+
+do
+  local core = reload(nil)
+  local ledger = core.ledger
+  assert(ledger:SubmitCraft(9001, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = {
+    { reagent = { itemID = 8 }, quantity = 1 }, { reagent = { itemID = 9 } },
+  } }))
+  for index = 2, 30 do
+    assert(ledger:SubmitCraft(9001, 1, false, nil, {
+      { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    }))
+    assert(ledger:RecordResult({ resourcesReturned = index <= 8 and
+      { { reagent = { itemID = 8 }, quantity = 1 } } or {} }))
+  end
+  local data = ledger.database
+  data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
+  for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil end
+  for _, row in ipairs(data.craftSeries) do
+    for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }) do
+      row[metric], row[metric .. "ObservedCount"] = nil, nil
+    end
+  end
+  core = reload(data)
+  local ui = loadUI()
+  ui.UI.SetTrivial(8, true)
+  ui.productionWindow:Activate("Recipes")
+  ui.productionWindow:OpenRecipe({ id = 9001 })
+  while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
+    ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
+  end
+  local text = ui.productionWindow.recipeOutcomes.stats[3].text
+  assert(text == "Returns recorded for 8 crafts" and not text:find("%%"))
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("Return results missing for 22 crafts", 1, true))
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
+  ui.UI.SetTrivial(8, false)
+  ui.productionWindow.recipeOutcomes:Refresh()
+  while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
+    ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
+  end
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 8 crafts")
+  print("PASS legacy incomplete positive sets never become measured non-trivial false")
+end
 
 local invalidTrace = { traceSchemaVersion = 999 }
 environment.ArtisanLogbookTraceDB = invalidTrace

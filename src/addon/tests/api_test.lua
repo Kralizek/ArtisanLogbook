@@ -85,6 +85,167 @@ local function errorIs(code, value, reason)
   assert(value == nil and reason == code, tostring(reason) .. " instead of " .. code)
 end
 
+test("recipe outcomes summarize durable evidence with bounded charts and factual returns", function()
+  local ledger, api, clock, addon = newLedger({ retentionDays = 1 })
+  session(ledger, "A", 1)
+  local from = math.floor(clock.current / 86400) * 86400
+  local function record(recipeId, result)
+    assert(ledger:SubmitCraft(recipeId, 1, false))
+    return assert(ledger:RecordResult(result))
+  end
+  record(101, { quantity = 5, multicraft = 0, resourcesReturned = {}, hasIngenuityProc = false, ingenuityRefund = 90 })
+  record(101, { quantity = 8, multicraft = 3, resourcesReturned = {
+    { reagent = { itemID = 9 }, quantity = 2 }, { reagent = { itemID = 8 }, quantity = 1 },
+  }, hasIngenuityProc = true, ingenuityRefund = 20 })
+  record(101, {})
+  local character = api.GetCharacters()[1].key
+  clock.current = clock.current + 3 * 86400
+  session(ledger, "B", 1)
+  record(101, { resourcesReturned = { { reagent = { itemID = 8 }, quantity = 4 } } })
+  record(102, { quantity = 99, resourcesReturned = { { reagent = { itemID = 10 }, quantity = 99 } } })
+  local all = assert(api.GetRecipeOutcomes(101, nil, { buckets = 2 }))
+  assert(all.totals.craftCount == 4 and #all.series == 2 and all.bucketSeconds == 2 * 86400)
+  assert(all.totals.multicraftProcCount == 1 and all.totals.multicraftProcCountObservedCount == 2)
+  assert(all.totals.multicraftBonus == 3 and all.totals.outputQuantity == 13)
+  assert(all.totals.ingenuityRefund == 20 and all.totals.ingenuityRefundObservedCount == 2)
+  assert(all.totals.resourcefulnessProcCount == 2 and all.totals.resourcefulnessProcCountObservedCount == 3)
+  assert(api.GetRecipeOutcomes(101, { characters = { character } }).totals.craftCount == 3)
+  assert(api.GetRecipeOutcomes(101, { characters = {} }).totals.craftCount == 0)
+  assert(api.GetRecipeOutcomes(101, { time = { from = from, to = from + 86400 } }).totals.craftCount == 3)
+  assert(api.GetRecipeOutcomes(101, { time = { from = from, to = from } }).totals.craftCount == 0)
+  local page = assert(api.GetRecipeReturnSets(101, nil, { limit = 1 }))
+  equal(page.returns, { { itemIds = { 8 }, craftCount = 1 } })
+  assert(page.nextCursor)
+  local last = assert(api.GetRecipeReturnSets(101, nil, { limit = 1, cursor = page.nextCursor }))
+  equal(last.returns, { { itemIds = { 8, 9 }, craftCount = 1 } })
+  assert(last.nextCursor == nil)
+  equal(api.GetRecipeReturnedReagents(101).returns, {
+    { item = { id = 8 }, returnedQuantity = 5 }, { item = { id = 9 }, returnedQuantity = 2 },
+  })
+  equal(api.GetRecipeReturnedReagents(101, { characters = { character } }).returns, {
+    { item = { id = 8 }, returnedQuantity = 1 }, { item = { id = 9 }, returnedQuantity = 2 },
+  })
+  page.returns[1].itemIds[1] = 999
+  assert(api.GetRecipeReturnSets(101).returns[1].itemIds[1] == 8)
+  clock.current = clock.current + 86401
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(#addon.ledger.database.crafts == 0)
+  equal(api.GetRecipeOutcomes(101, nil, { buckets = 2 }), all)
+  assert(api.GetRecipeReturnedReagents(101).returns[1].returnedQuantity == 5)
+  local empty = api.GetRecipeOutcomes(999)
+  assert(empty.totals.craftCount == 0 and empty.totals.resourcefulnessProcCount == nil)
+  assert(empty.totals.resourcefulnessProcCountObservedCount == 0 and #empty.series == 0)
+  errorIs("invalid-id", api.GetRecipeOutcomes(-1))
+  errorIs("invalid-filter", api.GetRecipeOutcomes(101, { time = { from = 1 } }))
+  errorIs("invalid-filter", api.GetRecipeOutcomes(101, { recipes = { 101 } }))
+  errorIs("invalid-options", api.GetRecipeOutcomes(101, nil, { buckets = 201 }))
+  errorIs("invalid-options", api.GetRecipeOutcomes(101, nil, false))
+  errorIs("invalid-options", api.GetRecipeReturnSets(101, nil, false))
+  errorIs("invalid-options", api.GetRecipeReturnSets(101, nil, { limit = 201 }))
+  errorIs("invalid-cursor", api.GetRecipeReturnSets(102, nil, { cursor = page.nextCursor }))
+  errorIs("invalid-cursor", api.GetRecipeReturnedReagents(101, nil, { cursor = page.nextCursor }))
+  errorIs("invalid-cursor", api.GetRecipeReturnSets(101, { characters = {} }, { cursor = page.nextCursor }))
+end)
+
+test("returned materials total each item identity across characters days and small pages", function()
+  local ledger, api, clock, addon = newLedger({ retentionDays = 1 })
+  local start = math.floor(clock.current / 86400) * 86400
+  session(ledger, "A", 1)
+  local function record(itemId, quantity)
+    assert(ledger:AddDimension("item", itemId, { name = "Same-named herb" }))
+    assert(ledger:SubmitCraft(101, 1, false))
+    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = itemId }, quantity = quantity } } }))
+  end
+  for itemId = 12, 8, -1 do record(itemId, itemId) end
+  record(8, 2)
+  local character = api.GetCharacters()[1].key
+  clock.current = clock.current + 86400
+  session(ledger, "B", 1)
+  for itemId = 8, 12 do record(itemId, 3) end
+  local function verify(filter, expected)
+    local cursor, seen = nil, {}
+    repeat
+      local page = assert(api.GetRecipeReturnedReagents(101, filter, { limit = 1, cursor = cursor }))
+      assert(#page.returns <= 1)
+      for _, row in ipairs(page.returns) do
+        assert(not seen[row.item.id], "duplicate material identity across pages")
+        assert(row.item.name == "Same-named herb")
+        seen[row.item.id] = row.returnedQuantity
+      end
+      cursor = page.nextCursor
+    until not cursor
+    equal(seen, expected)
+  end
+  verify(nil, { [8] = 13, [9] = 12, [10] = 13, [11] = 14, [12] = 15 })
+  verify({ characters = { character } }, { [8] = 10, [9] = 9, [10] = 10, [11] = 11, [12] = 12 })
+  verify({ time = { from = start + 86400, to = start + 2 * 86400 } },
+    { [8] = 3, [9] = 3, [10] = 3, [11] = 3, [12] = 3 })
+  clock.current = clock.current + 2 * 86400
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(#addon.ledger.database.crafts == 0)
+  verify(nil, { [8] = 13, [9] = 12, [10] = 13, [11] = 14, [12] = 15 })
+end)
+
+test("legacy positive evidence is separate from complete return coverage in recipe queries", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitCraft(101, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = {
+    { reagent = { itemID = 8 }, quantity = 1 }, { reagent = { itemID = 9 } },
+  } }))
+  local data = ledger.database
+  data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
+  for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil end
+  for _, row in ipairs(data.craftSeries) do
+    for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }) do
+      row[metric], row[metric .. "ObservedCount"] = nil, nil
+    end
+  end
+  addon.ledger = assert(addon.Ledger.New(data, clock))
+  local totals = api.GetRecipeOutcomes(101).totals
+  assert(totals.resourcefulnessProcCount == 1 and totals.resourcefulnessProcCountObservedCount == 1)
+  assert(totals.resourcefulnessCompleteProcCount == nil and totals.resourcefulnessCompleteProcCountObservedCount == 0)
+  assert(#api.GetRecipeReturnSets(101).returns == 0)
+  assert(api.GetRecipeReturnedReagents(101).returns[1].returnedQuantity == 1)
+  session(addon.ledger, "A", 1)
+  assert(addon.ledger:SubmitCraft(101, 1, false))
+  assert(addon.ledger:RecordResult({ resourcesReturned = {} }))
+  totals = api.GetRecipeOutcomes(101).totals
+  assert(totals.resourcefulnessProcCount == 1 and totals.resourcefulnessProcCountObservedCount == 2)
+  assert(totals.resourcefulnessCompleteProcCount == 0 and totals.resourcefulnessCompleteProcCountObservedCount == 1)
+  clock.current = clock.current + 61 * 86400
+  addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
+  equal(api.GetRecipeOutcomes(101).totals, totals)
+end)
+
+test("recipe outcome queries never scan craft history or unrelated daily recipes", function()
+  local ledger, api, clock = newLedger()
+  session(ledger, "A", 1)
+  for index = 1, 205 do
+    assert(ledger:SubmitCraft(101, 1, false))
+    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = index }, quantity = 2 } } }))
+  end
+  local oldPairs, oldIpairs = pairs, ipairs
+  local forbidden = { [ledger.database.crafts] = true, [ledger.database.reagents] = true,
+    [ledger.database.craftSeries] = true, [ledger.database.resourcefulnessSets] = true,
+    [ledger.database.returnedReagents] = true }
+  pairs = function(rows) assert(not forbidden[rows]); return oldPairs(rows) end
+  ipairs = function(rows) assert(not forbidden[rows]); return oldIpairs(rows) end
+  local ok, reason = pcall(function()
+    local page = assert(api.GetRecipeReturnedReagents(101, nil, { limit = 200 }))
+    assert(#page.returns == 200 and page.nextCursor)
+    local last = assert(api.GetRecipeReturnedReagents(101, nil, { limit = 200, cursor = page.nextCursor }))
+    assert(#last.returns == 5 and not last.nextCursor)
+    assert(api.GetRecipeOutcomes(101).totals.resourcefulnessProcCount == 205)
+    assert(#api.GetRecipeReturnSets(101, nil, { limit = 200 }).returns == 200)
+  end)
+  pairs, ipairs = oldPairs, oldIpairs
+  assert(ok, reason)
+end)
+
 test("GetCraft has an explicit denormalized shape and preserves zero and false", function()
   local _, api = fixture()
   local craft = assert(api.GetCraft(1))
@@ -102,6 +263,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
     outputItem = { id = 201, name = "Output", expansion = oldExpansion },
     outputQuality = 0, outputQuantity = 5, outputItemLevel = 0, multicraftBonus = 0,
     concentrationSpent = 0, concentrationCurrencyId = 0, hasIngenuityProc = false, ingenuityRefund = 9,
+    hasResourcefulnessProc = false, resourcefulnessComplete = true,
     request = { id = 1, timestamp = 1800000000, requestedCount = 1, useConcentration = false,
       concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0, recipe = recipe,
       allocations = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, quality = 0 } } },
@@ -110,6 +272,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
   local unknown = assert(api.GetCraft(5))
   assert(unknown.recipe == nil and unknown.request == nil and unknown.outputItem == nil)
   assert(unknown.outputQuantity == nil and unknown.hasIngenuityProc == nil and unknown.ingenuityRefund == nil)
+  assert(unknown.hasResourcefulnessProc == nil and unknown.resourcefulnessComplete == nil)
   equal(unknown.reagents, {})
   errorIs("not-found", api.GetCraft(999))
   errorIs("invalid-id", api.GetCraft(0))

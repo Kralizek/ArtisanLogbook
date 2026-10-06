@@ -9,5 +9,6 @@
 UI/Components.lua
 UI/Detail.lua
 UI/Overview.lua
+UI/Outcomes.lua
 UI/Window.lua
 Bootstrap.lua

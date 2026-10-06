@@ -7,7 +7,9 @@ Ledger.retentionDays = 60
 
 local maxInteger = 9007199254740991
 local seriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent",
-  "ingenuityProcCount", "ingenuityRefund" }
+  "ingenuityProcCount", "ingenuityRefund", "multicraftProcCount", "resourcefulnessProcCount",
+  "resourcefulnessCompleteProcCount" }
+local outcomeMetrics = { "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }
 
 local function isFinite(value)
   return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
@@ -77,6 +79,9 @@ local function emptyDatabase()
     nextRequestId = 1,
     crafts = {},
     craftSeries = {},
+    outcomeVersion = 2,
+    resourcefulnessSets = {},
+    returnedReagents = {},
     recipeOutputs = {},
     requests = {},
     reagents = {},
@@ -117,6 +122,7 @@ end
 
 local references = {
   series = { characterDimensionId = "character", recipeId = "recipe" },
+  returnedReagent = { characterDimensionId = "character", recipeId = "recipe", itemId = "item" },
   craft = { sessionId = "session", recipeId = "recipe", requestId = "request",
     outputItemId = "item", professionId = "profession" },
   request = { sessionId = "session", recipeId = "recipe" },
@@ -179,6 +185,18 @@ local function indexSeriesChoices(ledger, characterId, recipeId)
 end
 
 local function seriesMeasurement(craft, metric)
+  if metric == "resourcefulnessCompleteProcCount" then
+    if craft.resourcefulnessComplete ~= true then return nil end
+    return craft.hasResourcefulnessProc and 1 or 0
+  end
+  if metric == "multicraftProcCount" then
+    if craft.multicraftBonus == nil then return nil end
+    return craft.multicraftBonus > 0 and 1 or 0
+  end
+  if metric == "resourcefulnessProcCount" then
+    if craft.hasResourcefulnessProc == nil then return nil end
+    return craft.hasResourcefulnessProc and 1 or 0
+  end
   if metric == "ingenuityProcCount" or metric == "ingenuityRefund" then
     if craft.hasIngenuityProc == false then return 0 end
     if craft.hasIngenuityProc ~= true then return nil end
@@ -198,7 +216,7 @@ local function accumulateMetrics(row, existing, craft)
       if not isCount(row[coverage]) or row[coverage] >= maxInteger then
         return nil, "craft series coverage overflow: " .. metric
       end
-      if metric == "ingenuityProcCount" and
+      if metric:match("ProcCount$") and
           (not isCount(row[metric] or 0) or (row[metric] or 0) > maxInteger - value) then
         return nil, "craft series proc count overflow"
       end
@@ -288,8 +306,14 @@ local function validateDatabase(data)
         return nil, "invalid craft measurement: " .. field
       end
     end
-    if craft.hasIngenuityProc ~= nil and type(craft.hasIngenuityProc) ~= "boolean" then
-      return nil, "invalid craft boolean: hasIngenuityProc"
+    for _, field in ipairs({ "hasIngenuityProc", "hasResourcefulnessProc", "resourcefulnessComplete" }) do
+      if craft[field] ~= nil and type(craft[field]) ~= "boolean" then
+        return nil, "invalid craft boolean: " .. field
+      end
+    end
+    if craft.resourcefulnessComplete ~= nil and
+        (craft.resourcefulnessComplete ~= true or craft.hasResourcefulnessProc == nil) then
+      return nil, "complete Resourcefulness observation requires an outcome"
     end
     ids.craft[craft.id] = true
   end
@@ -428,10 +452,18 @@ local function validateDatabase(data)
         return nil, "invalid craft series coverage or sum: " .. metric
       end
     end
-    if row.ingenuityProcCount ~= nil and
-        (not isCount(row.ingenuityProcCount) or
-          row.ingenuityProcCount > row.ingenuityProcCountObservedCount) then
-      return nil, "invalid craft series proc count"
+    for _, metric in ipairs({ "ingenuityProcCount", "multicraftProcCount", "resourcefulnessProcCount",
+      "resourcefulnessCompleteProcCount" }) do
+      if row[metric] ~= nil and
+          (not isCount(row[metric]) or row[metric] > row[metric .. "ObservedCount"]) then
+        return nil, "invalid craft series proc count"
+      end
+    end
+    if row.resourcefulnessCompleteProcCountObservedCount > row.resourcefulnessProcCountObservedCount or
+        (row.resourcefulnessCompleteProcCount or 0) > (row.resourcefulnessProcCount or 0) or
+        row.resourcefulnessCompleteProcCountObservedCount - (row.resourcefulnessCompleteProcCount or 0) >
+          row.resourcefulnessProcCountObservedCount - (row.resourcefulnessProcCount or 0) then
+      return nil, "complete Resourcefulness coverage conflicts with proc coverage"
     end
     if row.ingenuityRefundObservedCount > row.ingenuityProcCountObservedCount or
         row.ingenuityRefundObservedCount <
@@ -440,6 +472,215 @@ local function validateDatabase(data)
     end
     if row.ingenuityProcCount == 0 and row.ingenuityRefund ~= nil and row.ingenuityRefund ~= 0 then
       return nil, "craft series refund without an observed proc"
+    end
+  end
+  return true
+end
+
+local function returnGroup(index, day, characterId, recipeId)
+  local recipes = seriesGroup(index, day, characterId)
+  local key = recipeId or 0
+  if not recipes[key] then recipes[key] = {} end
+  return recipes[key]
+end
+
+local function returnIndex(rows, field)
+  local index = {}
+  for _, row in ipairs(rows) do
+    returnGroup(index, row.bucketStart, row.characterDimensionId, row.recipeId)[row[field]] = row
+  end
+  return index
+end
+
+local function canonicalReturns(quantities)
+  local ids, encoded = {}, {}
+  for itemId, quantity in pairs(quantities) do
+    if quantity > 0 then ids[#ids + 1] = itemId end
+  end
+  if #ids > 1 then table.sort(ids) end
+  for _, itemId in ipairs(ids) do encoded[#encoded + 1] = string.format("%.0f", itemId) end
+  return table.concat(encoded, ",")
+end
+
+local function stageReturnRow(index, craft, characterId, field, key, metric, amount)
+  local day = math.floor(craft.timestamp / 86400) * 86400
+  local bucket = index[day]
+  local recipes = bucket and bucket[characterId or 0]
+  local group = recipes and recipes[craft.recipeId or 0]
+  local existing = group and group[key]
+  local previous = existing and existing[metric] or 0
+  local sum = previous + amount
+  if metric == "returnedQuantity" then
+    if not isFinite(previous) or previous < 0 or not isFinite(amount) or amount <= 0 or
+        not isFinite(sum) or sum <= previous or (previous > 0 and sum <= amount) or
+        (isCount(previous) and isCount(amount) and previous > maxInteger - amount) then
+      return nil, "returned aggregate overflow: " .. metric
+    end
+  elseif not isCount(previous) or not isCount(amount) or previous > maxInteger - amount then
+    return nil, "returned aggregate overflow: " .. metric
+  end
+  return { existing = existing, row = {
+    bucketStart = day, characterDimensionId = characterId, recipeId = craft.recipeId,
+    [field] = key, [metric] = sum,
+  } }
+end
+
+local function commitReturnRows(rows, index, field, staged)
+  for _, change in ipairs(staged) do
+    local row = change.row
+    if change.existing then
+      for key, value in pairs(row) do change.existing[key] = value end
+    else
+      rows[#rows + 1] = row
+      returnGroup(index, row.bucketStart, row.characterDimensionId, row.recipeId)[row[field]] = row
+    end
+  end
+end
+
+local function stageReturns(setIndex, quantityIndex, craft, characterId, quantities)
+  local sets, reagents = {}, {}
+  if craft.hasResourcefulnessProc == true and craft.resourcefulnessComplete == true then
+    local key = canonicalReturns(quantities)
+    if key == "" then return nil, "observed return has no items" end
+    local staged, reason = stageReturnRow(setIndex, craft, characterId,
+      "returnedItemSet", key, "craftCount", 1)
+    if not staged then return nil, reason end
+    sets[1] = staged
+  end
+  for itemId, quantity in pairs(quantities) do
+    if quantity > 0 then
+      local staged, reason = stageReturnRow(quantityIndex, craft, characterId,
+        "itemId", itemId, "returnedQuantity", quantity)
+      if not staged then return nil, reason end
+      reagents[#reagents + 1] = staged
+    end
+  end
+  return { sets = sets, reagents = reagents }
+end
+
+local function quantitiesFromFacts(rows, fractionalOnly)
+  local quantities = {}
+  for _, row in ipairs(rows) do
+    if isInteger(row.itemId) and isFinite(row.returnedQuantity) and row.returnedQuantity > 0 and
+        (not fractionalOnly or not isInteger(row.returnedQuantity)) then
+      quantities[row.itemId] = (quantities[row.itemId] or 0) + row.returnedQuantity
+    end
+  end
+  return quantities
+end
+
+local function validateReturns(data)
+  if data.outcomeVersion ~= 2 or not isArray(data.resourcefulnessSets) or
+      not isArray(data.returnedReagents) then return nil, "invalid outcome collections" end
+  local daily = {}
+  for _, row in ipairs(data.craftSeries) do
+    seriesGroup(daily, row.bucketStart, row.characterDimensionId)[row.recipeId or 0] = row
+  end
+  local ids = { character = {}, recipe = data.dimensions.recipes, item = data.dimensions.items }
+  for _, row in ipairs(data.dimensions.characters) do ids.character[row.id] = true end
+  local totals = {}
+  for _, spec in ipairs({ { data.resourcefulnessSets, "returnedItemSet", "craftCount", "series" },
+      { data.returnedReagents, "itemId", "returnedQuantity", "returnedReagent" } }) do
+    local seen = {}
+    for _, row in ipairs(spec[1]) do
+      local ok, reason = validateReferences(spec[4], row, ids)
+      if not ok then return nil, reason end
+      local validMeasure = spec[3] == "craftCount" and isInteger(row.craftCount) or
+        spec[3] == "returnedQuantity" and isFinite(row.returnedQuantity) and row.returnedQuantity > 0
+      if not isFinite(row.bucketStart) or row.bucketStart % 86400 ~= 0 or
+          not validMeasure then return nil, "invalid returned aggregate measure" end
+      local bucket = daily[row.bucketStart]
+      local recipes = bucket and bucket[row.characterDimensionId or 0]
+      local parent = recipes and recipes[row.recipeId or 0]
+      if not parent then return nil, "returned aggregate has no daily grain" end
+      local key = row[spec[2]]
+      if spec[2] == "returnedItemSet" then
+        if type(key) ~= "string" or key == "" then return nil, "invalid returned item set" end
+        local quantities = {}
+        for text in key:gmatch("[^,]+") do
+          local itemId = tonumber(text)
+          if not isInteger(itemId) or not ids.item[itemId] then return nil, "invalid returned item" end
+          quantities[itemId] = 1
+        end
+        if canonicalReturns(quantities) ~= key then return nil, "noncanonical returned item set" end
+        totals[parent] = (totals[parent] or 0) + row.craftCount
+      elseif not isInteger(key) then return nil, "invalid returned item" end
+      local grain = returnGroup(seen, row.bucketStart, row.characterDimensionId, row.recipeId)
+      if grain[key] then return nil, "duplicate returned aggregate grain" end
+      grain[key] = true
+    end
+  end
+  for _, row in ipairs(data.craftSeries) do
+    if (totals[row] or 0) ~= (row.resourcefulnessCompleteProcCount or 0) then
+      return nil, "returned sets conflict with proc count"
+    end
+  end
+  return true
+end
+
+local function upgradeOutcomes(data)
+  if data.outcomeVersion ~= nil and data.outcomeVersion ~= 1 then return true end
+  local priorOutcomes = data.outcomeVersion == 1
+  if not priorOutcomes and (data.resourcefulnessSets ~= nil or data.returnedReagents ~= nil) then
+    return nil, "unversioned outcome collections"
+  end
+  if priorOutcomes and (not isArray(data.resourcefulnessSets) or not isArray(data.returnedReagents)) then
+    return nil, "invalid prior outcome collections"
+  end
+  data.outcomeVersion, data.resourcefulnessSets = 2, {}
+  data.returnedReagents = priorOutcomes and data.returnedReagents or {}
+  local daily, sessions, facts = {}, {}, {}
+  for _, row in ipairs(data.craftSeries or {}) do
+    seriesGroup(daily, row.bucketStart, row.characterDimensionId)[row.recipeId or 0] = row
+    for _, metric in ipairs(outcomeMetrics) do
+      if not priorOutcomes and (row[metric] ~= nil or row[metric .. "ObservedCount"] ~= nil) then
+        return nil, "unversioned outcome measures"
+      end
+      if priorOutcomes and metric == "resourcefulnessProcCount" then
+        row[metric .. "ObservedCount"] = row[metric] or 0
+        if row[metric] == 0 then row[metric] = nil end
+      else
+        row[metric], row[metric .. "ObservedCount"] = nil, 0
+      end
+    end
+  end
+  for _, session in ipairs(data.dimensions.sessions) do sessions[session.id] = session end
+  for _, reagent in ipairs(data.reagents) do
+    local rows = facts[reagent.craftId] or {}
+    rows[#rows + 1] = reagent
+    facts[reagent.craftId] = rows
+  end
+  local setIndex, quantityIndex = {}, returnIndex(data.returnedReagents, "itemId")
+  for _, craft in ipairs(data.crafts) do
+    if not priorOutcomes and craft.hasResourcefulnessProc ~= nil then return nil, "unversioned outcome observation" end
+    local countedPositive = priorOutcomes and craft.hasResourcefulnessProc == true
+    local reagentFacts = facts[craft.id] or {}
+    local quantities = quantitiesFromFacts(reagentFacts)
+    craft.hasResourcefulnessProc = (countedPositive or next(quantities) ~= nil) and true or nil
+    craft.resourcefulnessComplete = nil
+    local session = sessions[craft.sessionId]
+    local characterId = session and session.characterDimensionId
+    local bucket = daily[math.floor(craft.timestamp / 86400) * 86400]
+    local group = bucket and bucket[characterId or 0]
+    local row = group and group[craft.recipeId or 0]
+    if not row then return nil, "legacy craft has no daily grain" end
+    for _, metric in ipairs(outcomeMetrics) do
+      local value = seriesMeasurement(craft, metric)
+      if value ~= nil and not (countedPositive and metric == "resourcefulnessProcCount") then
+        row[metric] = (row[metric] or 0) + value
+        row[metric .. "ObservedCount"] = row[metric .. "ObservedCount"] + 1
+      end
+    end
+    local staged, reason = stageReturns(setIndex, quantityIndex, craft, characterId,
+      priorOutcomes and quantitiesFromFacts(reagentFacts, true) or quantities)
+    if not staged then return nil, reason end
+    commitReturnRows(data.resourcefulnessSets, setIndex, "returnedItemSet", staged.sets)
+    commitReturnRows(data.returnedReagents, quantityIndex, "itemId", staged.reagents)
+  end
+  for _, row in ipairs(data.craftSeries) do
+    if row.multicraftBonusObservedCount == 1 and row.multicraftProcCountObservedCount == 0 then
+      row.multicraftProcCount = row.multicraftBonus > 0 and 1 or 0
+      row.multicraftProcCountObservedCount = 1
     end
   end
   return true
@@ -540,6 +781,8 @@ end
 
 function Ledger:RebuildIndexes()
   self.recipeOrder = nil
+  self.returnSetIndex = returnIndex(self.database.resourcefulnessSets, "returnedItemSet")
+  self.returnQuantityIndex = returnIndex(self.database.returnedReagents, "itemId")
   self.dimensionIndex, self.dimensionRows = {}, {}
   for kind, collection in pairs(dimensions) do
     self.dimensionIndex[kind], self.dimensionRows[kind] = {}, {}
@@ -707,12 +950,19 @@ local function openDatabase(database, clock, options)
   else
     data = copyValue(database)
   end
+  if data.schemaVersion ~= Ledger.schemaVersion or data.schemaIdentity ~= Ledger.schemaIdentity then
+    return nil, "ledger data refused: unsupported ledger schema"
+  end
   if data.recipeOutputs == nil then data.recipeOutputs = {} end
 
+  local upgraded, upgradeReason = upgradeOutcomes(data)
+  if not upgraded then return nil, "ledger data refused: " .. upgradeReason end
   local valid, reason = validateDatabase(data)
   if not valid then
     return nil, "ledger data refused: " .. reason
   end
+  valid, reason = validateReturns(data)
+  if not valid then return nil, "ledger data refused: " .. reason end
   if options then
     if options.maxCrafts ~= nil then
       return nil, "ledger options refused: schema 1 does not support maxCrafts"
@@ -1037,6 +1287,23 @@ function Ledger:RecordResult(result)
   if type(result.hasIngenuityProc) == "boolean" then
     craft.hasIngenuityProc = result.hasIngenuityProc
   end
+  local returnedQuantities, completeReturns = {}, isArray(result.resourcesReturned)
+  if completeReturns then
+    for _, returned in ipairs(result.resourcesReturned) do
+      local itemId = type(returned.reagent) == "table" and returned.reagent.itemID
+      if not isInteger(itemId) or not isCount(returned.quantity) then
+        completeReturns = false
+      else
+        local total = (returnedQuantities[itemId] or 0) + returned.quantity
+        if not isCount(total) then return nil, "reagent return sum overflow" end
+        returnedQuantities[itemId] = total
+      end
+    end
+  end
+  if completeReturns then
+    craft.hasResourcefulnessProc = canonicalReturns(returnedQuantities) ~= ""
+    craft.resourcefulnessComplete = true
+  end
 
   local pending = self.pendingRequest
   local request = pending and self.requestById[pending.id]
@@ -1123,8 +1390,15 @@ function Ledger:RecordResult(result)
     end
   end
 
+  local stagedReturns
+  returnedQuantities = quantitiesFromFacts(reagentFacts)
+  stagedReturns, reason = stageReturns(self.returnSetIndex, self.returnQuantityIndex,
+    craft, stagedSeries.characterDimensionId, returnedQuantities)
+  if not stagedReturns then return nil, reason end
   commitDimensions(self, stagedDimensions)
   commitStagedSeries(data, self.seriesByKey, self.seriesDays, stagedSeries)
+  commitReturnRows(data.resourcefulnessSets, self.returnSetIndex, "returnedItemSet", stagedReturns.sets)
+  commitReturnRows(data.returnedReagents, self.returnQuantityIndex, "itemId", stagedReturns.reagents)
   indexSeriesChoices(self, stagedSeries.characterDimensionId, craft.recipeId)
   if craft.recipeId then
     if not self.recipeCounts[craft.recipeId] then self.recipeOrder = nil end
@@ -1296,6 +1570,25 @@ local function moveCraftSeriesContribution(index, rows, craft, characterId, reci
   return true
 end
 
+local function moveReturnContribution(rows, index, craft, characterId, recipeId, field, key, metric, amount)
+  local day = math.floor(craft.timestamp / 86400) * 86400
+  local group = returnGroup(index, day, characterId, nil)
+  local source = group[key]
+  if not source or source[metric] < amount then return nil, "missing returned aggregate contribution" end
+  local targetCraft = { timestamp = craft.timestamp, recipeId = recipeId }
+  local staged, reason = stageReturnRow(index, targetCraft, characterId, field, key, metric, amount)
+  if not staged then return nil, reason end
+  source[metric] = source[metric] - amount
+  if source[metric] == 0 then
+    group[key] = nil
+    for position, row in ipairs(rows) do
+      if row == source then table.remove(rows, position); break end
+    end
+  end
+  commitReturnRows(rows, index, field, { staged })
+  return true
+end
+
 function Ledger:RepairUnknownRecipes(outputFilter)
   local analysis, reason = self:AnalyzeUnknownRecipeRepair(outputFilter)
   if not analysis then return nil, reason end
@@ -1309,6 +1602,8 @@ function Ledger:RepairUnknownRecipes(outputFilter)
   for _, repair in ipairs(analysis.repairs) do repairsById[repair.craftId] = repair end
 
   local seriesIndex = seriesRowsByGrain(stagedData.craftSeries)
+  local setIndex = returnIndex(stagedData.resourcefulnessSets, "returnedItemSet")
+  local quantityIndex = returnIndex(stagedData.returnedReagents, "itemId")
   local sessions = {}
   for _, session in ipairs(stagedData.dimensions.sessions) do sessions[session.id] = session end
   local recipes = {}
@@ -1326,12 +1621,25 @@ function Ledger:RepairUnknownRecipes(outputFilter)
       ok, reason = moveCraftSeriesContribution(seriesIndex, stagedData.craftSeries,
         craft, characterId, repair.recipeId)
       if not ok then return nil, reason end
+      local quantities = quantitiesFromFacts(self.reagentsByCraftId[craft.id] or {})
+      if craft.hasResourcefulnessProc == true and craft.resourcefulnessComplete == true then
+        ok, reason = moveReturnContribution(stagedData.resourcefulnessSets, setIndex,
+          craft, characterId, repair.recipeId, "returnedItemSet", canonicalReturns(quantities), "craftCount", 1)
+        if not ok then return nil, reason end
+      end
+      for itemId, quantity in pairs(quantities) do
+        ok, reason = moveReturnContribution(stagedData.returnedReagents, quantityIndex,
+          craft, characterId, repair.recipeId, "itemId", itemId, "returnedQuantity", quantity)
+        if not ok then return nil, reason end
+      end
       craft.recipeId = repair.recipeId
     end
   end
 
   local valid
   valid, reason = validateDatabase(stagedData)
+  if not valid then return nil, "repair validation failed: " .. tostring(reason) end
+  valid, reason = validateReturns(stagedData)
   if not valid then return nil, "repair validation failed: " .. tostring(reason) end
 
   local stagedLedger = {}
@@ -1399,6 +1707,8 @@ function Ledger:ClearHistory()
   self.database.requests = {}
   self.database.reagents = {}
   self.database.craftSeries = {}
+  self.database.resourcefulnessSets = {}
+  self.database.returnedReagents = {}
   self.pendingRequest, self.pendingRecipeId = nil, nil
   self.requestAmbiguous, self.ambiguousRecipe = nil, nil
   self:RebuildIndexes()

@@ -29,6 +29,9 @@ local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
 local recipes, reason = ArtisanLogbookAPI.GetRecipeSummaries({ limit = 50 })
 local characters, reason = ArtisanLogbookAPI.GetCharacters()
 local professions, reason = ArtisanLogbookAPI.GetProfessions(characterKey)
+local outcomes, reason = ArtisanLogbookAPI.GetRecipeOutcomes(recipeId, filter, { buckets = 60 })
+local sets, reason = ArtisanLogbookAPI.GetRecipeReturnSets(recipeId, filter, { limit = 50 })
+local materials, reason = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipeId, filter, { limit = 50 })
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
   -- Refresh consumer state using the committed craft projection.
 end)
@@ -60,6 +63,7 @@ Both craft queries and callback payloads use the same shape:
   outputQuantity = 5, outputQuality = 0, outputItemLevel = 0,
   multicraftBonus = 0, concentrationSpent = 0, concentrationCurrencyId = 0,
   hasIngenuityProc = false, ingenuityRefund = 9,
+  hasResourcefulnessProc = false, resourcefulnessComplete = true,
   request = {
     id = 42, timestamp = 1800000000, recipe = recipe,
     requestedCount = 1, useConcentration = false,
@@ -82,6 +86,11 @@ retained reagent facts, not proof of no reagent consumption. `request` is absent
 without a correlated submission; `request.allocations` is absent without a
 captured selection. No context, order/customer data, or source is fabricated.
 Request quotes remain separate from observed result measurements.
+`hasResourcefulnessProc` is present only when a return outcome was captured;
+`resourcefulnessComplete` is true only when the callback's returned-item list was
+complete and valid. A positive item fact can establish a proc even when the full
+list is incomplete. These fields are factual; consumers should not treat missing
+as a negative result.
 
 Related objects have these allowlisted fields (each metadata field is optional):
 
@@ -202,6 +211,109 @@ Facets reuse secondary-index candidate populations with the appropriate
 self-exclusion; their counts may require traversing the full retained population.
 Indexes are runtime-only and rebuilt after startup retention, never persisted
 as another ledger. See [storage-ledger.md](storage-ledger.md) for details.
+
+### Recipe Outcomes
+
+The three recipe-specific queries above operate on durable facts, including
+history older than detailed retention. `recipeId` is a WoW recipe ID. Their
+filter accepts **only** `time` and `characters`, with the same half-open and
+OR-selection semantics as the shared filter. Time bounds must be UTC-midnight
+aligned; omitted bounds mean all available aggregate history. No feature-start
+date is imposed. Empty/unknown populations return zero crafts and zero coverage,
+not measured-zero outcomes. Invalid inputs use the existing API error codes.
+
+`GetRecipeOutcomes(recipeId, filter, { buckets = 60 })` returns:
+
+```lua
+{
+  totals = {
+    craftCount = 4,
+    multicraftProcCount = 1, multicraftProcCountObservedCount = 2,
+    multicraftBonus = 3, multicraftBonusObservedCount = 2,
+    outputQuantity = 13, outputQuantityObservedCount = 2,
+    resourcefulnessProcCount = 2, resourcefulnessProcCountObservedCount = 3,
+    resourcefulnessCompleteProcCount = 1, resourcefulnessCompleteProcCountObservedCount = 2,
+    ingenuityProcCount = 1, ingenuityProcCountObservedCount = 2,
+    ingenuityRefund = 20, ingenuityRefundObservedCount = 2,
+    concentrationSpentObservedCount = 0, -- sum absent when unobserved
+  },
+  from = 1800057600, to = 1800403200,
+  bucketSeconds = 172800,
+  series = { { bucketStart = 1800057600, craftCount = 3 }, ... },
+}
+```
+
+`buckets` defaults to 60 and is an integer from 1 to 200. The equal-width
+whole-day buckets cover the selected interval, with empty buckets filled with
+zero **craft counts**, never synthetic measurement observations. `from`, `to`,
+and `bucketSeconds` are absent for an empty population and `series` is empty.
+No character/session/persistence rows are exposed. The older `GetCraftSeries`
+projection remains compatible; this query is the bounded recipe summary/chart
+alternative, not a requirement to download and sum daily history in the UI.
+
+`GetRecipeReturnSets(recipeId, filter, { limit = 50, cursor = nil })` returns:
+
+```lua
+{ returns = { { itemIds = { 3, 20 }, craftCount = 7 }, ... }, nextCursor = "..." }
+```
+
+Each row combines the selected days/characters for one observed positive-return
+set. Item IDs are distinct and numerically sorted. A consumer classifies the
+set once: if **any** item is currently non-trivial, add that row's `craftCount`
+once to its non-trivial numerator. Its denominator is
+`resourcefulnessCompleteProcCountObservedCount`, including completely observed
+false outcomes. The raw any-proc rate instead uses
+`resourcefulnessProcCountObservedCount`, which can additionally include legacy
+positive evidence without complete set coverage. Never use returned-item count,
+set-row count, or total crafts as a proxy
+for that denominator. Empty sets are represented by measured-false coverage,
+not return-set rows. Partial/unknown sets do not join the complete-return denominator.
+Legacy zero/nil facts cannot prove list completeness because old capture could
+discard unavailable entries. Zero complete-return coverage means an unknown
+non-trivial rate, even if the raw positive proc rate is known.
+
+These observations need not be a representative sample: legacy backfill may
+prove only positive outcomes. For example, 8 positive return records in 30
+crafts do not establish a 100% population proc rate. The production UI says
+`Returns recorded for 8 crafts` and `Return results missing for 22 crafts`; it
+does not claim the other crafts had no returns. It shows an overall any-return
+rate only when all selected crafts have known outcomes. Non-trivial savings
+likewise show recorded craft counts instead of subset percentages when full
+return details are missing; missing figures display a dash. These presentation
+choices do not change the factual API's counts or observation fields.
+
+`GetRecipeReturnedReagents` has the same parameters/paging shape and returns
+`{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.
+Each row combines one material's positive quantities across the selected period
+and characters, including individually known quantities from partially observed
+results. Identity is the item ID, not its name: same-named quality variants can
+legitimately have separate rows. No proc rate may be derived from these quantity rows.
+
+Return-page limits default to 50 and have a hard maximum of 200. Pass opaque
+`nextCursor` values unchanged with the same recipe, filter, and query method;
+the limit may change. Set ordering is deterministic and opaque; material pages
+are ordered by item ID. Cursors are exclusive key boundaries, not historical
+snapshots. Restart after capture, repair, or a population/preference change.
+Final pages omit the cursor. All projections are detached copies.
+
+Core traverses selected aggregate-day indexes, directly looks up the requested
+recipe, and never scans retained crafts or sends persistence rows. Working
+result memory is capped at the requested chart size or page size plus one
+lookahead identity. Aggregating a broad period can still visit its occupied
+aggregate grains; it is not constant-time. The UI processes returned sets one
+100-row page per frame, discards processed pages, and renders only three
+returned-material rows at a time. There is no full-history daily-row UI scan.
+
+Rates and interpretation remain consumer-owned. Multicraft and Ingenuity proc
+rates divide their counts by their own observed counts. Ingenuity refund totals
+are **applied** refunds, not the raw reported refund on false/unknown outcomes.
+Missing coverage is unknown. Equal marginal observation counts alone do not
+prove the same crafts were measured. The production UI shows bonus/output and
+refund/spend percentages only when both measures cover the complete selected
+population and the denominator is positive; otherwise quantities are shown with
+a short missing-details note where needed, and the percentage is omitted.
+Trivial-item preferences are not part
+of either the factual API or `ArtisanLogbookManagement`.
 
 ### Durable daily craft series
 
