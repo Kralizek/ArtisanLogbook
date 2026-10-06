@@ -1434,6 +1434,64 @@ end
 
 do
   local core = reload(nil)
+  local ledger = core.ledger
+  for index = 1, 85 do
+    ledger:AddDimension("recipe", 9650 + index, { name = string.format("Recipe %02d", index) })
+    local count = index == 1 and 44 or index == 2 and 19 or 1
+    for craftIndex = 1, count do
+      ledger:BeginCraft(9650 + index)
+      assert(ledger:RecordResult({ operationID = index * 100 + craftIndex }))
+    end
+  end
+  local ui = loadUI()
+  local window = ui.productionWindow
+  window:Show()
+  for _, destination in ipairs({ "Overview", "Recipes" }) do
+    window:Activate(destination)
+    local page = window.pages[destination]
+    local list = page.topRecipes or page.catalogue
+    assert(#list.items == 40 and list.items[1].craftCount == 44 and list.items[2].craftCount == 19)
+    list.scroll.SetVerticalScroll = function(self, offset)
+      local changed = offset ~= self:GetVerticalScroll()
+      methods.SetVerticalScroll(self, offset)
+      if changed then self.scripts.OnVerticalScroll(self, offset) end
+    end
+    list.child.SetHeight = function(self, value)
+      methods.SetHeight(self, value)
+      local maximum = math.max(0, value - list.scroll:GetHeight())
+      if list.scroll:GetVerticalScroll() > maximum then list.scroll:SetVerticalScroll(maximum) end
+    end
+    list.scroll:SetVerticalScroll(180)
+    local items = list.items
+    list.worker.scripts.OnUpdate(list.worker)
+    assert(#list.items == 40, destination .. ": enrichment must not load a page during repaint")
+    assert(list.items == items and list.scroll:GetVerticalScroll() == 180)
+    for index, row in ipairs(list.rows) do
+      if row.item then assert(row.item == list.items[index]) end
+    end
+    list:LoadNext()
+    assert(#list.items == 80)
+    list:LoadNext()
+    assert(#list.items == 85 and list.finish:IsShown())
+    local childHeight = list.child:GetHeight()
+    while list.worker.scripts.OnUpdate do list.worker.scripts.OnUpdate(list.worker) end
+    assert(#list.items == 85 and list.items == items and list.finish:IsShown())
+    assert(list.child:GetHeight() == childHeight and list.scroll:GetVerticalScroll() == 180)
+    local seen = {}
+    for index, row in ipairs(list.items) do
+      assert(not seen[row.recipe.id], destination .. ": duplicate recipe")
+      seen[row.recipe.id] = true
+      assert(row.totals.craftCount == row.craftCount and list.rows[index].item == row)
+      assert(list.rows[index].cells[2].label.text == ui.UI.Number(row.craftCount))
+      if index > 1 then assert(list.items[index - 1].craftCount >= row.craftCount) end
+    end
+  end
+  window:Hide()
+  print("PASS most-crafted ordering survives enrichment and native scroll callbacks across pages")
+end
+
+do
+  local core = reload(nil)
   local ledger, api = core.ledger, environment.ArtisanLogbookAPI
   environment.ArtisanLogbookUISettings.trivialReagents = {}
   local ui = loadUI()

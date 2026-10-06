@@ -715,10 +715,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   end
 
   function frame:Repaint()
-    local items, offset, finished = self.items, self.scroll:GetVerticalScroll(), self.finish:IsShown()
-    self:Reset(); self:Append(items)
-    if finished then self:SetFinished() end
-    self.scroll:SetVerticalScroll(offset)
+    self:Append(self.items, true)
   end
 
   function frame:Reset(message)
@@ -739,10 +736,10 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
     self.child:SetHeight(math.max(self.scroll:GetHeight(), #self.items * 30 + 35))
   end
 
-  function frame:Append(items)
-    for _, item in ipairs(items) do
-      local index = #self.items + 1
-      self.items[index] = item
+  function frame:Append(items, repaint)
+    for position, item in ipairs(items) do
+      local index = repaint and position or #self.items + 1
+      if not repaint then self.items[index] = item end
       local row = self.rows[index]
       if not row then
         row = CreateFrame("Button", nil, child)
@@ -854,8 +851,10 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
       end
       row:Show()
     end
-    self.empty:SetShown(#self.items == 0)
-    self.child:SetHeight(math.max(self.scroll:GetHeight(), #self.items * 30))
+    if not repaint then
+      self.empty:SetShown(#self.items == 0)
+      self.child:SetHeight(math.max(self.scroll:GetHeight(), #self.items * 30))
+    end
   end
   scroll:HookScript("OnVerticalScroll", function(self)
     if frame.onNearEnd and self:GetVerticalScroll() + self:GetHeight() >= child:GetHeight() - 100 then
