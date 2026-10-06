@@ -40,7 +40,7 @@ function addon.CreateProductionWindow()
   body:SetPoint("TOPLEFT", 14, -16)
   body:SetSize(inner, bodyHeight)
   local pages = {}
-  for _, name in ipairs({ "Overview", "Logbook", "Recipes", "Character", "Profession", "Recipe", "Settings" }) do
+  for _, name in ipairs({ "Overview", "Logbook", "Recipes", "Reagents", "Character", "Profession", "Recipe", "Settings" }) do
     pages[name] = CreateFrame("Frame", nil, body)
     pages[name]:SetAllPoints(body)
     pages[name]:Hide()
@@ -59,6 +59,7 @@ function addon.CreateProductionWindow()
       { label = "Overview", page = "Overview", icon = "Interface\\Icons\\INV_Misc_Book_09" },
       { label = "Logbook", page = "Logbook", icon = "Interface\\Icons\\INV_Misc_Note_01" },
       { label = "Recipes", page = "Recipes", icon = "Interface\\Icons\\INV_Scroll_03" },
+      { label = "Reagents", page = "Reagents", icon = "Interface\\Icons\\INV_Misc_Herb_19" },
       { section = "PINNED RECIPES" },
     }
     local pins = UI.Pins()
@@ -159,6 +160,7 @@ function addon.CreateProductionWindow()
     UI.PopulationPage(pages[name], name, inner, bodyHeight, navigate, openCraft)
   end
   UI.CataloguePage(pages.Recipes, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end)
+  UI.ReagentsPage(pages.Reagents, inner, bodyHeight)
   UI.RecipePage(pages.Recipe, inner, bodyHeight, openCraft, function() window:RefreshSidebar() end)
   window.recipeDetailPage, window.recipeOutcomes = pages.Recipe, pages.Recipe.outcomes
   function window:OpenRecipe(recipe) self:Activate("Recipe", recipe) end

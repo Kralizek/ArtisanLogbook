@@ -456,10 +456,12 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         local rule = row:CreateTexture(nil, "BACKGROUND")
         rule:SetPoint("BOTTOMLEFT", 0, 0); rule:SetSize(width - 24, 1)
         rule:SetColorTexture(.45, .34, .18, .16)
-        row.cells = {}
+        row.cells, row.widgets = {}, {}
         local left = 0
         for _, column in ipairs(columns) do
-          if column.activity then
+          if column.create then
+            row.widgets[#row.widgets + 1] = { widget = column.create(row, left), column = column }
+          elseif column.activity then
             row.activity = CreateFrame("Frame", nil, row)
             row.activity:SetSize(column.width - 4, 24)
             row.activity:SetPoint("TOPLEFT", left + 2, -2)
@@ -498,6 +500,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         self.rows[index] = row
       end
       row.item = item
+      for _, cell in ipairs(row.widgets) do cell.column.update(cell.widget, item) end
       for _, cell in ipairs(row.cells) do
         local text = cell.column.value(item)
         cell.label:SetText(UI.Elide(text, math.max(3, math.floor((cell.column.width - (cell.icon and 30 or 9)) / 7))))

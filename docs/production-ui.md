@@ -9,12 +9,13 @@ belong to `ArtisanLogbookUISettings`, never Core. Core owns the separate
 `ArtisanLogbookAPI` v1. Retention uses `ArtisanLogbookManagement`. The production
 UI neither accesses Core's private namespace nor reads/writes its SavedVariables.
 Confirmed destructive maintenance stays in the debug tracer. Storage, retention,
-and the durable outcomes introduced by #21 are unchanged. The one additive API
-option is `GetRecipeSummaries({ sort = "profession" })`.
+and the durable outcomes introduced by #21 are unchanged. Additive API changes
+are `GetRecipeSummaries({ sort = "profession" })` and the read-only
+`GetReagentSummaries(options)` catalogue query.
 
 ## Pages and navigation
 
-The persistent dark sidebar contains Overview, Logbook, Recipes, pinned recipes,
+The persistent dark sidebar contains Overview, Logbook, Recipes, Reagents, pinned recipes,
 characters, and professions. Settings stays at the bottom, outside the scrolling
 navigation population. Selected entries have a restrained gold highlight; long
 names are shortened with full labels on hover. The main surface uses Blizzard
@@ -30,6 +31,7 @@ existing current-entry highlight without replacing the primary selection.
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, returned reagents, and most-crafted recipe. No factual craft list. |
 | Logbook | Independent period/character/profession filters above a dense newest-first ledger. Recipe, Character, Profession, Qty, and Highlights columns. Factual history loads 40 crafts per page as the user scrolls. |
 | Recipes | The complete recorded-recipe catalogue, with independent character/profession filters. Name (default), profession, and most-crafted sorting happen before 40-row pagination. Selecting a row navigates to Recipe Detail. |
+| Reagents | Global reagent catalogue and canonical trivial-preference management. Profession, trivial-state and name-search filters; name/allocated/returned/recipe-count sort; one row per item ID with artwork, known quality, recorded professions/recipe count, quantities and a Trivial checkbox. |
 | Character | Neutral helmet icon and class-colored identity; period and optional profession filter, graph, production totals, five most-crafted recipes, and exactly two primary-profession slots. Empty slots say Not recorded. |
 | Profession | Profession icon and identity; period and optional character filter, graph, production totals, five most-crafted recipes, and a lazy-loaded recent-craft ledger. |
 | Recipe Detail | Identity, profession/expansion metadata when known, pin control, shared period/character filters, and four local views: Overview, Craft History, Statistics, Reagents. This is a main-content page, not a modal. |
@@ -58,6 +60,42 @@ are included. Ordinary navigation does not discard loaded history. New data mark
 cached pages stale and reloads lists in bounded batches while retaining position.
 Profession metadata events refresh safely on the next frame. Page selections are
 session state, not reload-persistent preferences.
+
+## Global Reagents catalogue
+
+Reagents is a top-level sibling directly after Recipes, separate from Recipe
+Detail's contextual Reagents view. It reuses the parchment ledger and thin
+separators, with compact item/quality/profession artwork and no card grid.
+Each row includes the item ID, so identical names and distinct quality IDs never
+merge. Missing artwork uses the existing question-mark fallback; unavailable
+quality is not invented.
+
+Filters are Profession, Trivial state (All, Trivial, Non-trivial), and literal
+case-insensitive name search. Search is briefly debounced without changing an
+in-flight paging cursor. Name is the default sort; Most allocated, Most returned
+and Recipe count sort descending across the entire selection before 40-row lazy
+paging. Filters, loaded rows and scroll offset survive navigation away and back.
+
+Allocated sums retained craft allocations only. Returned sums existing durable
+positive return facts without double-counting retained rows. The footer states
+the different scopes. Unknown quantities say Unknown rather than zero; known
+amounts with incomplete coverage are marked partial. Full cell values and item
+identity are available on hover. There is no return percentage. After detail
+pruning, returns remain but allocation-only identities may disappear and
+allocations/quality may become unknown; no new historical allocation store is
+introduced. Recipe/profession associations describe recorded uses, not all game
+recipes capable of using the item.
+
+The checkbox writes only `ArtisanLogbookUISettings.trivialReagents`, the same
+item-ID preference used by Craft Detail and Recipe Detail. Those contextual
+controls remain. A UI-only change notification synchronizes controls and
+invalidates/restarts relevant Resourcefulness classification immediately,
+preserving recipe material pagination. Filtering by Trivial/Non-trivial happens
+before pagination via generic included/excluded item IDs passed to Core; Core
+has no knowledge of UI classification. A toggled row may leave the current
+filtered population. Quantities are unaffected by classification.
+
+This page contains no TSM, inventory, valuation, or Warband Bank integration.
 
 ## Pinned recipes
 
@@ -119,7 +157,7 @@ that preference refreshes recipe statistics on return without resetting history.
   outcome API, not an unbounded daily-series request.
 - Return-quantity workers process one outcome query or one 100-item page per
   render frame. Non-trivial classification processes 100 sets/crafts per frame;
-  reagent tables render ten rows per page. History and catalogue requests remain
+  recipe reagent tables render ten rows per page. History and catalogue requests remain
   40-row pages. No heavyweight UI framework or external service is introduced.
 
 ## Visual references and deviations
@@ -128,6 +166,12 @@ Issue #22 was read with both comments before implementation. The primary visual
 reference is the [latest four-view Recipe Detail mockup](https://github.com/Kralizek/ArtisanLogbook/issues/22#issuecomment-6012538079).
 The [earlier six-screen mockup](https://github.com/Kralizek/ArtisanLogbook/issues/22#issuecomment-6012436186)
 supplies context for the other pages and Craft Detail.
+
+When the top-level Reagents page was requested, the issue still exposed only
+those two comments/images, not a separate Reagents mockup. With direction to
+proceed autonomously, the page follows the existing Recipes catalogue reference
+and the requested ledger columns. Comparison with the missing page-specific
+image remains part of the next review; no exact visual match is claimed.
 
 The implementation follows the sidebar/parchment proportions, ledger density,
 local recipe views, and native item artwork, but deliberately differs where the
@@ -180,6 +224,18 @@ pages and the modal while performing this checklist.
   across multiple pages. Open a recipe and return to the preserved catalogue.
   Recipes must remain selected throughout Recipe Detail, including pin navigation,
   pin/unpin changes, local recipe views, and Craft Detail modal return.
+- [ ] Open the top-level Reagents destination directly after Recipes. Test no
+  reagents, one reagent, identical names with different item/quality IDs, missing
+  metadata, long names, multiple professions and more than 40 rows. Check identity,
+  quality artwork, tooltips and row checkbox hit areas at every UI scale.
+- [ ] Exercise every Reagents filter/sort across multiple pages, including search
+  while scrolling. Navigate away/back and verify filters, rows and offset persist.
+  Confirm allocations/returns display unknown and partial evidence honestly.
+- [ ] Toggle Trivial globally and in both detail views. Verify shared checkbox
+  state, immediate non-trivial Resourcefulness recalculation, unchanged quantities,
+  and a row leaving Trivial/Non-trivial selections. Reload to verify persistence.
+  Prune a copy of history and verify durable returns remain without inventing
+  missing allocation totals. Compare with the Reagents mockup when supplied.
 - [ ] Visit characters with 0, 1 and 2 recorded primary professions, including
   secondary professions and historical profession changes. There must never be
   more than two primary slots or an invented portrait. Test per-character filters.

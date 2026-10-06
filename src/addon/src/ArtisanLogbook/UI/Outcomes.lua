@@ -1,5 +1,23 @@
 local _, addon = ...
 local UI = addon.UI
+local trivialCallbacks = {}
+
+function UI.RegisterTrivialCallback(callback)
+  trivialCallbacks[#trivialCallbacks + 1] = callback
+end
+
+function UI.TrivialItemIds()
+  local ids = {}
+  if type(ArtisanLogbookUISettings) == "table" and type(ArtisanLogbookUISettings.trivialReagents) == "table" then
+    for id, selected in pairs(ArtisanLogbookUISettings.trivialReagents) do
+      if selected == true and type(id) == "number" and id > 0 and id < math.huge and id % 1 == 0 then
+        ids[#ids + 1] = id
+      end
+    end
+  end
+  table.sort(ids)
+  return ids
+end
 
 local function trivialItems()
   if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
@@ -16,7 +34,11 @@ end
 function UI.SetTrivial(itemId, trivial)
   if type(itemId) ~= "number" or itemId < 1 or itemId >= math.huge or itemId % 1 ~= 0 or
       type(trivial) ~= "boolean" then return nil end
+  local changed = UI.IsTrivial(itemId) ~= trivial
   trivialItems()[itemId] = trivial and true or nil
+  if changed then
+    for _, callback in ipairs(trivialCallbacks) do callback(itemId, trivial) end
+  end
   return true
 end
 
@@ -291,7 +313,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     row.identity = UI.Text(row, 36, -16, nameWidth, 14)
     row.identity:SetTextColor(.38, .32, .22)
     row.quantity = UI.Text(row, nameWidth + 44, -6, 84, 22)
-    row.check = UI.TrivialCheckbox(row, nameWidth + 144, -2, function() pane:Refresh(true) end)
+    row.check = UI.TrivialCheckbox(row, nameWidth + 144, -2, function() end)
     row:SetScript("OnEnter", function(self)
       if not self.item then return end
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -429,6 +451,9 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged)
     period:Update(periodChoices, days)
     self:Refresh(state ~= nil)
   end
+  UI.RegisterTrivialCallback(function()
+    if recipeId then pane:Refresh(true) end
+  end)
   return pane
 end
 

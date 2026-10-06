@@ -1323,6 +1323,129 @@ end
 
 do
   local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  environment.ArtisanLogbookUISettings.trivialReagents = {}
+  local ui = loadUI()
+  local window, helpers = ui.productionWindow, ui.UI
+  local page, list = window.pages.Reagents, window.pages.Reagents.catalogue
+  window:Show(); window:Activate("Reagents")
+  assert(window.navItems[3].entry.page == "Recipes" and window.navItems[4].entry.page == "Reagents")
+  assert(window.navItems[4].selection:IsShown() and not window.navItems[3].selection:IsShown())
+  assert(#list.items == 0 and list.empty:IsShown())
+  local summaries = api.GetReagentSummaries
+  api.GetReagentSummaries = function(options)
+    assert(options.limit == 40 and options.trivial == nil)
+    return summaries(options)
+  end
+  assert(ledger:AddDimension("profession", 171, { name = "Alchemy" }))
+  assert(ledger:AddDimension("profession", 333, { name = "Enchanting" }))
+  assert(ledger:AddDimension("recipe", 9701, { name = "Potion", professionId = 171 }))
+  assert(ledger:AddDimension("recipe", 9702, { name = "Enchant", professionId = 333 }))
+  local function record(recipeId, itemId, name, quantity, returned, quality)
+    assert(ledger:AddDimension("item", itemId, { name = name }))
+    assert(ledger:SubmitCraft(recipeId, 1, false, nil, {
+      { dataSlotIndex = 1, quantity = quantity, quality = quality, reagent = { itemID = itemId } },
+    }))
+    return assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = itemId }, quantity = returned } } }))
+  end
+  local firstCraft = record(9701, 4008, "Bloom", 5, 2, 1)
+  assert(#list.items == 1 and list.items[1].item.id == 4008 and list.items[1].quality == 1)
+  assert(list.items[1].allocatedQuantity == 5 and list.items[1].returnedQuantity == 2)
+  record(9701, 4009, "Bloom", 7, 3, 2)
+  record(9702, 4008, "Bloom", 3, 1, 1)
+  assert(#list.items == 2 and list.items[2].item.id == 4009 and list.items[2].quality == 2)
+  assert(#list.items[1].professions == 2 and list.items[1].recipeCount == 2)
+  assert(list.rows[1].widgets[1].widget.identity.text:find("#4008", 1, true))
+  assert(list.rows[2].widgets[1].widget.identity.text:find("Quality 2", 1, true))
+  for index = 1, 45 do record(9701, 4100 + index, string.format("Herb %02d", index), index, index, 1) end
+  assert(#list.items == 40)
+  page.searchInput:SetText("Bloom")
+  page.searchInput.scripts.OnTextChanged(page.searchInput)
+  list.scroll:SetVerticalScroll(1200); list.scroll.scripts.OnVerticalScroll(list.scroll)
+  assert(#list.items == 47)
+  page.scripts.OnUpdate(page, .3)
+  assert(#list.items == 2)
+  page.searchInput:SetText("")
+  page.searchInput.scripts.OnTextChanged(page.searchInput)
+  page.scripts.OnUpdate(page, .3)
+  dropdown(page, "Most returned"):Choose("returned")
+  assert(#list.items == 40 and list.items[1].item.id == 4145)
+  dropdown(page, "Most allocated"):Choose("allocated")
+  assert(list.items[1].item.id == 4145)
+  dropdown(page, "Recipe count"):Choose("recipes")
+  assert(list.items[1].item.id == 4008)
+  dropdown(page, "Name"):Choose("name")
+  dropdown(page, "Enchanting"):Choose(333)
+  assert(#list.items == 1 and list.items[1].allocatedQuantity == 3 and list.items[1].returnedQuantity == 1)
+  dropdown(page, "Alchemy"):Choose(false)
+  local function search(text)
+    page.searchInput:SetText(text)
+    page.searchInput.scripts.OnTextChanged(page.searchInput)
+    page.scripts.OnUpdate(page, .3)
+  end
+  search("BLOOM")
+  assert(#list.items == 2)
+  local function check(row)
+    return list.rows[row].widgets[2].widget
+  end
+  check(1):SetChecked(true); check(1).scripts.OnClick(check(1))
+  assert(helpers.IsTrivial(4008) and environment.ArtisanLogbookUISettings.trivialReagents[4008])
+  dropdown(page, "Trivial"):Choose("trivial")
+  assert(#list.items == 1 and list.items[1].item.id == 4008)
+  dropdown(page, "Non-trivial"):Choose("non-trivial")
+  assert(#list.items == 1 and list.items[1].item.id == 4009)
+  dropdown(page, "Trivial"):Choose("all")
+  assert(#list.items == 2)
+  window:OpenRecipe({ id = 9701 })
+  local outcomes = window.recipeOutcomes
+  local function finish()
+    while outcomes.scripts.OnUpdate do outcomes.scripts.OnUpdate() end
+  end
+  finish()
+  assert(outcomes.materialRows[1].check:GetChecked())
+  local before = outcomes.resourcefulness.nonTrivial.text
+  window:Activate("Reagents")
+  assert(#list.items == 2 and page.searchInput:GetText() == "BLOOM")
+  check(1):SetChecked(false); check(1).scripts.OnClick(check(1))
+  finish()
+  assert(not outcomes.materialRows[1].check:GetChecked() and outcomes.resourcefulness.nonTrivial.text ~= before)
+  window:OpenRecipe({ id = 9701 }); window:OpenCraft(firstCraft.id)
+  local detail, preference = window.craftDetailPage
+  for _, frame in ipairs(frames) do
+    if frame.parent == detail and frame.kind == "CheckButton" then preference = frame end
+  end
+  assert(preference and preference.itemId == 4008 and not preference:GetChecked())
+  preference:SetChecked(true); preference.scripts.OnClick(preference)
+  assert(helpers.IsTrivial(4008) and outcomes.materialRows[1].check:GetChecked())
+  window.craftDetailWindow:Hide()
+  window:Activate("Reagents")
+  assert(check(1):GetChecked())
+  dropdown(page, "Trivial"):Choose("trivial")
+  assert(#list.items == 1)
+  check(1):SetChecked(false); check(1).scripts.OnClick(check(1))
+  assert(#list.items == 0 and list.empty:IsShown() and not preference:GetChecked())
+  dropdown(page, "Trivial"):Choose("all")
+  search("Herb")
+  dropdown(page, "Alchemy"):Choose(171)
+  dropdown(page, "Most allocated"):Choose("allocated")
+  list.scroll:SetVerticalScroll(1200); list.scroll.scripts.OnVerticalScroll(list.scroll)
+  assert(#list.items == 45)
+  list.scroll:SetVerticalScroll(150)
+  window:Activate("Recipes"); window:Activate("Reagents")
+  assert(#list.items == 45 and list.scroll:GetVerticalScroll() == 150 and page.searchInput:GetText() == "Herb")
+  assert(dropdown(page, "Alchemy").value == 171 and dropdown(page, "Most allocated").value == "allocated")
+  search("not recorded")
+  assert(#list.items == 0 and list.empty:IsShown())
+  assert(helpers.ReagentAmount({ allocatedQuantity = 4, allocationComplete = false }, "allocatedQuantity", "allocationComplete") == "4 (partial)")
+  assert(helpers.ReagentAmount({}, "returnedQuantity", "returnComplete") == "Unknown")
+  assert(helpers.ReagentAmount({ returnedQuantity = 0, returnComplete = true }, "returnedQuantity", "returnComplete") == "0")
+  api.GetReagentSummaries = summaries
+  window:Hide()
+  print("PASS Reagents navigation, global filters/sorts, quality identities, shared preferences and scroll restoration")
+end
+
+do
+  local core = reload(nil)
   local ledger = core.ledger
   local ui = loadUI()
   local window, helpers = ui.productionWindow, ui.UI
