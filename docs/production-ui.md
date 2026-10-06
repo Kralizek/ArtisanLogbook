@@ -70,6 +70,16 @@ Each row includes the item ID, so identical names and distinct quality IDs never
 merge. Missing artwork uses the existing question-mark fallback; unavailable
 quality is not invented.
 
+Reagent icons and quality atlases use a UI-session-only cache keyed by item ID.
+Resolved fields are reused across rerenders, filters, sorting, paging and
+navigation. Missing fields stay unresolved without polling or retrying on every
+render. A successful `GET_ITEM_INFO_RECEIVED` retries only the matching cached
+item's missing fields; `TRADE_SKILL_LIST_UPDATE` retries unresolved quality
+atlases when profession data updates. API errors retain safe fallbacks. Events
+repaint only matching reagent cells, including mounted cells on a hidden page,
+without re-querying aggregates or resetting filters/scroll. The cache is never
+persisted or stored in Core, and contains no craft totals or trivial preferences.
+
 Filters are Profession, Trivial state (All, Trivial, Non-trivial), and literal
 case-insensitive name search. Search is briefly debounced without changing an
 in-flight paging cursor. Name is the default sort; Most allocated, Most returned
@@ -228,6 +238,10 @@ pages and the modal while performing this checklist.
   reagents, one reagent, identical names with different item/quality IDs, missing
   metadata, long names, multiple professions and more than 40 rows. Check identity,
   quality artwork, tooltips and row checkbox hit areas at every UI scale.
+- [ ] With uncached item metadata, verify fallback artwork initially, then live
+  icon/quality enrichment after item info or profession metadata arrives. Filters,
+  scroll and row quantities must not reset; repeat while Reagents is hidden and
+  then return. Reload starts a fresh display cache without changing saved settings.
 - [ ] Exercise every Reagents filter/sort across multiple pages, including search
   while scrolling. Navigate away/back and verify filters, rows and offset persist.
   Confirm allocations/returns display unknown and partial evidence honestly.

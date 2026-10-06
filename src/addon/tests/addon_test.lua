@@ -1446,6 +1446,102 @@ end
 
 do
   local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  for itemId = 5101, 5103 do
+    assert(ledger:AddDimension("item", itemId, { name = "Cached herb " .. itemId }))
+    assert(ledger:SubmitCraft(9801, 1, false))
+    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = itemId }, quantity = itemId - 5100 } } }))
+  end
+  local ui = loadUI()
+  local window = ui.productionWindow
+  local page, list = window.pages.Reagents, window.pages.Reagents.catalogue
+  local savedIcon, savedQuality = environment.GetItemIcon, environment.C_TradeSkillUI.GetItemReagentQualityInfo
+  local iconCalls, qualityCalls, ready = {}, {}, {}
+  environment.GetItemIcon = function(itemId)
+    iconCalls[itemId] = (iconCalls[itemId] or 0) + 1
+    if itemId ~= 5102 or ready.icon then return "Icon-" .. itemId end
+  end
+  environment.C_TradeSkillUI.GetItemReagentQualityInfo = function(itemId)
+    qualityCalls[itemId] = (qualityCalls[itemId] or 0) + 1
+    if itemId == 5103 and not ready.profession then error("Quality metadata unavailable") end
+    if itemId == 5101 or itemId == 5102 and ready.quality or itemId == 5103 and ready.profession then
+      return { icon = "Quality-" .. itemId }
+    end
+  end
+  local savedSummaries, queries = api.GetReagentSummaries, 0
+  api.GetReagentSummaries = function(options)
+    queries = queries + 1
+    return savedSummaries(options)
+  end
+  local savedSettings = core.Trace.Serialize(environment.ArtisanLogbookUISettings)
+  local savedFacts = core.Trace.Serialize(ledger.database)
+  window:Show(); window:Activate("Reagents")
+  local function cell(itemId)
+    for _, row in ipairs(list.rows) do
+      if row.item and row.item.item.id == itemId then return row.widgets[1].widget end
+    end
+    error("Missing reagent cell " .. itemId)
+  end
+  assert(cell(5101).icon.texture == "Icon-5101" and cell(5101).quality.atlas == "Quality-5101")
+  assert(cell(5102).icon.texture == "Interface\\Icons\\INV_Misc_QuestionMark" and not cell(5102).quality:IsShown())
+  page:Refresh(true)
+  dropdown(page, "Most returned"):Choose("returned")
+  window:Activate("Recipes"); window:Activate("Reagents")
+  for itemId = 5101, 5103 do
+    assert(iconCalls[itemId] == 1 and qualityCalls[itemId] == 1, "Reagent rerenders must reuse metadata, including unresolved entries")
+  end
+  assert(page:IsEventRegistered("GET_ITEM_INFO_RECEIVED") and page:IsEventRegistered("TRADE_SKILL_LIST_UPDATE"))
+  list.scroll:SetVerticalScroll(45)
+  local items, queriesBeforeEvent = list.items, queries
+  local function event(name, ...)
+    page.scripts.OnEvent(page, name, ...)
+  end
+  event("GET_ITEM_INFO_RECEIVED", 999999, true)
+  event("GET_ITEM_INFO_RECEIVED", 5102, false)
+  assert(not iconCalls[999999] and iconCalls[5102] == 1)
+  ready.icon = true
+  event("GET_ITEM_INFO_RECEIVED", 5102, true)
+  assert(iconCalls[5102] == 2 and qualityCalls[5102] == 2)
+  assert(cell(5102).icon.texture == "Icon-5102" and not cell(5102).quality:IsShown())
+  assert(iconCalls[5101] == 1 and qualityCalls[5101] == 1 and qualityCalls[5103] == 1)
+  ready.quality = true
+  event("GET_ITEM_INFO_RECEIVED", 5102, true)
+  assert(iconCalls[5102] == 2 and qualityCalls[5102] == 3, "Resolved icon must survive quality retry")
+  assert(cell(5102).quality:IsShown() and cell(5102).quality.atlas == "Quality-5102")
+  event("GET_ITEM_INFO_RECEIVED", 5102, true)
+  assert(iconCalls[5102] == 2 and qualityCalls[5102] == 3)
+  window:Activate("Recipes")
+  ready.profession = true
+  event("TRADE_SKILL_LIST_UPDATE")
+  assert(iconCalls[5103] == 1 and qualityCalls[5103] == 2)
+  assert(cell(5103).quality:IsShown() and cell(5103).quality.atlas == "Quality-5103")
+  assert(qualityCalls[5101] == 1 and qualityCalls[5102] == 3)
+  assert(window.activeTab == "Recipes")
+  window:Activate("Reagents")
+  assert(queries == queriesBeforeEvent and list.items == items and list.scroll:GetVerticalScroll() == 45)
+  assert(window.activeTab == "Reagents" and dropdown(page, "Most returned").value == "returned")
+  page.searchInput:SetText("5102")
+  page.searchInput.scripts.OnTextChanged(page.searchInput); page.scripts.OnUpdate(page, .3)
+  assert(#list.items == 1 and cell(5102).icon.texture == "Icon-5102")
+  assert(iconCalls[5102] == 2 and qualityCalls[5102] == 3)
+  local visibleCell = cell(5102)
+  event("GET_ITEM_INFO_RECEIVED", 5101, true)
+  event("TRADE_SKILL_LIST_UPDATE")
+  assert(visibleCell.icon.texture == "Icon-5102" and visibleCell.quality.atlas == "Quality-5102")
+  assert(iconCalls[5101] == 1 and qualityCalls[5101] == 1 and qualityCalls[5103] == 2)
+  page.searchInput:SetText("")
+  page.searchInput.scripts.OnTextChanged(page.searchInput); page.scripts.OnUpdate(page, .3)
+  assert(cell(5103).quality.atlas == "Quality-5103" and qualityCalls[5103] == 2)
+  assert(core.Trace.Serialize(environment.ArtisanLogbookUISettings) == savedSettings)
+  assert(core.Trace.Serialize(ledger.database) == savedFacts)
+  environment.GetItemIcon, environment.C_TradeSkillUI.GetItemReagentQualityInfo = savedIcon, savedQuality
+  api.GetReagentSummaries = savedSummaries
+  window:Hide()
+  print("PASS session reagent metadata reuse, delayed item/quality events, targeted row updates and no persistence")
+end
+
+do
+  local core = reload(nil)
   local ledger = core.ledger
   local ui = loadUI()
   local window, helpers = ui.productionWindow, ui.UI

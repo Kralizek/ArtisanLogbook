@@ -1,5 +1,33 @@
 local _, addon = ...
 local UI = addon.UI
+local reagentMetadata = {}
+
+local function resolveReagentMetadata(itemId, entry, qualityOnly)
+  if not qualityOnly and entry.icon == nil and type(GetItemIcon) == "function" then
+    local ok, icon = pcall(GetItemIcon, itemId)
+    if ok and (type(icon) == "number" or type(icon) == "string") then entry.icon = icon end
+  end
+  if entry.qualityAtlas == nil and C_TradeSkillUI and type(C_TradeSkillUI.GetItemReagentQualityInfo) == "function" then
+    local ok, info = pcall(C_TradeSkillUI.GetItemReagentQualityInfo, itemId)
+    if ok and type(info) == "table" and type(info.icon) == "string" then entry.qualityAtlas = info.icon end
+  end
+end
+
+local function reagentDisplay(itemId)
+  local entry = reagentMetadata[itemId]
+  if not entry then
+    entry = {}
+    reagentMetadata[itemId] = entry
+    resolveReagentMetadata(itemId, entry)
+  end
+  return entry
+end
+
+local function updateReagentVisuals(cell, metadata)
+  cell.icon:SetTexture(metadata.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+  cell.quality:SetShown(metadata.qualityAtlas ~= nil)
+  if metadata.qualityAtlas then cell.quality:SetAtlas(metadata.qualityAtlas) end
+end
 
 function UI.CataloguePage(page, width, height, openRecipe)
   UI.Section(page, "Recipes", 0, -2, width)
@@ -106,17 +134,9 @@ function UI.ReagentsPage(page, width, height)
         return cell
       end,
       update = function(cell, row)
-        local icon = type(GetItemIcon) == "function" and GetItemIcon(row.item.id)
-        cell.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+        updateReagentVisuals(cell, reagentDisplay(row.item.id))
         cell.name:SetText(UI.Elide(UI.Name(row.item), math.max(3, math.floor((nameWidth - 34) / 7))))
         cell.identity:SetText("#" .. row.item.id .. (row.quality ~= nil and " | Quality " .. row.quality or ""))
-        local quality
-        if C_TradeSkillUI and type(C_TradeSkillUI.GetItemReagentQualityInfo) == "function" then
-          local ok, info = pcall(C_TradeSkillUI.GetItemReagentQualityInfo, row.item.id)
-          if ok then quality = info end
-        end
-        cell.quality:SetShown(quality ~= nil and quality.icon ~= nil)
-        if quality and quality.icon then cell.quality:SetAtlas(quality.icon) end
       end },
     { title = "Profession(s)", width = available * .24, value = professionNames,
       icon = function(row) return UI.ProfessionIcon(row.professions[1] and row.professions[1].skillLineId) end },
@@ -144,6 +164,27 @@ function UI.ReagentsPage(page, width, height)
       update = function(check, row) check.itemId = row.item.id; check:SetChecked(UI.IsTrivial(row.item.id)) end },
   }, function() end, "No recorded reagents in this selection")
   page.catalogue = list
+  local function refreshMetadata(itemId, qualityOnly)
+    local entry = reagentMetadata[itemId]
+    if not entry then return end
+    local icon, atlas = entry.icon, entry.qualityAtlas
+    resolveReagentMetadata(itemId, entry, qualityOnly)
+    if icon == entry.icon and atlas == entry.qualityAtlas then return end
+    for _, row in ipairs(list.rows) do
+      if row.item and row.item.item.id == itemId then updateReagentVisuals(row.widgets[1].widget, entry) end
+    end
+  end
+  page:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+  page:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
+  page:SetScript("OnEvent", function(_, event, itemId, success)
+    if event == "GET_ITEM_INFO_RECEIVED" then
+      if success then refreshMetadata(itemId) end
+    elseif event == "TRADE_SKILL_LIST_UPDATE" then
+      for id, entry in pairs(reagentMetadata) do
+        if entry.qualityAtlas == nil then refreshMetadata(id, true) end
+      end
+    end
+  end)
   UI.Text(page, 0, -height + 26, width, 22):SetText("Allocated: retained craft facts. Returned: recorded totals.")
   local selectedItems, excludedItems
   UI.LazyList(list, function(cursor)
