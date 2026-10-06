@@ -2,6 +2,100 @@ local _, addon = ...
 local UI = {}
 addon.UI = UI
 
+UI.ink = { .20, .16, .10 }
+
+function UI.Surface(parent, parchment)
+  local texture = parent:CreateTexture(nil, "BACKGROUND")
+  texture:SetAllPoints(parent)
+  if parchment then
+    texture:SetTexture("Interface\\QuestFrame\\QuestBG")
+    texture:SetTexCoord(0, .585, 0, .9)
+  else
+    texture:SetColorTexture(.075, .075, .07, 1)
+  end
+  return texture
+end
+
+function UI.Section(parent, title, x, y, width)
+  local label = UI.Text(parent, x, y, width, 24, "GameFontNormal")
+  label:SetText(title)
+  local rule = parent:CreateTexture(nil, "ARTWORK")
+  rule:SetColorTexture(.35, .27, .14, .3)
+  rule:SetPoint("TOPLEFT", x, y - 25)
+  rule:SetSize(width, 1)
+  return label
+end
+
+function UI.NavItem(parent, width, action)
+  local button = CreateFrame("Button", nil, parent)
+  button:SetSize(width, 30)
+  button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+  button.selection = button:CreateTexture(nil, "BACKGROUND")
+  button.selection:SetAllPoints(button)
+  button.selection:SetColorTexture(.55, .38, .08, .45)
+  button.icon = button:CreateTexture(nil, "ARTWORK")
+  button.icon:SetSize(18, 18)
+  button.icon:SetPoint("TOPLEFT", 6, -6)
+  button.label = UI.Text(button, 30, -7, width - 36, 20)
+  button.label:SetWordWrap(false)
+  button:SetScript("OnClick", function(self) action(self.entry) end)
+  button:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(self.entry.label)
+    GameTooltip:Show()
+  end)
+  button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  function button:Update(entry, selected)
+    self.entry = entry
+    self.icon:SetTexture(entry.icon or "Interface\\Icons\\INV_Misc_Book_09")
+    self.label:SetText(UI.Elide(entry.label, math.floor((width - 36) / 7)))
+    local color = UI.ClassColor(entry.classFile)
+    if color then self.label:SetTextColor(color.r, color.g, color.b)
+    else self.label:SetTextColor(.92, .87, .72) end
+    self.selection:SetShown(selected)
+  end
+  return button
+end
+
+function UI.Pins()
+  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
+  local stored = ArtisanLogbookUISettings.pinnedRecipes
+  local pins = {}
+  if type(stored) == "table" then
+    for id, recipe in pairs(stored) do
+      if type(id) == "number" and id > 0 and id < math.huge and id % 1 == 0 and
+          type(recipe) == "table" then
+        pins[#pins + 1] = { id = id, name = type(recipe.name) == "string" and recipe.name or nil }
+      end
+    end
+  end
+  table.sort(pins, function(left, right)
+    local leftName, rightName = UI.Name(left):lower(), UI.Name(right):lower()
+    if leftName == rightName then return left.id < right.id end
+    return leftName < rightName
+  end)
+  ArtisanLogbookUISettings.pinnedRecipes = {}
+  for index = #pins, 6, -1 do table.remove(pins, index) end
+  for _, recipe in ipairs(pins) do ArtisanLogbookUISettings.pinnedRecipes[recipe.id] = recipe end
+  return pins
+end
+
+function UI.IsPinned(id)
+  UI.Pins()
+  return ArtisanLogbookUISettings.pinnedRecipes[id] ~= nil
+end
+
+function UI.TogglePin(recipe)
+  if type(recipe) ~= "table" or type(recipe.id) ~= "number" or recipe.id <= 0 or
+      recipe.id >= math.huge or recipe.id % 1 ~= 0 then return nil, "Unavailable recipe" end
+  local pins = UI.Pins()
+  local stored = ArtisanLogbookUISettings.pinnedRecipes
+  if stored[recipe.id] then stored[recipe.id] = nil; return true end
+  if #pins >= 5 then return nil, "Five recipes are already pinned" end
+  stored[recipe.id] = { id = recipe.id, name = recipe.name }
+  return true
+end
+
 function UI.Text(parent, x, y, width, height, font)
   local label = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
   label:SetPoint("TOPLEFT", x, y)

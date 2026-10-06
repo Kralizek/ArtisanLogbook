@@ -832,6 +832,21 @@ local uiAddon = loadUI()
 assert(not uiAddon.ledger and not uiAddon.recorder and not uiAddon.Ledger and not uiAddon.Trace)
 local uiWindow = uiAddon.productionWindow
 local UI = uiAddon.UI
+assert(#UI.Pins() == 0)
+for index = 1, 5 do assert(UI.TogglePin({ id = index, name = "Recipe " .. (6 - index) })) end
+assert(UI.Pins()[1].id == 5 and UI.Pins()[5].id == 1)
+local pinned, pinReason = UI.TogglePin({ id = 6, name = "Sixth" })
+assert(not pinned and pinReason == "Five recipes are already pinned")
+assert(not UI.TogglePin({ id = 0 / 0 }) and not UI.TogglePin({ id = math.huge }))
+assert(UI.IsPinned(1) and not UI.IsPinned(6))
+local reloadedUI = {}
+local reloadComponents = assert(loadfile(uiRoot .. "/UI/Components.lua"))
+setfenv(reloadComponents, environment)
+reloadComponents("ArtisanLogbook", reloadedUI)
+assert(#reloadedUI.UI.Pins() == 5 and reloadedUI.UI.IsPinned(1))
+for index = 1, 5 do assert(UI.TogglePin({ id = index })) end
+assert(#UI.Pins() == 0 and not uiAddon.ledger)
+print("PASS UI-owned alphabetical pins, five-pin limit and reload persistence")
 assert(UI.Elide("Silvermoon Health Potion", 10) == "Silvermoon...")
 assert(UI.Elide("caf\195\169 noir", 4) == "caf\195\169...")
 assert(UI.CraftOutput({ recipe = { name = "Potion" }, outputItem = { name = "Potion" } }) == "")
