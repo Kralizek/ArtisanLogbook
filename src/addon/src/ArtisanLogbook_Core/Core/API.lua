@@ -580,7 +580,7 @@ function API.GetRecipeSummaries(options)
   end
   if options.profession ~= nil and not integer(options.profession, 0) then return nil, "invalid-options" end
   local sort = options.sort or "name"
-  if sort ~= "name" and sort ~= "count" then return nil, "invalid-options" end
+  if sort ~= "name" and sort ~= "count" and sort ~= "profession" then return nil, "invalid-options" end
   local offset = 0
   if options.cursor ~= nil then
     if type(options.cursor) ~= "string" or not options.cursor:match("^[1-9]%d*$") then
@@ -612,6 +612,13 @@ function API.GetRecipeSummaries(options)
     table.sort(order, function(left, right)
       if sort == "count" and counts[left] ~= counts[right] then return counts[left] > counts[right] end
       local a, b = dimension(ledger, "recipe", left), dimension(ledger, "recipe", right)
+      if sort == "profession" then
+        local leftProfession = dimension(ledger, "profession", a.professionId)
+        local rightProfession = dimension(ledger, "profession", b.professionId)
+        local leftLabel = (leftProfession and leftProfession.name or "Unknown"):lower()
+        local rightLabel = (rightProfession and rightProfession.name or "Unknown"):lower()
+        if leftLabel ~= rightLabel then return leftLabel < rightLabel end
+      end
       local leftName = (a.name or "Recipe #" .. a.id):lower()
       local rightName = (b.name or "Recipe #" .. b.id):lower()
       if leftName ~= rightName then return leftName < rightName end

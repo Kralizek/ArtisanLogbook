@@ -5,6 +5,7 @@ addon.UI = UI
 UI.ink = { .20, .16, .10 }
 
 function UI.Surface(parent, parchment)
+  parent.parchment, parent.dark = parchment, not parchment
   local texture = parent:CreateTexture(nil, "BACKGROUND")
   texture:SetAllPoints(parent)
   if parchment then
@@ -102,7 +103,132 @@ function UI.Text(parent, x, y, width, height, font)
   label:SetSize(width, height)
   label:SetJustifyH("LEFT")
   label:SetJustifyV("TOP")
+  if UI.IsParchment(parent) then label:SetTextColor(unpack(UI.ink)) end
   return label
+end
+
+function UI.IsParchment(parent)
+  while parent do
+    if parent.parchment then return true end
+    if parent.dark then return false end
+    parent = parent:GetParent()
+  end
+  return false
+end
+
+function UI.RecipeIcon(recipe)
+  local id = recipe and recipe.id
+  if id and C_TradeSkillUI and type(C_TradeSkillUI.GetRecipeInfo) == "function" then
+    local ok, info = pcall(C_TradeSkillUI.GetRecipeInfo, id)
+    if ok and info and info.icon then return info.icon end
+  end
+  return id and type(GetSpellTexture) == "function" and GetSpellTexture(id) or
+    "Interface\\Icons\\INV_Misc_Book_09"
+end
+
+UI.professionIcons = {
+  [171] = "Trade_Alchemy", [164] = "Trade_BlackSmithing", [333] = "Trade_Engraving",
+  [202] = "Trade_Engineering", [182] = "Trade_Herbalism", [773] = "INV_Inscription_Tradeskill01",
+  [755] = "INV_Misc_Gem_01", [165] = "Trade_LeatherWorking", [186] = "Trade_Mining",
+  [393] = "INV_Misc_Pelt_Wolf_01", [197] = "Trade_Tailoring",
+}
+
+function UI.ProfessionIcon(id)
+  return "Interface\\Icons\\" .. (UI.professionIcons[id] or "INV_Misc_Book_09")
+end
+
+function UI.Population(character, profession)
+  return { characters = character and { character } or nil, professions = profession and { profession } or nil }
+end
+
+function UI.Choices(facet, character)
+  local result = { { label = "All", value = false } }
+  local entries = facet == "characters" and ArtisanLogbookAPI.GetCharacters() or
+    ArtisanLogbookAPI.GetProfessions(character or nil)
+  for _, entry in ipairs(entries or {}) do
+    result[#result + 1] = { label = UI.Name(entry), value = entry.key or entry.skillLineId,
+      classFile = entry.classFile }
+  end
+  table.sort(result, function(left, right)
+    if left.value == false then return right.value ~= false end
+    if right.value == false then return false end
+    if left.label == right.label then return tostring(left.value) < tostring(right.value) end
+    return left.label:lower() < right.label:lower()
+  end)
+  return result
+end
+
+function UI.HistoryColumns(width)
+  local available = width - 24
+  return {
+    { title = "Recipe", width = available * .30, value = function(row) return UI.Name(row.recipe) end,
+      icon = function(row) return UI.RecipeIcon(row.recipe) end },
+    { title = "Character", width = available * .18, value = function(row) return UI.Name(row.character) end,
+      color = function(row) return UI.ClassColor(row.character and row.character.classFile) end },
+    { title = "Profession", width = available * .17, value = function(row) return UI.Name(row.profession) end },
+    { title = "Qty", width = available * .07, value = function(row) return UI.Value(row.outputQuantity) end },
+    { title = "Highlights", width = available * .28, activity = true },
+  }
+end
+
+function UI.LazyList(list, fetch)
+  local cursor, loading, finished
+  function list:LoadNext()
+    if loading or finished then return end
+    loading = true
+    local page, nextCursor = fetch(cursor)
+    if page then
+      self:Append(page)
+      cursor, finished = nextCursor, nextCursor == nil
+      if finished then self:SetFinished() end
+    else
+      finished = true
+      self.empty:SetText(nextCursor or "Unavailable")
+      self.empty:SetShown(#self.items == 0)
+    end
+    loading = false
+  end
+  list.onNearEnd = function() list:LoadNext() end
+  function list:Reload(preserve)
+    local offset, count = self.scroll:GetVerticalScroll(), #self.items
+    cursor, finished = nil, false
+    self:Reset()
+    self:LoadNext()
+    self.restoreCount = preserve and count or nil
+    self.restoreOffset = preserve and offset or nil
+    self:SetScript("OnUpdate", function(self)
+      if self.restoreCount and #self.items < self.restoreCount and not finished then
+        self:LoadNext()
+      else
+        if self.restoreOffset then self.scroll:SetVerticalScroll(self.restoreOffset) end
+        self.restoreCount, self.restoreOffset = nil, nil
+        self:SetScript("OnUpdate", nil)
+      end
+    end)
+    if not preserve or count <= #self.items then self:GetScript("OnUpdate")(self) end
+  end
+  function list:Save()
+    return { items = self.items, cursor = cursor, finished = finished, offset = self.scroll:GetVerticalScroll() }
+  end
+  function list:Restore(state)
+    self:SetScript("OnUpdate", nil)
+    self:Reset()
+    cursor, finished = state.cursor, state.finished
+    self:Append(state.items)
+    if finished then self:SetFinished() end
+    self.scroll:SetVerticalScroll(state.offset)
+  end
+  return list
+end
+
+function UI.PageScroll(parent, width, height, contentHeight)
+  local scroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+  scroll:SetPoint("TOPLEFT", 0, 0)
+  scroll:SetSize(width - 24, height)
+  local content = CreateFrame("Frame", nil, scroll)
+  content:SetSize(width - 28, math.max(height, contentHeight))
+  scroll:SetScrollChild(content)
+  return content, scroll
 end
 
 function UI.Button(parent, title, x, y, width, action)
@@ -358,6 +484,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         end
         local color = cell.column.color and cell.column.color(item)
         if color then cell.label:SetTextColor(color.r, color.g, color.b)
+        elseif UI.IsParchment(frame) then cell.label:SetTextColor(unpack(UI.ink))
         else cell.label:SetTextColor(1, 1, 1) end
       end
       if row.activity then

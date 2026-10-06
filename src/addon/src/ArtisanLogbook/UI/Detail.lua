@@ -1,6 +1,57 @@
 local _, addon = ...
 local UI = addon.UI
 
+function UI.RecipePage(page, width, height, openCraft, pinsChanged)
+  local content, scroll = UI.PageScroll(page, width, height, 1020)
+  width = width - 28
+  page.content, page.scroll = content, scroll
+  local heading = UI.Text(content, 42, -4, width - 174, 26, "GameFontNormalLarge")
+  local metadata = UI.Text(content, 42, -34, width - 48, 20)
+  local icon = content:CreateTexture(nil, "ARTWORK")
+  icon:SetSize(34, 34); icon:SetPoint("TOPLEFT", 0, -4)
+  local pin
+  pin = UI.Button(content, "Pin recipe", width - 116, -4, 112, function()
+    local ok, reason = UI.TogglePin(page.recipe)
+    if not ok then addon.Notify(reason) end
+    pin:SetText(UI.IsPinned(page.recipe.id) and "Unpin recipe" or "Pin recipe")
+    pinsChanged()
+  end)
+  local history
+  local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end)
+  page.outcomes = outcomes
+  UI.Section(content, "Craft history", 0, -732, width)
+  history = UI.ScrollList(content, 0, -766, width, 238, UI.HistoryColumns(width),
+    function(craft) openCraft(craft.id) end, "No retained crafts in this period")
+  page.history = history
+  UI.LazyList(history, function(cursor)
+    local filter = outcomes:Filter()
+    filter.recipes = { page.recipe.id }
+    local result, reason = ArtisanLogbookAPI.GetCrafts(filter, { limit = 40, cursor = cursor })
+    return result and result.crafts, result and result.nextCursor or reason
+  end)
+  function page:Open(recipe)
+    local changed = not self.recipe or self.recipe.id ~= recipe.id
+    self.recipe = recipe
+    heading:SetText(UI.Name(recipe))
+    local details = { "Recipe #" .. recipe.id }
+    if recipe.profession then details[#details + 1] = UI.Name(recipe.profession) end
+    if recipe.expansion then details[#details + 1] = UI.Name(recipe.expansion) end
+    metadata:SetText(table.concat(details, "  -  "))
+    icon:SetTexture(UI.RecipeIcon(recipe))
+    pin:SetText(UI.IsPinned(recipe.id) and "Unpin recipe" or "Pin recipe")
+    if changed then scroll:SetVerticalScroll(0) end
+    if changed or self.dirty then
+      outcomes:Open(recipe.id)
+      history:Reload(not changed)
+      self.dirty = false
+    end
+  end
+  function page:Refresh()
+    self.dirty = true
+    if self.recipe then self:Open(self.recipe) end
+  end
+end
+
 function UI.CraftDetail(parent, width, height, goBack)
   local detail = CreateFrame("Frame", nil, parent)
   detail:SetAllPoints(parent)

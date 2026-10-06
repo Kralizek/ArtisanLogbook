@@ -18,7 +18,7 @@ for _, name in ipairs({
   "SetStartPoint", "SetEndPoint", "SetWordWrap", "SetMaxLines",
   "SetFrameStrata", "RegisterForClicks", "ClearAllPoints", "SetTexture", "SetTexCoord",
   "LockHighlight", "UnlockHighlight", "SetToplevel", "Raise", "SetAtlas",
-  "SetTextColor", "AddMaskTexture",
+  "SetTextColor", "AddMaskTexture", "SetScale",
 }) do
   methods[name] = function() end
 end
@@ -39,6 +39,8 @@ function methods:GetChecked() return self.checked end
 function methods:SetText(value) assert(type(value) == "string"); self.text = value end
 function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
+function methods:GetParent() return self.parent end
+function methods:GetScript(name) return self.scripts[name] end
 function methods:GetWidth() return self.width or 1024 end
 function methods:GetHeight() return self.height or (self.kind == "ScrollFrame" and 300 or 768) end
 function methods:GetCenter() return 500, 500 end
@@ -54,7 +56,11 @@ function methods:RegisterEvent(event) self.events[event] = true end
 function methods:UnregisterEvent(event) self.events[event] = nil end
 function methods:RegisterUnitEvent(event, unit) assert(unit == "player"); self:RegisterEvent(event) end
 function methods:IsEventRegistered(event) return self.events[event] or false end
-function methods:Hide() self.shown = false end
+function methods:Hide()
+  local shown = self.shown
+  self.shown = false
+  if shown and self.scripts.OnHide then self.scripts.OnHide(self) end
+end
 function methods:SetShown(value) self.shown = value end
 function methods:Show()
   self.shown = true
@@ -951,10 +957,9 @@ end
 assert(not uiWindow:IsShown() and not uiCore.window:IsShown())
 assert(environment.SLASH_ARTISANLOGBOOK2 == "/artisanlogbook")
 environment.SlashCmdList.ARTISANLOGBOOK("anything")
-assert(uiWindow:IsShown() and uiWindow.activeTab == "Logbook" and not uiCore.window:IsShown())
+assert(uiWindow:IsShown() and uiWindow.activeTab == "Overview" and not uiCore.window:IsShown())
 assert(uiWindow.pages.Logbook and uiWindow.pages.Recipes and uiWindow.pages.Settings)
-assert(not uiWindow.pages.Overview and not uiWindow.pages.Recent and
-  not uiWindow.pages.Character and not uiWindow.pages.Profession)
+assert(uiWindow.pages.Overview and uiWindow.pages.Character and uiWindow.pages.Profession and uiWindow.pages.Recipe)
 uiWindow:Hide()
 environment.SlashCmdList.ARTISANLOGBOOK("")
 assert(uiWindow:IsShown())
@@ -983,12 +988,12 @@ launcher.scripts.OnClick()
 assert(not uiWindow:IsShown())
 launcher.scripts.OnClick()
 assert(uiWindow:IsShown())
-local logbook = uiWindow.pages.Logbook
-local chart
-for _, frame in ipairs(frames) do
-  if frame.parent == logbook and frame.title then chart = frame end
-end
+local overview = uiWindow.pages.Overview
+local chart = overview.chart
 assert(chart and chart.title.text == "Craft activity" and chart.total.text == "14 crafts")
+assert(not overview.history and not uiWindow.pages.Logbook.chart)
+uiWindow:Activate("Logbook")
+local logbook = uiWindow.pages.Logbook
 local history
 for _, frame in ipairs(frames) do if frame.parent == logbook and frame.scroll then history = frame end end
 assert(history and #history.items == 14 and history.scroll:GetHeight() > 0)
@@ -1001,7 +1006,7 @@ dropdown(logbook, "Alchemy"):Choose(171)
 dropdown(logbook, "Other"):Choose(otherKey)
 local logbookProfessions = dropdown(logbook, "Enchanting")
 assert(logbookProfessions.value == false and logbookProfessions.text == "All")
-assert(chart.total.text == "1 crafts" and #history.items == 1 and history.items[1].id == 14)
+assert(#history.items == 1 and history.items[1].id == 14)
 logbookProfessions:Choose(333)
 assert(#history.items == 1 and history.items[1].profession.skillLineId == 333)
 dropdown(logbook, "30 days"):Choose(30)
@@ -1101,12 +1106,11 @@ dropdown(logbook, "All"):Choose(false)
 local professionFilter = dropdown(logbook, "Enchanting")
 professionFilter:Choose(false)
 dropdown(logbook, "30 days"):Choose(30)
-assert(chart.total.text:find("16 crafts", 1, true))
 assert(#history.items == 16)
 dropdown(logbook, "7 days"):Choose(7)
-assert(chart.total.text:find("15 crafts", 1, true) and #history.items == 15)
+assert(#history.items == 15)
 dropdown(logbook, "Today"):Choose(1)
-assert(chart.total.text:find("15 crafts", 1, true) and #history.items == 15)
+assert(#history.items == 15)
 local today = math.floor(environment.GetServerTime() / 86400) * 86400
 local from, to = uiAddon.UI.Range(environment.GetServerTime(), 1)
 assert(from == today and to == today + 86400)
@@ -1115,9 +1119,9 @@ uiLedger.wall = function() return 1800000000 - 40 * 86400 end
 uiLedger:BeginCraft(502)
 assert(uiLedger:RecordResult({ operationID = 17 }))
 uiLedger.wall = environment.GetServerTime
-assert(chart.total.text:find("16 crafts", 1, true))
+assert(#history.items == 16)
 dropdown(logbook, "90 days"):Choose(90)
-assert(chart.total.text:find("17 crafts", 1, true))
+assert(#history.items == 17)
 dropdown(logbook, "30 days"):Choose(30)
 uiWindow:Activate("Settings")
 local settings = uiWindow.pages.Settings
@@ -1136,9 +1140,13 @@ assert(#uiLedger.database.craftSeries == 5)
 assert(not pcall(button, settings, "Clear history"))
 assert(environment.ArtisanLogbookManagement.Clear())
 assert(#uiLedger.database.crafts == 0 and #uiLedger.database.craftSeries == 0)
+uiWindow.pages.Logbook.dirty = true
 uiWindow:Activate("Logbook")
+uiWindow.pages.Overview.dirty = true
+uiWindow:Activate("Overview")
 assert(chart.total.text:find("0 crafts", 1, true))
 assert(chart.empty:IsShown() and history.empty:IsShown())
+uiWindow.pages.Recipes.dirty = true
 uiWindow:Activate("Recipes")
 assert(not displayedRow(recipes, function() return true end))
 assert(catalogue.empty:IsShown())
@@ -1153,6 +1161,60 @@ history.scroll.scripts.OnVerticalScroll(history.scroll)
 assert(#history.items == 45)
 history.scroll.scripts.OnVerticalScroll(history.scroll)
 assert(#history.items == 45)
+history.scroll:SetVerticalScroll(210)
+uiWindow:Activate("Overview")
+dropdown(overview.content, "7 days"):Choose(7)
+uiWindow:Activate("Logbook")
+assert(#history.items == 45 and history.scroll:GetVerticalScroll() == 210)
+assert(dropdown(logbook, "30 days").value == 30)
+uiWindow:OpenCraft(history.items[1].id)
+uiWindow.escapeFrame:Hide()
+assert(uiWindow:IsShown() and not uiWindow.craftDetailWindow:IsShown())
+assert(uiWindow.visiblePage == logbook and #history.items == 45 and history.scroll:GetVerticalScroll() == 210)
+uiWindow.escapeFrame:Hide()
+assert(not uiWindow:IsShown() and not uiWindow.modalShade:IsShown())
+uiWindow:Show()
+assert(history.scroll:GetVerticalScroll() == 210)
+local characterPage, professionPage = uiWindow.pages.Character, uiWindow.pages.Profession
+uiWindow:Activate("Character", { key = currentKey, name = "TestCrafter", classFile = "MAGE" })
+assert(characterPage.chart.total.text == "45 crafts" and #characterPage.professionSlots == 2)
+assert(characterPage.professionSlots[1].entry.details.skillLineId == 171)
+assert(characterPage.professionSlots[2].entry.details == nil)
+dropdown(characterPage.content, "7 days"):Choose(7)
+characterPage.scroll:SetVerticalScroll(85)
+uiWindow:Activate("Character", { key = "missing", name = "Missing" })
+assert(characterPage.chart.total.text == "0 crafts")
+assert(characterPage.professionSlots[1].entry.details == nil and characterPage.professionSlots[2].entry.details == nil)
+uiWindow:Activate("Character", { key = currentKey, name = "TestCrafter" })
+assert(dropdown(characterPage.content, "7 days").value == 7 and characterPage.scroll:GetVerticalScroll() == 85)
+uiWindow:Activate("Profession", { skillLineId = 171, name = "Alchemy" })
+assert(professionPage.chart.total.text == "45 crafts" and #professionPage.history.items == 40)
+professionPage.history.scroll:SetVerticalScroll(95)
+uiWindow:OpenCraft(professionPage.history.items[1].id)
+uiWindow.craftDetailWindow:Hide()
+assert(uiWindow.visiblePage == professionPage and professionPage.history.scroll:GetVerticalScroll() == 95)
+uiWindow:Activate("Recipes")
+dropdown(recipes, "Profession"):Choose("profession")
+assert(catalogue.items[1].profession.name == "Alchemy")
+uiWindow:OpenRecipe(catalogue.items[1].recipe)
+button(uiWindow.pages.Recipe.content, "Pin recipe").scripts.OnClick()
+local pinNav
+for _, item in ipairs(uiWindow.navItems) do
+  if item:IsShown() and item.entry.page == "Recipe" and item.entry.identity.id == 501 then pinNav = item end
+end
+assert(pinNav and UI.IsPinned(501))
+uiWindow:Activate("Recipes")
+dropdown(recipes, "All"):Choose(otherKey)
+assert(#catalogue.items == 0)
+pinNav.scripts.OnClick(pinNav)
+assert(uiWindow.activeTab == "Recipe" and uiWindow.pages.Recipe.recipe.id == 501)
+button(uiWindow.pages.Recipe.content, "Unpin recipe").scripts.OnClick()
+assert(not UI.IsPinned(501))
+uiWindow:Activate("Overview")
+while overview.summary.scripts.OnUpdate do overview.summary.scripts.OnUpdate(overview.summary) end
+assert(overview.summary.tiles[5].note.text == "Some return details missing")
+uiWindow:Activate("Logbook")
+print("PASS sidebar destinations, independent filters, list preservation, pins and modal Escape")
 local present = environment.GetServerTime
 environment.GetServerTime = function() return 1800000000 + 40 * 86400 end
 dropdown(logbook, "30 days"):Choose(30)
@@ -1228,14 +1290,13 @@ do
   api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
-  assert(window.recipeDetailWindow.parent == environment.UIParent and window.recipeDetailWindow:IsShown())
-  assert(window.modalShade:IsShown() and not window.craftDetailWindow:IsShown())
-  local escapeRecipe, escapeCraft = false, false
+  assert(window.recipeDetailPage == window.pages.Recipe and window.recipeDetailPage:IsShown())
+  assert(not window.modalShade:IsShown() and not window.craftDetailWindow:IsShown())
+  local escapeJournal = false
   for _, frameName in ipairs(environment.UISpecialFrames) do
-    if frameName == "ArtisanLogbookRecipeDetailWindow" then escapeRecipe = true end
-    if frameName == "ArtisanLogbookCraftDetailWindow" then escapeCraft = true end
+    if frameName == "ArtisanLogbookEscapeFrame" then escapeJournal = true end
   end
-  assert(escapeRecipe and escapeCraft)
+  assert(escapeJournal)
   local function finishCalculation()
     while pane.scripts.OnUpdate do pane.scripts.OnUpdate() end
   end
@@ -1277,8 +1338,8 @@ do
   local recipePage = window.visiblePage
   window:OpenCraft(second.id)
   local detail = window.visiblePage
-  assert(window.craftDetailWindow.parent == environment.UIParent and window.craftDetailWindow:IsShown())
-  assert(not window.recipeDetailWindow:IsShown() and window.modalShade:IsShown())
+  assert(window.craftDetailWindow.parent == window.modalShade and window.craftDetailWindow:IsShown())
+  assert(window.recipeDetailPage:IsShown() and window.modalShade:IsShown())
   local checkbox
   for _, frame in ipairs(frames) do
     if frame.parent == detail and frame.kind == "CheckButton" then checkbox = frame end
@@ -1288,8 +1349,8 @@ do
   assert(helpers.IsTrivial(8))
   button(detail, "Back").scripts.OnClick()
   finishCalculation()
-  assert(window.visiblePage == recipePage, "craft close did not restore recipe modal")
-  assert(window.recipeDetailWindow:IsShown() and not window.craftDetailWindow:IsShown() and window.modalShade:IsShown())
+  assert(window.visiblePage == recipePage, "craft close did not restore recipe page")
+  assert(window.recipeDetailPage:IsShown() and not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
   assert(pane.resourcefulness.nonTrivial.text == "Non-trivial returns recorded for 2 crafts",
     "unexpected non-trivial summary: " .. tostring(pane.resourcefulness.nonTrivial.text))
   local materialCheck
@@ -1360,7 +1421,7 @@ do
   api.GetCraftSeries, api.GetRecipeReturnSets = oldSeries, oldSets
   window:Hide()
   window.scripts.OnHide(window)
-  assert(not window.recipeDetailWindow:IsShown() and not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
+  assert(not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
   print("PASS recipe outcomes, exact denominators, reversible UI preferences, pruning and bounded rendering")
 end
 

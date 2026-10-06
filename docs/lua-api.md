@@ -444,7 +444,9 @@ an opaque character key; `profession` selects a WoW skill-line ID. Both
 constraints apply together, and unknown values yield an empty catalogue.
 Unnamed recipes display as `Recipe #<ID>`. `sort = "name"` (the default) is
 case-insensitive by display name with ID as a tie-breaker; `sort = "count"`
-orders most-crafted first, using name and ID to break ties. Recipe and
+orders most-crafted first, using name and ID to break ties. `sort = "profession"`
+orders by case-insensitive profession name (missing names use `Unknown`), then
+recipe name and ID. Sorting applies before pagination. Recipe and
 profession are detached domain projections.
 
 The default page size is 50, maximum 200. Only `limit`, `cursor`, `character`,
@@ -455,7 +457,7 @@ return `"invalid-cursor"`. No cursor means the first page; an empty catalogue
 returns `{ recipes = {} }` without a cursor. This is not a snapshot: new recipes
 or metadata enrichment can change ordering between pages, so restart at page one
 when the catalogue or filters change. The runtime caches the unfiltered name
-order; filtered/count-sorted calls derive an order from durable totals and
+order; filtered/count/profession-sorted calls derive an order from durable totals and
 project only the requested page. The name `GetRecipeSummaries` distinguishes
 these lifetime counts from full recipe or craft facts. This query does not add a general statistics
 or write API; for filtered activity use `GetCraftSeries`.
