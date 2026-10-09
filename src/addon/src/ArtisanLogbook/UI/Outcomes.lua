@@ -254,7 +254,6 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       local show = (self.maxQuality or 0) > 1 or qualityCount > 1
       qualityList:SetShown(show); qualityTitle:SetShown(show)
       if show then
-        self.tiles[2].note:SetText("By quality below")
         if splitCrafts < totals.craftCount then
           qualityStatus:SetText("Output quality available for " .. UI.Count(splitCrafts, "craft") .. " of " .. UI.Number(totals.craftCount) .. ".")
         end

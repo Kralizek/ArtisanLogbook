@@ -869,6 +869,37 @@ assert(UI.Amount(34766, false) == "34.8k" and UI.Amount(34766, true) == "34.8k")
 assert(UI.Amount(260, false) == "260" and UI.Amount(0, false) == "-" and UI.Amount(0, true) == "0")
 assert(UI.AmountTooltip(260, false):find("total may be higher", 1, true))
 assert(UI.AmountTooltip(260, true) == "260")
+local professionSummary = UI.ProductionSummary(paperProbe, 732, 0, function() end, true)
+local professionSeries = {
+  { craftCount = 55, profession = { skillLineId = 171, name = "Alchemy" },
+    recipe = { id = 501, name = "Potion" }, outputQuantity = 300, outputQuantityObservedCount = 55 },
+  { craftCount = 47, profession = { skillLineId = 197, name = "Tailoring" },
+    recipe = { id = 502, name = "Cloth" }, outputQuantity = 124, outputQuantityObservedCount = 47 },
+}
+professionSummary:Render(professionSeries, {})
+assert(professionSummary.tiles[1].value.text == "Alchemy: 55\nTailoring: 47")
+assert(professionSummary.tiles[2].title.text == "Output")
+assert(professionSummary.tiles[2].value.text == "Alchemy: 300\nTailoring: 124")
+assert(professionSummary.tiles[1].value:GetStringHeight() <= professionSummary.tiles[1].value:GetHeight())
+assert(-professionSummary.tiles[2].value.y + professionSummary.tiles[2].value:GetHeight() <= professionSummary:GetHeight())
+professionSummary.tiles[2].scripts.OnEnter(professionSummary.tiles[2])
+assert(environment.GameTooltip.text == "Output" and environment.GameTooltip.lines[2] == "Tailoring: 124")
+professionSeries[2].outputQuantity, professionSeries[2].outputQuantityObservedCount = nil, 0
+professionSummary:Render(professionSeries, {})
+assert(professionSummary.tiles[2].value.text == "Alchemy: 300\nTailoring: -")
+professionSeries[2].outputQuantity, professionSeries[2].outputQuantityObservedCount = 7, 20
+professionSummary:Render(professionSeries, {})
+assert(professionSummary.tiles[2].value.text == "Alchemy: 300\nTailoring: 7")
+professionSummary.tiles[2].scripts.OnEnter(professionSummary.tiles[2])
+assert(environment.GameTooltip.lines[2]:find("total may be higher", 1, true))
+professionSummary:Render({ professionSeries[1] }, {})
+assert(professionSummary.tiles[1].value.text == "55" and professionSummary.tiles[2].value.text == "300")
+assert(professionSummary.tiles[1].value:GetHeight() == 20 and professionSummary.tiles[1].note:IsShown())
+professionSummary:Render({}, {})
+assert(professionSummary.tiles[1].value.text == "0" and professionSummary.tiles[2].value.text == "-")
+local accountSummary = UI.ProductionSummary(paperProbe, 732, 0, function() end)
+accountSummary:Render(professionSeries, {})
+assert(accountSummary.tiles[1].value.text == "102" and accountSummary.tiles[2].value.text == "307")
 local logbookColumns = UI.HistoryColumns(732, "Logbook")
 for _, column in ipairs(logbookColumns) do assert(column.title ~= "When") end
 local hasSixtyDays = false
@@ -1427,8 +1458,9 @@ do
   dropdown(page.content, "90 days"):Choose(90)
   assertPrimarySlots()
   assert(page.chart.total.text == "6 crafts" and page.summary.totals.craftCount == 6)
-  assert(page.craftBreakdown:IsShown() and page.craftBreakdown.text:find("Alchemy 1", 1, true))
-  assert(page.craftBreakdown.text:find("Blacksmithing 1", 1, true))
+  assert(not page.craftBreakdown and not page.craftBreakdownHover)
+  assert(page.summary.tiles[1].value.text:find("Alchemy: 1", 1, true))
+  assert(page.summary.tiles[2].value.text:find("Alchemy: 1", 1, true))
   dropdown(page.content, "Today"):Choose(1)
   assertPrimarySlots()
   assert(page.chart.total.text == "5 crafts" and page.summary.totals.craftCount == 5)
@@ -1437,7 +1469,7 @@ do
   dropdown(page.content, "Alchemy"):Choose(171)
   assertPrimarySlots()
   assert(page.summary.totals.craftCount == 1 and #page.topRecipes.items == 1)
-  assert(not page.craftBreakdown:IsShown() and not page.craftBreakdownHover:IsShown())
+  assert(page.summary.tiles[1].value.text == "1" and page.summary.tiles[2].value.text == "1")
   page.history.scroll:SetVerticalScroll(85)
   window:Activate("Character", { key = "missing", name = "Missing" })
   assert(not page.professionSlots[1].entry.details and not page.professionSlots[2].entry.details)
@@ -1996,6 +2028,7 @@ do
   recipe.outcomes.qualityWorker.scripts.OnUpdate(recipe.outcomes.qualityWorker)
   assert(recipe.outcomes.qualityList.items[1].quality == 2 and recipe.outcomes.qualityList.items[1].quantity == 4)
   assert(recipe.outcomes.qualityTitle:IsShown())
+  assert(recipe.outcomes.tiles[2].note.text == "")
   local from, to = ui.UI.Range(environment.GetServerTime(), 30)
   assert(recipe.outcomes.chart.start.text == os.date("!%d %b %Y", from))
   assert(recipe.outcomes.chart.finish.text == os.date("!%d %b %Y", to - 86400))
@@ -2067,7 +2100,8 @@ do
         for _, tile in ipairs(summary.tiles) do
           assert(tile.y == 0 and tile.x >= previousRight + 16 - .01)
           assert(tile.x + tile:GetWidth() <= summary:GetWidth() + .01)
-          assert(tile.title:GetWidth() > 64 and -tile.value.y + tile.value:GetHeight() <= summary:GetHeight())
+          assert(tile.title:GetWidth() > (destination[1] == "Character" and 50 or 64) and
+            -tile.value.y + tile.value:GetHeight() <= summary:GetHeight())
           previousRight = tile.x + tile:GetWidth()
         end
       end

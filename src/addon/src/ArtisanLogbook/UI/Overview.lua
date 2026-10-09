@@ -107,9 +107,10 @@ function UI.SummaryRow(parent, width, y, entries)
   return summary
 end
 
-function UI.ProductionSummary(parent, width, y, openRecipe)
+function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
   local entries = {
-    { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
+    { "Crafts", "Trade_BlackSmithing", splitProfessions and 1.35 or 1 },
+    { splitProfessions and "Output" or "Total output", "INV_Misc_Bag_10", splitProfessions and 1.35 or 1 },
     { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
     { "Reagents returned", "INV_Misc_Herb_19" }, { "Most crafted", "INV_Misc_Book_09", 2 },
   }
@@ -120,9 +121,11 @@ function UI.ProductionSummary(parent, width, y, openRecipe)
     local professions, professionRows = {}, {}
     for _, row in ipairs(series) do
       local key = row.profession and row.profession.skillLineId or "unknown"
-      local entry = professions[key] or { profession = row.profession, crafts = 0 }
+      local entry = professions[key] or { profession = row.profession, crafts = 0, output = 0, outputObserved = 0 }
       professions[key] = entry
       entry.crafts = entry.crafts + row.craftCount
+      entry.output = entry.output + (row.outputQuantity or 0)
+      entry.outputObserved = entry.outputObserved + (row.outputQuantityObservedCount or 0)
     end
     for _, row in pairs(professions) do professionRows[#professionRows + 1] = row end
     table.sort(professionRows, function(left, right) return UI.Name(left.profession) < UI.Name(right.profession) end)
@@ -132,6 +135,37 @@ function UI.ProductionSummary(parent, width, y, openRecipe)
     for index, metric in pairs({ [2] = "outputQuantity", [3] = "concentrationSpent", [4] = "multicraftBonus" }) do
       local known = totals[metric .. "ObservedCount"]
       self.tiles[index]:SetNumber(known > 0 and totals[metric] or nil, known == totals.craftCount)
+    end
+    local split = splitProfessions and #professionRows > 1
+    self:SetHeight(split and math.max(80, 34 + #professionRows * 14) or 80)
+    for index = 1, 2 do
+      local tile = self.tiles[index]
+      tile:SetHeight(self:GetHeight())
+      tile.value:SetFontObject(split and "GameFontHighlightSmall" or "GameFontNormalLarge")
+      if UI.IsParchment(self) then
+        tile.value:SetTextColor(unpack(UI.ink)); tile.value:SetShadowOffset(0, 0)
+      end
+      tile.value:SetHeight(split and #professionRows * 14 or 20)
+      tile.note:SetShown(not split)
+      if split then
+        local lines = {}
+        for _, entry in ipairs(professionRows) do
+          local value = index == 1 and UI.Number(entry.crafts) or
+            UI.Amount(entry.outputObserved > 0 and entry.output or nil, entry.outputObserved == entry.crafts)
+          local nameWidth = math.max(4, math.floor(tile:GetWidth() / 6) - #value - 2)
+          lines[#lines + 1] = UI.Elide(UI.Name(entry.profession), nameWidth) .. ": " .. value
+        end
+        tile.value:SetText(table.concat(lines, "\n"))
+        tile:SetScript("OnEnter", function(self)
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(index == 1 and "Crafts" or "Output")
+          for _, entry in ipairs(professionRows) do
+            local value = index == 1 and tostring(entry.crafts) or UI.AmountTooltip(
+              entry.outputObserved > 0 and entry.output or nil, entry.outputObserved == entry.crafts)
+            GameTooltip:AddLine(UI.Name(entry.profession) .. ": " .. value, 1, 1, 1, true)
+          end
+          GameTooltip:Show()
+        end)
+      end
     end
     local share = UI.MeasuredShare(totals, "multicraftBonus", "outputQuantity")
     if share ~= "Unknown" then self.tiles[4].note:SetText(share .. " of total output") end
@@ -197,23 +231,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   end
   local tabs, overview = nil, content
   if kind ~= "Logbook" then
-    page.summary = UI.ProductionSummary(content, width, -100, function(recipe) navigate("Recipe", recipe) end)
-  end
-  if kind == "Character" then
-    page.craftBreakdown = UI.Text(content, 0, -180, width, 24)
-    page.craftBreakdown:SetWordWrap(false)
-    page.craftBreakdown:Hide()
-    page.craftBreakdownHover = CreateFrame("Frame", nil, content)
-    page.craftBreakdownHover:SetSize(width, 24); page.craftBreakdownHover:EnableMouse(true)
-    page.craftBreakdownHover:SetScript("OnEnter", function(self)
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText("Crafts by profession")
-      for _, entry in ipairs(page.summary.professionCounts) do
-        GameTooltip:AddLine(UI.Name(entry.profession) .. ": " .. entry.crafts, 1, 1, 1)
-      end
-      GameTooltip:Show()
-    end)
-    page.craftBreakdownHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    page.craftBreakdownHover:Hide()
+    page.summary = UI.ProductionSummary(content, width, -100, function(recipe) navigate("Recipe", recipe) end, kind == "Character")
   end
   if entity then
     tabs = UI.TabbedContent(content, width, height - 248, -248, { "Overview", "Craft History" },
@@ -249,12 +267,6 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   function filters.onLayout(filterHeight)
     local top = 48 + filterHeight
     local summaryHeight = page.summary and page.summary:GetHeight() + 8 or 0
-    if page.craftBreakdown then
-      local breakdownTop = top + summaryHeight
-      page.craftBreakdown:ClearAllPoints(); page.craftBreakdown:SetPoint("TOPLEFT", 0, -breakdownTop)
-      page.craftBreakdownHover:ClearAllPoints(); page.craftBreakdownHover:SetPoint("TOPLEFT", 0, -breakdownTop)
-      if page.craftBreakdown:IsShown() then summaryHeight = summaryHeight + 28 end
-    end
     if page.summary then page.summary:ClearAllPoints(); page.summary:SetPoint("TOPLEFT", 0, -top) end
     if tabs then
       tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top - summaryHeight)
@@ -299,15 +311,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
       local series = result and result.series or {}
       self.chart:Render(series, filter.time.from, filter.time.to)
       self.summary:Render(series, filter)
-      if self.craftBreakdown then
-        local entries = self.summary.professionCounts
-        local labels = {}
-        for _, entry in ipairs(entries) do labels[#labels + 1] = UI.Name(entry.profession) .. " " .. UI.Number(entry.crafts) end
-        self.craftBreakdown:SetText(UI.Elide("Crafts by profession: " .. table.concat(labels, "  |  "), math.floor(width / 6)))
-        self.craftBreakdown:SetShown(#entries > 1)
-        self.craftBreakdownHover:SetShown(#entries > 1)
-        filters.onLayout(filters:GetHeight())
-      end
+      filters.onLayout(filters:GetHeight())
       if self.topRecipes then
         self.topRecipes:Render(self.summary.recipes, filter)
       end

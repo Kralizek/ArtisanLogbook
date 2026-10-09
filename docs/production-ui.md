@@ -56,7 +56,7 @@ fixed; lists scroll inside bounded regions. Recipe Statistics has a bounded loca
 overflow region at short heights, not a whole-page scrollbar. Tabs share a native
 border/backdrop with the content they control.
 
-Summary metrics share one compact row, at most 80 UI units high, with light
+Summary metrics share one compact row, normally 80 UI units high, with light
 separators and extra width for the most-crafted recipe. Reagents uses a shorter
 60-unit row with bounded metric widths. Recovered space goes to charts and lists.
 Most crafted remains clickable without a stretched glowing highlight. When its
@@ -113,9 +113,14 @@ about currently learned professions. Slots do not show period-based craft counts
 All recorded professions remain available through filters and the account
 sidebar. No remote-character portrait, race, level, or faction is invented.
 When multiple professions have activity in the selected character population,
-a compact Crafts by profession line shows the separate counts below the summary.
-Its tooltip contains exact counts; the line disappears for a single active
-profession and follows period/profession filters independently of header icons.
+Crafts and Output replace their single numbers with per-profession lines, for
+example `Alchemy: 55` and `Tailoring: 47`. Output uses the same selected population
+and keeps absent quantities as dashes, with incomplete quantities explained in
+tooltips. Single-profession selections return to one number. There is no separate
+Crafts by profession line. Historical selections with more than three active
+professions expand the summary just enough to fit the lines, keeping tabs bounded.
+This is independent of the two primary-profession header icons. The Recipe output
+quality table remains available without the redundant By quality below label.
 
 Page filters and scroll positions are independent for the session. Character,
 profession, and recipe destinations remember their own state when switching
