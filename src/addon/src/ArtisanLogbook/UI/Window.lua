@@ -210,6 +210,10 @@ function addon.CreateProductionWindow()
       page.revision = (page.revision or 0) + 1
     end
   end
+  UI.RegisterHiddenRecipeCallback(function()
+    window:Invalidate()
+    if window:IsShown() then window:Refresh() end
+  end)
   local escape = CreateFrame("Frame", "ArtisanLogbookEscapeFrame", UIParent)
   escape:Hide()
   tinsert(UISpecialFrames, "ArtisanLogbookEscapeFrame")

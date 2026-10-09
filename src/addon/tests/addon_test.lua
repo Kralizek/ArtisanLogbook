@@ -869,6 +869,16 @@ assert(UI.Amount(34766, false) == "34.8k" and UI.Amount(34766, true) == "34.8k")
 assert(UI.Amount(260, false) == "260" and UI.Amount(0, false) == "-" and UI.Amount(0, true) == "0")
 assert(UI.AmountTooltip(260, false):find("total may be higher", 1, true))
 assert(UI.AmountTooltip(260, true) == "260")
+assert(not UI.IsRecipeHidden(501))
+assert(not UI.SetRecipeHidden(0, true) and not UI.SetRecipeHidden(0 / 0, true))
+assert(not UI.SetRecipeHidden(math.huge, true) and not UI.SetRecipeHidden(501, "true"))
+local hiddenProbe = UI.HiddenRecipeCheckbox(paperProbe, 0, 0, true)
+hiddenProbe:SetRecipe(501)
+assert(UI.SetRecipeHidden(501, true) and hiddenProbe:GetChecked())
+assert(environment.ArtisanLogbookUISettings.hiddenRecipes[501])
+assert(not UI.VisibleRecipe({ recipe = { id = 501 } }) and UI.VisibleRecipe({}))
+hiddenProbe:SetChecked(false); hiddenProbe.scripts.OnClick(hiddenProbe)
+assert(not UI.IsRecipeHidden(501) and environment.ArtisanLogbookUISettings.hiddenRecipes[501] == nil)
 local professionSummary = UI.ProductionSummary(paperProbe, 732, 0, function() end, true)
 local professionSeries = {
   { craftCount = 55, profession = { skillLineId = 171, name = "Alchemy" },
@@ -1697,6 +1707,116 @@ do
   api.GetCrafts = originalCrafts
   window:Hide()
   print("PASS recipe quality totals are scoped, paged, cancellable and honest after detail pruning")
+end
+
+do
+  local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  environment.ArtisanLogbookUISettings.hiddenRecipes = {}
+  environment.ArtisanLogbookUISettings.pinnedRecipes = {}
+  ledger:AddDimension("profession", 171, { name = "Alchemy" })
+  ledger:AddDimension("item", 6401, { name = "Shared herb" })
+  for _, entry in ipairs({ { 10051, "Midnight Prospecting" }, { 10052, "Potion" }, { 10053, "Mulching" } }) do
+    ledger:AddDimension("recipe", entry[1], { name = entry[2], professionId = 171 })
+  end
+  local function record(recipeId, count)
+    for _ = 1, count do
+      ledger:SubmitCraft(recipeId, 1, false, nil, { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 6401 } } })
+      assert(ledger:RecordResult({ quantity = 1, resourcesReturned = { { reagent = { itemID = 6401 }, quantity = 1 } } }))
+    end
+  end
+  record(10052, 5); record(10051, 85); record(10053, 20)
+  local databaseBefore = core.Trace.Serialize(ledger.database)
+  local ui = loadUI()
+  local window, helpers = ui.productionWindow, ui.UI
+  assert(helpers.TogglePin({ id = 10051, name = "Midnight Prospecting" }))
+  window:Show(); window:Activate("Recipes")
+  local catalogue = window.pages.Recipes.catalogue
+  local function recipeRow(recipeId)
+    for _, row in ipairs(catalogue.rows) do if row.item and row.item.recipe.id == recipeId then return row end end
+    error("Missing recipe catalogue row " .. recipeId)
+  end
+  local function toggleCatalogue(recipeId, hidden)
+    local check = recipeRow(recipeId).widgets[2].widget
+    check:SetChecked(hidden); check.scripts.OnClick(check)
+  end
+  local function finishList(list)
+    local framesRun = 0
+    while list.pageLoader.scripts.OnUpdate or list.scripts.OnUpdate do
+      framesRun = framesRun + 1
+      assert(framesRun < 30, "Filtered list did not finish")
+      if list.pageLoader.scripts.OnUpdate then list.pageLoader.scripts.OnUpdate(list.pageLoader) end
+      if list.scripts.OnUpdate then list.scripts.OnUpdate(list) end
+    end
+  end
+  toggleCatalogue(10051, true); toggleCatalogue(10053, true)
+  assert(#catalogue.items == 3 and helpers.IsRecipeHidden(10051) and helpers.IsPinned(10051))
+  assert(recipeRow(10051).widgets[2].widget:GetChecked())
+  window:Activate("Overview")
+  local overview = window.pages.Overview
+  assert(#overview.topRecipes.items == 1 and overview.topRecipes.items[1].recipe.id == 10052)
+  assert(overview.summary.tiles[6].value.text == "Potion" and overview.summary.totals.craftCount == 110)
+  local originalCrafts, pageQueries = api.GetCrafts, 0
+  api.GetCrafts = function(filter, options)
+    assert(filter.hiddenRecipes == nil and options.hiddenRecipes == nil)
+    if options.limit == 40 then pageQueries = pageQueries + 1 end
+    return originalCrafts(filter, options)
+  end
+  window:Activate("Logbook")
+  local logbook = window.pages.Logbook.history
+  assert(pageQueries == 1 and #logbook.items == 0 and logbook.pageLoader.scripts.OnUpdate)
+  logbook.pageLoader.scripts.OnUpdate(logbook.pageLoader)
+  assert(pageQueries == 2 and #logbook.items == 0 and logbook.pageLoader.scripts.OnUpdate)
+  logbook.pageLoader.scripts.OnUpdate(logbook.pageLoader)
+  finishList(logbook)
+  assert(pageQueries == 3 and #logbook.items == 5 and logbook.finish:IsShown())
+  for _, row in ipairs(logbook.items) do assert(row.recipe.id == 10052) end
+  local character = api.GetCharacters()[1]
+  for _, destination in ipairs({ { "Character", character }, { "Profession", { skillLineId = 171, name = "Alchemy" } } }) do
+    window:Activate(destination[1], destination[2])
+    local page = window.pages[destination[1]]
+    finishList(page.history)
+    assert(#page.history.items == 5 and #page.topRecipes.items == 1)
+    assert(page.topRecipes.items[1].recipe.id == 10052)
+  end
+  window:Activate("Reagent", { id = 6401, name = "Shared herb" })
+  local reagent = window.pages.Reagent
+  while reagent.worker.scripts.OnUpdate do reagent.worker.scripts.OnUpdate(reagent.worker) end
+  finishList(reagent.history); finishList(reagent.recipes)
+  assert(#reagent.history.items == 5 and #reagent.recipes.items == 1 and reagent.recipes.items[1].recipe.id == 10052)
+  window:OpenRecipe({ id = 10051, name = "Midnight Prospecting" })
+  local recipe = window.pages.Recipe
+  finishList(recipe.history)
+  assert(recipe.hiddenCheck:GetChecked() and #recipe.history.items == 0)
+  assert(recipe.outcomes.tiles[1].value.text == "85")
+  recipe.hiddenCheck:SetChecked(false); recipe.hiddenCheck.scripts.OnClick(recipe.hiddenCheck)
+  finishList(recipe.history)
+  assert(not helpers.IsRecipeHidden(10051) and #recipe.history.items == 40)
+  window:Activate("Recipes")
+  assert(#catalogue.items == 3 and not recipeRow(10051).widgets[2].widget:GetChecked())
+  toggleCatalogue(10051, true); toggleCatalogue(10052, true)
+  window:Activate("Overview")
+  assert(#overview.topRecipes.items == 0 and overview.summary.tiles[6].value.text == "-")
+  assert(overview.summary.tiles[6].note.text == "No visible recipes")
+  window:Activate("Logbook"); finishList(logbook)
+  assert(#logbook.items == 0 and logbook.empty:IsShown() and not logbook.empty.text:find("Loading", 1, true))
+  window:Activate("Recipes"); toggleCatalogue(10052, false)
+  window:Activate("Overview")
+  assert(#overview.topRecipes.items == 1 and overview.topRecipes.items[1].recipe.id == 10052)
+  api.GetCrafts = originalCrafts
+  for recipeId = 11001, 11007 do assert(helpers.SetRecipeHidden(recipeId, true)) end
+  assert(helpers.IsRecipeHidden(11007), "Hiding must not inherit the five-pin limit")
+  assert(core.Trace.Serialize(ledger.database) == databaseBefore, "Hiding changed Core data")
+  assert(#api.GetCrafts(nil, { limit = 200 }).crafts == 110)
+  assert(#api.GetRecipeSummaries().recipes == 3)
+  window:Hide()
+  local reloaded = loadUI()
+  assert(reloaded.UI.IsRecipeHidden(10051) and reloaded.UI.IsRecipeHidden(10053) and not reloaded.UI.IsRecipeHidden(10052))
+  assert(reloaded.UI.IsPinned(10051))
+  reloaded.productionWindow:Show(); reloaded.productionWindow:Activate("Recipes")
+  assert(#reloaded.productionWindow.pages.Recipes.catalogue.items == 3)
+  reloaded.productionWindow:Hide()
+  print("PASS UI-only recipe hiding, both toggles, all list contexts, bounded hidden-only paging and preference reload")
 end
 
 do

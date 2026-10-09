@@ -3,6 +3,53 @@ local UI = {}
 addon.UI = UI
 
 UI.ink = { .20, .16, .10 }
+local hiddenRecipeCallbacks = {}
+
+function UI.IsRecipeHidden(recipeId)
+  local settings = ArtisanLogbookUISettings
+  return type(settings) == "table" and type(settings.hiddenRecipes) == "table" and
+    settings.hiddenRecipes[recipeId] == true or false
+end
+
+function UI.SetRecipeHidden(recipeId, hidden)
+  if type(recipeId) ~= "number" or recipeId <= 0 or recipeId >= math.huge or recipeId % 1 ~= 0 or
+      type(hidden) ~= "boolean" then return nil end
+  local changed = UI.IsRecipeHidden(recipeId) ~= hidden
+  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
+  if type(ArtisanLogbookUISettings.hiddenRecipes) ~= "table" then ArtisanLogbookUISettings.hiddenRecipes = {} end
+  ArtisanLogbookUISettings.hiddenRecipes[recipeId] = hidden and true or nil
+  if changed then for _, callback in ipairs(hiddenRecipeCallbacks) do callback(recipeId, hidden) end end
+  return true
+end
+
+function UI.RegisterHiddenRecipeCallback(callback)
+  hiddenRecipeCallbacks[#hiddenRecipeCallbacks + 1] = callback
+end
+
+function UI.VisibleRecipe(row)
+  return not row.recipe or not UI.IsRecipeHidden(row.recipe.id)
+end
+
+function UI.HiddenRecipeCheckbox(parent, x, y, compact)
+  local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+  check:SetSize(24, 24); check:SetPoint("TOPLEFT", x, y)
+  if not compact then UI.Text(check, 26, -5, 146, 24):SetText("Hide from lists") end
+  check:SetScript("OnClick", function(self) UI.SetRecipeHidden(self.recipeId, self:GetChecked() == true) end)
+  check:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText("Hide from lists")
+    GameTooltip:AddLine("Hide this recipe in most-crafted tables and craft lists. It stays in Recipes; totals and saved history do not change.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  check:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  function check:SetRecipe(recipeId)
+    self.recipeId = recipeId
+    self:SetChecked(UI.IsRecipeHidden(recipeId))
+  end
+  UI.RegisterHiddenRecipeCallback(function(recipeId)
+    if check.recipeId == recipeId then check:SetRecipe(recipeId) end
+  end)
+  return check
+end
 
 function UI.Number(value, exact, lowerBound)
   if type(value) ~= "number" then return "-" end
@@ -316,16 +363,33 @@ function UI.HistoryColumns(width, context)
   return columns
 end
 
-function UI.LazyList(list, fetch)
+function UI.LazyList(list, fetch, visible)
   local cursor, loading, finished
+  local emptyMessage = list.empty:GetText()
+  list.pageLoader = list.pageLoader or CreateFrame("Frame", nil, list)
+  list.pageLoader:SetScript("OnUpdate", nil)
   function list:LoadNext()
     if loading or finished then return end
+    self.pageLoader:SetScript("OnUpdate", nil)
     loading = true
     local page, nextCursor = fetch(cursor)
     if page then
+      if visible then
+        local filtered = {}
+        for _, row in ipairs(page) do if visible(row) then filtered[#filtered + 1] = row end end
+        page = filtered
+      end
       self:Append(page)
       cursor, finished = nextCursor, nextCursor == nil
-      if finished then self:SetFinished() end
+      if finished then
+        self:SetFinished()
+        if #self.items == 0 then self.empty:SetText(emptyMessage) end
+      elseif visible and (#page == 0 or self.child:GetHeight() <= self.scroll:GetHeight()) then
+        if #self.items == 0 then self.empty:SetText("Loading crafts...") end
+        self.pageLoader:SetScript("OnUpdate", function(worker)
+          worker:SetScript("OnUpdate", nil); list:LoadNext()
+        end)
+      end
     else
       finished = true
       self.empty:SetText(nextCursor or "Unavailable")
@@ -337,11 +401,13 @@ function UI.LazyList(list, fetch)
   function list:Reload(preserve)
     local offset, count = self.scroll:GetVerticalScroll(), #self.items
     cursor, finished = nil, false
-    self:Reset()
+    self.pageLoader:SetScript("OnUpdate", nil)
+    loading = true; self:Reset(); loading = false
     self:LoadNext()
     self.restoreCount = preserve and count or nil
     self.restoreOffset = preserve and offset or nil
     self:SetScript("OnUpdate", function(self)
+      if self.pageLoader:GetScript("OnUpdate") then return end
       if self.restoreCount and #self.items < self.restoreCount and not finished then
         self:LoadNext()
       else
@@ -357,11 +423,14 @@ function UI.LazyList(list, fetch)
   end
   function list:Restore(state)
     self:SetScript("OnUpdate", nil)
+    self.pageLoader:SetScript("OnUpdate", nil)
+    loading = true
     self:Reset()
     cursor, finished = state.cursor, state.finished
     self:Append(state.items)
     if finished then self:SetFinished() end
     self.scroll:SetVerticalScroll(state.offset)
+    loading = false
   end
   return list
 end
@@ -1048,8 +1117,8 @@ function UI.Chart(parent, x, y, width, quantities)
   return chart
 end
 
-function UI.RecipeTable(parent, x, y, width, height, openRecipe)
-  local available = width - 24
+function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
+  local available = width - 24 - (hideToggle and 44 or 0)
   local columns = {
     { title = "Recipe", width = available * .22, value = function(row) return UI.Name(row.recipe) end,
       icon = function(row) return UI.RecipeIcon(row.recipe) end },
@@ -1080,6 +1149,12 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe)
       end,
       exact = function(row) return UI.ProcTooltip(row.totals, metric) end }
   end
+  if hideToggle then
+    columns[#columns + 1] = { title = "Hide", width = 44,
+      value = function(row) return UI.IsRecipeHidden(row.recipe.id) and "Yes" or "No" end,
+      create = function(owner, left) return UI.HiddenRecipeCheckbox(owner, left + 6, -2, true) end,
+      update = function(check, row) check:SetRecipe(row.recipe.id) end }
+  end
   local list = UI.ScrollList(parent, x, y, width, height, columns,
     function(row) if row.recipe then openRecipe(row.recipe) end end, "No recipes in this period")
   list.worker = CreateFrame("Frame", nil, list)
@@ -1102,6 +1177,11 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe)
     end)
   end
   function list:Render(rows, filter)
+    if not hideToggle then
+      local filtered = {}
+      for _, row in ipairs(rows) do if UI.VisibleRecipe(row) then filtered[#filtered + 1] = row end end
+      rows = filtered
+    end
     UI.LazyList(self, function(cursor)
       local offset, page = cursor or 0, {}
       for index = offset + 1, math.min(offset + 40, #rows) do page[#page + 1] = rows[index] end

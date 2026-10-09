@@ -4,7 +4,8 @@ local UI = addon.UI
 function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
   local content = page
   page.content, page.states = content, {}
-  local heading = UI.Text(content, 42, -4, width - 174, 26, "GameFontNormalLarge")
+  local heading = UI.Text(content, 42, -4, width - 352, 26, "GameFontNormalLarge")
+  heading:SetWordWrap(false); heading:SetMaxLines(1)
   local metadata = UI.Text(content, 42, -34, width - 48, 20)
   local icon = content:CreateTexture(nil, "ARTWORK")
   icon:SetSize(34, 34); icon:SetPoint("TOPLEFT", 0, -4)
@@ -15,6 +16,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     pin:SetText(UI.IsPinned(page.recipe.id) and "Unpin recipe" or "Pin recipe")
     pinsChanged()
   end)
+  page.hiddenCheck = UI.HiddenRecipeCheckbox(content, width - 296, -4)
   local history
   local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end, height - 62, openReagent)
   page.outcomes = outcomes
@@ -33,7 +35,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     filter.recipes = { page.recipe.id }
     local result, reason = ArtisanLogbookAPI.GetCrafts(filter, { limit = 40, cursor = cursor })
     return result and result.crafts, result and result.nextCursor or reason
-  end)
+  end, UI.VisibleRecipe)
   function page:Open(recipe)
     local changed = not self.recipe or self.recipe.id ~= recipe.id
     if changed and self.recipe then
@@ -57,6 +59,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     metadata:SetText(table.concat(details, "  -  "))
     icon:SetTexture(UI.RecipeIcon(recipe))
     pin:SetText(UI.IsPinned(recipe.id) and "Unpin recipe" or "Pin recipe")
+    self.hiddenCheck:SetRecipe(recipe.id)
     if changed or self.dirty then
       outcomes.maxQuality = recipe.maxQuality
       outcomes:Open(recipe.id, saved and saved.filters)

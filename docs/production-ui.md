@@ -43,7 +43,7 @@ existing current-entry highlight without replacing the primary selection.
 | --- | --- |
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, returned reagents, and most-crafted recipe. No factual craft list. |
 | Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
-| Recipes | Period/character/profession filters, explicit search/clear controls and most-crafted default sorting. Name and profession sorting remain available. Rich recipe rows navigate to Recipe Detail. |
+| Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
 | Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, compact Used/Returned columns and editable Ignore checkboxes. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
@@ -210,6 +210,30 @@ copy of known display metadata. They survive reload, pruning, and Core history
 clear. Sidebar navigation is independent of catalogue filters and still works
 when factual detail has expired. Newly committed metadata can refresh a pin.
 
+## Hidden recipes
+
+Hide from lists is a UI-only preference stored as positive recipe IDs in
+`ArtisanLogbookUISettings.hiddenRecipes`. Unlike pins, hidden recipes have no
+five-entry limit. The Recipes catalogue always lists hidden recipes under the
+current period/search/character/profession filters, so its Hide checkbox can
+restore them. Recipe Detail has the same synchronized toggle beside Pin.
+
+Hidden recipes are omitted from most-crafted tables and the most-crafted tile,
+and from Logbook, Character, Profession, Recipe and Reagent craft histories.
+Reagent recipe-use lists also omit them. The active page refreshes immediately;
+cached entity pages are invalidated, including per-identity history state.
+Pins still work, hidden recipes remain inspectable via their catalogue/detail
+pages, and hiding does not delete or rewrite crafts or change aggregate totals,
+charts, reagent quantities, capture, migrations or Core API results. If every
+recipe is hidden, the summary says No visible recipes rather than claiming no
+crafts occurred.
+
+Filtering occurs in UI after bounded Core pages are fetched. An entirely hidden
+page schedules continuation on the next frame, one page per worker update, so
+later visible crafts remain reachable and no unbounded synchronous scan is
+introduced. List scroll restoration and the existing in-place enrichment remain
+intact. Core never reads the hidden preference and has no new hide API/filter.
+
 ## Craft Detail modal
 
 Only individual crafts open modally. A full-screen dimmed shade blocks underlying
@@ -338,6 +362,10 @@ pages and the modal while performing this checklist.
 - [ ] Test an empty account, an empty filtered population, no pins, and five pins.
   Pin/unpin from Recipe Detail, reject a sixth, change catalogue filters, navigate
   directly from a pin, reload, and verify alphabetical order and persistence.
+- [ ] Hide/unhide recipes from catalogue and Detail. Recipes must keep listing
+  them; both checkboxes synchronize. Verify every ranked/history list, hide all,
+  hidden-only pages before a visible craft, switching cached identities, pins,
+  reload, and more than five hidden recipes. Totals and saved Core facts stay fixed.
 - [ ] Overview must have no craft list. Verify all filters, graph and totals,
   including complete, zero, unknown, and partial Multicraft/Resourcefulness data.
 - [ ] Logbook must have no graph. Inspect Result item/quality and Highlights for

@@ -59,7 +59,7 @@ function UI.CataloguePage(page, width, height, openRecipe)
     { label = "Most crafted", value = "count" },
   }, function(value) sort = value; page:Refresh(true) end, controlWidth)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
-  local list = UI.RecipeTable(page, 0, -144, width, height - 144, openRecipe)
+  local list = UI.RecipeTable(page, 0, -144, width, height - 144, openRecipe, true)
   page.catalogue = list
   function filters.onLayout(filterHeight)
     list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -48 - filterHeight)
@@ -148,7 +148,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       if craft then rows[#rows + 1] = craft end
     end
     return rows, offset + 40 < #ids and offset + 40 or nil
-  end)
+  end, UI.VisibleRecipe)
   detail.chart = UI.Chart(overview, 0, 0, inner, true)
   local legend = UI.Text(overview, 0, -168, inner, 18)
   legend:SetText("|cff2787c2Used|r   |cff287040Returned|r")
@@ -249,7 +249,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
         local offset, rows = cursor or 0, {}
         for index = offset + 1, math.min(offset + 40, #ranked) do rows[#rows + 1] = ranked[index] end
         return rows, offset + 40 < #ranked and offset + 40 or nil
-      end)
+      end, UI.VisibleRecipe)
       recipes:Reload()
       if preserve then
         recipes.restoreCount, recipes.restoreOffset = recipeCount, recipeOffset

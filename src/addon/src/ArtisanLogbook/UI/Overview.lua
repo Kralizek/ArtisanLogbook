@@ -118,6 +118,8 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
   function summary:Render(series, filter)
     local totals, recipes = UI.Aggregate(series)
     self.totals, self.recipes = totals, recipes
+    self.recipes = {}
+    for _, row in ipairs(recipes) do if UI.VisibleRecipe(row) then self.recipes[#self.recipes + 1] = row end end
     local professions, professionRows = {}, {}
     for _, row in ipairs(series) do
       local key = row.profession and row.profession.skillLineId or "unknown"
@@ -169,10 +171,11 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     end
     local share = UI.MeasuredShare(totals, "multicraftBonus", "outputQuantity")
     if share ~= "Unknown" then self.tiles[4].note:SetText(share .. " of total output") end
-    local top = recipes[1]
+    local top = self.recipes[1]
+    local emptyRecipeMessage = totals.craftCount > 0 and "No visible recipes" or "No crafts in this period"
     self.tiles[6].icon:SetTexture(UI.RecipeIcon(top and top.recipe))
     self.tiles[6].value:SetText(top and UI.Elide(UI.Name(top.recipe), math.floor(self.tiles[6]:GetWidth() / 10)) or "-")
-    self.tiles[6].note:SetText(top and UI.Count(top.craftCount, "craft") or "No crafts in this period")
+    self.tiles[6].note:SetText(top and UI.Count(top.craftCount, "craft") or emptyRecipeMessage)
     self.tiles[6].value:SetTextColor(.30, .22, .06)
     self.tiles[6]:SetScript("OnClick", function() if top and top.recipe and openRecipe then openRecipe(top.recipe) end end)
     self.tiles[6]:EnableMouse(true)
@@ -183,7 +186,7 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
       if item then UI.ItemTooltip(self, item)
       else
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(top and UI.Name(top.recipe) or "No crafts in this period")
+        GameTooltip:SetText(top and UI.Name(top.recipe) or emptyRecipeMessage)
         GameTooltip:Show()
       end
     end)
@@ -292,7 +295,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     UI.LazyList(page.history, function(cursor)
       local result, reason = ArtisanLogbookAPI.GetCrafts(page:Filter(), { limit = 40, cursor = cursor })
       return result and result.crafts, result and result.nextCursor or reason
-    end)
+    end, UI.VisibleRecipe)
   end
   function page:Refresh(reset, preserve)
     local character = kind == "Character" and self.identity.key or state.character
