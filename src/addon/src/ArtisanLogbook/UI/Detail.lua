@@ -4,7 +4,7 @@ local UI = addon.UI
 function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
   local content = page
   page.content, page.states = content, {}
-  local heading = UI.Text(content, 42, -4, width - 352, 26, "GameFontNormalLarge")
+  local heading = UI.Text(content, 42, -4, width - 292, 26, "GameFontNormalLarge")
   heading:SetWordWrap(false); heading:SetMaxLines(1)
   local metadata = UI.Text(content, 42, -34, width - 48, 20)
   local icon = content:CreateTexture(nil, "ARTWORK")
@@ -16,7 +16,22 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     pin:SetText(UI.IsPinned(page.recipe.id) and "Unpin recipe" or "Pin recipe")
     pinsChanged()
   end)
-  page.hiddenCheck = UI.HiddenRecipeCheckbox(content, width - 296, -4)
+  local hidden = UI.Button(content, "Hide recipe", width - 236, -4, 112, function()
+    if page.recipe then UI.SetRecipeHidden(page.recipe.id, not UI.IsRecipeHidden(page.recipe.id)) end
+  end)
+  page.hiddenButton = hidden
+  local function updateHiddenButton()
+    hidden:SetText(page.recipe and UI.IsRecipeHidden(page.recipe.id) and "Show recipe" or "Hide recipe")
+  end
+  hidden:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self:GetText())
+    GameTooltip:AddLine("Toggle this recipe in most-crafted tables and craft lists. It stays in Recipes; totals and saved history do not change.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  hidden:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  UI.RegisterHiddenRecipeCallback(function(recipeId)
+    if page.recipe and page.recipe.id == recipeId then updateHiddenButton() end
+  end)
   local history
   local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end, height - 62, openReagent)
   page.outcomes = outcomes
@@ -59,7 +74,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     metadata:SetText(table.concat(details, "  -  "))
     icon:SetTexture(UI.RecipeIcon(recipe))
     pin:SetText(UI.IsPinned(recipe.id) and "Unpin recipe" or "Pin recipe")
-    self.hiddenCheck:SetRecipe(recipe.id)
+    updateHiddenButton()
     if changed or self.dirty then
       outcomes.maxQuality = recipe.maxQuality
       outcomes:Open(recipe.id, saved and saved.filters)

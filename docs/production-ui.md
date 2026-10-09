@@ -216,7 +216,9 @@ Hide from lists is a UI-only preference stored as positive recipe IDs in
 `ArtisanLogbookUISettings.hiddenRecipes`. Unlike pins, hidden recipes have no
 five-entry limit. The Recipes catalogue always lists hidden recipes under the
 current period/search/character/profession filters, so its Hide checkbox can
-restore them. Recipe Detail has the same synchronized toggle beside Pin.
+restore them. Recipe Detail uses matching Hide recipe / Show recipe and Pin recipe /
+Unpin recipe buttons, with equal widths and an 8-unit gap. Its visibility button
+stays synchronized with the catalogue checkbox.
 
 Hidden recipes are omitted from most-crafted tables and the most-crafted tile,
 and from Logbook, Character, Profession, Recipe and Reagent craft histories.
