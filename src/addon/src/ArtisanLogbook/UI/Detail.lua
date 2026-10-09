@@ -58,6 +58,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     icon:SetTexture(UI.RecipeIcon(recipe))
     pin:SetText(UI.IsPinned(recipe.id) and "Unpin recipe" or "Pin recipe")
     if changed or self.dirty then
+      outcomes.maxQuality = recipe.maxQuality
       outcomes:Open(recipe.id, saved and saved.filters)
       if changed and saved then history:Restore(saved.history) end
       if not saved or self.dirty or saved.revision ~= (self.revision or 0) then history:Reload(not changed or saved ~= nil) end
@@ -110,7 +111,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local reagents = UI.ScrollList(content, 0, -306, width - 36, height - 378, {
     { title = "Reagent", width = (width - 60) * .78, value = function(row) return UI.Name(row.item) end,
       create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .78) end,
-      update = function(cell, row) cell:Update(row.item); UI.ReagentVisual(cell, row.item.id) end },
+      update = function(cell, row) UI.ReagentCell(cell, row.item) end },
     { title = "Returned", width = (width - 60) * .22, value = function(row) return UI.Number(row.returnedQuantity) end,
       exact = function(row) return tostring(row.returnedQuantity) end },
   }, function(row) if openReagent then goBack(); openReagent(row.item) end end, "No reagents returned")

@@ -35,22 +35,29 @@ function UI.ReagentVisual(cell, itemId)
   updateReagentVisuals(cell, reagentDisplay(itemId))
 end
 
+function UI.ReagentCell(cell, item)
+  local metadata = reagentDisplay(item.id)
+  cell:Update(item, nil, metadata.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+  UI.ReagentVisual(cell, item.id)
+end
+
 function UI.CataloguePage(page, width, height, openRecipe)
   UI.Section(page, "Recipes", 0, -2, width)
   local character, profession, sort, search = false, false, "count", ""
   local filters = UI.FilterBar(page, width, -42)
   page.filters = filters
-  local period = filters:Period({ days = false }, function() page:Refresh(true) end, true)
+  local controlWidth = math.min(156, (width - 246) / 4)
+  local period = filters:Period({ days = false }, function() page:Refresh(true) end, true, controlWidth)
   local characters = filters:Select("Character", {}, function(value)
     character, profession = value, false; page:Refresh(true)
-  end)
+  end, controlWidth)
   local professions = filters:Select("Profession", {}, function(value)
     profession = value; page:Refresh(true)
-  end)
+  end, controlWidth)
   local sorts = filters:Select("Sort", {
     { label = "Recipe name", value = "name" }, { label = "Profession", value = "profession" },
     { label = "Most crafted", value = "count" },
-  }, function(value) sort = value; page:Refresh(true) end)
+  }, function(value) sort = value; page:Refresh(true) end, controlWidth)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
   local list = UI.RecipeTable(page, 0, -144, width, height - 144, openRecipe)
   page.catalogue = list
@@ -92,6 +99,11 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   detail.icon:SetSize(32, 32); detail.icon:SetPoint("TOPLEFT", 0, 0)
   detail.quality = content:CreateTexture(nil, "OVERLAY")
   detail.quality:SetSize(16, 16); detail.quality:SetPoint("TOPLEFT", 18, -18)
+  local iconHover = CreateFrame("Frame", nil, content)
+  iconHover:SetAllPoints(detail.icon); iconHover:EnableMouse(true)
+  iconHover:SetScript("OnEnter", function(self) UI.ItemTooltip(self, detail.item) end)
+  iconHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  detail.iconHover = iconHover
   local heading = UI.Text(content, 40, 0, width - 320, 28, "GameFontNormalLarge")
   local identity = UI.Text(content, 40, -30, width - 40, 18)
   detail.classification = UI.TrivialCheckbox(content, width - 250, 0, function() end)
@@ -319,36 +331,33 @@ function UI.ReagentsPage(page, width, height, openReagent)
   page.summary, page.summaryRow = summary.tiles, summary
   local listWidth = width
   local available = listWidth - 24
-  local nameWidth = available * .40
+  local nameWidth = available - 418
   local list = UI.ScrollList(page, 0, -224, listWidth, height - 258, {
     { title = "Reagent", width = nameWidth, value = function(row)
         return UI.Name(row.item) .. " (#" .. row.item.id .. ")"
       end,
       create = function(parent, left)
-        local cell = CreateFrame("Frame", nil, parent)
-        cell:SetPoint("TOPLEFT", left, 0); cell:SetSize(nameWidth, 28)
-        cell.icon = cell:CreateTexture(nil, "ARTWORK")
-        cell.icon:SetSize(22, 22); cell.icon:SetPoint("TOPLEFT", 2, -3)
-        cell.quality = cell:CreateTexture(nil, "OVERLAY")
-        cell.quality:SetSize(14, 14); cell.quality:SetPoint("TOPLEFT", 12, -14)
-        cell.name = UI.Text(cell, 30, -1, nameWidth - 34, 14)
-        cell.name:SetWordWrap(false)
-        cell.identity = UI.Text(cell, 30, -15, nameWidth - 34, 13)
-        return cell
+        return UI.ItemCell(parent, left, nameWidth)
       end,
       update = function(cell, row)
-        UI.ReagentVisual(cell, row.item.id)
-        cell.name:SetText(UI.Elide(UI.Name(row.item), math.max(3, math.floor((nameWidth - 34) / 7))))
-        cell.identity:SetText("#" .. row.item.id .. (row.quality ~= nil and " | Quality " .. row.quality or ""))
+        UI.ReagentCell(cell, row.item)
       end },
-    { title = "Used", width = available * .23, value = function(row)
+    { title = "Profession", width = 140, value = function(row)
+      local names = {}
+      for _, profession in ipairs(row.professions or {}) do names[#names + 1] = UI.Name(profession) end
+      return table.concat(names, ", ")
+    end },
+    { title = "Recipes", width = 54, value = function(row) return UI.Number(row.recipeCount) end },
+    { title = "Used", width = 80, value = function(row)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
     end, exact = function(row) return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) end },
-    { title = "Returned", width = available * .23, value = function(row)
+    { title = "Returned", width = 80, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end, exact = function(row) return UI.AmountTooltip(row.returnedQuantity, row.returnComplete) end },
-    { title = "Savings stats", width = available * .14,
-      value = function(row) return UI.IsTrivial(row.item.id) and "Ignored" or "Included" end },
+    { title = "Ignore", width = 64,
+      value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
+      create = function(parent, left) return UI.TrivialCheckbox(parent, left + 8, -2, function() end, true) end,
+      update = function(check, row) check:SetItem(row.item.id) end },
   }, function(row) openReagent(row.item) end, "No reagents in this selection")
   page.catalogue = list
   function filters.onLayout(filterHeight)

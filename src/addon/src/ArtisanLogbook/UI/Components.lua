@@ -249,9 +249,22 @@ function UI.Choices(facet, character)
   return result
 end
 
+function UI.ItemTooltip(owner, item)
+  if not item then return end
+  GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+  if item.id and type(GameTooltip.SetItemByID) == "function" then GameTooltip:SetItemByID(item.id)
+  else GameTooltip:SetText(UI.Name(item)) end
+  if item.id then GameTooltip:AddLine("Item ID: " .. item.id, 1, 1, 1) end
+  GameTooltip:Show()
+end
+
 function UI.ItemCell(parent, left, width)
   local cell = CreateFrame("Frame", nil, parent)
   cell:SetPoint("TOPLEFT", left, 0); cell:SetSize(width, 28)
+  cell:EnableMouse(true)
+  cell:SetPropagateMouseClicks(true)
+  cell:SetScript("OnEnter", function(self) UI.ItemTooltip(self, self.item) end)
+  cell:SetScript("OnLeave", function() GameTooltip:Hide() end)
   cell.icon = cell:CreateTexture(nil, "ARTWORK")
   cell.icon:SetSize(22, 22); cell.icon:SetPoint("TOPLEFT", 2, -3)
   cell.quality = cell:CreateTexture(nil, "OVERLAY")
@@ -271,7 +284,7 @@ end
 
 function UI.HistoryColumns(width, context)
   local available, columns = width - 24, {}
-  local fixed = 38 + 88 + 72
+  local fixed = 38 + 88 + (context == "Logbook" and 0 or 72)
   local textWeight = (context ~= "Recipe" and 1.15 or 0) + 1.25 +
     (context ~= "Character" and .65 or 0) + (context ~= "Profession" and context ~= "Recipe" and .70 or 0)
   local unit = (available - fixed) / textWeight
@@ -296,8 +309,10 @@ function UI.HistoryColumns(width, context)
   columns[#columns + 1] = { title = "Qty", width = 38, value = function(row) return UI.Number(row.outputQuantity) end,
     exact = function(row) return UI.Value(row.outputQuantity) end }
   columns[#columns + 1] = { title = "Highlights", width = 88, activity = true, extrasOnly = true }
-  columns[#columns + 1] = { title = "When", width = 72, lines = 2,
-    value = function(row) return UI.DateTime(row.timestamp) end, exact = function(row) return UI.DateTime(row.timestamp, true) end }
+  if context ~= "Logbook" then
+    columns[#columns + 1] = { title = "When", width = 72, lines = 2,
+      value = function(row) return UI.DateTime(row.timestamp) end, exact = function(row) return UI.DateTime(row.timestamp, true) end }
+  end
   return columns
 end
 
@@ -418,11 +433,11 @@ function UI.FilterBar(parent, width, y)
     return control
   end
   function bar:Search(onSearch)
-    local size = 210
+    local size = 190
     local left, top = self:Slot(size)
     UI.Text(self, left, top, size, 16, "GameFontNormalSmall"):SetText("Search")
     local input = CreateFrame("EditBox", nil, self, "InputBoxTemplate")
-    input:SetPoint("TOPLEFT", left + 4, top - 16); input:SetSize(150, 24)
+    input:SetPoint("TOPLEFT", left + 4, top - 16); input:SetSize(128, 24)
     input:SetAutoFocus(false); input:SetMaxLetters(120)
     local function apply() input:SetScript("OnUpdate", nil); input:ClearFocus(); onSearch(input:GetText()) end
     input:SetScript("OnEnterPressed", apply)
@@ -434,11 +449,16 @@ function UI.FilterBar(parent, width, y)
         if self.delay <= 0 then self:SetScript("OnUpdate", nil); onSearch(self:GetText()) end
       end)
     end)
-    local search = CreateFrame("Button", nil, self)
-    search:SetSize(24, 24); search:SetPoint("TOPLEFT", left + 156, top - 16)
-    search:SetNormalTexture("Interface\\Common\\UI-Searchbox-Icon"); search:SetScript("OnClick", apply)
-    local clear = CreateFrame("Button", nil, self, "UIPanelCloseButton")
-    clear:SetSize(24, 24); clear:SetPoint("TOPLEFT", left + 184, top - 16)
+    local function actionButton(x, texture, action)
+      local button = CreateFrame("Button", nil, self, "UIPanelButtonTemplate")
+      button:SetSize(24, 24); button:SetPoint("TOPLEFT", x, top - 16)
+      local icon = button:CreateTexture(nil, "ARTWORK")
+      icon:SetSize(16, 16); icon:SetPoint("CENTER"); icon:SetTexture(texture)
+      button:SetScript("OnClick", action)
+      return button
+    end
+    local search = actionButton(left + 136, "Interface\\Common\\UI-Searchbox-Icon", apply)
+    local clear = actionButton(left + 164, "Interface\\Buttons\\UI-GroupLoot-Pass-Up", function() input:SetText(""); apply() end)
     clear:SetScript("OnClick", function() input:SetText(""); apply() end)
     for button, text in pairs({ [search] = "Search", [clear] = "Clear search" }) do
       button:SetScript("OnEnter", function(self)
@@ -449,14 +469,14 @@ function UI.FilterBar(parent, width, y)
     input.searchButton, input.clearButton = search, clear
     return input
   end
-  function bar:Period(state, onChange, includeAll)
+  function bar:Period(state, onChange, includeAll, size)
     local choices = includeAll and { { label = "All time", value = false } } or {}
     for _, choice in ipairs(UI.ranges) do choices[#choices + 1] = choice end
     choices[#choices + 1] = { label = "Custom dates", value = "custom" }
     local control
     control = self:Select("Period", choices, function(value)
       control.state.days = value; control:UpdateState(); onChange()
-    end)
+    end, size)
     local dates = CreateFrame("Frame", nil, self)
     dates:SetSize(width, 46); dates:Hide()
     local inputs = {}
@@ -821,6 +841,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
               GameTooltip:AddLine(indicator.tooltip, 1, 1, 1)
             end
           end
+          if self.item.timestamp then GameTooltip:AddLine("Crafted: " .. UI.DateTime(self.item.timestamp, true), 1, 1, 1) end
           GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -845,11 +866,9 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         for _, indicator in ipairs(row.indicators or {}) do indicator:Hide() end
         row.indicators = row.indicators or {}
         local left = 0
-        local indicators, desired = UI.Activity(item, row.activity.extrasOnly), 0
-        for _, indicator in ipairs(indicators) do desired = desired + (indicator.text ~= "" and 50 or 26) end
-        local compact = desired > row.activity:GetWidth()
+        local indicators = UI.Activity(item, row.activity.extrasOnly)
         for indicatorIndex, indicator in ipairs(indicators) do
-          local indicatorWidth = compact and 20 or (indicator.text ~= "" and 50 or 26)
+          local indicatorWidth = 20
           if left + indicatorWidth > row.activity:GetWidth() then break end
           local button = row.indicators[indicatorIndex]
           if not button then
@@ -872,7 +891,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
           button.tooltip = indicator.tooltip
           if indicator.atlas then button.icon:SetAtlas(indicator.atlas)
           else button.icon:SetTexture(indicator.icon) end
-          button.label:SetText(compact and "" or indicator.text)
+          button.label:SetText("")
           button:Show()
           left = left + indicatorWidth
         end
@@ -1054,7 +1073,11 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe)
       { "Resourcefulness", "resourcefulnessProcCount" }, { "Ingenuity", "ingenuityProcCount" } }) do
     local title, metric = entry[1], entry[2]
     columns[#columns + 1] = { title = title, width = available * (.38 / 3),
-      value = function(row) return UI.ProcValue(row.totals, metric) end,
+      value = function(row)
+        if metric ~= "resourcefulnessProcCount" and row.totals and row.totals[metric] == 0 and
+            row.totals[metric .. "ObservedCount"] == row.totals.craftCount then return "" end
+        return UI.ProcValue(row.totals, metric)
+      end,
       exact = function(row) return UI.ProcTooltip(row.totals, metric) end }
   end
   local list = UI.ScrollList(parent, x, y, width, height, columns,
@@ -1143,6 +1166,7 @@ UI.ranges = {
   { label = "Today", value = 1 },
   { label = "7 days", value = 7 },
   { label = "30 days", value = 30 },
+  { label = "60 days", value = 60 },
   { label = "90 days", value = 90 },
   { label = "365 days", value = 365 },
 }

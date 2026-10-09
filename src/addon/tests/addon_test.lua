@@ -20,6 +20,7 @@ for _, name in ipairs({
   "LockHighlight", "UnlockHighlight", "SetToplevel", "Raise", "SetAtlas",
   "SetTextColor", "AddMaskTexture", "SetScale", "SetShadowOffset", "SetBlendMode",
   "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor",
+  "SetPropagateMouseClicks",
 }) do
   methods[name] = function() end
 end
@@ -868,6 +869,31 @@ assert(UI.Amount(34766, false) == "34.8k" and UI.Amount(34766, true) == "34.8k")
 assert(UI.Amount(260, false) == "260" and UI.Amount(0, false) == "-" and UI.Amount(0, true) == "0")
 assert(UI.AmountTooltip(260, false):find("total may be higher", 1, true))
 assert(UI.AmountTooltip(260, true) == "260")
+local logbookColumns = UI.HistoryColumns(732, "Logbook")
+for _, column in ipairs(logbookColumns) do assert(column.title ~= "When") end
+local hasSixtyDays = false
+for _, range in ipairs(UI.ranges) do if range.value == 60 then hasSixtyDays = true end end
+assert(hasSixtyDays)
+local highlightProbe = UI.ScrollList(paperProbe, 0, 0, 220, 120,
+  { { title = "Highlights", width = 196, activity = true, extrasOnly = true } }, function() end)
+highlightProbe:Append({ { concentrationSpent = 42, multicraftBonus = 5 } })
+assert(highlightProbe.rows[1].indicators[1].label.text == "" and highlightProbe.rows[1].indicators[2].label.text == "")
+highlightProbe:Reset(); highlightProbe:Append({ { multicraftBonus = 5 } })
+assert(highlightProbe.rows[1].indicators[1].label.text == "")
+highlightProbe.rows[1].indicators[1].scripts.OnEnter(highlightProbe.rows[1].indicators[1])
+assert(environment.GameTooltip.text == "Multicraft: produced 5 additional items")
+local smallCatalogue = environment.CreateFrame("Frame", nil, paperProbe)
+UI.CataloguePage(smallCatalogue, 732, 576, function() end)
+assert(smallCatalogue.filters:GetHeight() == 46 and smallCatalogue.searchInput.y == -16)
+local itemProbe = UI.ItemCell(paperProbe, 0, 200)
+itemProbe:Update({ id = 123, name = "Potion" })
+itemProbe.scripts.OnEnter(itemProbe)
+assert(environment.GameTooltip.itemId == 123 and environment.GameTooltip.lines[1] == "Item ID: 123")
+local nativeItemTooltip = environment.GameTooltip.SetItemByID
+environment.GameTooltip.SetItemByID = nil
+itemProbe.scripts.OnEnter(itemProbe)
+assert(environment.GameTooltip.text == "Potion")
+environment.GameTooltip.SetItemByID = nativeItemTooltip
 local procCases = {
   { craftCount = 20, resourcefulnessProcCount = 5, resourcefulnessProcCountObservedCount = 20, expected = "25.0%" },
   { craftCount = 20, resourcefulnessProcCount = 0, resourcefulnessProcCountObservedCount = 20, expected = "0.0%" },
@@ -886,11 +912,14 @@ periodProbe:Choose("custom")
 assert(filterProbe:GetHeight() == 92 and periodProbe:Time().from < periodProbe:Time().to)
 periodProbe:Choose(1)
 assert(filterProbe:GetHeight() == 46 and periodProbe:Time().to - periodProbe:Time().from == 86400)
+periodProbe:Choose(60)
+assert(periodProbe:Time().to - periodProbe:Time().from == 60 * 86400)
 local searchProbe = filterProbe:Search(function(value) filterProbe.search = value end)
 searchProbe:SetText("Potion"); searchProbe.searchButton.scripts.OnClick()
 assert(filterProbe.search == "Potion")
 searchProbe.clearButton.scripts.OnClick()
 assert(filterProbe.search == "")
+assert(searchProbe.searchButton.template == "UIPanelButtonTemplate" and searchProbe.clearButton.template == "UIPanelButtonTemplate")
 local tabsProbe = UI.TabbedContent(paperProbe, 700, 400, -100, { "Overview", "Craft History" })
 tabsProbe:Select("Craft History")
 assert(tabsProbe.views["Craft History"]:IsShown() and not tabsProbe.views.Overview:IsShown())
@@ -1398,6 +1427,8 @@ do
   dropdown(page.content, "90 days"):Choose(90)
   assertPrimarySlots()
   assert(page.chart.total.text == "6 crafts" and page.summary.totals.craftCount == 6)
+  assert(page.craftBreakdown:IsShown() and page.craftBreakdown.text:find("Alchemy 1", 1, true))
+  assert(page.craftBreakdown.text:find("Blacksmithing 1", 1, true))
   dropdown(page.content, "Today"):Choose(1)
   assertPrimarySlots()
   assert(page.chart.total.text == "5 crafts" and page.summary.totals.craftCount == 5)
@@ -1406,6 +1437,7 @@ do
   dropdown(page.content, "Alchemy"):Choose(171)
   assertPrimarySlots()
   assert(page.summary.totals.craftCount == 1 and #page.topRecipes.items == 1)
+  assert(not page.craftBreakdown:IsShown() and not page.craftBreakdownHover:IsShown())
   page.history.scroll:SetVerticalScroll(85)
   window:Activate("Character", { key = "missing", name = "Missing" })
   assert(not page.professionSlots[1].entry.details and not page.professionSlots[2].entry.details)
@@ -1533,7 +1565,8 @@ do
         returns = index <= 5 and { { reagent = { itemID = 8 }, quantity = 1 } } or {}
       elseif recipeId == 9742 then returns = {}
       elseif index <= 8 then returns = { { reagent = { itemID = 8 }, quantity = 1 } } end
-      assert(ledger:RecordResult({ operationID = recipeId * 100 + index, resourcesReturned = returns }))
+      assert(ledger:RecordResult({ operationID = recipeId * 100 + index, resourcesReturned = returns,
+        multicraft = 0, hasIngenuityProc = false }))
     end
   end
   local ui = loadUI()
@@ -1550,6 +1583,9 @@ do
         local resource
         for _, cell in ipairs(row.cells) do if cell.column.title == "Resourcefulness" then resource = cell end end
         assert(resource and resource.label.text == expected[row.item.recipe.id])
+        for _, cell in ipairs(row.cells) do
+          if cell.column.title == "Multicraft" or cell.column.title == "Ingenuity" then assert(cell.label.text == "") end
+        end
         if row.item.recipe.id == 9743 then
           row.scripts.OnEnter(row)
           local tooltip = table.concat(environment.GameTooltip.lines, "\n")
@@ -1560,6 +1596,75 @@ do
   end
   window:Hide()
   print("PASS recipe Resourcefulness shows measured mixed rates or known procs without treating missing outcomes as failures")
+end
+
+do
+  local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  local now = environment.GetServerTime()
+  ledger:AddDimension("recipe", 9901, { name = "Quality recipe", maxQuality = 3 })
+  ledger:AddDimension("recipe", 9902, { name = "Second recipe", maxQuality = 3 })
+  for index = 1, 3 do ledger:AddDimension("item", 6000 + index, { name = "Quality " .. index .. " result" }) end
+  local function record(recipeId, itemId, quality, quantity, operation)
+    ledger:BeginCraft(recipeId)
+    return assert(ledger:RecordResult({ operationID = operation, itemID = itemId, craftingQuality = quality,
+      quantity = quantity, multicraft = 0, hasIngenuityProc = false, resourcesReturned = {} }))
+  end
+  ledger.wall = function() return now - 40 * 86400 end
+  record(9901, 6001, 1, 7, 1)
+  ledger.wall = environment.GetServerTime
+  local firstCharacter = api.GetCharacters()[1].key
+  for index = 1, 105 do
+    record(9901, index <= 50 and 6001 or index <= 100 and 6002 or 6003,
+      index <= 50 and 1 or index <= 100 and 2 or nil, 1, index + 1)
+  end
+  ledger:CreateSession({ characterName = "Other quality crafter", characterGUID = "Player-quality-other" })
+  record(9901, 6003, 3, 4, 107)
+  record(9902, 6002, 2, 2, 108)
+  local ui = loadUI()
+  local window = ui.productionWindow
+  window:Show(); window:OpenRecipe({ id = 9901, name = "Quality recipe", maxQuality = 3 })
+  local pane = window.recipeOutcomes
+  local queries, originalCrafts = 0, api.GetCrafts
+  api.GetCrafts = function(filter, options)
+    if options.limit == 100 then queries = queries + 1 end
+    return originalCrafts(filter, options)
+  end
+  pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker)
+  assert(queries == 1 and pane.qualityWorker.scripts.OnUpdate)
+  pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker)
+  assert(queries == 2 and not pane.qualityWorker.scripts.OnUpdate)
+  assert(#pane.qualityRows == 4 and pane.qualityCraftCount == 101)
+  assert(pane.qualityRows[1].quality == 1 and pane.qualityRows[1].quantity == 50)
+  assert(pane.qualityRows[2].quality == 2 and pane.qualityRows[2].quantity == 50)
+  assert(pane.qualityRows[3].quality == 3 and pane.qualityRows[3].quantity == 4)
+  assert(pane.qualityRows[4].quality == nil and pane.qualityRows[4].quantity == 5)
+  assert(pane.tiles[2].value.text == "109" and pane.qualityStatus.text:find("101 crafts of 106", 1, true))
+  pane.qualityList.rows[1].widgets[1].widget.scripts.OnEnter(pane.qualityList.rows[1].widgets[1].widget)
+  assert(environment.GameTooltip.itemId == 6001)
+  dropdown(pane, "All time"):Choose(false)
+  while pane.qualityWorker.scripts.OnUpdate do pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker) end
+  assert(pane.qualityRows[1].quantity == 57 and pane.tiles[2].value.text == "116")
+  dropdown(pane, "TestCrafter"):Choose(firstCharacter)
+  while pane.qualityWorker.scripts.OnUpdate do pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker) end
+  assert(#pane.qualityRows == 3 and pane.qualityCraftCount == 101)
+  assert(pane.tiles[2].value.text == "112")
+  dropdown(pane, "Today"):Choose(1)
+  while pane.qualityWorker.scripts.OnUpdate do pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker) end
+  assert(pane.qualityRows[1].quantity == 50)
+  pane:Refresh()
+  pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker)
+  window:OpenRecipe({ id = 9902, name = "Second recipe", maxQuality = 3 })
+  while pane.qualityWorker.scripts.OnUpdate do pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker) end
+  assert(#pane.qualityRows == 1 and pane.qualityRows[1].quantity == 2)
+  ledger:Prune(now + 61 * 86400)
+  pane:Refresh()
+  while pane.qualityWorker.scripts.OnUpdate do pane.qualityWorker.scripts.OnUpdate(pane.qualityWorker) end
+  assert(#pane.qualityRows == 0 and pane.tiles[2].value.text == "2")
+  assert(pane.qualityStatus.text:find("0 crafts of 1", 1, true))
+  api.GetCrafts = originalCrafts
+  window:Hide()
+  print("PASS recipe quality totals are scoped, paged, cancellable and honest after detail pruning")
 end
 
 do
@@ -1596,8 +1701,15 @@ do
   record(9702, 4008, "Bloom", 3, 1, 1)
   assert(#list.items == 2 and list.items[2].item.id == 4009 and list.items[2].quality == 2)
   assert(#list.items[1].professions == 2 and list.items[1].recipeCount == 2)
-  assert(list.rows[1].widgets[1].widget.identity.text:find("#4008", 1, true))
-  assert(list.rows[2].widgets[1].widget.identity.text:find("Quality 2", 1, true))
+  assert(list.rows[1].widgets[1].widget.label.text == "Bloom" and not list.rows[1].widgets[1].widget.identity)
+  list.rows[1].widgets[1].widget.scripts.OnEnter(list.rows[1].widgets[1].widget)
+  assert(environment.GameTooltip.itemId == 4008 and environment.GameTooltip.lines[1] == "Item ID: 4008")
+  assert(list.rows[2].widgets[1].widget.item.id == 4009)
+  local catalogueCheck = list.rows[1].widgets[2].widget
+  catalogueCheck:SetChecked(true); catalogueCheck.scripts.OnClick(catalogueCheck)
+  assert(helpers.IsTrivial(4008))
+  catalogueCheck:SetChecked(false); catalogueCheck.scripts.OnClick(catalogueCheck)
+  assert(not helpers.IsTrivial(4008))
   for index = 1, 45 do record(9701, 4100 + index, string.format("Herb %02d", index), index, index, 1) end
   assert(#list.items == 40)
   page.searchInput:SetText("Bloom")
@@ -1868,6 +1980,8 @@ do
   local ranked = overview.topRecipes.items[1]
   assert(ranked.result.outputItem.id == 5302 and ranked.totals.outputQuantity == 4)
   assert(ui.UI.Rate(ranked.totals, "multicraftProcCount") == "100.0%")
+  overview.summary.tiles[6].scripts.OnEnter(overview.summary.tiles[6])
+  assert(environment.GameTooltip.itemId == 5302)
   overview.summary.tiles[6].scripts.OnClick()
   assert(window.activeTab == "Recipe" and window.identity.id == 9850)
   local recipe = window.pages.Recipe
@@ -1876,11 +1990,22 @@ do
   assert(recipe.outcomes.production.averageConcentration.text == "100")
   assert(recipe.outcomes.production.netConcentration.text == "80")
   assert(recipe.outcomes.tiles[6].note.text == "100.0% proc rate")
+  assert(recipe.outcomes.tiles[4].note.text == "100.0% procs\n25.0% of output")
+  assert(recipe.outcomes.tiles[4].note:GetStringHeight() <= recipe.outcomes.tiles[4].note:GetHeight())
+  assert(-recipe.outcomes.tiles[4].note.y + recipe.outcomes.tiles[4].note:GetHeight() <= recipe.outcomes.summary:GetHeight())
+  recipe.outcomes.qualityWorker.scripts.OnUpdate(recipe.outcomes.qualityWorker)
+  assert(recipe.outcomes.qualityList.items[1].quality == 2 and recipe.outcomes.qualityList.items[1].quantity == 4)
+  assert(recipe.outcomes.qualityTitle:IsShown())
+  local from, to = ui.UI.Range(environment.GetServerTime(), 30)
+  assert(recipe.outcomes.chart.start.text == os.date("!%d %b %Y", from))
+  assert(recipe.outcomes.chart.finish.text == os.date("!%d %b %Y", to - 86400))
   recipe:SelectView("Reagents")
   local reagentRow = recipe.outcomes.materialList.rows[1]
   reagentRow.scripts.OnClick(reagentRow)
   assert(window.activeTab == "Reagent" and window.identity.id == 5301)
   local reagent = window.pages.Reagent
+  reagent.iconHover.scripts.OnEnter(reagent.iconHover)
+  assert(environment.GameTooltip.itemId == 5301)
   while reagent.worker.scripts.OnUpdate do reagent.worker.scripts.OnUpdate(reagent.worker) end
   assert(reagent.fields.rate.text == "20.0%" and #reagent.history.items == 1)
   reagent:SelectView("Craft History")
@@ -2068,6 +2193,11 @@ do
   assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
   assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
   assert(materialRows[1].item.returnedQuantity == 3 and materialRows[2].item.returnedQuantity == 5)
+  local reagentCheck = materialRows[1].widgets[2].widget
+  reagentCheck:SetChecked(true); reagentCheck.scripts.OnClick(reagentCheck)
+  assert(helpers.IsTrivial(8))
+  reagentCheck:SetChecked(false); reagentCheck.scripts.OnClick(reagentCheck)
+  assert(not helpers.IsTrivial(8))
   assert(material.icon.texture and material.quality.atlas == "ReagentQuality-8")
   assert(materialRows[2].widgets[1].widget.quality.atlas == "ReagentQuality-9")
   assert(not materialRows[3].widgets[1].widget.quality:IsShown())
@@ -2185,6 +2315,9 @@ do
     return oldSets(...)
   end
   window:OpenRecipe({ id = 9002 })
+  assert(pane.production.netConcentration.text == "-")
+  pages = 0
+  dropdown(pane, "All time"):Choose(false)
   assert(pages == 1 and pane.scripts.OnUpdate and pane.resourcefulness.nonTrivial.text:find("Calculating", 1, true))
   pane.scripts.OnUpdate()
   assert(pages == 2 and pane.scripts.OnUpdate)

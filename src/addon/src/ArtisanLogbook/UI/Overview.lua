@@ -68,10 +68,10 @@ function UI.Stat(parent, title, icon, x, y, width)
   texture:SetPoint("TOPLEFT", 0, -2)
   texture:SetTexture(icon)
   tile.icon = texture
-  tile.title = UI.Text(tile, 24, -2, width - 24, 28, "GameFontNormalSmall")
+  tile.title = UI.Text(tile, 24, -2, width - 24, 26, "GameFontNormalSmall")
   tile.title:SetText(title)
-  tile.value = UI.Text(tile, 0, -32, width, 22, "GameFontNormalLarge")
-  tile.note = UI.Text(tile, 0, -56, width, 24)
+  tile.value = UI.Text(tile, 0, -30, width, 20, "GameFontNormalLarge")
+  tile.note = UI.Text(tile, 0, -52, width, 28)
   function tile:SetNumber(value, complete, note)
     self.value:SetText(UI.Amount(value, complete))
     self.note:SetText(note or "")
@@ -117,6 +117,16 @@ function UI.ProductionSummary(parent, width, y, openRecipe)
   function summary:Render(series, filter)
     local totals, recipes = UI.Aggregate(series)
     self.totals, self.recipes = totals, recipes
+    local professions, professionRows = {}, {}
+    for _, row in ipairs(series) do
+      local key = row.profession and row.profession.skillLineId or "unknown"
+      local entry = professions[key] or { profession = row.profession, crafts = 0 }
+      professions[key] = entry
+      entry.crafts = entry.crafts + row.craftCount
+    end
+    for _, row in pairs(professions) do professionRows[#professionRows + 1] = row end
+    table.sort(professionRows, function(left, right) return UI.Name(left.profession) < UI.Name(right.profession) end)
+    self.professionCounts = professionRows
     self.tiles[1]:SetNumber(totals.craftCount, true)
     self.tiles[1].note:SetText("")
     for index, metric in pairs({ [2] = "outputQuantity", [3] = "concentrationSpent", [4] = "multicraftBonus" }) do
@@ -129,13 +139,19 @@ function UI.ProductionSummary(parent, width, y, openRecipe)
     self.tiles[6].icon:SetTexture(UI.RecipeIcon(top and top.recipe))
     self.tiles[6].value:SetText(top and UI.Elide(UI.Name(top.recipe), math.floor(self.tiles[6]:GetWidth() / 10)) or "-")
     self.tiles[6].note:SetText(top and UI.Count(top.craftCount, "craft") or "No crafts in this period")
-    self.tiles[6]:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    self.tiles[6].value:SetTextColor(.30, .22, .06)
     self.tiles[6]:SetScript("OnClick", function() if top and top.recipe and openRecipe then openRecipe(top.recipe) end end)
     self.tiles[6]:EnableMouse(true)
     self.tiles[6]:SetScript("OnEnter", function(self)
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:SetText(top and UI.Name(top.recipe) or "No crafts in this period")
-      GameTooltip:Show()
+      local result = top and top.recipe and ArtisanLogbookAPI.GetCrafts({ recipes = { top.recipe.id },
+        time = filter.time, characters = filter.characters }, { limit = 1 })
+      local item = result and result.crafts[1] and result.crafts[1].outputItem
+      if item then UI.ItemTooltip(self, item)
+      else
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(top and UI.Name(top.recipe) or "No crafts in this period")
+        GameTooltip:Show()
+      end
     end)
     self.tiles[6]:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.tiles[5].value:SetText("...")
@@ -183,6 +199,22 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   if kind ~= "Logbook" then
     page.summary = UI.ProductionSummary(content, width, -100, function(recipe) navigate("Recipe", recipe) end)
   end
+  if kind == "Character" then
+    page.craftBreakdown = UI.Text(content, 0, -180, width, 24)
+    page.craftBreakdown:SetWordWrap(false)
+    page.craftBreakdown:Hide()
+    page.craftBreakdownHover = CreateFrame("Frame", nil, content)
+    page.craftBreakdownHover:SetSize(width, 24); page.craftBreakdownHover:EnableMouse(true)
+    page.craftBreakdownHover:SetScript("OnEnter", function(self)
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText("Crafts by profession")
+      for _, entry in ipairs(page.summary.professionCounts) do
+        GameTooltip:AddLine(UI.Name(entry.profession) .. ": " .. entry.crafts, 1, 1, 1)
+      end
+      GameTooltip:Show()
+    end)
+    page.craftBreakdownHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    page.craftBreakdownHover:Hide()
+  end
   if entity then
     tabs = UI.TabbedContent(content, width, height - 248, -248, { "Overview", "Craft History" },
       function(name) state.view = name end)
@@ -203,7 +235,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
       end
     end
   elseif kind == "Logbook" then
-    page.history = UI.ScrollList(content, 0, -110, width, height - 110, UI.HistoryColumns(width),
+    page.history = UI.ScrollList(content, 0, -110, width, height - 110, UI.HistoryColumns(width, "Logbook"),
       function(craft) openCraft(craft.id) end, "No crafts in this period")
   end
   local recipesHeading
@@ -217,6 +249,12 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   function filters.onLayout(filterHeight)
     local top = 48 + filterHeight
     local summaryHeight = page.summary and page.summary:GetHeight() + 8 or 0
+    if page.craftBreakdown then
+      local breakdownTop = top + summaryHeight
+      page.craftBreakdown:ClearAllPoints(); page.craftBreakdown:SetPoint("TOPLEFT", 0, -breakdownTop)
+      page.craftBreakdownHover:ClearAllPoints(); page.craftBreakdownHover:SetPoint("TOPLEFT", 0, -breakdownTop)
+      if page.craftBreakdown:IsShown() then summaryHeight = summaryHeight + 28 end
+    end
     if page.summary then page.summary:ClearAllPoints(); page.summary:SetPoint("TOPLEFT", 0, -top) end
     if tabs then
       tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top - summaryHeight)
@@ -261,6 +299,15 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
       local series = result and result.series or {}
       self.chart:Render(series, filter.time.from, filter.time.to)
       self.summary:Render(series, filter)
+      if self.craftBreakdown then
+        local entries = self.summary.professionCounts
+        local labels = {}
+        for _, entry in ipairs(entries) do labels[#labels + 1] = UI.Name(entry.profession) .. " " .. UI.Number(entry.crafts) end
+        self.craftBreakdown:SetText(UI.Elide("Crafts by profession: " .. table.concat(labels, "  |  "), math.floor(width / 6)))
+        self.craftBreakdown:SetShown(#entries > 1)
+        self.craftBreakdownHover:SetShown(#entries > 1)
+        filters.onLayout(filters:GetHeight())
+      end
       if self.topRecipes then
         self.topRecipes:Render(self.summary.recipes, filter)
       end
