@@ -431,10 +431,10 @@ The production Recipes catalogue uses one read-only factual query:
 ```lua
 local page, reason = ArtisanLogbookAPI.GetRecipeSummaries({
   limit = 40, cursor = nil, character = characterKey,
-  profession = 171, sort = "count",
+  profession = 171, sort = "count", search = "potion",
 })
 -- { recipes = { { recipe = recipe, profession = profession, craftCount = 12 } },
---   nextCursor = "40" }
+--   nextCursor = "opaque cursor" }
 ```
 
 This catalogue includes recipes with a known WoW recipe ID and at least one
@@ -444,21 +444,147 @@ an opaque character key; `profession` selects a WoW skill-line ID. Both
 constraints apply together, and unknown values yield an empty catalogue.
 Unnamed recipes display as `Recipe #<ID>`. `sort = "name"` (the default) is
 case-insensitive by display name with ID as a tie-breaker; `sort = "count"`
-orders most-crafted first, using name and ID to break ties. Recipe and
+orders most-crafted first, using name and ID to break ties. `sort = "profession"`
+orders by case-insensitive profession name (missing names use `Unknown`), then
+recipe name and ID. Optional `search` is a literal case-insensitive substring of
+the display name, applied before sorting and pagination. Recipe and
 profession are detached domain projections.
 
 The default page size is 50, maximum 200. Only `limit`, `cursor`, `character`,
-`profession`, and `sort` are accepted; invalid options return
-`"invalid-options"`. The cursor is a positive offset in the current selected
-order; malformed/out-of-range cursors
+`profession`, `sort`, `search`, and `time` are accepted; invalid options return
+`"invalid-options"`. Without search the cursor retains its positive-offset
+format when no time filter is present. Nonempty search or a time filter uses an
+opaque cursor bound to search, character, profession, sort and time; do not
+construct cursors. Malformed/out-of-range cursors
 return `"invalid-cursor"`. No cursor means the first page; an empty catalogue
 returns `{ recipes = {} }` without a cursor. This is not a snapshot: new recipes
 or metadata enrichment can change ordering between pages, so restart at page one
 when the catalogue or filters change. The runtime caches the unfiltered name
-order; filtered/count-sorted calls derive an order from durable totals and
+order; filtered/count/profession-sorted calls derive an order from durable totals and
 project only the requested page. The name `GetRecipeSummaries` distinguishes
 these lifetime counts from full recipe or craft facts. This query does not add a general statistics
 or write API; for filtered activity use `GetCraftSeries`.
+
+`time` accepts half-open `{ from, to }` bounds aligned to UTC days, matching
+`GetReagentSummaries` and the UI's shared period selector. Missing bounds are
+unbounded. Invalid/reversed/non-day-aligned bounds return `invalid-options`.
+Time-filtered counts use durable daily craft series and survive detail pruning.
+The default API sort remains name; the production Recipes page explicitly asks
+for count order as its default.
+
+### Reagent catalogue
+
+`GetReagentSummaries(options)` is an additive, read-only API v1 query over
+retained reagent facts and existing durable returned-reagent totals. It adds no
+storage, inventory queries, valuation, external dependencies, or UI preferences.
+
+```lua
+local page, reason = ArtisanLogbookAPI.GetReagentSummaries({
+  profession = 171, search = "bloom", sort = "allocated", limit = 40,
+  character = characterKey, time = { from = utcDayStart, to = nextUtcDayStart },
+  cursor = nil, items = nil, excludeItems = nil,
+})
+-- {
+--   reagents = {
+--     {
+--       item = { id = 8, name = "Bloom" }, quality = 2,
+--       professions = { { skillLineId = 171, name = "Alchemy" } },
+--       recipeCount = 2, allocatedQuantity = 12, returnedQuantity = 3,
+--       allocationObservedCount = 2, allocationUnknownCount = 0,
+--       returnObservedCount = 2, returnUnknownCount = 0,
+--       allocationComplete = true, returnComplete = true,
+--       hasPrunedReturns = false,
+--     },
+--   },
+--   totalCount = 45, nextCursor = "opaque cursor",
+--   totals = { allocatedQuantity = 120, returnedQuantity = 30,
+--     allocationComplete = false, returnComplete = true },
+-- }
+```
+
+One row represents one WoW item ID. Same-named IDs and quality-variant IDs remain
+distinct. `quality` is the consistent quality observed on retained reagent rows;
+it is absent when none was captured or the observations conflict. Item/profession
+projections are detached copies. The UI may additionally display guarded Blizzard
+item-quality metadata; the query does not call live inventory or trade APIs.
+
+Options:
+
+- `character`: optional opaque character key. Unknown characters yield no rows.
+- `time`: optional half-open `{ from, to }` UTC bounds, each aligned to a whole
+  UTC day because durable returns are daily facts. Missing bounds are unbounded.
+  Reversed, nonfinite, or non-day-aligned bounds return `invalid-options`.
+  Character/time filters apply to retained allocations, durable returns and
+  completeness evidence together.
+- `profession`: optional nonnegative skill-line ID. Selects facts associated with
+  that recorded profession, so quantities and recipe counts are scoped too.
+  Unknown professions yield no rows. Unattributed facts only appear unfiltered.
+- `search`: optional literal substring of the recorded item name, lowercased for
+  matching. Unnamed items use `Item #<ID>` for search/sorting. Pattern characters
+  are literal; there is no regular-expression or inventory search.
+- `sort`: `name` (default, ascending), `allocated`, `returned`, or `recipes`
+  (numeric sorts descending). Missing quantities follow known quantities. Ties
+  use case-insensitive name then numeric item ID. Sorting applies to the complete
+  matching population **before pagination**.
+- `items` / `excludeItems`: optional dense arrays of positive item IDs. Duplicates
+  are ignored. Inclusion and exclusion compose; an empty inclusion matches none.
+  These are generic identity filters, not a Core classification preference. UI
+  implements Trivial with `items` and Non-trivial with `excludeItems`, using its
+  single `ArtisanLogbookUISettings.trivialReagents` store. `trivial` is not an
+  accepted API option; Core never reads that UI store.
+- `limit`: integer 1-200, default 50. UI requests 40. `cursor` is an opaque
+  filter/sort-bound offset; do not construct it. Changed filters/sort, malformed
+  cursors, or offsets beyond the matching population return `invalid-cursor`.
+  Page size may change. This is not a frozen snapshot: restart paging after a
+  commit, metadata enrichment, pruning, or preference-filter change.
+
+`totalCount` counts matching item identities, not crafts. `recipeCount` counts
+distinct known recipe IDs associated with the reagent through retained facts or
+durable positive returns; no association is inferred from names, output items,
+or recipe schematics. Unknown recipe attribution does not increment it.
+`professions` lists the matching recorded associations, sorted by skill-line ID.
+
+`totals` sums known allocated/returned quantities over the **entire filtered
+selection**, not only this page. No known amount stays absent. Completeness
+flags require every included row to meet the corresponding coverage rule. These
+totals retain their different storage scopes and do not establish a shared
+denominator for a return percentage. Quantity overflow returns `quantity-overflow`.
+
+Quantity/coverage semantics:
+
+- `allocatedQuantity` sums only known allocations on **retained** reagent facts.
+  No known allocation means absent, not zero. Allocations are not consumption.
+  The observed/unknown allocation counts count retained reagent rows, including
+  separate data slots, not crafts. `allocationComplete` requires at least one
+  known row, no unknown rows, and no evidence of pruned positive returns. It does
+  **not** establish a lifetime allocation denominator or account for unidentified
+  reagents on crafts without allocation capture.
+- `returnedQuantity` sums existing **durable positive** return totals, exactly
+  once. Retained positive facts are not added again. Zero is exposed only when
+  retained return evidence exists and return coverage is complete; otherwise no
+  recorded amount is absent. Known positive quantities remain available even
+  when coverage is incomplete.
+- `returnObservedCount` / `returnUnknownCount` count retained reagent rows with
+  known nonnegative / missing return amounts. They are not lifetime proc counts.
+  `returnComplete` additionally requires complete return outcomes for every craft
+  in all associated recipe populations, including the unattributed population
+  when relevant. This is conservative and is not per-item proc evidence. Ambiguous
+  slot allocations and legacy incomplete results remain incomplete.
+- `hasPrunedReturns` means durable positive returns exceed retained positive
+  returns for this item in the selected profession. Pruning does not erase
+  durable returns, but allocations and captured quality can become unknown.
+  Allocation-only item identities/associations may disappear after their last
+  detailed fact expires, since no historical allocation store is introduced.
+- These fields must not be combined into a return/allocated percentage: their
+  historical scopes differ and complete lifetime allocation coverage is unknown.
+
+The query scans retained reagent rows, durable return rows and daily coverage,
+groups by item ID, sorts the matching items, and returns at most `limit` detached
+summaries. Runtime work is proportional to existing facts plus matching-item
+sorting, not just page size; there is no extra durable table or cache to invalidate.
+Empty results return `{ reagents = {}, totalCount = 0 }`. Unsupported options
+return `invalid-options`; an unavailable ledger returns `not-ready`; a nonfinite
+quantity sum returns `quantity-overflow` without writing anything.
 
 ### Durable observed identities
 

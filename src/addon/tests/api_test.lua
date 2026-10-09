@@ -85,6 +85,188 @@ local function errorIs(code, value, reason)
   assert(value == nil and reason == code, tostring(reason) .. " instead of " .. code)
 end
 
+test("reagent catalogue separates recorded allocations and durable returns without doubling facts", function()
+  local ledger, api, clock = newLedger()
+  assert(#api.GetReagentSummaries().reagents == 0)
+  session(ledger, "A", 1)
+  local alchemy = assert(ledger:AddDimension("profession", 171, { name = "Alchemy" }))
+  assert(ledger:AddDimension("recipe", 101, { name = "Potion", professionId = alchemy }))
+  assert(ledger:AddDimension("item", 8, { name = "Bloom" }))
+  assert(ledger:SubmitCraft(101, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 5, quality = 2, reagent = { itemID = 8 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
+  local row = api.GetReagentSummaries().reagents[1]
+  assert(row.item.id == 8 and row.item.name == "Bloom" and row.quality == 2)
+  assert(row.allocatedQuantity == 5 and row.returnedQuantity == 2 and row.recipeCount == 1)
+  assert(row.allocationComplete and row.returnComplete and row.professions[1].skillLineId == 171)
+  row.item.name = "Changed"; row.professions[1].name = "Changed"
+  assert(api.GetReagentSummaries().reagents[1].item.name == "Bloom")
+  ledger:Prune(clock.current + 61 * 86400)
+  row = api.GetReagentSummaries().reagents[1]
+  assert(row.allocatedQuantity == nil and row.returnedQuantity == 2 and row.hasPrunedReturns)
+  assert(not row.allocationComplete and row.returnComplete and row.recipeCount == 1)
+end)
+
+test("reagent catalogue filters item identities and professions before globally sorted pages", function()
+  local ledger, api = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:AddDimension("profession", 171, { name = "Alchemy" }))
+  assert(ledger:AddDimension("profession", 333, { name = "Enchanting" }))
+  assert(ledger:AddDimension("recipe", 101, { name = "Potion", professionId = 171 }))
+  assert(ledger:AddDimension("recipe", 102, { name = "Enchant", professionId = 333 }))
+  local function record(recipeId, itemId, name, quantity, returned, quality)
+    assert(ledger:AddDimension("item", itemId, { name = name }))
+    assert(ledger:SubmitCraft(recipeId, 1, false, nil, {
+      { dataSlotIndex = 1, quantity = quantity, quality = quality, reagent = { itemID = itemId } },
+    }))
+    assert(ledger:RecordResult({ resourcesReturned = returned > 0 and
+      { { reagent = { itemID = itemId }, quantity = returned } } or {} }))
+  end
+  record(101, 8, "Bloom", 3, 1, 1)
+  record(101, 9, "Bloom", 8, 2, 2)
+  record(101, 10, "Zinc", 50, 15, 3)
+  record(101, 11, "A 100% bloom", 1, 0, 1)
+  record(102, 8, "Bloom", 7, 2, 1)
+  local rows = api.GetReagentSummaries().reagents
+  assert(rows[1].item.id == 11 and rows[2].item.id == 8 and rows[3].item.id == 9)
+  assert(rows[2].quality == 1 and rows[3].quality == 2 and rows[2].recipeCount == 2)
+  assert(#rows[2].professions == 2 and rows[2].allocatedQuantity == 10 and rows[2].returnedQuantity == 3)
+  assert(rows[1].returnedQuantity == 0 and rows[1].returnComplete)
+  local filtered = api.GetReagentSummaries({ profession = 333 }).reagents
+  assert(#filtered == 1 and filtered[1].item.id == 8 and filtered[1].allocatedQuantity == 7)
+  assert(filtered[1].recipeCount == 1 and #filtered[1].professions == 1 and filtered[1].returnedQuantity == 2)
+  assert(#api.GetReagentSummaries({ profession = 999 }).reagents == 0)
+  assert(#api.GetReagentSummaries({ search = "BLOOM" }).reagents == 3)
+  assert(api.GetReagentSummaries({ search = "%" }).reagents[1].item.id == 11)
+  assert(#api.GetReagentSummaries({ search = ".*" }).reagents == 0)
+  assert(#api.GetReagentSummaries({ items = {} }).reagents == 0)
+  assert(#api.GetReagentSummaries({ items = { 9, 8, 8 }, excludeItems = { 8 } }).reagents == 1)
+  assert(api.GetReagentSummaries({ excludeItems = { 8, 9 }, sort = "allocated", limit = 1 }).reagents[1].item.id == 10)
+  for sort, expected in pairs({ name = { 11, 8, 9, 10 }, allocated = { 10, 8, 9, 11 },
+      returned = { 10, 8, 9, 11 }, recipes = { 8, 11, 9, 10 } }) do
+    local cursor
+    for _, id in ipairs(expected) do
+      local page = assert(api.GetReagentSummaries({ sort = sort, limit = 1, cursor = cursor }))
+      assert(#page.reagents == 1 and page.reagents[1].item.id == id and page.totalCount == 4)
+      cursor = page.nextCursor
+    end
+    assert(not cursor)
+  end
+end)
+
+test("reagent periods and characters filter both retained and durable totals", function()
+  local ledger, api, clock = newLedger()
+  local day = math.floor(clock.current / 86400) * 86400
+  local function record(name, quantity, returned)
+    session(ledger, name, 1)
+    assert(ledger:SubmitCraft(101, 1, false, nil, {
+      { dataSlotIndex = 1, quantity = quantity, reagent = { itemID = 8 } },
+    }))
+    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = returned } } }))
+    return api.GetCrafts().crafts[1].character.key
+  end
+  local first = record("A", 5, 2)
+  record("B", 9, 3)
+  clock.current = clock.current + 86400
+  record("A", 11, 4)
+  local options = { character = first, time = { from = day, to = day + 86400 } }
+  local result = assert(api.GetReagentSummaries(options))
+  assert(result.reagents[1].allocatedQuantity == 5 and result.reagents[1].returnedQuantity == 2)
+  assert(result.totals.allocatedQuantity == 5 and result.totals.returnedQuantity == 2)
+  assert(api.GetReagentSummaries({ time = options.time }).totals.returnedQuantity == 5)
+  assert(api.GetReagentSummaries({ character = first }).totals.returnedQuantity == 6)
+  assert(#api.GetReagentSummaries({ character = "missing" }).reagents == 0)
+  for _, invalid in ipairs({ { character = false }, { time = { from = day + 1 } },
+      { time = { from = day + 86400, to = day } }, { time = false } }) do
+    errorIs("invalid-options", api.GetReagentSummaries(invalid))
+  end
+  ledger:Prune(clock.current + 61 * 86400)
+  result = assert(api.GetReagentSummaries(options))
+  assert(result.totals.allocatedQuantity == nil and result.totals.returnedQuantity == 2)
+  assert(not result.totals.allocationComplete and result.totals.returnComplete)
+end)
+
+test("reagent catalogue keeps missing amounts unknown and retained coverage separate", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitCraft(101, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } },
+  }))
+  assert(ledger:RecordResult({}))
+  local row = api.GetReagentSummaries().reagents[1]
+  assert(row.allocatedQuantity == 5 and row.returnedQuantity == nil)
+  assert(row.allocationObservedCount == 1 and row.returnUnknownCount == 1 and not row.returnComplete)
+  assert(ledger:SubmitCraft(101, 1, false))
+  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
+  row = api.GetReagentSummaries().reagents[1]
+  assert(row.allocatedQuantity == 5 and row.returnedQuantity == 2)
+  assert(row.allocationUnknownCount == 1 and not row.allocationComplete and not row.returnComplete)
+  assert(ledger:SubmitCraft(102, 1, false))
+  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 9 }, quantity = 1 } } }))
+  row = api.GetReagentSummaries({ items = { 9 } }).reagents[1]
+  assert(row.allocatedQuantity == nil and row.returnedQuantity == 1 and row.quality == nil)
+  local saved = ledger.database
+  addon.ledger = assert(addon.Ledger.New(saved, clock))
+  row = api.GetReagentSummaries({ items = { 8 } }).reagents[1]
+  assert(row.returnedQuantity == 2 and not row.returnComplete)
+  addon.ledger:Prune(clock.current + 61 * 86400)
+  row = api.GetReagentSummaries({ items = { 8 } }).reagents[1]
+  assert(row.allocatedQuantity == nil and row.returnedQuantity == 2 and not row.returnComplete)
+  assert(row.hasPrunedReturns)
+end)
+
+test("reagent catalogue bounds validates cursors and never consumes UI preference state", function()
+  local ledger, api, _, addon = newLedger()
+  session(ledger, "A", 1)
+  local returns = {}
+  for id = 1, 205 do returns[id] = { reagent = { itemID = id }, quantity = id } end
+  ledger:BeginCraft(101)
+  assert(ledger:RecordResult({ resourcesReturned = returns }))
+  ArtisanLogbookUISettings = setmetatable({}, { __index = function() error("Core read UI settings") end })
+  local first = api.GetReagentSummaries({ sort = "returned", limit = 200 })
+  assert(#first.reagents == 200 and first.reagents[1].item.id == 205)
+  assert(first.totals.returnedQuantity == 205 * 206 / 2)
+  local last = api.GetReagentSummaries({ sort = "returned", limit = 200, cursor = first.nextCursor })
+  assert(#last.reagents == 5 and last.reagents[5].item.id == 1 and not last.nextCursor)
+  assert(#api.GetReagentSummaries().reagents == 50)
+  errorIs("invalid-cursor", api.GetReagentSummaries({ sort = "name", cursor = first.nextCursor }))
+  errorIs("invalid-cursor", api.GetReagentSummaries({ sort = "returned", search = "missing", cursor = first.nextCursor }))
+  errorIs("invalid-cursor", api.GetReagentSummaries({ sort = "returned", items = { 1 }, cursor = first.nextCursor }))
+  errorIs("invalid-cursor", api.GetReagentSummaries({ sort = "returned", character = "missing", cursor = first.nextCursor }))
+  errorIs("invalid-cursor", api.GetReagentSummaries({ sort = "returned", time = { from = 0 }, cursor = first.nextCursor }))
+  errorIs("invalid-cursor", api.GetReagentSummaries({ cursor = "bad" }))
+  errorIs("invalid-cursor", api.GetReagentSummaries({ sort = "returned", cursor = first.nextCursor:gsub("\n%d+$", "\n9999") }))
+  for _, options in ipairs({ false, { limit = 0 }, { limit = 201 }, { limit = math.huge },
+      { profession = -1 }, { search = false }, { sort = "unknown" }, { trivial = true },
+      { items = { 0 } }, { items = { [2] = 8 } }, { excludeItems = { "8" } }, { items = false } }) do
+    errorIs("invalid-options", api.GetReagentSummaries(options))
+  end
+  ArtisanLogbookUISettings = nil
+  addon.ledger = nil
+  errorIs("not-ready", api.GetReagentSummaries())
+end)
+
+test("reagent catalogue preserves ambiguous slots and unknown zero coverage without inventing quality", function()
+  local ledger, api = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitCraft(101, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 3, quality = 1, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 4, quality = 2, reagent = { itemID = 8 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
+  local row = api.GetReagentSummaries().reagents[1]
+  assert(row.allocatedQuantity == 7 and row.returnedQuantity == 2 and row.quality == nil)
+  assert(row.allocationObservedCount == 2 and row.returnUnknownCount == 2)
+  assert(not row.allocationComplete and not row.returnComplete)
+  assert(ledger:SubmitCraft(102, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 9 } },
+  }))
+  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 9 } } } }))
+  row = api.GetReagentSummaries({ items = { 9 } }).reagents[1]
+  assert(row.returnedQuantity == nil and not row.returnComplete)
+end)
+
 test("recipe outcomes summarize durable evidence with bounded charts and factual returns", function()
   local ledger, api, clock, addon = newLedger({ retentionDays = 1 })
   session(ledger, "A", 1)
@@ -448,6 +630,49 @@ test("recipe summary filters and count sort page durable character totals", func
   ledger:Prune(ledger.wall() + 86400 * 61)
   assert(api.GetRecipeSummaries({ character = characterKey, profession = 171,
     sort = "count" }).recipes[1].craftCount == 2)
+end)
+
+test("recipe search filters before paging without changing the cached catalogue", function()
+  local ledger, api = fixture()
+  assert(#api.GetRecipeSummaries().recipes == 4)
+  local first = assert(api.GetRecipeSummaries({ search = "POTION", limit = 1 }))
+  assert(first.recipes[1].recipe.name == "Old potion" and first.nextCursor)
+  local second = assert(api.GetRecipeSummaries({ search = "potion", limit = 1, cursor = first.nextCursor }))
+  assert(second.recipes[1].recipe.name == "Potion" and not second.nextCursor)
+  assert(#api.GetRecipeSummaries().recipes == 4)
+  assert(#api.GetRecipeSummaries({ search = ".*" }).recipes == 0)
+  assert(api.GetRecipeSummaries({ search = "potion", sort = "count" }).recipes[1].recipe.id == 101)
+  assert(#api.GetRecipeSummaries({ search = "potion", profession = 333 }).recipes == 0)
+  errorIs("invalid-cursor", api.GetRecipeSummaries({ search = "enchant", cursor = first.nextCursor }))
+  errorIs("invalid-cursor", api.GetRecipeSummaries({ search = "potion", sort = "count", cursor = first.nextCursor }))
+  errorIs("invalid-options", api.GetRecipeSummaries({ search = false }))
+  ledger:Prune(ledger.wall() + 86400 * 61)
+  assert(#api.GetRecipeSummaries({ search = "potion" }).recipes == 2)
+end)
+
+test("profession sort orders the full catalogue before paging", function()
+  local ledger, api = fixture()
+  local first = assert(api.GetRecipeSummaries({ sort = "profession", limit = 1 }))
+  assert(first.recipes[1].recipe.name == "Old potion" and first.nextCursor == "1")
+  local second = assert(api.GetRecipeSummaries({ sort = "profession", limit = 1, cursor = first.nextCursor }))
+  assert(second.recipes[1].recipe.name == "Potion" and second.nextCursor == "2")
+  local third = assert(api.GetRecipeSummaries({ sort = "profession", limit = 1, cursor = second.nextCursor }))
+  assert(third.recipes[1].recipe.name == "Enchant")
+  assert(api.GetRecipeSummaries({ sort = "profession", profession = 333 }).recipes[1].recipe.name == "Enchant")
+  ledger:Prune(ledger.wall() + 86400 * 61)
+  assert(api.GetRecipeSummaries({ sort = "profession", limit = 1 }).recipes[1].recipe.name == "Old potion")
+end)
+
+test("recipe periods share day-aligned bounds and query-bound cursors", function()
+  local ledger, api, clock = fixture()
+  local day = math.floor(clock.current / 86400) * 86400
+  local first = assert(api.GetRecipeSummaries({ time = { from = day, to = day + 86400 }, sort = "count", limit = 1 }))
+  assert(first.recipes[1].recipe.id == 101 and first.recipes[1].craftCount == 2)
+  assert(#api.GetRecipeSummaries({ time = { from = day + 86400 } }).recipes == 0)
+  errorIs("invalid-cursor", api.GetRecipeSummaries({ time = { from = day }, sort = "count", cursor = first.nextCursor }))
+  errorIs("invalid-options", api.GetRecipeSummaries({ time = { from = day + 1 } }))
+  ledger:Prune(clock.current + 61 * 86400)
+  assert(api.GetRecipeSummaries({ time = { from = day }, sort = "count" }).recipes[1].craftCount == 2)
 end)
 
 test("first craft for an existing recipe invalidates the catalogue order", function()

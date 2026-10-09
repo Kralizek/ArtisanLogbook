@@ -1,392 +1,257 @@
-local addonName, addon = ...
+local _, addon = ...
 local UI = addon.UI
 local API = ArtisanLogbookAPI
 local management = ArtisanLogbookManagement
-local tabs = { "Logbook", "Recipes", "Settings" }
 
-local function population(character, profession, recipe)
-  local filter = {}
-  if character then filter.characters = { character } end
-  if profession then filter.professions = { profession } end
-  if recipe then filter.recipes = { recipe } end
-  return filter
-end
-
-local function choices(facet, character)
-  local result = { { label = "All", value = false } }
-  local filter = character and population(character) or nil
-  local facets = API.GetFacets(filter, { facets = { facet } })
-  for _, entry in ipairs(facets and facets[facet] or {}) do
-    result[#result + 1] = { label = UI.Name(entry.details), value = entry.value,
-      classFile = entry.details and entry.details.classFile }
-  end
-  table.sort(result, function(left, right)
-    if left.value == false then return true end
-    if right.value == false then return false end
-    return left.label < right.label
-  end)
-  return result
-end
-
-local function historyColumns(width)
-  local available = width - 24
-  return {
-    { title = "Recipe", width = available * .30, value = function(row) return UI.Name(row.recipe) end },
-    { title = "Character", width = available * .18, value = function(row) return UI.Name(row.character) end,
-      color = function(row) return UI.ClassColor(row.character and row.character.classFile) end },
-    { title = "Profession", width = available * .18, value = function(row) return UI.Name(row.profession) end },
-    { title = "Quantity", width = available * .09, value = function(row) return UI.Value(row.outputQuantity) end },
-    { title = "Activity", width = available * .25, activity = true },
-  }
-end
-
-local function lazyList(list, fetch)
-  local cursor, loading, finished
-  local function load()
-    if loading or finished then return end
-    loading = true
-    local page, reason = fetch(cursor)
-    if page then
-      list:Append(page)
-      cursor = reason
-      finished = cursor == nil
-      if finished then list:SetFinished() end
-      if #list.items == 0 then list.empty:Show() end
-    else
-      finished = true
-      list.empty:SetText(reason or "Unavailable")
-      if #list.items == 0 then list.empty:Show() end
-    end
-    loading = false
-  end
-  list.onNearEnd = load
-  return function(message)
-    cursor, finished = nil, false
-    list:Reset(message)
-    load()
-  end
-end
-
-local function createModalWindow(name, title, width, height)
-  local frame = CreateFrame("Frame", name, UIParent, "BasicFrameTemplateWithInset")
+local function shell(name, title, parent, width, height)
+  local frame = CreateFrame("Frame", name, parent, "BasicFrameTemplateWithInset")
   frame:SetSize(width, height)
   frame:SetPoint("CENTER")
   frame:SetClampedToScreen(true)
   frame:SetMovable(true)
   frame:EnableMouse(true)
-  frame:SetFrameStrata("DIALOG")
   frame:SetToplevel(true)
   frame:RegisterForDrag("LeftButton")
   frame:SetScript("OnDragStart", frame.StartMoving)
   frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
   frame:SetScript("OnMouseDown", function(self) self:Raise() end)
   frame.TitleText:SetText(title)
-  tinsert(UISpecialFrames, name)
   return frame
 end
 
 function addon.CreateProductionWindow()
-  local width = math.min(940, UIParent:GetWidth() - 40)
-  local height = math.min(670, UIParent:GetHeight() - 40)
-  local inner = width - 48
-  local bodyHeight = height - 112
-  local window = CreateFrame("Frame", "ArtisanLogbookWindow", UIParent, "BasicFrameTemplateWithInset")
+  local width = math.max(960, math.min(1100, UIParent:GetWidth() - 40))
+  local height = math.max(640, math.min(780, UIParent:GetHeight() - 40))
+  local scale = math.min(1, (UIParent:GetWidth() - 24) / width, (UIParent:GetHeight() - 24) / height)
+  local window = shell("ArtisanLogbookWindow", "Artisan Logbook", UIParent, width, height)
   addon.productionWindow = window
-  window:SetSize(width, height)
-  window:SetPoint("CENTER")
-  window:SetClampedToScreen(true)
-  window:SetMovable(true)
-  window:EnableMouse(true)
+  window:SetScale(scale)
   window:SetFrameStrata("DIALOG")
-  window:SetToplevel(true)
-  window:RegisterForDrag("LeftButton")
-  window:SetScript("OnDragStart", window.StartMoving)
-  window:SetScript("OnDragStop", window.StopMovingOrSizing)
-  window:SetScript("OnMouseDown", function(self) self:Raise() end)
-  window.TitleText:SetText("Artisan Logbook")
-  tinsert(UISpecialFrames, "ArtisanLogbookWindow")
-  local body = CreateFrame("Frame", nil, window)
-  body:SetPoint("TOPLEFT", 24, -90)
+  local sideWidth, inner, bodyHeight = 180, width - 228, height - 64
+  local sidebar = CreateFrame("Frame", nil, window)
+  sidebar:SetPoint("TOPLEFT", 8, -30)
+  sidebar:SetSize(sideWidth, height - 38)
+  UI.Surface(sidebar, false)
+  local paper = CreateFrame("Frame", nil, window)
+  paper:SetPoint("TOPLEFT", 194, -30)
+  paper:SetSize(width - 202, height - 38)
+  UI.Surface(paper, true)
+  local body = CreateFrame("Frame", nil, paper)
+  body:SetPoint("TOPLEFT", 14, -16)
   body:SetSize(inner, bodyHeight)
   local pages = {}
-  for _, name in ipairs(tabs) do
+  for _, name in ipairs({ "Overview", "Logbook", "Recipes", "Reagents", "Character", "Profession", "Recipe", "Reagent", "Settings" }) do
     pages[name] = CreateFrame("Frame", nil, body)
     pages[name]:SetAllPoints(body)
     pages[name]:Hide()
   end
-  window.pages = pages
+  window.pages, window.activeTab = pages, "Overview"
+  local navContent, navScroll = UI.PageScroll(sidebar, sideWidth - 4, height - 86, height - 86)
+  navScroll:ClearAllPoints(); navScroll:SetPoint("TOPLEFT", 2, -8)
+  window.sidebar, window.sidebarScroll, window.navItems = sidebar, navScroll, {}
+  local headings = {}
+  local settingsNav = UI.NavItem(sidebar, sideWidth - 8, function() window:Activate("Settings") end)
+  settingsNav:SetPoint("BOTTOMLEFT", 4, 4)
+  window.settingsNav = settingsNav
+
+  function window:RefreshSidebar()
+    local entries = {
+      { label = "Overview", page = "Overview", icon = "Interface\\Icons\\INV_Misc_Book_09" },
+      { label = "Logbook", page = "Logbook", icon = "Interface\\Icons\\INV_Misc_Note_01" },
+      { label = "Recipes", page = "Recipes", icon = "Interface\\Icons\\INV_Scroll_03" },
+      { label = "Reagents", page = "Reagents", icon = "Interface\\Icons\\INV_Misc_Herb_19" },
+      { section = "PINNED RECIPES" },
+    }
+    local pins = UI.Pins()
+    for _, recipe in ipairs(pins) do
+      entries[#entries + 1] = { label = UI.Name(recipe), page = "Recipe", identity = recipe, icon = UI.RecipeIcon(recipe) }
+    end
+    if #pins == 0 then entries[#entries + 1] = { section = "No pinned recipes" } end
+    entries[#entries + 1] = { section = "CHARACTERS" }
+    local characters = API.GetCharacters() or {}
+    table.sort(characters, function(left, right)
+      if UI.Name(left) == UI.Name(right) then return left.key < right.key end
+      return UI.Name(left) < UI.Name(right)
+    end)
+    for _, character in ipairs(characters) do
+      entries[#entries + 1] = { label = UI.Name(character), page = "Character", identity = character,
+        classFile = character.classFile, icon = "Interface\\Icons\\INV_Helmet_03" }
+    end
+    if #characters == 0 then entries[#entries + 1] = { section = "No crafts yet" } end
+    entries[#entries + 1] = { section = "PROFESSIONS" }
+    local professions = API.GetProfessions() or {}
+    table.sort(professions, function(left, right) return UI.Name(left) < UI.Name(right) end)
+    for _, profession in ipairs(professions) do
+      entries[#entries + 1] = { label = UI.Name(profession), page = "Profession", identity = profession,
+        icon = UI.ProfessionIcon(profession.skillLineId) }
+    end
+    if #professions == 0 then entries[#entries + 1] = { section = "No crafts yet" } end
+    for _, item in ipairs(self.navItems) do item:Hide() end
+    for _, heading in ipairs(headings) do heading:Hide() end
+    local offset, itemCount, headingCount = 0, 0, 0
+    for _, entry in ipairs(entries) do
+      if entry.section then
+        headingCount = headingCount + 1
+        local heading = headings[headingCount] or UI.Text(navContent, 4, 0, sideWidth - 36, 20)
+        headings[headingCount] = heading
+        heading:ClearAllPoints(); heading:SetPoint("TOPLEFT", 4, -offset - 6)
+        heading:SetText(entry.section); heading:SetTextColor(.65, .64, .58); heading:Show()
+        offset = offset + 24
+      else
+        itemCount = itemCount + 1
+        local item = self.navItems[itemCount] or UI.NavItem(navContent, sideWidth - 30,
+          function(selected) self:Activate(selected.page, selected.identity) end)
+        self.navItems[itemCount] = item
+        item:ClearAllPoints(); item:SetPoint("TOPLEFT", 0, -offset)
+        local selected = self.activeTab == entry.page or
+          (self.activeTab == "Recipe" and entry.page == "Recipes") or
+          (self.activeTab == "Reagent" and entry.page == "Reagents")
+        if selected and entry.identity then
+          local current = self.identity
+          selected = current and (current.key or current.skillLineId or current.id) ==
+            (entry.identity.key or entry.identity.skillLineId or entry.identity.id)
+        end
+        item:Update(entry, selected); item:Show()
+        offset = offset + 24
+      end
+    end
+    navContent:SetHeight(math.max(navScroll:GetHeight(), offset + 8))
+    settingsNav:Update({ label = "Settings", icon = "Interface\\Icons\\Trade_Engineering" }, self.activeTab == "Settings")
+  end
+
   local modalShade = CreateFrame("Frame", nil, UIParent)
   modalShade:SetAllPoints(UIParent)
-  modalShade:SetFrameStrata("DIALOG")
+  modalShade:SetFrameStrata("FULLSCREEN_DIALOG")
   modalShade:EnableMouse(true)
   modalShade:SetScript("OnMouseDown", function() end)
-  local shadeTexture = modalShade:CreateTexture(nil, "BACKGROUND")
-  shadeTexture:SetAllPoints(modalShade)
-  shadeTexture:SetColorTexture(0, 0, 0, .55)
+  local shade = modalShade:CreateTexture(nil, "BACKGROUND")
+  shade:SetAllPoints(modalShade); shade:SetColorTexture(0, 0, 0, .55)
   modalShade:Hide()
   window.modalShade = modalShade
-
-  local recipeModalHeight = math.min(820, UIParent:GetHeight() - 32)
-  local recipeModal = createModalWindow("ArtisanLogbookRecipeDetailWindow", "Recipe Detail", width,
-    recipeModalHeight)
-  recipeModal:Hide()
-  window.recipeDetailWindow = recipeModal
-  local recipeDetail = CreateFrame("Frame", nil, recipeModal)
-  recipeDetail:SetPoint("TOPLEFT", 24, -48)
-  recipeDetail:SetSize(inner, recipeModalHeight - 72)
-  recipeDetail:Hide()
-  window.recipeDetailPage = recipeDetail
-
-  local craftModalHeight = math.min(650, UIParent:GetHeight() - 32)
-  local craftModal = createModalWindow("ArtisanLogbookCraftDetailWindow", "Craft Detail", width,
-    craftModalHeight)
+  local craftModal = shell("ArtisanLogbookCraftDetailWindow", "Craft Detail", modalShade, 700, 620)
+  craftModal:SetScale(scale)
+  craftModal:SetFrameStrata("FULLSCREEN_DIALOG")
   craftModal:Hide()
   window.craftDetailWindow = craftModal
   local craftBody = CreateFrame("Frame", nil, craftModal)
-  craftBody:SetPoint("TOPLEFT", 24, -48)
-  craftBody:SetSize(inner, craftModalHeight - 72)
-  local closingMain = false
+  craftBody:SetPoint("TOPLEFT", 12, -34); craftBody:SetSize(676, 568)
+  local closingMain, closingCraft = false, false
   local detail
-  local function showModal(frame)
-    modalShade:Show()
-    frame:Show()
-    frame:Raise()
-  end
-  local function closeRecipeModal()
-    recipeDetail:Hide()
-    recipeModal:Hide()
-    if window.visiblePage == recipeDetail then window.visiblePage = pages.Recipes end
-    if not craftModal:IsShown() then modalShade:Hide() end
-  end
-  local function restoreFromCraft()
-    if closingMain or window.visiblePage ~= detail then return end
-    window.visiblePage = window.returnPage
-    if window.returnPage == recipeDetail then
-      recipeDetail:Show()
-      showModal(recipeModal)
-    else
-      modalShade:Hide()
-    end
-    if window:IsShown() then window:Refresh(true) end
-  end
-  local function closeCraftModal()
-    if detail then detail:Hide() end
-    craftModal:Hide()
-    restoreFromCraft()
-  end
-  detail = UI.CraftDetail(craftBody, inner, craftModalHeight - 112, closeCraftModal)
-  window.craftDetailPage = detail
-  recipeModal:SetScript("OnHide", function()
-    recipeDetail:Hide()
-    if closingMain then return end
-    closeRecipeModal()
-  end)
-  craftModal:SetScript("OnHide", function()
-    detail:Hide()
-    restoreFromCraft()
-  end)
-  window:SetScript("OnHide", function()
-    closingMain = true
-    recipeModal:Hide()
-    craftModal:Hide()
-    modalShade:Hide()
+  local function closeCraft()
+    if closingCraft then return end
+    closingCraft = true
+    craftModal:Hide(); detail:Hide(); modalShade:Hide()
     window.visiblePage = pages[window.activeTab]
-    closingMain = false
-  end)
-  window.activeTab = "Logbook"
-  local buttons = {}
-  for index, name in ipairs(tabs) do
-    buttons[name] = UI.Button(window, name, 22 + (index - 1) * 112, -52, 108,
-      function() window:Activate(name) end)
+    window.openCraftId = nil
+    if not closingMain and window.activeTab == "Recipe" then pages.Recipe.outcomes:Refresh(true) end
+    closingCraft = false
   end
-
-  local logbook = pages.Logbook
-  UI.Text(logbook, 0, -4, inner, 25, "GameFontNormalLarge"):SetText("Logbook")
-  local days, character, profession = 30, false, false
-  local periodSelect = UI.Selector(logbook, 0, -35, 112, UI.ranges, function(value)
-    days = value; window:Refresh(true)
-  end, "Period")
-  local characterSelect = UI.Selector(logbook, 154, -35, 170, {}, function(value)
-    character, profession = value, false; window:Refresh(true)
-  end, "Character")
-  local professionSelect = UI.Selector(logbook, 363, -35, 155, {}, function(value)
-    profession = value; window:Refresh(true)
-  end, "Profession")
-  local noProfessions = UI.Text(logbook, 530, -52, inner - 530, 22)
-  local graph = UI.Chart(logbook, 0, -74, inner)
-  local summary = UI.CreateLogbookSummary(logbook, inner)
-  UI.Text(logbook, 0, -336, inner, 22, "GameFontNormal"):SetText("Craft history")
-  local history = UI.ScrollList(logbook, 0, -362, inner, bodyHeight - 365,
-    historyColumns(inner), function(craft) window:OpenCraft(craft.id) end, "No crafts in this period")
-  local function logbookFilter()
-    local selected = population(character, profession)
-    local from, to = UI.Range(GetServerTime(), days)
-    selected.time = { from = from, to = to }
-    return selected, from, to
+  detail = UI.CraftDetail(craftBody, 676, 550, closeCraft, function(item) window:Activate("Reagent", item) end)
+  window.craftDetailPage = detail
+  craftModal:SetScript("OnHide", closeCraft)
+  function window:OpenCraft(id)
+    self.returnPage = pages[self.activeTab]
+    self.openCraftId, self.visiblePage = id, detail
+    detail:ShowCraft(id); detail:Show()
+    modalShade:Show(); craftModal:Show(); craftModal:Raise()
   end
-  local resetHistory = lazyList(history, function(cursor)
-    local page, reason = API.GetCrafts(logbookFilter(), { limit = 40, cursor = cursor })
-    return page and page.crafts, page and page.nextCursor or reason
-  end)
-
-  local recipes = pages.Recipes
-  UI.Text(recipes, 0, -4, inner, 25, "GameFontNormalLarge"):SetText("Recipes")
-  local recipeCharacter, recipeProfession, recipeSort = false, false, "name"
-  local recipeCharacters = UI.Selector(recipes, 0, -35, 170, {}, function(value)
-    recipeCharacter, recipeProfession = value, false; window:Refresh(true)
-  end, "Character")
-  local recipeProfessions = UI.Selector(recipes, 209, -35, 155, {}, function(value)
-    recipeProfession = value; window:Refresh(true)
-  end, "Profession")
-  local sortSelect = UI.Selector(recipes, 403, -35, 152, {
-    { label = "Recipe name", value = "name" }, { label = "Most crafted", value = "count" },
-  }, function(value) recipeSort = value; window:Refresh(true) end, "Sort")
-  local recipeNoProfessions = UI.Text(recipes, 565, -52, inner - 565, 22)
-  local recipeWidth = inner - 24
-  local catalogue = UI.ScrollList(recipes, 0, -86, inner, bodyHeight - 90, {
-    { title = "Recipe", width = recipeWidth * .52, value = function(row) return UI.Name(row.recipe) end,
-      icon = function(row)
-        local id = row.recipe and row.recipe.id
-        if not id then return nil end
-        if C_TradeSkillUI and type(C_TradeSkillUI.GetRecipeInfo) == "function" then
-          local ok, info = pcall(C_TradeSkillUI.GetRecipeInfo, id)
-          if ok and info and info.icon then return info.icon end
-        end
-        return type(GetSpellTexture) == "function" and GetSpellTexture(id) or nil
-      end },
-    { title = "Profession", width = recipeWidth * .30, value = function(row) return UI.Name(row.profession) end },
-    { title = "Crafts", width = recipeWidth * .18, value = function(row) return tostring(row.craftCount) end },
-  }, function(row) window:OpenRecipe(row.recipe) end, "No recipes in this selection")
-  local resetRecipes = lazyList(catalogue, function(cursor)
-    local page, reason = API.GetRecipeSummaries({ limit = 40, cursor = cursor,
-      character = recipeCharacter or nil, profession = recipeProfession or nil, sort = recipeSort })
-    return page and page.recipes, page and page.nextCursor or reason
-  end)
-
-  local recipeScroll = CreateFrame("ScrollFrame", nil, recipeDetail, "UIPanelScrollFrameTemplate")
-  recipeScroll:SetPoint("TOPLEFT", 0, 0)
-  recipeScroll:SetSize(inner - 24, recipeModalHeight - 96)
-  local recipeContent = CreateFrame("Frame", nil, recipeScroll)
-  local recipeInner = inner - 28
-  recipeContent:SetSize(recipeInner, 1004)
-  recipeScroll:SetScrollChild(recipeContent)
-  local recipeHeading = UI.Text(recipeContent, 0, -4, recipeInner - 100, 27, "GameFontNormalLarge")
-  local recipeMetadata = UI.Text(recipeContent, 0, -34, recipeInner - 100, 20)
-  UI.Button(recipeContent, "Back", recipeInner - 92, -4, 76, function()
-    closeRecipeModal()
-    window:Refresh(true)
-  end)
-  local resetRecipeHistory
-  local outcomes = UI.RecipeOutcomes(recipeContent, recipeInner, function()
-    if resetRecipeHistory then resetRecipeHistory() end
-  end)
-  window.recipeOutcomes = outcomes
-  UI.Text(recipeContent, 0, -728, recipeInner, 22, "GameFontNormal"):SetText("Craft history")
-  local recipeHistory = UI.ScrollList(recipeContent, 0, -758, recipeInner, 230,
-    historyColumns(recipeInner), function(craft) window:OpenCraft(craft.id) end, "No retained crafts in this period")
-  local selectedRecipe
-  resetRecipeHistory = lazyList(recipeHistory, function(cursor)
-    local selected = outcomes:Filter()
-    selected.recipes = { selectedRecipe.id }
-    local page, reason = API.GetCrafts(selected, { limit = 40, cursor = cursor })
-    return page and page.crafts, page and page.nextCursor or reason
-  end)
-
-  function window:OpenRecipe(recipe)
-    if not selectedRecipe or selectedRecipe.id ~= recipe.id then recipeScroll:SetVerticalScroll(0) end
-    selectedRecipe = recipe
-    recipeHeading:SetText(UI.Name(recipe, "Unattributed recipe"))
-    local metadata = {}
-    if recipe.profession then metadata[#metadata + 1] = UI.Name(recipe.profession) end
-    if recipe.expansion then metadata[#metadata + 1] = UI.Name(recipe.expansion) end
-    recipeMetadata:SetText(table.concat(metadata, "  -  "))
-    outcomes:Open(recipe.id)
-    resetRecipeHistory()
-    self.visiblePage = recipeDetail
-    recipeDetail:Show()
-    showModal(recipeModal)
+  local function navigate(name, identity) window:Activate(name, identity) end
+  local function openCraft(id) window:OpenCraft(id) end
+  for _, name in ipairs({ "Overview", "Logbook", "Character", "Profession" }) do
+    UI.PopulationPage(pages[name], name, inner, bodyHeight, navigate, openCraft)
   end
+  UI.CataloguePage(pages.Recipes, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end)
+  local function openReagent(item) window:Activate("Reagent", item) end
+  UI.ReagentsPage(pages.Reagents, inner, bodyHeight, openReagent)
+  UI.ReagentPage(pages.Reagent, inner, bodyHeight, function(recipe) window:OpenRecipe(recipe) end, openCraft)
+  UI.RecipePage(pages.Recipe, inner, bodyHeight, openCraft, function() window:RefreshSidebar() end, openReagent)
+  window.recipeDetailPage, window.recipeOutcomes = pages.Recipe, pages.Recipe.outcomes
+  function window:OpenRecipe(recipe) self:Activate("Recipe", recipe) end
 
   local settings = pages.Settings
-  UI.Text(settings, 0, -4, inner, 25, "GameFontNormalLarge"):SetText("History settings")
-  local settingsStatus = UI.Text(settings, 0, -42, inner, 70)
-  UI.Text(settings, 0, -128, 160, 24):SetText("Retention (days)")
+  UI.Section(settings, "History settings", 0, -2, inner)
+  local settingsStatus = UI.Text(settings, 0, -46, inner, 70)
+  UI.Text(settings, 0, -132, 170, 32):SetText("Keep craft history (days)")
   local retention = CreateFrame("EditBox", nil, settings, "InputBoxTemplate")
-  retention:SetSize(78, 24)
-  retention:SetPoint("TOPLEFT", 175, -123)
-  retention:SetAutoFocus(false)
-  retention:SetNumeric(true)
+  retention:SetSize(78, 24); retention:SetPoint("TOPLEFT", 175, -127)
+  retention:SetAutoFocus(false); retention:SetNumeric(true)
   retention:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-  UI.Button(settings, "Save", 275, -123, 76, function()
+  UI.Button(settings, "Save", 275, -127, 76, function()
     local ok, reason = management.SetRetentionDays(tonumber(retention:GetText()))
-    addon.Notify(ok and "Retention updated." or reason)
-    window:Refresh(true)
+    addon.Notify(ok and "Craft history setting updated." or reason)
+    settings:Open()
   end)
-
-  function window:OpenCraft(id)
-    self.openCraftId = id
-    if self.visiblePage ~= detail then self.returnPage = self.visiblePage end
-    self.visiblePage = detail
-    detail:ShowCraft(id)
-    detail:Show()
-    showModal(craftModal)
-    if self.returnPage == recipeDetail then recipeModal:Hide() end
+  function settings:Open()
+    local status, reason = management.Status()
+    if not status then settingsStatus:SetText(reason or "Unavailable"); return end
+    retention:SetText(tostring(status.retentionDays))
+    settingsStatus:SetText("Craft history: " .. UI.Number(status.retainedCrafts) .. " crafts\nAddon version: " .. UI.Value(status.addonVersion))
   end
-
-  function window:Refresh(reset)
-    if self.activeTab == "Logbook" then
-      characterSelect:Update(choices("characters"), character)
-      local available = choices("professions", character)
-      if not UI.HasChoice(available, profession) then profession = false end
-      professionSelect:Update(available, profession)
-      noProfessions:SetText(character and #available == 1 and "No professions recorded" or "")
-      periodSelect:Update(UI.ranges, days)
-      local selected, from, to = logbookFilter()
-      local series = API.GetCraftSeries(selected)
-      graph:Render(series and series.series or {}, from, to)
-      summary(series and series.series or {})
-      if reset or #history.items == 0 then resetHistory() end
-    elseif self.activeTab == "Recipes" then
-      recipeCharacters:Update(choices("characters"), recipeCharacter)
-      local available = choices("professions", recipeCharacter)
-      if not UI.HasChoice(available, recipeProfession) then recipeProfession = false end
-      recipeProfessions:Update(available, recipeProfession)
-      recipeNoProfessions:SetText(recipeCharacter and #available == 1 and "No professions recorded" or "")
-      sortSelect:Update(sortSelect.choices, recipeSort)
-      if reset or #catalogue.items == 0 then resetRecipes() end
-    else
-      local status, reason = management.Status()
-      if not status then settingsStatus:SetText(reason or "Unavailable")
-      else
-        retention:SetText(tostring(status.retentionDays))
-        settingsStatus:SetText(string.format("Retained crafts: %d\nDaily totals: %d\nAddon version: %s",
-          status.retainedCrafts, status.dailyRows, UI.Value(status.addonVersion)))
-      end
-    end
-    if self.visiblePage == recipeDetail and selectedRecipe then self:OpenRecipe(selectedRecipe) end
-    if self.visiblePage == detail then detail:ShowCraft(self.openCraftId) end
-  end
-
-  function window:Activate(name)
-    if detail:IsShown() then closeCraftModal() end
-    if recipeModal:IsShown() then closeRecipeModal() end
-    modalShade:Hide()
-    self.activeTab = name
-    for title, button in pairs(buttons) do
-      if title == name then button:LockHighlight() else button:UnlockHighlight() end
-    end
+  function window:Activate(name, identity)
+    if not pages[name] then return end
+    if (name == "Character" or name == "Profession" or name == "Recipe" or name == "Reagent") and not identity then return end
+    if self.openCraftId then closeCraft() end
+    local status = management.Status()
+    local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)
+    if signature ~= self.dataSignature then self:Invalidate(); self.dataSignature = signature end
     for _, page in pairs(pages) do page:Hide() end
-    detail:Hide(); recipeDetail:Hide()
+    self.activeTab, self.identity = name, identity
+    pages[name]:Open(identity)
     pages[name]:Show(); self.visiblePage = pages[name]
-    self:Raise(); self:Refresh(true)
+    self:RefreshSidebar(); self:Raise()
   end
-  window:SetScript("OnShow", function(self) self:Raise(); self:Activate(self.activeTab) end)
-  window:Hide()
-  API.RegisterCallback("CRAFT_COMMITTED", function()
-    if window:IsShown() then window:Refresh(true) end
+  function window:Refresh()
+    self:RefreshSidebar()
+    if not self.openCraftId then pages[self.activeTab]:Open(self.identity) end
+  end
+  function window:Invalidate()
+    for _, page in pairs(pages) do
+      page.dirty = true
+      page.revision = (page.revision or 0) + 1
+    end
+  end
+  UI.RegisterHiddenRecipeCallback(function()
+    window:Invalidate()
+    if window:IsShown() then window:Refresh() end
   end)
+  local escape = CreateFrame("Frame", "ArtisanLogbookEscapeFrame", UIParent)
+  escape:Hide()
+  tinsert(UISpecialFrames, "ArtisanLogbookEscapeFrame")
+  escape:SetScript("OnHide", function(self)
+    if closingMain then return end
+    if window.openCraftId then closeCraft(); self:Show()
+    else window:Hide() end
+  end)
+  window.escapeFrame = escape
+  window:SetScript("OnHide", function()
+    closingMain = true
+    if window.openCraftId then closeCraft() end
+    escape:Hide()
+    closingMain = false
+  end)
+  window:SetScript("OnShow", function(self)
+    self:Activate(self.activeTab, self.identity); escape:Show()
+  end)
+  API.RegisterCallback("CRAFT_COMMITTED", function(craft)
+    if craft.recipe and UI.IsPinned(craft.recipe.id) then
+      ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id] = UI.CopyRecipe(craft.recipe,
+        ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id])
+    end
+    window:Invalidate()
+    if window:IsShown() then window:Refresh() end
+  end)
+  window:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
+  window:RegisterEvent("PLAYER_ENTERING_WORLD")
+  window:SetScript("OnEvent", function(self)
+    self:Invalidate()
+    self:SetScript("OnUpdate", function(self)
+      self:SetScript("OnUpdate", nil)
+      if self:IsShown() then self:Refresh() end
+    end)
+  end)
+  window:Hide()
 
-  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
+  UI.Pins()
   local launcher = CreateFrame("Button", "ArtisanLogbookButton", UIParent)
   launcher:SetSize(32, 32)
   launcher:SetFrameStrata("MEDIUM")
@@ -394,18 +259,14 @@ function addon.CreateProductionWindow()
   launcher:RegisterForDrag("LeftButton")
   launcher:SetNormalTexture("Interface\\Icons\\INV_Misc_Book_09")
   local icon = launcher:GetNormalTexture()
-  icon:ClearAllPoints()
-  icon:SetPoint("CENTER")
-  icon:SetSize(22, 22)
+  icon:ClearAllPoints(); icon:SetPoint("CENTER"); icon:SetSize(22, 22)
   icon:SetTexCoord(.08, .92, .08, .92)
   local mask = launcher:CreateMaskTexture()
   mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
-  mask:SetAllPoints(icon)
-  icon:AddMaskTexture(mask)
+  mask:SetAllPoints(icon); icon:AddMaskTexture(mask)
   local border = launcher:CreateTexture(nil, "OVERLAY")
   border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-  border:SetSize(52, 52)
-  border:SetPoint("TOPLEFT", launcher, "TOPLEFT", 0, 0)
+  border:SetSize(52, 52); border:SetPoint("TOPLEFT", launcher, "TOPLEFT", 0, 0)
   launcher:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight", "ADD")
   local angle = type(ArtisanLogbookUISettings.minimapAngle) == "number" and
     ArtisanLogbookUISettings.minimapAngle or math.pi / 4

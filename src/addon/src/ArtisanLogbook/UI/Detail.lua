@@ -1,95 +1,185 @@
 local _, addon = ...
 local UI = addon.UI
 
-function UI.CraftDetail(parent, width, height, goBack)
+function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
+  local content = page
+  page.content, page.states = content, {}
+  local heading = UI.Text(content, 42, -4, width - 292, 26, "GameFontNormalLarge")
+  heading:SetWordWrap(false); heading:SetMaxLines(1)
+  local metadata = UI.Text(content, 42, -34, width - 48, 20)
+  local icon = content:CreateTexture(nil, "ARTWORK")
+  icon:SetSize(34, 34); icon:SetPoint("TOPLEFT", 0, -4)
+  local pin
+  pin = UI.Button(content, "Pin recipe", width - 116, -4, 112, function()
+    local ok, reason = UI.TogglePin(page.recipe)
+    if not ok then addon.Notify(reason) end
+    pin:SetText(UI.IsPinned(page.recipe.id) and "Unpin recipe" or "Pin recipe")
+    pinsChanged()
+  end)
+  local hidden = UI.Button(content, "Hide recipe", width - 236, -4, 112, function()
+    if page.recipe then UI.SetRecipeHidden(page.recipe.id, not UI.IsRecipeHidden(page.recipe.id)) end
+  end)
+  page.hiddenButton = hidden
+  local function updateHiddenButton()
+    hidden:SetText(page.recipe and UI.IsRecipeHidden(page.recipe.id) and "Show recipe" or "Hide recipe")
+  end
+  hidden:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self:GetText())
+    GameTooltip:AddLine("Toggle this recipe in most-crafted tables and craft lists. It stays in Recipes; totals and saved history do not change.", 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  hidden:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  UI.RegisterHiddenRecipeCallback(function(recipeId)
+    if page.recipe and page.recipe.id == recipeId then updateHiddenButton() end
+  end)
+  local history
+  local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end, height - 62, openReagent)
+  page.outcomes = outcomes
+  history = UI.ScrollList(outcomes.views["Craft History"], 0, 0, width - 24, height - 315, UI.RecipeHistoryColumns(width - 24),
+    function(craft) openCraft(craft.id) end, "No crafts in this period")
+  page.history = history
+  function outcomes:OnLayout(viewHeight) history:SetViewportHeight(viewHeight) end
+  function outcomes:OnSelect(name) page.activeView = name end
+  function page:SelectView(name)
+    self.activeView = name
+    outcomes:SelectView(name)
+  end
+  page.tabs = outcomes.tabbed.buttons
+  UI.LazyList(history, function(cursor)
+    local filter = outcomes:Filter()
+    filter.recipes = { page.recipe.id }
+    local result, reason = ArtisanLogbookAPI.GetCrafts(filter, { limit = 40, cursor = cursor })
+    return result and result.crafts, result and result.nextCursor or reason
+  end, UI.VisibleRecipe)
+  function page:Open(recipe)
+    local changed = not self.recipe or self.recipe.id ~= recipe.id
+    if changed and self.recipe then
+      self.states[self.recipe.id] = { filters = outcomes:State(), history = history:Save(),
+        view = self.activeView, recipe = self.recipe,
+        revision = self.loadedRevision }
+    end
+    local saved = self.states[recipe.id]
+    local previous = not changed and self.recipe or saved and saved.recipe
+    if changed or self.dirty then
+      local facets = ArtisanLogbookAPI.GetFacets({ recipes = { recipe.id } }, { facets = { "recipes" }, mode = "strict" })
+      local available = facets and facets.recipes[1]
+      if available then recipe = UI.CopyRecipe(available.details, recipe) end
+    end
+    self.recipe = UI.CopyRecipe(recipe, previous)
+    recipe = self.recipe
+    heading:SetText(UI.Name(recipe))
+    local details = { "Recipe #" .. recipe.id }
+    if recipe.profession then details[#details + 1] = UI.Name(recipe.profession) end
+    if recipe.expansion then details[#details + 1] = UI.Name(recipe.expansion) end
+    metadata:SetText(table.concat(details, "  -  "))
+    icon:SetTexture(UI.RecipeIcon(recipe))
+    pin:SetText(UI.IsPinned(recipe.id) and "Unpin recipe" or "Pin recipe")
+    updateHiddenButton()
+    if changed or self.dirty then
+      outcomes.maxQuality = recipe.maxQuality
+      outcomes:Open(recipe.id, saved and saved.filters)
+      if changed and saved then history:Restore(saved.history) end
+      if not saved or self.dirty or saved.revision ~= (self.revision or 0) then history:Reload(not changed or saved ~= nil) end
+      self.dirty = false
+      self.loadedRevision = self.revision or 0
+    end
+    if changed then
+      self.activeView = nil
+      self:SelectView(saved and saved.view or "Overview")
+    end
+  end
+  function page:Refresh()
+    self.dirty = true
+    if self.recipe then self:Open(self.recipe) end
+  end
+end
+
+function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local detail = CreateFrame("Frame", nil, parent)
   detail:SetAllPoints(parent)
-  local heading = UI.Text(detail, 16, -8, width - 120, 28, "GameFontNormalLarge")
-  UI.Button(detail, "Back", width - 92, -8, 76, goBack)
-  local preference
-  local reagentSelector = UI.Selector(detail, 18, -43, width - 200, {}, function(value)
-    preference:SetItem(value)
-  end, "Reagent")
-  preference = UI.TrivialCheckbox(detail, width - 145, -58, function() end)
-  local scroll = CreateFrame("ScrollFrame", nil, detail, "UIPanelScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", 18, -100)
-  scroll:SetPoint("BOTTOMRIGHT", -36, 16)
-  local content = CreateFrame("Frame", nil, scroll)
-  content:SetWidth(width - 75)
-  local text = UI.Text(content, 0, 0, width - 75, height, "GameFontHighlight")
-  scroll:SetScrollChild(content)
+  UI.Surface(detail, false)
+  local identity = detail:CreateTexture(nil, "ARTWORK")
+  identity:SetSize(36, 36); identity:SetPoint("TOPLEFT", 16, -8)
+  local quality = detail:CreateTexture(nil, "OVERLAY")
+  quality:SetSize(18, 18); quality:SetPoint("TOPLEFT", 38, -29)
+  local heading = UI.Text(detail, 62, -8, width - 166, 26, "GameFontNormalLarge")
+  heading:SetWordWrap(false); heading:SetMaxLines(1)
+  local subtitle = UI.Text(detail, 62, -35, width - 166, 20)
+  UI.Button(detail, "Close", width - 92, -8, 76, goBack)
+  local content = CreateFrame("Frame", nil, detail)
+  content:SetPoint("TOPLEFT", 18, -72); content:SetSize(width - 36, height - 72)
+  detail.content = content
+  UI.Section(content, "Result", 0, 0, width - 36)
+  local resultRow = UI.ItemCell(content, 0, width - 220)
+  resultRow:ClearAllPoints(); resultRow:SetPoint("TOPLEFT", 0, -34)
+  resultRow:SetHeight(40)
+  resultRow.quantity = UI.Text(content, width - 214, -34, 176, 24, "GameFontNormalLarge")
+  resultRow.bonus = UI.Text(content, width - 214, -60, 176, 22)
+  detail.result = resultRow
+  local fields = {}
+  local fieldNames = { "Character", "Timestamp", "Quantity", "Quality", "Concentration", "Multicraft", "Ingenuity", "Resourcefulness" }
+  for index, title in ipairs(fieldNames) do
+    local offset = -104 - math.floor((index - 1) / 2) * 38
+    local left = ((index - 1) % 2) * (width - 36) / 2
+    UI.Text(content, left, offset, 110, 22, "GameFontNormalSmall"):SetText(title .. ":")
+    fields[title] = UI.Text(content, left + 112, offset, (width - 36) / 2 - 126, 34)
+  end
+  detail.fields = fields
+  UI.Section(content, "Reagents returned", 0, -270, width - 36)
+  local reagents = UI.ScrollList(content, 0, -306, width - 36, height - 378, {
+    { title = "Reagent", width = (width - 60) * .78, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .78) end,
+      update = function(cell, row) UI.ReagentCell(cell, row.item) end },
+    { title = "Returned", width = (width - 60) * .22, value = function(row) return UI.Number(row.returnedQuantity) end,
+      exact = function(row) return tostring(row.returnedQuantity) end },
+  }, function(row) if openReagent then goBack(); openReagent(row.item) end end, "No reagents returned")
+  detail.returnedReagents = reagents
 
   function detail:ShowCraft(id)
     local craft, reason = ArtisanLogbookAPI.GetCraft(id)
-    local choices, seen = {}, {}
-    for _, reagent in ipairs(craft and craft.reagents or {}) do
-      local item = reagent.item
-      if item and item.id and not seen[item.id] then
-        seen[item.id] = true
-        choices[#choices + 1] = { label = UI.Name(item), value = item.id }
-      end
-    end
-    local selected = seen[reagentSelector.value] and reagentSelector.value or (choices[1] and choices[1].value)
-    reagentSelector:Update(choices, selected)
-    preference:SetItem(selected)
-    reagentSelector:SetShown(#choices > 0)
     if not craft then
       heading:SetText("Craft unavailable")
-      text:SetText(reason or "Unknown craft")
-      content:SetHeight(40)
+      subtitle:SetText(reason or "Unknown craft")
+      for _, field in pairs(fields) do field:SetText("-") end
+      reagents:Reset(); resultRow:Update(nil); resultRow.quantity:SetText("-"); resultRow.bonus:SetText("")
+      identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); quality:Hide()
       return
     end
-    heading:SetText(UI.Name(craft.recipe, "Unattributed craft") .. "  #" .. craft.id)
-    local lines = {}
-    local function section(title)
-      lines[#lines + 1] = ""
-      lines[#lines + 1] = title
-    end
-    local function field(title, value)
-      lines[#lines + 1] = title .. ": " .. UI.Value(value)
-    end
-    section("Craft")
-    field("Time", date("%Y-%m-%d %H:%M:%S", craft.timestamp))
-    field("Character", UI.CharacterName(craft.character))
-    field("Realm", UI.Name(craft.realm))
-    field("Profession", UI.Name(craft.profession))
-    field("Recipe", UI.Name(craft.recipe))
-    field("Expansion", UI.Name(craft.expansion))
-    field("Output", UI.Name(craft.outputItem))
-    field("Quantity", craft.outputQuantity)
-    field("Quality", craft.outputQuality)
-    field("Item level", craft.outputItemLevel)
-    local highlights = UI.CraftHighlights(craft)
-    if #highlights > 0 then
-      section("Craft activity")
-      for _, highlight in ipairs(highlights) do lines[#lines + 1] = highlight end
-    end
-    if craft.request then
-      section("Personal craft request")
-      field("Request ID", craft.request.id)
-      field("Submitted", date("%Y-%m-%d %H:%M:%S", craft.request.timestamp))
-      field("Requested recipe", UI.Name(craft.request.recipe))
-      field("Requested count", craft.request.requestedCount)
-      field("Use concentration", craft.request.useConcentration)
-      field("Quoted concentration", craft.request.concentrationCost)
-      field("Base skill", craft.request.baseSkill)
-      field("Base difficulty", craft.request.baseDifficulty)
-      field("Expected quality", craft.request.craftingQuality)
-    end
-    if #craft.reagents > 0 then
-      section("Reagents and returns")
-      for _, reagent in ipairs(craft.reagents) do
-        lines[#lines + 1] = UI.ReagentDescription(reagent)
+    heading:SetText(UI.Elide(UI.Name(craft.recipe, "Unattributed craft"), math.floor((width - 166) / 10)))
+    subtitle:SetText(UI.Name(craft.profession))
+    identity:SetTexture(craft.outputItem and type(GetItemIcon) == "function" and GetItemIcon(craft.outputItem.id) or UI.RecipeIcon(craft.recipe))
+    local atlas = UI.QualityAtlas(craft.recipe and craft.recipe.id, craft.outputQuality, craft.recipe and craft.recipe.maxQuality)
+    quality:SetShown(atlas ~= nil)
+    if atlas then quality:SetAtlas(atlas) end
+    resultRow:Update(craft.outputItem, atlas)
+    resultRow.quantity:SetText(UI.Number(craft.outputQuantity) .. " items")
+    resultRow.bonus:SetText(craft.multicraftBonus and craft.multicraftBonus > 0 and "+" .. UI.Number(craft.multicraftBonus) .. " Multicraft" or "")
+    fields.Character:SetText(UI.CharacterName(craft.character))
+    fields.Timestamp:SetText(UI.DateTime(craft.timestamp))
+    fields.Quantity:SetText(UI.Number(craft.outputQuantity))
+    fields.Quality:SetText(UI.Value(craft.outputQuality))
+    fields.Concentration:SetText(UI.Number(craft.concentrationSpent))
+    fields.Multicraft:SetText(craft.multicraftBonus and (UI.Number(craft.multicraftBonus) .. " additional") or "-")
+    fields.Ingenuity:SetText(craft.hasIngenuityProc == true and
+      (craft.ingenuityRefund and UI.Number(craft.ingenuityRefund) .. " refunded" or "Proc") or
+      (craft.hasIngenuityProc == false and "No proc" or "-"))
+    local returned, total, allocated, complete = {}, 0, 0, craft.resourcefulnessComplete == true
+    for _, reagent in ipairs(craft.reagents or {}) do
+      if reagent.allocatedQuantity == nil or reagent.returnedQuantity == nil then complete = false end
+      allocated = allocated + (reagent.allocatedQuantity or 0)
+      if reagent.returnedQuantity and reagent.returnedQuantity > 0 then
+        returned[#returned + 1] = reagent; total = total + reagent.returnedQuantity
+        if reagent.allocatedQuantity and reagent.returnedQuantity > reagent.allocatedQuantity then complete = false end
       end
     end
-    section("Identity")
-    field("Game operation ID", craft.gameOperationId)
-    text:SetText(table.concat(lines, "\n"))
-    local contentHeight = math.max(scroll:GetHeight(), text:GetStringHeight() + 24)
-    content:SetHeight(contentHeight)
-    text:SetHeight(contentHeight)
-    scroll:UpdateScrollChildRect()
-    scroll:SetVerticalScroll(0)
+    local returnText = craft.hasResourcefulnessProc == nil and total == 0 and "-" or UI.Number(total) .. " returned"
+    if complete and allocated > 0 then
+      returnText = returnText .. " (" .. UI.Percent(total, allocated) .. " of used)"
+    elseif craft.resourcefulnessComplete ~= true and total > 0 then
+      returnText = ">= " .. returnText
+    end
+    fields.Resourcefulness:SetText(returnText)
+    reagents:Reset(); reagents:Append(returned)
   end
   detail:Hide()
   return detail
