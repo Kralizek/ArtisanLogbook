@@ -1803,11 +1803,26 @@ do
   window:Activate("Overview")
   assert(#overview.topRecipes.items == 0 and overview.summary.tiles[6].value.text == "-")
   assert(overview.summary.tiles[6].note.text == "No visible recipes")
+  assert(overview.topRecipes.hiddenCount == 3 and overview.topRecipes.empty.text == "No recipes in this period (3 hidden)")
+  local hiddenTable = helpers.RecipeTable(environment.CreateFrame("Frame"), 0, 0, 700, 150, function() end)
+  hiddenTable:Render({ { recipe = { id = 10051 }, craftCount = 85 } }, {})
+  assert(hiddenTable.hiddenCount == 1 and hiddenTable.empty.text == "No recipes in this period (1 hidden)")
+  window:Activate("Profession", { skillLineId = 171, name = "Alchemy" })
+  local professionRecipes = window.pages.Profession.topRecipes
+  assert(professionRecipes.empty:IsShown() and professionRecipes.empty.text == "No recipes in this period (3 hidden)")
+  dropdown(window.pages.Profession, "Custom dates"):Choose("custom")
+  local professionPeriod = window.pages.Profession.filters.controls[1]
+  professionPeriod.state.customFrom, professionPeriod.state.customTo = 0, 86400
+  window.pages.Profession:Refresh(true)
+  assert(professionRecipes.hiddenCount == 0 and professionRecipes.empty.text == "No recipes in this period")
+  dropdown(window.pages.Profession, "30 days"):Choose(30)
+  assert(professionRecipes.hiddenCount == 3)
   window:Activate("Logbook"); finishList(logbook)
   assert(#logbook.items == 0 and logbook.empty:IsShown() and not logbook.empty.text:find("Loading", 1, true))
   window:Activate("Recipes"); toggleCatalogue(10052, false)
   window:Activate("Overview")
   assert(#overview.topRecipes.items == 1 and overview.topRecipes.items[1].recipe.id == 10052)
+  assert(overview.topRecipes.hiddenCount == 2 and not overview.topRecipes.empty:IsShown())
   api.GetCrafts = originalCrafts
   for recipeId = 11001, 11007 do assert(helpers.SetRecipeHidden(recipeId, true)) end
   assert(helpers.IsRecipeHidden(11007), "Hiding must not inherit the five-pin limit")

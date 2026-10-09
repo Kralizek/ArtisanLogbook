@@ -1177,9 +1177,11 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
     end)
   end
   function list:Render(rows, filter)
+    self.hiddenCount = 0
     if not hideToggle then
       local filtered = {}
       for _, row in ipairs(rows) do if UI.VisibleRecipe(row) then filtered[#filtered + 1] = row end end
+      self.hiddenCount = #rows - #filtered
       rows = filtered
     end
     UI.LazyList(self, function(cursor)
@@ -1189,6 +1191,7 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       return page, offset + 40 < #rows and offset + 40 or nil
     end)
     self:Reload()
+    self.empty:SetText("No recipes in this period" .. (self.hiddenCount > 0 and " (" .. self.hiddenCount .. " hidden)" or ""))
   end
   return list
 end

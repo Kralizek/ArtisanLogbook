@@ -229,6 +229,9 @@ pages, and hiding does not delete or rewrite crafts or change aggregate totals,
 charts, reagent quantities, capture, migrations or Core API results. If every
 recipe is hidden, the summary says No visible recipes rather than claiming no
 crafts occurred.
+Empty most-crafted tables say `No recipes in this period (N hidden)` when recipes
+in the current population are hidden. N counts recipes, not crafts or all saved
+hidden preferences. Periods with no matching activity omit the hidden suffix.
 
 Filtering occurs in UI after bounded Core pages are fetched. An entirely hidden
 page schedules continuation on the next frame, one page per worker update, so

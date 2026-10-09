@@ -117,7 +117,7 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
   local summary = UI.SummaryRow(parent, width, y, entries)
   function summary:Render(series, filter)
     local totals, recipes = UI.Aggregate(series)
-    self.totals, self.recipes = totals, recipes
+    self.totals, self.allRecipes = totals, recipes
     self.recipes = {}
     for _, row in ipairs(recipes) do if UI.VisibleRecipe(row) then self.recipes[#self.recipes + 1] = row end end
     local professions, professionRows = {}, {}
@@ -316,7 +316,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
       self.summary:Render(series, filter)
       filters.onLayout(filters:GetHeight())
       if self.topRecipes then
-        self.topRecipes:Render(self.summary.recipes, filter)
+        self.topRecipes:Render(self.summary.allRecipes, filter)
       end
     end
     if self.professionSlots then
