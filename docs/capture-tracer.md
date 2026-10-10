@@ -467,7 +467,7 @@ produce multiple result operations, or fewer results after a queued failure.
 Quote concentration cost and actual spend may differ by one; `useConcentration`
 is request intent, not spend. `resourcesReturned` item IDs matched selected
 personal-craft inputs, but only unambiguous item mappings can be attributed.
-The ledger (first supported schema 1, with its format identity marker) captures a
+The ledger (schema 2, migrated from schema 1 with its format identity marker) captures a
 personal submission snapshot and links only reliably correlated successful
 result callbacks. Return-only rows remain partial. `operationID` is not assumed to identify a
 request, and no nearest-event/time-window correlation is used. Order/recraft

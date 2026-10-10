@@ -161,6 +161,15 @@ environment.C_TradeSkillUI = {
 }
 environment.hooksecurefunc = function(_, name, callback) hooks[name] = callback end
 
+function environment.RecordFixtureResult(ledger, result)
+  local payload = {}
+  for key, value in pairs(result) do payload[key] = value end
+  payload.operationID = payload.operationID or ledger.database.nextCraftId
+  payload.itemID = payload.itemID or 900000
+  payload.quantity = payload.quantity or 1
+  return ledger:RecordResult(payload)
+end
+
 local coreRoot = arg[1] or "src/ArtisanLogbook_Core"
 local uiRoot = arg[2] or "src/ArtisanLogbook"
 local function load(root, name, afterFile)
@@ -192,7 +201,7 @@ assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
-assert(addon.ledger.database.schemaVersion == 1)
+assert(addon.ledger.database.schemaVersion == 2)
 assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
@@ -207,7 +216,8 @@ addon.Start()
 addon.Mark("basic craft")
 assert(notices[#notices] == "Artisan Logbook: Marker: basic craft")
 addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
-addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1 })
+addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT",
+  { operationID = 1, itemID = 900000, quantity = 1 })
 assert(#addon.ledger.database.crafts == 1)
 assert(addon.ledger.database.crafts[1].gameOperationId == 1)
 assert(addon.ledger.database.crafts[1].recipeId == 456)
@@ -322,8 +332,8 @@ end
 
 local maintenance = reload(nil)
 maintenance.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 9901)
-maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 9902 })
-maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2, itemID = 9902 })
+maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 9902, quantity = 1 })
+maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2, itemID = 9902, quantity = 1 })
 local maintenanceDatabase = maintenance.ledger.database
 local repairButton
 for _, frame in ipairs(frames) do
@@ -344,7 +354,7 @@ assert(environment.ArtisanLogbookDB == maintenance.ledger.database)
 assert(maintenance.ledger.database.crafts[2].recipeId == 9901)
 assert(maintenance.lastMaintenanceDiagnostic:find("success=true", 1, true))
 assert(notices[#notices]:find("Repaired 1 crafts and reconciled affected aggregates. 0 ambiguous and 0 without sufficient evidence remain.", 1, true))
-maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 3, itemID = 9903 })
+maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 3, itemID = 9903, quantity = 1 })
 maintenanceDatabase = maintenance.ledger.database
 environment.popup = nil
 repairButton.scripts.OnClick(repairButton)
@@ -375,7 +385,8 @@ local function startupDatabase(knownOutput, unknownOutputs, competingRecipe)
 end
 
 local automaticDatabase = startupDatabase(9920, { 9920, 9921 })
-automaticDatabase.recipeOutputs = nil
+-- Schema 2 always persists the map; start empty so bootstrap must learn from attributed crafts.
+automaticDatabase.recipeOutputs = {}
 local noticesBeforeAutomatic = #notices
 local automatic = reload(automaticDatabase)
 assert(automatic.ledger and automatic.ledger.unknownRecipeCount == 1)
@@ -511,7 +522,7 @@ do
   assert(confirmed.ledger.database.recipeOutputs[1236472][243807])
   assert(confirmed.ledger.craftById[1].recipeId == 1236472)
   assert(confirmed.ledger.craftById[1].requestId == nil)
-  assert(confirmed.ledger.database.schemaVersion == 1)
+  assert(confirmed.ledger.database.schemaVersion == 2)
   local reloadedKnowledge = reload(confirmed.ledger.database)
   assert(queries == 2 and reloadedKnowledge.ledger.database.recipeOutputs[1236472][243807])
   print("PASS candidate confirmation, silence, schema v1 and durable reload")
@@ -719,7 +730,7 @@ do
   assert(candidateQueries == 9 and enumerationQueries == 0 and infoQueries == 0)
   assert(bounded.lastRecoverySummary.candidateCount == 9 and bounded.lastRecoverySummary.verifiedCount == 3)
   assert(bounded.ledger.unknownRecipeCount == 11 and bounded.ledger.recipeOutputCount == 4)
-  assert(bounded.ledger.database.schemaVersion == 1 and #notices == noticeCount)
+  assert(bounded.ledger.database.schemaVersion == 2 and #notices == noticeCount)
   print(string.format("PASS bounded startup: 2010 recipe dimensions, 2000 good crafts, 14 Unknowns, 9 queries (%.3fs mocked full load)", os.clock() - started))
   environment.C_TradeSkillUI.GetRecipeSchematic = previousSchematic
   environment.C_TradeSkillUI.GetAllRecipeIDs = previousIds
@@ -773,11 +784,13 @@ print("PASS passive ledger capture, reload, identity fallback, and SavedVariable
 hooks.GetCraftingOperationInfo(456, {
   { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
 }, nil, true)
-hooks.CraftRecipe(456, 2, {}, nil, nil, true)
+hooks.CraftRecipe(456, 2, {
+  { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
+}, nil, nil, true)
 assert(not unknown.recorder.recording and #unknown.ledger.database.requests == 1)
-unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1,
+unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 900000, quantity = 1,
   concentrationSpent = 80, resourcesReturned = { { reagent = { itemID = 101 }, quantity = 1 } } })
-unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2,
+unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2, itemID = 900000, quantity = 1,
   concentrationSpent = 80, resourcesReturned = {} })
 assert(#unknown.ledger.database.crafts == 2 and #unknown.ledger.database.reagents == 2)
 assert(unknown.ledger.database.crafts[1].requestId == unknown.ledger.database.crafts[2].requestId)
@@ -799,13 +812,17 @@ print("PASS passive personal request capture and shared batch allocation")
 hooks.GetCraftingOperationInfo(456, {
   { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
 }, nil, true)
-hooks.CraftRecipe(456, 3, {}, nil, nil, true)
+hooks.CraftRecipe(456, 3, {
+  { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
+}, nil, nil, true)
 local partialRequest = unknown.ledger.database.requests[2]
-unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 3, concentrationSpent = 80 })
+unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+  { operationID = 3, itemID = 900000, quantity = 1, concentrationSpent = 80 })
 unknown.HandleRetailEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-Unrelated", 999)
 unknown.HandleRetailEvent("UNIT_SPELLCAST_FAILED_QUIET", "player", "Cast-Unrelated", 999)
 unknown.HandleRetailEvent("UNIT_SPELLCAST_INTERRUPTED", "player", "Cast-Unrelated", 999)
-unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 4, concentrationSpent = 80 })
+unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+  { operationID = 4, itemID = 900000, quantity = 1, concentrationSpent = 80 })
 assert(unknown.ledger.database.crafts[4].requestId == partialRequest.id)
 unknown.HandleRetailEvent("UNIT_SPELLCAST_FAILED", "player", "Cast-Queued", 456)
 unknown.HandleRetailEvent("UPDATE_TRADESKILL_CAST_STOPPED", false)
@@ -1070,15 +1087,15 @@ assert(uiLedger:AddDimension("recipe", 501, { name = "Zebra Brew", professionId 
 assert(uiLedger:AddDimension("recipe", 502, { name = "Apple Mix", professionId = enchanting }))
 for index = 1, 12 do
   uiLedger:BeginCraft(501)
-  assert(uiLedger:RecordResult({ operationID = index, quantity = 0, craftingQuality = 0,
+  assert(environment.RecordFixtureResult(uiLedger, { operationID = index, itemID = 900000, quantity = 1, craftingQuality = 0,
     multicraft = 0, concentrationSpent = 0, hasIngenuityProc = false, ingenuityRefund = 9 }))
 end
 uiLedger:BeginCraft(502)
-assert(uiLedger:RecordResult({ operationID = 13, quantity = 1 }))
+assert(environment.RecordFixtureResult(uiLedger, { operationID = 13, itemID = 900000, quantity = 1 }))
 assert(uiLedger:CreateSession({ startedAt = 1800000000, projectId = 1, regionId = 3,
   gameRealmId = 12, realmName = "TestRealm", characterName = "Other", characterGUID = "Player-Other" }))
 uiLedger:BeginCraft(502)
-assert(uiLedger:RecordResult({ operationID = 14 }))
+assert(environment.RecordFixtureResult(uiLedger, { operationID = 14, itemID = 900000, quantity = 1 }))
 assert(uiLedger:CreateSession({ startedAt = 1800000000, projectId = 1, regionId = 3,
   gameRealmId = 12, realmName = "TestRealm", characterName = "TestCrafter",
   characterGUID = "Player-1-123" }))
@@ -1262,9 +1279,9 @@ dropdown(logbook, "All"):Choose(false)
 uiLedger:BeginCraft(502)
 uiWindow:Hide()
 local noticeCount = #notices
-assert(uiLedger:RecordResult({ operationID = 15 }))
+assert(environment.RecordFixtureResult(uiLedger, { operationID = 15, itemID = 900000, quantity = 1 }))
 assert(#notices == noticeCount + 1 and notices[#notices] ==
-  "|cffffd100Artisan Logbook:|r Crafted Unknown item from Apple Mix")
+  "|cffffd100Artisan Logbook:|r Crafted |Hitem:900000|h[#900000]|hx1 from Apple Mix")
 noticeCount = #notices
 local cachedItemLink = "|cff1eff00|Hitem:123|h[Potion]|h|r"
 environment.C_Item = { GetItemInfo = function(id)
@@ -1288,7 +1305,7 @@ uiWindow:Show()
 assert(displayedRow(logbook, function(item) return item.id == 15 end))
 uiLedger.wall = function() return 1800000000 - 8 * 86400 end
 uiLedger:BeginCraft(501)
-assert(uiLedger:RecordResult({ operationID = 16 }))
+assert(environment.RecordFixtureResult(uiLedger, { operationID = 16 }))
 uiLedger.wall = environment.GetServerTime
 uiWindow:Activate("Logbook")
 dropdown(logbook, "All"):Choose(false)
@@ -1306,7 +1323,7 @@ assert(from == today and to == today + 86400)
 dropdown(logbook, "30 days"):Choose(30)
 uiLedger.wall = function() return 1800000000 - 40 * 86400 end
 uiLedger:BeginCraft(502)
-assert(uiLedger:RecordResult({ operationID = 17 }))
+assert(environment.RecordFixtureResult(uiLedger, { operationID = 17 }))
 uiLedger.wall = environment.GetServerTime
 assert(#history.items == 16)
 dropdown(logbook, "90 days"):Choose(90)
@@ -1345,7 +1362,7 @@ assert(not displayedRow(recipes, function() return true end))
 assert(catalogue.empty:IsShown())
 for index = 1, 45 do
   uiLedger:BeginCraft(501)
-  assert(uiLedger:RecordResult({ operationID = 1000 + index }))
+  assert(environment.RecordFixtureResult(uiLedger, { operationID = 1000 + index }))
 end
 uiWindow:Activate("Logbook")
 assert(#history.items == 40)
@@ -1444,7 +1461,7 @@ do
     assert(ledger:AddDimension("recipe", recipeId, { name = profession.name .. " recipe", professionId = professionId }))
     ledger.wall = function() return now - profession.days * 86400 end
     ledger:BeginCraft(recipeId)
-    assert(ledger:RecordResult({ operationID = index, quantity = 1 }))
+    assert(environment.RecordFixtureResult(ledger, { operationID = index, quantity = 1 }))
   end
   ledger.wall = environment.GetServerTime
   local character = api.GetCharacters()[1]
@@ -1499,7 +1516,7 @@ do
   local tailoring = assert(ledger:AddDimension("profession", 197, { name = "Tailoring" }))
   assert(ledger:AddDimension("recipe", 9507, { name = "Tailoring recipe", professionId = tailoring }))
   ledger:BeginCraft(9507)
-  assert(ledger:RecordResult({ operationID = 7, quantity = 1 }))
+  assert(environment.RecordFixtureResult(ledger, { operationID = 7, quantity = 1 }))
   assert(#api.GetProfessions(character.key) == 7)
   assertPrimarySlots()
   page.professionSlots[1].scripts.OnClick(page.professionSlots[1])
@@ -1514,7 +1531,7 @@ end
     for index = 1, 45 do
       ledger:AddDimension("recipe", 9600 + index, { name = string.format("Recipe %02d", index) })
       ledger:BeginCraft(9600 + index)
-      assert(ledger:RecordResult({ operationID = index }))
+      assert(environment.RecordFixtureResult(ledger, { operationID = index }))
     end
     local ui = loadUI()
     local window = ui.productionWindow
@@ -1545,7 +1562,7 @@ do
     local count = index == 1 and 44 or index == 2 and 19 or 1
     for craftIndex = 1, count do
       ledger:BeginCraft(9650 + index)
-      assert(ledger:RecordResult({ operationID = index * 100 + craftIndex }))
+      assert(environment.RecordFixtureResult(ledger, { operationID = index * 100 + craftIndex }))
     end
   end
   local ui = loadUI()
@@ -1601,13 +1618,16 @@ do
   for _, recipeId in ipairs({ 9741, 9742, 9743 }) do
     ledger:AddDimension("recipe", recipeId, { name = "Proc recipe " .. recipeId })
     for index = 1, 20 do
+      assert(ledger:SubmitCraft(recipeId, 1, false))
       ledger:BeginCraft(recipeId)
       local returns
       if recipeId == 9741 then
         returns = index <= 5 and { { reagent = { itemID = 8 }, quantity = 1 } } or {}
       elseif recipeId == 9742 then returns = {}
-      elseif index <= 8 then returns = { { reagent = { itemID = 8 }, quantity = 1 } } end
-      assert(ledger:RecordResult({ operationID = recipeId * 100 + index, resourcesReturned = returns,
+      elseif index <= 8 then returns = { { reagent = { itemID = 8 }, quantity = 1 } }
+      else returns = { { reagent = { itemID = 8 } } } end
+      assert(environment.RecordFixtureResult(ledger, { operationID = recipeId * 100 + index, itemID = 900000, quantity = 1,
+        resourcesReturned = returns,
         multicraft = 0, hasIngenuityProc = false }))
     end
   end
@@ -1649,7 +1669,7 @@ do
   for index = 1, 3 do ledger:AddDimension("item", 6000 + index, { name = "Quality " .. index .. " result" }) end
   local function record(recipeId, itemId, quality, quantity, operation)
     ledger:BeginCraft(recipeId)
-    return assert(ledger:RecordResult({ operationID = operation, itemID = itemId, craftingQuality = quality,
+    return assert(environment.RecordFixtureResult(ledger, { operationID = operation, itemID = itemId, craftingQuality = quality,
       quantity = quantity, multicraft = 0, hasIngenuityProc = false, resourcesReturned = {} }))
   end
   ledger.wall = function() return now - 40 * 86400 end
@@ -1722,7 +1742,7 @@ do
   local function record(recipeId, count)
     for _ = 1, count do
       ledger:SubmitCraft(recipeId, 1, false, nil, { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 6401 } } })
-      assert(ledger:RecordResult({ quantity = 1, resourcesReturned = { { reagent = { itemID = 6401 }, quantity = 1 } } }))
+      assert(environment.RecordFixtureResult(ledger, { quantity = 1, resourcesReturned = { { reagent = { itemID = 6401 }, quantity = 1 } } }))
     end
   end
   record(10052, 5); record(10051, 85); record(10053, 20)
@@ -1864,14 +1884,14 @@ do
     assert(ledger:SubmitCraft(recipeId, 1, false, nil, {
       { dataSlotIndex = 1, quantity = quantity, quality = quality, reagent = { itemID = itemId } },
     }))
-    return assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = itemId }, quantity = returned } } }))
+    return assert(environment.RecordFixtureResult(ledger, { resourcesReturned = { { reagent = { itemID = itemId }, quantity = returned } } }))
   end
   local firstCraft = record(9701, 4008, "Bloom", 5, 2, 1)
-  assert(#list.items == 1 and list.items[1].item.id == 4008 and list.items[1].quality == 1)
+  assert(#list.items == 1 and list.items[1].item.id == 4008 and list.items[1].quality == nil)
   assert(list.items[1].allocatedQuantity == 5 and list.items[1].returnedQuantity == 2)
   record(9701, 4009, "Bloom", 7, 3, 2)
   record(9702, 4008, "Bloom", 3, 1, 1)
-  assert(#list.items == 2 and list.items[2].item.id == 4009 and list.items[2].quality == 2)
+  assert(#list.items == 2 and list.items[2].item.id == 4009)
   assert(#list.items[1].professions == 2 and list.items[1].recipeCount == 2)
   assert(list.rows[1].widgets[1].widget.label.text == "Bloom" and not list.rows[1].widgets[1].widget.identity)
   list.rows[1].widgets[1].widget.scripts.OnEnter(list.rows[1].widgets[1].widget)
@@ -1973,13 +1993,13 @@ do
     ledger:SubmitCraft(9751, 1, false, nil, {
       { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 4501 } },
     })
-    assert(ledger:RecordResult({ operationID = index,
+    assert(environment.RecordFixtureResult(ledger, { operationID = index, itemID = 900000, quantity = 1,
       resourcesReturned = { { reagent = { itemID = 4501 }, quantity = 2 } } }))
   end
   ledger:SubmitCraft(9751, 1, false, nil, {
     { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 4502 } },
   })
-  assert(ledger:RecordResult({ operationID = 102 }))
+  assert(environment.RecordFixtureResult(ledger, { operationID = 102, resourcesReturned = { { reagent = { itemID = 4502 } } } }))
   local ui = loadUI()
   local window = ui.productionWindow
   window:Show(); window:Activate("Reagents")
@@ -2029,7 +2049,8 @@ do
   detail:Refresh(true)
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
   assert(detail.fields.crafts.text == "0" and detail.fields.returned.text:find("202", 1, true))
-  assert(detail.fields.allocated.text == "-" and detail.fields.rate.text == "-")
+  -- Durable input aggregates survive detail pruning; the retained-craft rate does not.
+  assert(detail.fields.allocated.text:find("505", 1, true) and detail.fields.rate.text == "-")
   assert(#detail.recipes.items == 0 and detail.chart.empty:IsShown())
   api.GetCrafts = crafts
   window:Hide()
@@ -2042,7 +2063,7 @@ do
   for itemId = 5101, 5103 do
     assert(ledger:AddDimension("item", itemId, { name = "Cached herb " .. itemId }))
     assert(ledger:SubmitCraft(9801, 1, false))
-    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = itemId }, quantity = itemId - 5100 } } }))
+    assert(environment.RecordFixtureResult(ledger, { resourcesReturned = { { reagent = { itemID = itemId }, quantity = itemId - 5100 } } }))
   end
   local ui = loadUI()
   local window = ui.productionWindow
@@ -2140,7 +2161,7 @@ do
   ledger:AddDimension("item", 5301, { name = "Bloom" })
   ledger:AddDimension("item", 5302, { name = "Potion" })
   ledger:SubmitCraft(9850, 1, true, nil, { { dataSlotIndex = 1, quantity = 10, reagent = { itemID = 5301 } } })
-  local craft = assert(ledger:RecordResult({ operationID = 1, itemID = 5302, quantity = 4, craftingQuality = 2,
+  local craft = assert(environment.RecordFixtureResult(ledger, { operationID = 1, itemID = 5302, quantity = 4, craftingQuality = 2,
     multicraft = 1, concentrationSpent = 100, hasIngenuityProc = true, ingenuityRefund = 20,
     resourcesReturned = { { reagent = { itemID = 5301 }, quantity = 2 } } }))
   local ui = loadUI()
@@ -2272,7 +2293,10 @@ do
   environment.ArtisanLogbookUISettings.trivialReagents = {}
   local function record(result, recipeId)
     assert(ledger:SubmitCraft(recipeId or 9001, 1, false))
-    return assert(ledger:RecordResult(result))
+    result.operationID = ledger.database.nextCraftId
+    result.itemID = 900000
+    result.quantity = result.quantity or 1
+    return assert(environment.RecordFixtureResult(ledger, result))
   end
   local first = record({ quantity = 5, multicraft = 0, concentrationSpent = 0,
     hasIngenuityProc = false, ingenuityRefund = 99, resourcesReturned = {} })
@@ -2285,7 +2309,7 @@ do
     resourcesReturned = { { reagent = { itemID = 9 }, quantity = 2 }, { reagent = { itemID = 10 }, quantity = 3 } } })
   assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "multicraftBonus", "outputQuantity") == "13.0%")
   assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "ingenuityRefund", "concentrationSpent") == "60.0%")
-  record({})
+  record({ resourcesReturned = { { reagent = { itemID = 8 } } } })
   assert(helpers.MeasuredShare(api.GetRecipeOutcomes(9001).totals, "multicraftBonus", "outputQuantity") == "Unknown")
   assert(helpers.ProcRate(nil, 0) == "-")
   assert(helpers.ProcRate(0, 4) == "0.0%\n0 / 4 crafts")
@@ -2542,21 +2566,29 @@ do
     { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
     { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 9 } },
   }))
-  assert(ledger:RecordResult({ resourcesReturned = {
+  assert(environment.RecordFixtureResult(ledger, { resourcesReturned = {
     { reagent = { itemID = 8 }, quantity = 1 }, { reagent = { itemID = 9 } },
   } }))
   for index = 2, 30 do
     assert(ledger:SubmitCraft(9001, 1, false, nil, {
       { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
     }))
-    assert(ledger:RecordResult({ resourcesReturned = index <= 8 and
+    assert(environment.RecordFixtureResult(ledger, { resourcesReturned = index <= 8 and
       { { reagent = { itemID = 8 }, quantity = 1 } } or {} }))
   end
   local data = ledger.database
+  -- Rewrite as a pre-#21 schema-1 database (no outcome or schema-2 measurements).
+  data.schemaVersion, data.reagentSeries, data.firstCraftRewards = 1, nil, nil
   data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
-  for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil end
+  for _, craft in ipairs(data.crafts) do
+    craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil
+    craft.outcomeSource, craft.quoteObserved, craft.inputComplete = nil, nil, nil
+  end
+  for _, reagent in ipairs(data.reagents) do reagent.inputTotalComplete = nil end
   for _, row in ipairs(data.craftSeries) do
-    for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }) do
+    row.quoteObservedCount, row.inputCompleteCount, row.matchedCraftCount = nil, nil, nil
+    for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount",
+        "resourcefulnessAuthoritativeProcCount" }) do
       row[metric], row[metric .. "ObservedCount"] = nil, nil
     end
   end
@@ -2677,7 +2709,7 @@ assert(enrichedApi.GetCraft(1).recipe.expansion.name == "Midnight")
 assert(enrichedApi.GetCraftSeries().series[1].recipe.expansion.name == "Midnight")
 assert(#enrichedApi.GetCrafts({ expansions = { "skillLine:2871" } }).crafts == 1)
 enriched.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
-enriched.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 102, itemID = 212345 })
+enriched.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 102, itemID = 212345, quantity = 1 })
 assert(enrichedCommits[#enrichedCommits].outputItem.name == "Midnight Potion")
 assert(rowCount(data.dimensions.recipes) == 1 and rowCount(data.dimensions.items) == 2 and
   rowCount(data.dimensions.professions) == 1)
@@ -2687,7 +2719,7 @@ assert(rowCount(restored.ledger.database.dimensions.recipes) == 1)
 assert(environment.ArtisanLogbookAPI.GetCraft(1).recipe.expansion.name == "Midnight")
 assert(restored.ledger:SubmitCraft(1230869, 1, false, nil,
   { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 212346 } } }))
-assert(restored.ledger:RecordResult({ operationID = 103, itemID = 212345, resourcesReturned = {} }))
+assert(restored.ledger:RecordResult({ operationID = 103, itemID = 212345, quantity = 1, resourcesReturned = {} }))
 assert(#restored.ledger.database.requests == 1 and #restored.ledger.database.reagents == 2)
 print("PASS delayed Retail metadata enriches historical facts, indexes, series and reload")
 
@@ -2807,7 +2839,7 @@ assert(#environment.ArtisanLogbookAPI.GetRecipeSummaries().recipes == 0)
 assert(#environment.ArtisanLogbookAPI.GetCharacters() == 0 and
   #environment.ArtisanLogbookAPI.GetProfessions() == 0)
 restored.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
-restored.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 101, itemID = 212345 })
+restored.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 101, itemID = 212345, quantity = 1 })
 assert(#clean.crafts == 1 and clean.crafts[1].id == 1)
 assert(clean.crafts[1].sessionId == clean.dimensions.sessions[1].id)
 assert(#environment.ArtisanLogbookAPI.GetCrafts({ professions = { 171 } }).crafts == 1)
@@ -2833,7 +2865,7 @@ reagentRuntime.SubmitCraft(1230869, 1, false, nil, {
 assert(reagentRuntime.ledger.database.dimensions.items[240991].name == "Cached Herb")
 assert(reagentRuntime.ledger.database.dimensions.items[240992].name == nil)
 reagentRuntime.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", {
-  operationID = 203, itemID = 212345, resourcesReturned = {
+  operationID = 203, itemID = 212345, quantity = 1, resourcesReturned = {
     { reagent = { itemID = 236761 }, quantity = 1 },
   },
 })
@@ -2891,11 +2923,11 @@ assert(#refusedRuntime.ledger.database.dimensions.sessions == 1 and
   #refusedRuntime.ledger.database.dimensions.characters == 1 and
   #refusedRuntime.ledger.database.dimensions.realms == 1)
 assert(refusedRuntime.ledger.database.dimensions.sessions[1].startedAt == 1800000123)
-assert(refusedRuntime.ledger.database.schemaVersion == 1 and refusedData.dimensions.recipes[1].key ==
+assert(refusedRuntime.ledger.database.schemaVersion == 2 and refusedData.dimensions.recipes[1].key ==
   "old-layout")
 assert(#refusedApi.GetCrafts().crafts == 0 and environment.ArtisanLogbookManagement.Status().retainedCrafts == 0)
 refusedRuntime.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
-refusedRuntime.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 302, itemID = 212345 })
+refusedRuntime.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 302, itemID = 212345, quantity = 1 })
 assert(#refusedApi.GetCrafts().crafts == 1 and not refusedRuntime.ledgerCaptureError)
 assert(environment.ArtisanLogbookTraceDB == preservedTrace)
 print("PASS confirmed debug purge recovers refused schema without touching trace")
@@ -2906,7 +2938,7 @@ oldData.dimensions.recipes[1230869].maxQuality = nil
 environment.UnitClass = function() return nil, nil end
 environment.C_TradeSkillUI.GetRecipeInfo = function() return nil end
 local oldCore = reload(oldData)
-assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 1)
+assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 2)
 assert(oldCore.ledger.database.dimensions.characters[1].classFile == nil)
 assert(oldCore.ledger.database.dimensions.recipes[1230869].maxQuality == nil)
 environment.UnitClass = function() return "Mage", "MAGE", 8 end
@@ -2918,9 +2950,300 @@ local savedRecipeRow = upgraded.ledger.database.dimensions.recipes[1230869]
 assert(upgraded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 upgraded.HandleRetailEvent("TRADE_SKILL_SHOW")
 assert(upgraded.ledger.database.dimensions.recipes[1230869] == savedRecipeRow)
-assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 1)
+assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 2)
 local reloaded = reload(upgraded.ledger.database)
 assert(reloaded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 assert(reloaded.ledger.database.dimensions.recipes[1230869].maxQuality == 3)
 assert(environment.ArtisanLogbookAPI.GetCrafts().crafts[1].recipe.maxQuality == 3)
 print("PASS optional schema-v1 class and quality enrichment reuses historical dimensions across reload")
+
+-- A function scope keeps this block below Lua 5.1's 200-local limit for the main chunk.
+;(function()
+  local function sameTable(left, right)
+    if type(left) ~= "table" or type(right) ~= "table" then return left == right end
+    for key, value in pairs(left) do if not sameTable(value, right[key]) then return false end end
+    for key in pairs(right) do if left[key] == nil then return false end end
+    return true
+  end
+  local fixturePath = "tests/fixtures/legacy/v1-outcome2.lua"
+  local savedTime = environment.GetServerTime
+  environment.GetServerTime = function() return 1796004060 end
+  environment.C_TradeSkillUI.CraftSalvage = function() end
+  local legacy = dofile(fixturePath)
+  local core = reload(legacy)
+  assert(core.ledger and environment.ArtisanLogbookDB == core.ledger.database)
+  assert(sameTable(legacy, dofile(fixturePath)), "migration rewrote the supplied SavedVariables")
+  local status = environment.ArtisanLogbookManagement.Status()
+  assert(status.schemaVersion == 2 and status.migratedFromSchemaVersion == 1 and status.migratedQuoteCrafts == 7)
+  local crafts = core.ledger.database.crafts
+  local count = #crafts
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 434018)
+  hooks.CraftSalvage(434018, 1, nil, {}, false)
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9001, itemID = 700, quantity = 2 })
+  assert(#crafts == count + 1 and crafts[#crafts].outcomeSource == "unverified")
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+    { operationID = 9001, itemID = 701, quantity = 1, firstCraftReward = true })
+  assert(#crafts == count + 1 and #core.ledger.database.firstCraftRewards == 1 and not core.ledgerCaptureError)
+  assert(core.ledger.database.firstCraftRewards[1].recipeId == 434018)
+  core.HandleRetailEvent("TRADE_SKILL_CLOSE")
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9002, itemID = 702, quantity = 1 })
+  assert(crafts[#crafts].outcomeSource == "unverified" and crafts[#crafts].hasResourcefulnessProc == nil)
+  local again = reload(core.ledger.database)
+  assert(again.ledger and environment.ArtisanLogbookManagement.Status().migratedFromSchemaVersion == nil)
+  assert(#again.ledger.database.firstCraftRewards == 1 and #again.ledger.database.crafts == count + 2)
+  local broken = dofile(fixturePath)
+  broken.reagents[1].craftId = 999
+  local rejected = reload(broken)
+  assert(rejected.ledger == nil and environment.ArtisanLogbookDB == broken)
+  assert(rejected.ledgerError:find("migration failed", 1, true) and notices[#notices]:find("Ledger disabled", 1, true))
+  local expected = dofile(fixturePath)
+  expected.reagents[1].craftId = 999
+  assert(sameTable(broken, expected), "failed migration changed SavedVariables")
+  environment.GetServerTime = savedTime
+  environment.C_TradeSkillUI.CraftSalvage = nil
+  print("PASS schema-1 SavedVariables migrate once at startup, capture v2 outcomes and refuse corrupt input untouched")
+end)()
+;(function()
+  local savedEnum = environment.Enum
+  local savedSchematic = environment.C_TradeSkillUI.GetRecipeSchematic
+  local savedSalvage = environment.C_TradeSkillUI.CraftSalvage
+  local savedNonpersonal = {}
+  for _, name in ipairs({ "CraftEnchant", "RecraftRecipe", "RecraftRecipeForOrder" }) do
+    savedNonpersonal[name] = environment.C_TradeSkillUI[name]
+    environment.C_TradeSkillUI[name] = function() end
+  end
+  environment.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2, Automatic = 3 } }
+  environment.C_TradeSkillUI.CraftSalvage = function() end
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, reagentSlotSchematics = {
+      { dataSlotType = 2, dataSlotIndex = 1, reagentType = 1, required = true,
+        quantityRequired = 5, reagents = { { itemID = 100 } }, variableQuantities = {} },
+    } }
+  end
+  local function start()
+    local core = reload(nil)
+    local api = environment.ArtisanLogbookAPI
+    local function event(name, ...)
+      core.adapter.frame.scripts.OnEvent(core.adapter.frame, name, ...)
+    end
+    local function result(payload)
+      event("TRADE_SKILL_ITEM_CRAFTED_RESULT", payload)
+      return core.ledger.database.crafts[#core.ledger.database.crafts]
+    end
+    local function submit()
+      hooks.CraftRecipe(456, 1, { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 100 } } },
+        nil, nil, false)
+      event("TRADE_SKILL_CRAFT_BEGIN", 456)
+      return core.ledger.pendingRequest.id
+    end
+    return core, api, event, result, submit
+  end
+  local function unowned(core, api, fact)
+    local projected = api.GetCraft(fact.id)
+    assert(fact.outcomeSource == "unverified" and fact.requestId == nil and fact.recipeId == nil)
+    assert(projected.inputComplete == nil and projected.quoteObserved == nil and projected.request == nil)
+    for _, reagent in ipairs(core.ledger.reagentsByCraftId[fact.id] or {}) do
+      assert(reagent.allocatedQuantity == nil and reagent.inputTotalComplete == nil)
+    end
+  end
+  local function stable(core, api)
+    local totals = api.GetRecipeOutcomes(456).totals
+    local items = api.GetRecipeReagentStatistics(456)
+    local loaded = reload(core.ledger.database)
+    local loadedApi = environment.ArtisanLogbookAPI
+    assert(loadedApi.GetRecipeOutcomes(456).totals.matchedCraftCount == totals.matchedCraftCount)
+    assert(#loadedApi.GetRecipeReagentStatistics(456).reagents == #items.reagents)
+    loaded.ledger:Prune(loaded.ledger.wall() + 61 * 86400)
+    assert(loadedApi.GetRecipeOutcomes(456).totals.inputCompleteCount == totals.inputCompleteCount)
+    assert(loadedApi.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount ==
+      totals.resourcefulnessAuthoritativeProcCountObservedCount)
+    local pruned = loadedApi.GetRecipeReagentStatistics(456)
+    for index, row in ipairs(items.reagents) do
+      assert(pruned.reagents[index].allocatedQuantity == row.allocatedQuantity)
+      assert(pruned.reagents[index].matchedCraftCount == row.matchedCraftCount)
+      assert(pruned.reagents[index].matchedAllocatedQuantity == row.matchedAllocatedQuantity)
+      assert(pruned.reagents[index].matchedReturnedQuantity == row.matchedReturnedQuantity)
+    end
+  end
+  for _, positive in ipairs({ false, true }) do
+    local core, api, event, result, submit = start()
+    local historical = result({ operationID = 699, itemID = 801, quantity = 1 })
+    hooks.CraftSalvage(123, 1, nil, {}, false)
+    event("TRADE_SKILL_CRAFT_BEGIN", 123)
+    result({ operationID = 700, itemID = 800, quantity = 1 })
+    event("TRADE_SKILL_CLOSE")
+    local requestId = submit()
+    local late = result({ operationID = 700, itemID = 801, quantity = 1,
+      resourcesReturned = positive and { { reagent = { itemID = 100 }, quantity = 2 } } or nil })
+    unowned(core, api, late)
+    assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
+    local actual = result({ operationID = 701, itemID = 900, quantity = 1 })
+    unowned(core, api, actual)
+    assert(core.ledger.pendingRequest == nil and core.ledger.requestAmbiguous)
+    assert(not (core.ledger.database.recipeOutputs[456] or {})[801])
+    assert(not (core.ledger.database.recipeOutputs[456] or {})[900])
+    assert(core.ledger:RepairUnknownRecipes().repairedCount == 0)
+    assert(core.ledger.craftById[historical.id].recipeId == nil)
+    assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount == 0)
+    assert(#api.GetRecipeReagentStatistics(456).reagents == 0)
+    stable(core, api)
+  end
+  do
+    local core, api, event, result, submit = start()
+    hooks.CraftSalvage(123, 1, nil, {}, false)
+    event("TRADE_SKILL_CLOSE")
+    submit()
+    unowned(core, api, result({ operationID = 702, itemID = 801, quantity = 1 }))
+    assert(core.ledger.pendingRequest == nil and core.ledger.requestAmbiguous)
+    stable(core, api)
+  end
+  do
+    local core, api, event, result, submit = start()
+    hooks.CraftSalvage(123, 1, nil, {}, false)
+    event("TRADE_SKILL_CRAFT_BEGIN", 123)
+    result({ operationID = 703, itemID = 800, quantity = 1 })
+    event("TRADE_SKILL_CLOSE")
+    core.ledger:Prune(core.ledger.wall() + 61 * 86400)
+    local requestId = submit()
+    unowned(core, api, result({ operationID = 703, itemID = 801, quantity = 1 }))
+    assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
+  end
+  for _, callback in ipairs({ {}, { operationID = 9, itemID = 901, quantity = 1, bonusCraft = true } }) do
+    local core, api, _, result, submit = start()
+    local requestId = submit()
+    unowned(core, api, result(callback))
+    assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
+    assert(core.ledger.pendingRecipeId == 456)
+    local actual = result({ operationID = callback.operationID or 10, itemID = 900, quantity = 1,
+      resourcesReturned = { { reagent = { itemID = 100 }, quantity = 2 } } })
+    assert(actual.requestId == requestId and actual.inputComplete and actual.outcomeSource == "native")
+    assert(core.ledger.pendingRequest == nil and core.ledger.database.recipeOutputs[456][900])
+    assert(not core.ledger.database.recipeOutputs[456][901])
+    local item = api.GetRecipeReagentStatistics(456).reagents[1]
+    assert(item.matchedCraftCount == 1 and item.matchedAllocatedQuantity == 5 and item.matchedReturnedQuantity == 2)
+    stable(core, api)
+  end
+  do
+    local core, api, _, result, submit = start()
+    local requestId = submit()
+    local actual = result({ operationID = 10, itemID = 900, quantity = 1,
+      resourcesReturned = { { reagent = { itemID = 100 }, quantity = 2 }, {} } })
+    assert(actual.requestId == requestId and actual.inputComplete and actual.outcomeSource == "partial")
+    assert(core.ledger.reagentsByCraftId[actual.id][1].inputTotalComplete == true)
+    assert(core.ledger.pendingRequest == nil and core.ledger.database.recipeOutputs[456][900])
+    local item = api.GetRecipeReagentStatistics(456).reagents[1]
+    assert(item.allocatedQuantity == 5 and item.returnedQuantity == 2 and item.matchedCraftCount == 0)
+    stable(core, api)
+  end
+  local function nonpersonal(kind)
+    if kind == "CraftEnchant" then hooks.CraftEnchant(123, 1, {}, nil, false)
+    elseif kind == "RecraftRecipe" then hooks.RecraftRecipe("synthetic-item", {}, nil, false)
+    elseif kind == "RecraftRecipeForOrder" then hooks.RecraftRecipeForOrder(77, {}, false)
+    else hooks.CraftRecipe(123, 1, {}, nil, 77, false) end
+  end
+  for _, kind in ipairs({ "CraftEnchant", "RecraftRecipe", "RecraftRecipeForOrder", "CraftRecipe" }) do
+    for _, boundary in ipairs({ "close", "personal-replacement", "nonpersonal-replacement" }) do
+      for _, known in ipairs({ false, true }) do
+        for _, positive in ipairs({ false, true }) do
+          local core, api, event, result, submit = start()
+          local status = environment.ArtisanLogbookManagement.Status()
+          assert(status.operationOwnershipUncertain == false and status.authoritativeCaptureSuspended == false)
+          local historical = result({ operationID = 699, itemID = 801, quantity = 1 })
+          nonpersonal(kind)
+          event("TRADE_SKILL_CRAFT_BEGIN", 123)
+          assert(core.ledger.pendingRequest == nil and core.ledger.nonpersonalOperationOutstanding)
+          if known then result({ operationID = 700, itemID = 800, quantity = 1 }) end
+          if boundary == "close" then event("TRADE_SKILL_CLOSE")
+          elseif boundary == "nonpersonal-replacement" then nonpersonal(kind) end
+          local requestId = submit()
+          status = environment.ArtisanLogbookManagement.Status()
+          assert(status.operationOwnershipUncertain and status.authoritativeCaptureSuspended)
+          status.operationOwnershipUncertain = false
+          assert(environment.ArtisanLogbookManagement.Status().operationOwnershipUncertain)
+          local late = result({ operationID = 700, itemID = 801, quantity = 1, isEnchant = kind == "CraftEnchant",
+            resourcesReturned = positive and { { reagent = { itemID = 100 }, quantity = 2 } } or nil })
+          unowned(core, api, late)
+          if known then
+            assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
+            assert(core.ledger.pendingRecipeId == 456)
+          else assert(core.ledger.pendingRequest == nil and core.ledger.requestAmbiguous) end
+          unowned(core, api, result({ operationID = 701, itemID = 900, quantity = 1 }))
+          assert(core.ledger.pendingRequest == nil)
+          assert(not (core.ledger.database.recipeOutputs[456] or {})[801])
+          assert(not (core.ledger.database.recipeOutputs[456] or {})[900])
+          assert(core.ledger:RepairUnknownRecipes().repairedCount == 0)
+          assert(core.ledger.craftById[historical.id].recipeId == nil)
+          assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount == 0)
+          assert(#api.GetRecipeReagentStatistics(456).reagents == 0)
+          if positive then assert(api.GetReagentSummaries({ items = { 100 } }).reagents[1].returnedQuantity == 2) end
+          assert(core.ledger.database.nonpersonalOperationOutstanding == nil)
+          assert(core.ledger.database.operationOwnershipUncertain == nil)
+          stable(core, api)
+        end
+      end
+    end
+  end
+  for _, reset in ipairs({ "purge", "clear", "prune" }) do
+    for _, mode in ipairs({ "malformed", "bonus", "terminal" }) do
+      local core, api, _, result, submit = start()
+      local oldRequestId = submit()
+      if mode == "terminal" then
+        assert(result({ operationID = 700, itemID = 900, quantity = 1 }).requestId == oldRequestId)
+      else
+        unowned(core, api, result(mode == "malformed" and { operationID = 700 } or
+          { operationID = 700, itemID = 901, quantity = 1, bonusCraft = true }))
+        assert(core.ledger.pendingRequest.id == oldRequestId)
+        assert(result({ operationID = 701, itemID = 900, quantity = 1 }).requestId == oldRequestId)
+      end
+      local registry = core.ledger.observedOperationIds
+      local observation = registry[700]
+      assert(observation.consumed == (mode == "terminal"))
+      if reset == "purge" then
+        assert(core.PurgeLogbookDB())
+        assert(core.ledger.database.nextRequestId == 1 and observation.consumed == true)
+        assert(core.ledger.database == environment.ArtisanLogbookDB)
+      elseif reset == "clear" then assert(environment.ArtisanLogbookManagement.Clear())
+      else core.ledger:Prune(core.ledger.wall() + 61 * 86400) end
+      assert(core.ledger.observedOperationIds == registry and registry[700] == observation)
+      assert(environment.ArtisanLogbookManagement.Status().authoritativeCaptureSuspended == false)
+      local requestId = submit()
+      assert((requestId == oldRequestId) == (reset == "purge"))
+      unowned(core, api, result({ operationID = 700, itemID = 801, quantity = 1,
+        resourcesReturned = { { reagent = { itemID = 100 }, quantity = 2 } } }))
+      assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
+      assert(core.ledger.pendingRecipeId == 456)
+      local actual = result({ operationID = 702, itemID = 900, quantity = 1,
+        resourcesReturned = { { reagent = { itemID = 100 }, quantity = 1 } } })
+      assert(actual.requestId == requestId and actual.inputComplete and actual.outcomeSource == "native")
+      assert(core.ledger.pendingRequest == nil and core.ledger.database.recipeOutputs[456][900])
+      assert(not core.ledger.database.recipeOutputs[456][801])
+      assert(core.ledger:RepairUnknownRecipes().repairedCount == 0)
+      local item = api.GetRecipeReagentStatistics(456).reagents[1]
+      assert(item.matchedAllocatedQuantity == (reset == "prune" and 10 or 5))
+      assert(item.matchedReturnedQuantity == 1 and item.returnedQuantity == 1)
+      assert(environment.ArtisanLogbookManagement.Status().operationOwnershipUncertain == false)
+      stable(core, api)
+    end
+  end
+  do
+    local core, api, _, result, submit = start()
+    local requestId = submit()
+    unowned(core, api, result({ operationID = 700 }))
+    local observation = core.ledger.observedOperationIds[700]
+    core.ledger:Prune(core.ledger.wall())
+    assert(core.ledger.observedOperationIds[700] == observation and not observation.consumed)
+    local actual = result({ operationID = 700, itemID = 900, quantity = 1 })
+    assert(actual.requestId == requestId and actual.inputComplete and actual.outcomeSource == "native")
+    assert(observation.consumed)
+    stable(core, api)
+  end
+  environment.Enum = savedEnum
+  environment.C_TradeSkillUI.GetRecipeSchematic = savedSchematic
+  environment.C_TradeSkillUI.CraftSalvage = savedSalvage
+  for _, name in ipairs({ "CraftEnchant", "RecraftRecipe", "RecraftRecipeForOrder" }) do
+    environment.C_TradeSkillUI[name] = savedNonpersonal[name]
+  end
+  print("PASS R1/R2 production ownership gate, stale/unknown IDs, request preservation, output learning, reload and pruning")
+  print("PASS N1/N2 nonpersonal boundaries, management purge provenance, lifecycle controls and read-only suspension status")
+end)()

@@ -104,38 +104,132 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
   end
 
   local probingQuote = false
-  local personalQuotes = {}
-  local function isGameId(value)
-    return type(value) == "number" and value >= 0 and value < math.huge and value % 1 == 0
-  end
   local function isPositiveInteger(value)
     return type(value) == "number" and value > 0 and value < math.huge and value % 1 == 0
   end
+  local function readable(value)
+    if type(api.issecretvalue) == "function" and api.issecretvalue(value) then return false end
+    if type(value) == "table" and type(api.canaccesstable) == "function" then return api.canaccesstable(value) end
+    return true
+  end
+
   local function snapshotSelections(selections)
-    if type(selections) ~= "table" then return nil end
+    if type(selections) ~= "table" or not readable(selections) then return nil end
     local snapshot = {}
-    local hasPositiveAllocation = false
-    for _, selection in ipairs(selections) do
-      local copied = copyCraftingReagentInfo(selection)
-      if copied then
-        snapshot[#snapshot + 1] = copied
-        if isPositiveInteger(copied.dataSlotIndex) and isPositiveInteger(copied.quantity) and
-            copied.reagent and isPositiveInteger(copied.reagent.itemID) then
-          hasPositiveAllocation = true
+    for index, selection in pairs(selections) do
+      local copied = type(selection) == "table" and readable(selection) and readable(selection.reagent) and
+        copyCraftingReagentInfo(selection)
+      snapshot[index] = copied or false
+    end
+    return snapshot
+  end
+
+  local function dense(list)
+    if type(list) ~= "table" or not readable(list) then return false end
+    local count, maximum = 0, 0
+    for index in pairs(list) do
+      if not isPositiveInteger(index) then return false end
+      count, maximum = count + 1, math.max(maximum, index)
+    end
+    return count == maximum
+  end
+
+  local function snapshotRecipeInputs(recipeId, recipeLevel, selections)
+    local tradeSkill, enum = api.C_TradeSkillUI, api.Enum
+    local slotTypes = type(enum) == "table" and enum.TradeskillSlotDataType
+    local reagentTypes = type(enum) == "table" and enum.CraftingReagentType
+    if type(tradeSkill.GetRecipeSchematic) ~= "function" or type(slotTypes) ~= "table" or
+        type(reagentTypes) ~= "table" or slotTypes.Reagent == nil or slotTypes.ModifiedReagent == nil or
+        slotTypes.Currency == nil or reagentTypes.Basic == nil then
+      return nil
+    end
+    local ok, schematic = pcall(tradeSkill.GetRecipeSchematic, recipeId, false, recipeLevel)
+    if not ok or type(schematic) ~= "table" or not readable(schematic) or schematic.recipeID ~= recipeId or
+        type(schematic.reagentSlotSchematics) ~= "table" or not readable(schematic.reagentSlotSchematics) then
+      return nil
+    end
+    local inputs = { fixed = {}, complete = true, evidenceVersion = 1, completeItemIDs = {} }
+    local totals, blocked, slots, unknown = {}, {}, {}, false
+    local selected = {}
+    if not dense(selections) then unknown = true end
+    for _, selection in pairs(selections or {}) do
+      if type(selection) == "table" and isPositiveInteger(selection.dataSlotIndex) and
+          type(selection.reagent) == "table" and isPositiveInteger(selection.reagent.itemID) and
+          (selection.quantity == 0 or isPositiveInteger(selection.quantity)) then
+        local list = selected[selection.dataSlotIndex] or {}
+        list[#list + 1] = selection
+        selected[selection.dataSlotIndex] = list
+      else
+        unknown = true
+      end
+    end
+    if not dense(schematic.reagentSlotSchematics) then unknown = true end
+    for _, slot in pairs(schematic.reagentSlotSchematics) do
+      local slotType = type(slot) == "table" and readable(slot) and slot.dataSlotType
+      if slotType ~= slotTypes.Currency then
+        local candidates, known = {}, slotType and dense(slot.reagents)
+        if known then
+          for _, reagent in ipairs(slot.reagents) do
+            if type(reagent) ~= "table" or not readable(reagent) or not isPositiveInteger(reagent.itemID) then
+              known = false
+            else
+              candidates[reagent.itemID] = true
+            end
+          end
+          if next(candidates) == nil then known = false end
+        end
+        local index = slotType and slot.dataSlotIndex
+        if isPositiveInteger(index) and slots[index] then unknown = true end
+        local supported = known and isPositiveInteger(index) and not slots[index] and
+          slot.hiddenInCraftingForm ~= true and type(slot.required) == "boolean" and
+          isPositiveInteger(slot.quantityRequired) and
+          (slot.variableQuantities == nil or (dense(slot.variableQuantities) and #slot.variableQuantities == 0))
+        local allocations, quantity = selected[index] or {}, 0
+        if slotType == slotTypes.ModifiedReagent and supported and dense(selections) and
+            (slot.reagentType == reagentTypes.Basic or
+              (reagentTypes.Modifying ~= nil and slot.reagentType == reagentTypes.Modifying) or
+              (reagentTypes.Finishing ~= nil and slot.reagentType == reagentTypes.Finishing)) then
+          for _, selection in ipairs(allocations) do
+            if not candidates[selection.reagent.itemID] then supported = false end
+            quantity = quantity + selection.quantity
+          end
+          supported = supported and ((quantity == slot.quantityRequired) or (not slot.required and quantity == 0))
+          if supported then
+            for _, selection in ipairs(allocations) do
+              if selection.quantity > 0 then totals[selection.reagent.itemID] = true end
+            end
+          end
+        elseif slotType == slotTypes.Reagent and supported and slot.reagentType == reagentTypes.Basic and
+            slot.required and #slot.reagents == 1 and #allocations == 0 then
+          local only = slot.reagents[1]
+          inputs.fixed[#inputs.fixed + 1] = { dataSlotIndex = slot.dataSlotIndex, itemID = only.itemID,
+            quantity = slot.quantityRequired }
+          totals[only.itemID] = true
+        else
+          supported = false
+        end
+        if isPositiveInteger(index) then slots[index] = true end
+        if not supported then
+          inputs.complete = false
+          if not known then unknown = true end
+          for itemId in pairs(candidates) do blocked[itemId] = true end
+          for _, selection in ipairs(allocations) do blocked[selection.reagent.itemID] = true end
         end
       end
     end
-    return hasPositiveAllocation and snapshot or nil
+    for index in pairs(selected) do if not slots[index] then unknown = true end end
+    if unknown then inputs.complete = false end
+    if not unknown then
+      for itemId in pairs(totals) do
+        if not blocked[itemId] then inputs.completeItemIDs[#inputs.completeItemIDs + 1] = { itemID = itemId } end
+      end
+    end
+    return inputs
   end
 
-  local function submitPersonalCraft(recipeId, count, orderId, concentration)
+  local function submitPersonalCraft(recipeId, count, orderId, concentration, recipeLevel, submitted)
     if orderId ~= nil or type(submitCraft) ~= "function" then return end
-    local quotes = personalQuotes[recipeId]
-    local selections = quotes and quotes[concentration] or nil
-    if selections then
-      quotes[concentration] = nil
-      if next(quotes) == nil then personalQuotes[recipeId] = nil end
-    end
+    local selections = snapshotSelections(submitted)
     local quote
     local tradeSkill = api.C_TradeSkillUI
     if selections and type(tradeSkill.GetCraftingOperationInfo) == "function" then
@@ -153,7 +247,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         end
       end
     end
-    submitCraft(recipeId, count, concentration, quote, selections)
+    submitCraft(recipeId, count, concentration, quote, selections, snapshotRecipeInputs(recipeId, recipeLevel, selections))
   end
   local function observeClaimedOrder(orderID, observation)
     local orders = api.C_CraftingOrders
@@ -236,7 +330,6 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     capabilities.events[event] = ok and frame:IsEventRegistered(event) == true
   end
   frame:SetScript("OnEvent", function(_, event, ...)
-    if event == "TRADE_SKILL_CLOSE" then personalQuotes = {} end
     forward(event, ...)
   end)
 
@@ -247,10 +340,13 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
       capabilities.hooks[name] = pcall(api.hooksecurefunc, api.C_TradeSkillUI, name, function(...)
         if hookedName == "CraftRecipe" and select(5, ...) == nil then
           local ok = pcall(submitPersonalCraft, select(1, ...), select(2, ...),
-            select(5, ...), select(6, ...))
-          if not ok then capabilities.captureError = true end
+            select(5, ...), select(6, ...), select(4, ...), select(3, ...))
+          if not ok then
+            capabilities.captureError = true
+            if type(invalidateCraft) == "function" then pcall(invalidateCraft) end
+          end
         elseif type(invalidateCraft) == "function" then
-          local ok = pcall(invalidateCraft)
+          local ok = pcall(invalidateCraft, hookedName)
           if not ok then capabilities.captureError = true end
         end
         forward("CALL_POST:C_TradeSkillUI." .. hookedName, ...)
@@ -269,17 +365,6 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         type(api.C_TradeSkillUI[name]) == "function" then
       capabilities.quoteHooks[name] = pcall(api.hooksecurefunc, api.C_TradeSkillUI, name, function(...)
         local ok = pcall(function(...)
-          if not probingQuote and hookedName == "GetCraftingOperationInfo" then
-            local recipeId, selections, orderId, concentration = ...
-            if orderId == nil and isGameId(recipeId) and type(concentration) == "boolean" then
-              local snapshot = snapshotSelections(selections)
-              if snapshot then
-                local quotes = personalQuotes[recipeId] or {}
-                quotes[concentration] = snapshot
-                personalQuotes[recipeId] = quotes
-              end
-            end
-          end
           if not probingQuote and isRecording and isRecording() then
             forward("QUOTE_CALL_POST:C_TradeSkillUI." .. hookedName, ...)
             probingQuote = true

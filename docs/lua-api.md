@@ -32,6 +32,7 @@ local professions, reason = ArtisanLogbookAPI.GetProfessions(characterKey)
 local outcomes, reason = ArtisanLogbookAPI.GetRecipeOutcomes(recipeId, filter, { buckets = 60 })
 local sets, reason = ArtisanLogbookAPI.GetRecipeReturnSets(recipeId, filter, { limit = 50 })
 local materials, reason = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipeId, filter, { limit = 50 })
+local statistics, reason = ArtisanLogbookAPI.GetRecipeReagentStatistics(recipeId, filter, { limit = 50 })
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
   -- Refresh consumer state using the committed craft projection.
 end)
@@ -64,6 +65,7 @@ Both craft queries and callback payloads use the same shape:
   multicraftBonus = 0, concentrationSpent = 0, concentrationCurrencyId = 0,
   hasIngenuityProc = false, ingenuityRefund = 9,
   hasResourcefulnessProc = false, resourcefulnessComplete = true,
+  outcomeSource = "native", quoteObserved = true, inputComplete = true,
   request = {
     id = 42, timestamp = 1800000000, recipe = recipe,
     requestedCount = 1, useConcentration = false,
@@ -71,10 +73,16 @@ Both craft queries and callback payloads use the same shape:
     allocations = {
       { item = item, dataSlotIndex = 1, allocatedQuantity = 3, quality = 0 },
     },
+    fixedReagents = {
+      { item = fluxItem, dataSlotIndex = 2, requiredQuantity = 2 },
+    },
+    inputComplete = true,
   },
   reagents = {
     { item = item, dataSlotIndex = 1, quality = 0,
       allocatedQuantity = 3, returnedQuantity = 0, source = nil },
+    { item = fluxItem, dataSlotIndex = 2, fixed = true,
+      allocatedQuantity = 2, returnedQuantity = 0 },
   },
 }
 ```
@@ -91,6 +99,79 @@ Request quotes remain separate from observed result measurements.
 complete and valid. A positive item fact can establish a proc even when the full
 list is incomplete. These fields are factual; consumers should not treat missing
 as a negative result.
+
+`outcomeSource` records how schema-2 capture classified the result (absent for
+crafts captured before schema 2):
+
+- `"native"`: a validated primary result whose complete return set is known.
+  An absent or empty `resourcesReturned` is an authoritative **no return**;
+  `hasResourcefulnessProc = false` and `resourcefulnessComplete = true`.
+- `"partial"`: a primary result with a malformed, currency-only or otherwise
+  unprovable list. Individually valid positive returns still set
+  `hasResourcefulnessProc = true`; nothing else is claimed.
+- `"unverified"`: a callback without affirmative supported call context and a
+  valid operation/output payload, including salvage, unknown/cleared context,
+  failed submission, ambiguous operations and `bonusCraft = true`. Only
+  positive returns are recorded; no negative or complete set is claimed.
+
+New input evidence comes from the actual submitted `CraftRecipe` selections,
+never a cached quote. Blizzard submits full modified choices in manual mode but
+only optional/finishing choices in automatic mode. Missing automatic basic choices
+stay unknown. Fixed basic reagents such as Luminant Flux are absent from either
+table. A validated primary additionally requires a supported call, nonambiguous
+context, nonnegative integer operation ID, positive item ID and positive integer
+output quantity and a positive operation ID not already observed in this runtime
+session, except that a non-primary observation may be completed within the same
+still-pending request. Its ID cannot move to a newer request.
+Malformed/bonus callbacks do not inherit inputs or consume a pending
+request. A correctly associated primary with a malformed return list can retain
+complete inputs while its outcome remains partial.
+
+Interrupted/replaced requests and transitions away from outstanding nonpersonal
+calls (salvage, enchant, recraft and orders) leave identity
+uncertain. Known stale IDs cannot acquire the new request; unseen IDs in this
+state are unverified/unowned and invalidate pending batch correlation. This guard
+lasts until a new runtime session, not merely until another craft hook. Therefore
+even the actual new craft can lose coverage after an uncertain transition. No
+incorrect output relationship is learned from those callbacks. The ID registry
+survives detail pruning in memory but is not persisted across runtime sessions;
+reload/login ordering with in-flight callbacks remains a live-validation boundary.
+Nonpersonal outstanding context is runtime-only and independent of personal
+requests. Closing or replacing it does not prove all callbacks have arrived.
+Successful purge retains observed IDs but retires every old same-request
+completion exception before numeric request IDs can be reused. Clear/pruning
+retain their normal monotonic IDs and live same-request behavior.
+
+The separate `ArtisanLogbookManagement.Status()` projection adds read-only
+`operationOwnershipUncertain` and `authoritativeCaptureSuspended` booleans. The
+latter is true for quarantine or ambiguous request/begin state. False is not a
+per-callback eligibility guarantee. These detached diagnostics neither reset
+quarantine nor change factual API version 1; no UI or recovery control is added.
+
+- `quoteObserved = true`: the compatibility name for a correlated request with
+  positive allocations (`request.allocations`), submitted selections for new
+  captures and quote snapshots historically. It says nothing about other slots, so it
+  is **partial** input evidence.
+- `inputComplete = true`: every input item and quantity is known. The request
+  also recorded the recipe schematic's fixed basic reagents
+  (`request.fixedReagents`, copied to reagent rows with `fixed = true` and
+  `allocatedQuantity` = the required quantity), the schematic accounted for every
+  slot (`request.inputComplete = true`), and every positively returned item is
+  among the submitted or fixed rows. Every required modified slot must have valid
+  submitted items whose quantities exactly fill its requirement. Optional absence
+  needs a readable dense submission; selected optional slots must also be filled.
+
+A returned item outside the known inputs never changes the craft's outcome
+(`hasResourcefulnessProc`, `outcomeSource`); it only prevents `inputComplete`.
+Without `inputComplete`, quantities of unlisted inputs are unknown. Fixed
+quantities come from `C_TradeSkillUI.GetRecipeSchematic` at submission and are
+recorded only for single-item, required, visible, basic slots without variable
+quantities. Missing/underfilled slots, sparse structures, conflicting identities,
+variable/hidden/automatic slots and unreadable evidence leave the snapshot partial.
+They are not yet verified
+in game against actual bag consumption.
+First-craft rewards (`firstCraftReward = true`) are child rewards of an attempt and
+never appear as crafts.
 
 Related objects have these allowlisted fields (each metadata field is optional):
 
@@ -214,7 +295,7 @@ as another ledger. See [storage-ledger.md](storage-ledger.md) for details.
 
 ### Recipe Outcomes
 
-The three recipe-specific queries above operate on durable facts, including
+The four recipe-specific queries above operate on durable facts, including
 history older than detailed retention. `recipeId` is a WoW recipe ID. Their
 filter accepts **only** `time` and `characters`, with the same half-open and
 OR-selection semantics as the shared filter. Time bounds must be UTC-midnight
@@ -233,6 +314,8 @@ not measured-zero outcomes. Invalid inputs use the existing API error codes.
     outputQuantity = 13, outputQuantityObservedCount = 2,
     resourcefulnessProcCount = 2, resourcefulnessProcCountObservedCount = 3,
     resourcefulnessCompleteProcCount = 1, resourcefulnessCompleteProcCountObservedCount = 2,
+    resourcefulnessAuthoritativeProcCount = 1, resourcefulnessAuthoritativeProcCountObservedCount = 2,
+    quoteObservedCount = 2, inputCompleteCount = 2, matchedCraftCount = 2, firstCraftRewardCount = 0,
     ingenuityProcCount = 1, ingenuityProcCountObservedCount = 2,
     ingenuityRefund = 20, ingenuityRefundObservedCount = 2,
     concentrationSpentObservedCount = 0, -- sum absent when unobserved
@@ -242,6 +325,33 @@ not measured-zero outcomes. Invalid inputs use the existing API error codes.
   series = { { bucketStart = 1800057600, craftCount = 3 }, ... },
 }
 ```
+
+Three Resourcefulness populations are exposed, each with its own numerator and
+denominator:
+
+| Population | Numerator / denominator | Includes |
+| --- | --- | --- |
+| Authoritative cohort | `resourcefulnessAuthoritativeProcCount` / `...ObservedCount` | Only schema-2 `native` outcomes. Every validated primary result enters it, positive or negative, so it is not selectively observed. |
+| Complete return sets | `resourcefulnessCompleteProcCount` / `...ObservedCount` | The authoritative cohort plus legacy complete lists. Legacy capture recorded complete lists mostly for positives, so this population can be biased. |
+| Raw evidence | `resourcefulnessProcCount` / `...ObservedCount` | Any known outcome, including legacy positive-only evidence. **Not a rate.** |
+
+Use the authoritative cohort for proc rates. Its coverage is
+`resourcefulnessAuthoritativeProcCountObservedCount` out of `craftCount`; crafts
+outside it (legacy history, partial lists, salvage callbacks) are unknown, not
+negative. A single unknown legacy craft never removes newer authoritative
+observations from the cohort. Never compute positives divided by the raw observed
+count: positive evidence was observed selectively.
+
+`quoteObservedCount` counts crafts with quote allocations (partial input
+evidence). `inputCompleteCount` counts crafts with complete recipe inputs, a
+subset of crafts whose fixed basic reagents were read from the schematic.
+`matchedCraftCount` counts crafts in **both** the complete-input and
+authoritative cohorts. `craftCount - inputCompleteCount` is the missing-input
+count, including quoted crafts without fixed-reagent evidence, crafts with no
+reagent rows at all and crafts whose details were later pruned. Schema-1 history
+never has complete inputs.
+`firstCraftRewardCount` counts first-craft reward callbacks attributed to this
+recipe; they are not crafts and never enter any denominator.
 
 `buckets` defaults to 60 and is an integer from 1 to 200. The equal-width
 whole-day buckets cover the selected interval, with empty buckets filled with
@@ -254,15 +364,17 @@ alternative, not a requirement to download and sum daily history in the UI.
 `GetRecipeReturnSets(recipeId, filter, { limit = 50, cursor = nil })` returns:
 
 ```lua
-{ returns = { { itemIds = { 3, 20 }, craftCount = 7 }, ... }, nextCursor = "..." }
+{ returns = { { itemIds = { 3, 20 }, craftCount = 7, authoritativeCraftCount = 5 }, ... }, nextCursor = "..." }
 ```
 
 Each row combines the selected days/characters for one observed positive-return
 set. Item IDs are distinct and numerically sorted. A consumer classifies the
-set once: if **any** item is currently non-trivial, add that row's `craftCount`
-once to its non-trivial numerator. Its denominator is
-`resourcefulnessCompleteProcCountObservedCount`, including completely observed
-false outcomes. The raw any-proc rate instead uses
+set once: if **any** item is currently non-trivial, add that row's count
+once to its non-trivial numerator. For an unbiased rate use
+`authoritativeCraftCount` over `resourcefulnessAuthoritativeProcCountObservedCount`
+(both describe the authoritative cohort). `craftCount` pairs with
+`resourcefulnessCompleteProcCountObservedCount` and includes legacy complete sets.
+The raw any-proc rate instead uses
 `resourcefulnessProcCountObservedCount`, which can additionally include legacy
 positive evidence without complete set coverage. Never use returned-item count,
 set-row count, or total crafts as a proxy
@@ -289,6 +401,50 @@ and characters, including individually known quantities from partially observed
 results. Identity is the item ID, not its name: same-named quality variants can
 legitimately have separate rows. No proc rate may be derived from these quantity rows.
 
+`GetRecipeReagentStatistics` has the same parameters and paging (ordered by item
+ID, with its own cursors) and returns per-item durable measurements plus the
+selected recipe population's coverage:
+
+```lua
+{
+  coverage = { craftCount = 11, quoteObservedCount = 10, inputCompleteCount = 10,
+    matchedCraftCount = 10, returnObservedCount = 10 },
+  reagents = {
+    { item = { id = 8, name = "..." },
+      allocatedQuantity = 40, allocationCount = 10, returnedQuantity = 4,
+      matchedCraftCount = 10, matchedAllocatedQuantity = 40,
+      matchedReturnedQuantity = 4, matchedReturnCount = 4 },
+  },
+  nextCursor = "...",
+}
+```
+
+- `allocatedQuantity` / `allocationCount`: gross observed allocation subtotals (not
+  net consumption): submitted selections plus schematic fixed reagents, historical
+  quotes, and the number of crafts with that evidence. Duplicate slots of one item
+  are added per craft; no slot is assigned the return. An item never quoted and
+  never read from a schematic has no allocation measure.
+- `returnedQuantity`: all known positive returns of the item, any cohort.
+- `matched...`: the same item measured only over crafts with an authoritative
+  return outcome **and** proof of this item's complete required total across all
+  applicable slots. An unresolved slot blocks every item it could contain; an
+  unknown slot identity blocks all totals. Disjoint items' coverage does not matter,
+  so proven ore stays matched when the craft also returned
+  unquoted Flux. `matchedReturnedQuantity / matchedAllocatedQuantity` is the
+  saved-material share for one population; `matchedAllocatedQuantity -
+  matchedReturnedQuantity` is matched net consumption. `matchedReturnCount` counts
+  matched crafts that returned this item. Never divide `returnedQuantity` by
+  `allocatedQuantity`: they cover different crafts.
+- `coverage.returnObservedCount` is the authoritative-cohort observed count.
+  `coverage.matchedCraftCount` is the craft-level complete-input ∩ authoritative
+  count; a reagent row's `matchedCraftCount` can exceed it because it requires
+  only that item's complete total. `craftCount - inputCompleteCount` crafts have
+  incomplete inputs. `quoteObservedCount` counts crafts with correlated allocations;
+  a recipe without modified slots can have complete inputs and no quote.
+
+Absent quantities mean no measurement; `allocationCount` and `matchedCraftCount`
+are always present (zero when no crafts qualify).
+
 Return-page limits default to 50 and have a hard maximum of 200. Pass opaque
 `nextCursor` values unchanged with the same recipe, filter, and query method;
 the limit may change. Set ordering is deterministic and opaque; material pages
@@ -304,7 +460,9 @@ aggregate grains; it is not constant-time. The UI processes returned sets one
 100-row page per frame, discards processed pages, and renders only three
 returned-material rows at a time. There is no full-history daily-row UI scan.
 
-Rates and interpretation remain consumer-owned. Multicraft and Ingenuity proc
+Rates and interpretation remain consumer-owned. Every rate or saved-material
+percentage must use a numerator and denominator from the same population; Core
+exposes the populations rather than bare percentages. Multicraft and Ingenuity proc
 rates divide their counts by their own observed counts. Ingenuity refund totals
 are **applied** refunds, not the raw reported refund on false/unknown outcomes.
 Missing coverage is unknown. Equal marginal observation counts alone do not
@@ -341,6 +499,8 @@ details never removes these daily rows.
   concentrationSpentObservedCount = 0, -- concentrationSpent absent, not zero
   ingenuityProcCount = 1, ingenuityProcCountObservedCount = 3,
   ingenuityRefund = 162, ingenuityRefundObservedCount = 2, -- APPLIED refund only
+  resourcefulnessAuthoritativeProcCount = 1, resourcefulnessAuthoritativeProcCountObservedCount = 3,
+  quoteObservedCount = 3, inputCompleteCount = 3, matchedCraftCount = 3,
 }
 ```
 
@@ -373,16 +533,17 @@ Verified Ingenuity adds two metrics to this same series shape:
 Both metrics retain absent-sum/zero-coverage semantics. The Ogrim export's true
 proc, spend 323, refund 162 contributes one proc and 162 applied refund; a
 non-proc result with raw refund 93 contributes zero applied refund. The factual
-`GetCraft`/`GetCrafts` refund fields remain untouched. No Resourcefulness rollup
-is added.
+`GetCraft`/`GetCrafts` refund fields remain untouched. The authoritative
+Resourcefulness cohort and quote/complete-input/matched coverage counts have the same meaning
+as in `GetRecipeOutcomes`.
 
-These metrics are captured continuously in the first supported persistence
-contract (schema 1 with its format identity marker). Partial coverage reflects
+These metrics are captured continuously in the persistence contract (schema 2,
+migrated from schema 1 with its format identity marker). Partial coverage reflects
 unknown observations, not invented zeros. Reload preserves coverage even when
 detailed facts have expired; it never replays facts into aggregates.
 Experimental prerelease formats are not supported upgrade sources; development
 users may need to reset SavedVariables. See [storage-ledger.md](storage-ledger.md)
-for the format discriminator and reset guidance. The public Lua API is unchanged.
+for the format discriminator, migration and reset guidance.
 
 The shared dimensional filter has the same OR-within/AND-across semantics.
 For this API alone, supplied `time.from`/`time.to` **must be UTC-midnight-aligned**
@@ -474,9 +635,10 @@ for count order as its default.
 
 ### Reagent catalogue
 
-`GetReagentSummaries(options)` is an additive, read-only API v1 query over
-retained reagent facts and existing durable returned-reagent totals. It adds no
-storage, inventory queries, valuation, external dependencies, or UI preferences.
+`GetReagentSummaries(options)` is a read-only API v1 query over the durable
+day × character × recipe × item reagent measurements and daily coverage. It never
+scans retained craft or reagent details, so pruning does not change its results.
+It adds no inventory queries, valuation, external dependencies, or UI preferences.
 
 ```lua
 local page, reason = ArtisanLogbookAPI.GetReagentSummaries({
@@ -487,38 +649,41 @@ local page, reason = ArtisanLogbookAPI.GetReagentSummaries({
 -- {
 --   reagents = {
 --     {
---       item = { id = 8, name = "Bloom" }, quality = 2,
+--       item = { id = 8, name = "Bloom" },
 --       professions = { { skillLineId = 171, name = "Alchemy" } },
---       recipeCount = 2, allocatedQuantity = 12, returnedQuantity = 3,
---       allocationObservedCount = 2, allocationUnknownCount = 0,
---       returnObservedCount = 2, returnUnknownCount = 0,
---       allocationComplete = true, returnComplete = true,
---       hasPrunedReturns = false,
+--       recipeCount = 2, craftCount = 4,
+--       allocatedQuantity = 12, allocationCount = 2, returnedQuantity = 3,
+--       matchedCraftCount = 2, matchedAllocatedQuantity = 12,
+--       matchedReturnedQuantity = 3, matchedReturnCount = 1, quoteObservedCount = 3,
+--       allocationObservedCount = 2, allocationUnknownCount = 2,
+--       returnObservedCount = 4, returnUnknownCount = 0,
+--       allocationComplete = false, returnComplete = true,
 --     },
 --   },
 --   totalCount = 45, nextCursor = "opaque cursor",
 --   totals = { allocatedQuantity = 120, returnedQuantity = 30,
+--     matchedAllocatedQuantity = 100, matchedReturnedQuantity = 25,
 --     allocationComplete = false, returnComplete = true },
 -- }
 ```
 
 One row represents one WoW item ID. Same-named IDs and quality-variant IDs remain
-distinct. `quality` is the consistent quality observed on retained reagent rows;
-it is absent when none was captured or the observations conflict. Item/profession
-projections are detached copies. The UI may additionally display guarded Blizzard
-item-quality metadata; the query does not call live inventory or trade APIs.
+distinct. Schema 2 removed the retained-only `quality` and `hasPrunedReturns`
+fields: they described the 60-day detail window rather than the durable
+population. Consumers use guarded Blizzard item-quality metadata for display.
+Item/profession projections are detached copies.
 
 Options:
 
 - `character`: optional opaque character key. Unknown characters yield no rows.
 - `time`: optional half-open `{ from, to }` UTC bounds, each aligned to a whole
-  UTC day because durable returns are daily facts. Missing bounds are unbounded.
+  UTC day because the measurements are daily facts. Missing bounds are unbounded.
   Reversed, nonfinite, or non-day-aligned bounds return `invalid-options`.
-  Character/time filters apply to retained allocations, durable returns and
-  completeness evidence together.
-- `profession`: optional nonnegative skill-line ID. Selects facts associated with
-  that recorded profession, so quantities and recipe counts are scoped too.
-  Unknown professions yield no rows. Unattributed facts only appear unfiltered.
+  Character/time filters apply to quantities and coverage together.
+- `profession`: optional nonnegative skill-line ID, resolved through each
+  recipe's current metadata. Quantities, coverage and recipe counts are scoped
+  together. Unknown professions yield no rows. Unattributed recipes only appear
+  unfiltered.
 - `search`: optional literal substring of the recorded item name, lowercased for
   matching. Unnamed items use `Item #<ID>` for search/sorting. Pattern characters
   are literal; there is no regular-expression or inventory search.
@@ -539,52 +704,45 @@ Options:
   commit, metadata enrichment, pruning, or preference-filter change.
 
 `totalCount` counts matching item identities, not crafts. `recipeCount` counts
-distinct known recipe IDs associated with the reagent through retained facts or
-durable positive returns; no association is inferred from names, output items,
-or recipe schematics. Unknown recipe attribution does not increment it.
+distinct known recipe IDs with a durable measurement of the reagent (allocation or
+positive return); no association is inferred from names, output items, or recipe
+schematics. Unknown recipe attribution does not increment it.
 `professions` lists the matching recorded associations, sorted by skill-line ID.
 
-`totals` sums known allocated/returned quantities over the **entire filtered
-selection**, not only this page. No known amount stays absent. Completeness
-flags require every included row to meet the corresponding coverage rule. These
-totals retain their different storage scopes and do not establish a shared
-denominator for a return percentage. Quantity overflow returns `quantity-overflow`.
+`totals` sums known quantities over the **entire filtered selection**, not only
+this page. No known amount stays absent. Completeness flags require every included
+row to meet the corresponding coverage rule. Gross totals do not establish a
+shared denominator; only the matched totals do. Quantity overflow returns
+`quantity-overflow`.
 
 Quantity/coverage semantics:
 
-- `allocatedQuantity` sums only known allocations on **retained** reagent facts.
-  No known allocation means absent, not zero. Allocations are not consumption.
-  The observed/unknown allocation counts count retained reagent rows, including
-  separate data slots, not crafts. `allocationComplete` requires at least one
-  known row, no unknown rows, and no evidence of pruned positive returns. It does
-  **not** establish a lifetime allocation denominator or account for unidentified
-  reagents on crafts without allocation capture.
-- `returnedQuantity` sums existing **durable positive** return totals, exactly
-  once. Retained positive facts are not added again. Zero is exposed only when
-  retained return evidence exists and return coverage is complete; otherwise no
-  recorded amount is absent. Known positive quantities remain available even
-  when coverage is incomplete.
-- `returnObservedCount` / `returnUnknownCount` count retained reagent rows with
-  known nonnegative / missing return amounts. They are not lifetime proc counts.
-  `returnComplete` additionally requires complete return outcomes for every craft
-  in all associated recipe populations, including the unattributed population
-  when relevant. This is conservative and is not per-item proc evidence. Ambiguous
-  slot allocations and legacy incomplete results remain incomplete.
-- `hasPrunedReturns` means durable positive returns exceed retained positive
-  returns for this item in the selected profession. Pruning does not erase
-  durable returns, but allocations and captured quality can become unknown.
-  Allocation-only item identities/associations may disappear after their last
-  detailed fact expires, since no historical allocation store is introduced.
-- These fields must not be combined into a return/allocated percentage: their
-  historical scopes differ and complete lifetime allocation coverage is unknown.
+- An item's craft population is every craft (in the selected period/characters/
+  profession) of every recipe with a durable measurement of that item.
+  `craftCount` counts it, including crafts with no reagent facts at all.
+- `allocationObservedCount` / `allocationUnknownCount` split that population into
+  crafts with and without **complete recipe inputs** (`inputCompleteCount`).
+  Quote allocations alone never count as observed, because the quote omits fixed
+  basic reagents. `quoteObservedCount` is reported separately: crafts in the
+  population whose quote was captured, which may or may not list this item.
+  `allocationComplete` is true only when every craft has complete inputs; then
+  `allocatedQuantity` is the item's complete gross required quantity. Pruning
+  never makes coverage look complete.
+- `returnObservedCount` / `returnUnknownCount` split the same population into the
+  authoritative return cohort and the rest. `returnComplete` requires every craft
+  to be authoritative; then an absent `returnedQuantity` is reported as `0`.
+- `allocatedQuantity`, `allocationCount` and `returnedQuantity` are gross known
+  amounts that may cover different crafts. `matched...` fields are restricted to
+  matched crafts and are the only valid inputs to a saved-material percentage
+  or net-consumption figure.
 
-The query scans retained reagent rows, durable return rows and daily coverage,
-groups by item ID, sorts the matching items, and returns at most `limit` detached
-summaries. Runtime work is proportional to existing facts plus matching-item
-sorting, not just page size; there is no extra durable table or cache to invalidate.
-Empty results return `{ reagents = {}, totalCount = 0 }`. Unsupported options
-return `invalid-options`; an unavailable ledger returns `not-ready`; a nonfinite
-quantity sum returns `quantity-overflow` without writing anything.
+The query visits occupied daily grains in the selected period via the runtime
+day index, groups by item ID, sorts the matching items, and returns at most
+`limit` detached summaries. Runtime work is proportional to the number of
+aggregate grains in the period plus matching-item sorting, not to the number of
+crafts. Empty results return `{ reagents = {}, totalCount = 0 }`. Unsupported
+options return `invalid-options`; an unavailable ledger returns `not-ready`; a
+nonfinite quantity sum returns `quantity-overflow` without writing anything.
 
 ### Durable observed identities
 

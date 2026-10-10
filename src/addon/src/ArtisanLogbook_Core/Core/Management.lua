@@ -13,9 +13,14 @@ function management.Status()
     retainedCrafts = #data.crafts,
     dailyRows = #data.craftSeries,
     schemaVersion = data.schemaVersion,
+    migratedFromSchemaVersion = ledger.migration and ledger.migration.fromSchemaVersion,
+    migratedQuoteCrafts = ledger.migration and ledger.migration.quoteObservedCrafts,
     addonVersion = session and session.addonVersion,
     wowBuild = session and session.wowBuild,
     captureError = addon.ledgerCaptureError == true,
+    operationOwnershipUncertain = ledger.operationOwnershipUncertain == true,
+    authoritativeCaptureSuspended = ledger.operationOwnershipUncertain == true or
+      ledger.requestAmbiguous == true or ledger.ambiguousRecipe == true,
   }
 end
 
