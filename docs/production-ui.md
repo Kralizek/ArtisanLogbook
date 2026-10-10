@@ -44,7 +44,7 @@ existing current-entry highlight without replacing the primary selection.
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, authoritative Resourcefulness rate with verified/selected coverage, known returned quantities, and most-crafted recipe. No factual craft list. |
 | Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
-| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required/Returned/Saved columns and editable Ignore checkboxes. Saved shares use matched same-craft quantities and show their sample count. Item IDs live in native item tooltips, not row subtitles. |
+| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required/Returned/Saved-per-craft-count columns and editable Ignore checkboxes. Saved shares use same-craft quantities and show their sample count. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
@@ -180,6 +180,9 @@ stay unavailable. Gross returned and required totals are never divided together.
 Duplicate input slots of one item are consolidated by Core before matched savings
 are measured. Missing quantities never become zero. Pruned detail leaves durable
 catalogue totals and matched savings intact without reconstructing craft histories.
+Reagent Detail states how many available craft rows supply chart quantities and
+return results; that retained-detail coverage is separate from its saved-share
+sample, which uses the selected durable item-level comparisons.
 
 Required sums gross known inputs before returns; it does not claim net consumption.
 Returned sums known positive returns from any supported cohort. Exact quantities,

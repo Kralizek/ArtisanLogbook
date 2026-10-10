@@ -1060,7 +1060,7 @@ local activity = UI.Activity({ recipe = { id = 42, name = "Crushing", maxQuality
 assert(#activity == 6 and activity[1].atlas == "Quality-2")
 assert(activity[2].tooltip:find("Gemdust", 1, true) and
   activity[4].tooltip == "Multicraft: produced 11 additional items" and
-  activity[6].tooltip:find("Azeroot: 4 returned (quantity used unavailable)", 1, true))
+  activity[6].tooltip:find("Azeroot: 4 returned (required quantity unavailable)", 1, true))
 assert(#UI.Activity({ recipe = { name = "Potion", maxQuality = 5 },
   outputItem = { name = "Potion" }, outputQuality = 0, multicraftBonus = 0,
   concentrationSpent = 0, reagents = {} }) == 0)
@@ -1071,10 +1071,10 @@ local highlights = table.concat(UI.CraftHighlights({ concentrationSpent = 323,
   reagents = { { returnedQuantity = 4 }, { returnedQuantity = 0 } } }), "; ")
 assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Reagents returned: 4")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 5,
-  returnedQuantity = 1 }) == "Azeroot: 5 used, 1 returned")
+  returnedQuantity = 1 }) == "Azeroot: 5 required before returns, 1 returned")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
-  "Azeroot: 4 returned (quantity used unavailable)")
-assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) == "#100: 2 used")
+  "Azeroot: 4 returned (required quantity unavailable)")
+assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) == "#100: 2 required before returns")
 local longName = "Silvermoon Health Potion of the Long Night"
 local sampleTable = UI.ScrollList(environment.CreateFrame("Frame"), 0, 0, 140, 140,
   { { title = "Recipe", width = 116, value = function(row) return row.name end } }, function() end)
@@ -1443,7 +1443,9 @@ button(uiWindow.pages.Recipe.content, "Unpin recipe").scripts.OnClick()
 assert(not UI.IsPinned(501))
 assertRecipesSelected()
 uiWindow:Activate("Overview")
-while overview.summary.scripts.OnUpdate do overview.summary.scripts.OnUpdate(overview.summary) end
+while overview.summary.resourcefulnessWorker.scripts.OnUpdate do
+  overview.summary.resourcefulnessWorker.scripts.OnUpdate(overview.summary.resourcefulnessWorker)
+end
 assert(overview.summary.tiles[5].value.text == "Unavailable" and overview.summary.tiles[5].note.text:find("0 of 0", 1, true))
 uiWindow:Activate("Logbook")
 print("PASS sidebar destinations, independent filters, list preservation, pins and modal Escape")
@@ -2034,7 +2036,9 @@ do
   assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
   assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
-  assert(detail.chart.bars[1].tooltip:find("Used: 505", 1, true))
+  assert(detail.chart.bars[1].tooltip:find("Known required: 505", 1, true))
+  assert(detail.status.text:find("Item details are available for 101 of 102 crafts", 1, true))
+  assert(detail.status.text:find("Saved share compares complete input amounts", 1, true))
   detail:SelectView("Used in Recipes")
   assert(detail.tabs["Used in Recipes"].selected and detail.recipes:IsShown())
   detail.recipes.rows[1].scripts.OnClick(detail.recipes.rows[1])
@@ -2047,7 +2051,7 @@ do
   assert(detail.item.id == 4502 and detail.totals.crafts == 1)
   assert(detail.fields.rate.text == "Unavailable" and detail.fields.returned.text == "-")
   assert(not detail.chart.bars[1].returned:IsShown())
-  assert(detail.chart.bars[1].tooltip:find("Returned: Unknown", 1, true))
+  assert(detail.chart.bars[1].tooltip:find("Known returned: Unknown", 1, true))
   page.catalogue.rows[1].scripts.OnClick(page.catalogue.rows[1])
   detail.worker.scripts.OnUpdate(detail.worker)
   page.catalogue.rows[2].scripts.OnClick(page.catalogue.rows[2])
@@ -2179,9 +2183,14 @@ do
     resourcesReturned = { { reagent = { itemID = 5301 }, quantity = 2 } } }))
   local ui = loadUI()
   local window = ui.productionWindow
+  local getReturnedReagents = api.GetRecipeReturnedReagents
+  api.GetRecipeReturnedReagents = function() error("Resourcefulness rate waited on returned materials") end
   window:Show()
   local overview = window.pages.Overview
-  while overview.summary.scripts.OnUpdate do overview.summary.scripts.OnUpdate(overview.summary) end
+  assert(overview.summary.returnedWorker.scripts.OnUpdate)
+  while overview.summary.resourcefulnessWorker.scripts.OnUpdate do
+    overview.summary.resourcefulnessWorker.scripts.OnUpdate(overview.summary.resourcefulnessWorker)
+  end
   local overviewTotals = api.GetRecipeOutcomes(9850).totals
   local overviewRate = ui.UI.AuthoritativeRate(overviewTotals)
   assert(overview.summary.tiles[5].value.text ==
@@ -2189,6 +2198,13 @@ do
   local verified = overviewTotals.resourcefulnessAuthoritativeProcCountObservedCount
   assert(overview.summary.tiles[5].note.text:find(tostring(verified) .. " of " ..
     tostring(overviewTotals.craftCount) .. " selected crafts", 1, true))
+  assert(overview.summary.returnedWorker.scripts.OnUpdate)
+  api.GetRecipeReturnedReagents = getReturnedReagents
+  while overview.summary.returnedWorker.scripts.OnUpdate do
+    overview.summary.returnedWorker.scripts.OnUpdate(overview.summary.returnedWorker)
+  end
+  overview.summary.tiles[5].scripts.OnEnter(overview.summary.tiles[5])
+  assert(table.concat(environment.GameTooltip.lines, "\n"):find("Known returned materials: 2", 1, true))
   while overview.topRecipes.worker.scripts.OnUpdate do overview.topRecipes.worker.scripts.OnUpdate(overview.topRecipes.worker) end
   assert(not overview.scroll and #overview.topRecipes.items == 1)
   local ranked = overview.topRecipes.items[1]
@@ -2364,11 +2380,14 @@ do
   assert(rate == "20.0%" and coverage == "2 of 10 verified crafts; 10 of 30 crafts")
   assert(helpers.AuthoritativeRate({ craftCount = 12 }) == "Not enough verified crafts")
   assert(helpers.MatchedSavings({ matchedCraftCount = 2, matchedAllocatedQuantity = 8,
-    matchedReturnedQuantity = 2 }) == "25.0%")
+    matchedReturnedQuantity = 2, allocationComplete = false, inputCompleteCount = 0 }) == "25.0%")
   assert(helpers.MatchedSavingsText({ matchedCraftCount = 2, matchedAllocatedQuantity = 8,
-    matchedReturnedQuantity = 2 }) == "25.0% (2)")
+    matchedReturnedQuantity = 2, allocationComplete = false }) == "25.0% / 2")
   assert(helpers.MatchedSavings({ matchedCraftCount = 0, matchedAllocatedQuantity = 8,
     matchedReturnedQuantity = 2 }) == "Unavailable")
+  assert(helpers.RecipeReturnedQuantity({ coverage = { returnObservedCount = 4, craftCount = 4 } }) == "-")
+  assert(helpers.RecipeReturnedQuantity({ returnedQuantity = 0,
+    coverage = { returnObservedCount = 4, craftCount = 4 } }) == "0")
   local multi = helpers.CompactOutcome(screenshotTotals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output")
   local ingenuity = helpers.CompactOutcome(screenshotTotals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent")
   assert(multi == "23.3% | 7 procs\nBonus: 52 | 25.7% of output")
@@ -2490,7 +2509,18 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(detail.fields.Resourcefulness.text == "Return observed; some items may be missing")
+  assert(detail.fields.Resourcefulness.text == "Known returns; other results may be unavailable")
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.outcomeSource = nil
+    craft.resourcefulnessComplete = true
+    craft.hasResourcefulnessProc = false
+    craft.reagents = { { item = { id = 8 }, allocatedQuantity = 2 } }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(detail.fields.Resourcefulness.text == "Outcome unavailable")
+  assert(detail.returnedReagents.items[1].returnComplete == false)
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.reagents = {}

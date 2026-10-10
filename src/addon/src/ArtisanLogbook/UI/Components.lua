@@ -1063,7 +1063,8 @@ function UI.Chart(parent, x, y, width, quantities)
     self.plot:SetShown(days > 1 and total > 0)
     self.empty:SetShown(days == 1 or total == 0)
     if days == 1 and total > 0 then
-      self.empty:SetText(quantities and ("Used: " .. UI.Number(daily[from]) .. "   Returned: " .. UI.Number(returned[from])) or
+      self.empty:SetText(quantities and ("Known required: " .. UI.Number(daily[from]) ..
+        "   Known returned: " .. UI.Number(returned[from])) or
         UI.Count(total, "craft") .. " on " .. date("!%d %b", from))
     else self.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period") end
     self.start:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", from))
@@ -1115,8 +1116,8 @@ function UI.Chart(parent, x, y, width, quantities)
       if quantities then
         local amount = returned[from + day * bucketSeconds]
         bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
-          "\nUsed: " .. UI.Value(daily[from + day * bucketSeconds]) ..
-          "\nReturned: " .. UI.Value(amount)
+          "\nKnown required: " .. UI.Value(daily[from + day * bucketSeconds]) ..
+          "\nKnown returned: " .. UI.Value(amount)
         bar.returned.tooltip = bar.tooltip
         bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft + visibleWidth + groupGap, 0)
         bar.returned:SetSize(math.max(.5, visibleWidth), math.max(1, (amount or 0) * (self.plot:GetHeight() - 6) / maximum))
@@ -1239,12 +1240,12 @@ end
 function UI.ReagentDescription(reagent)
   local description = UI.Name(reagent.item) .. ": "
   if reagent.allocatedQuantity ~= nil then
-    description = description .. reagent.allocatedQuantity .. " used"
+    description = description .. reagent.allocatedQuantity .. " required before returns"
     if reagent.returnedQuantity ~= nil then
       description = description .. ", " .. reagent.returnedQuantity .. " returned"
     end
   elseif reagent.returnedQuantity ~= nil then
-    description = description .. reagent.returnedQuantity .. " returned (quantity used unavailable)"
+    description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
   else
     description = description .. "quantity unknown"
   end

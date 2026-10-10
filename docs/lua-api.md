@@ -400,6 +400,8 @@ Each row combines one material's positive quantities across the selected period
 and characters, including individually known quantities from partially observed
 results. Identity is the item ID, not its name: same-named quality variants can
 legitimately have separate rows. No proc rate may be derived from these quantity rows.
+An absent per-item quantity remains unavailable; recipe-wide return coverage does
+not create a row-level zero measurement.
 
 `GetRecipeReagentStatistics` has the same parameters and paging (ordered by item
 ID, with its own cursors) and returns per-item durable measurements plus the

@@ -190,19 +190,19 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     local itemIds = {}
     for itemId in pairs(byItem) do itemIds[#itemIds + 1] = itemId end
     table.sort(itemIds)
+    local returnVerified = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
     for _, itemId in ipairs(itemIds) do
       local row = byItem[itemId]
-      row.returnComplete = craft.resourcefulnessComplete == true
+      row.returnComplete = returnVerified
       returned[#returned + 1] = row
       if row.returnedQuantity and row.returnedQuantity > 0 then total = total + row.returnedQuantity end
     end
-    if craft.hasResourcefulnessProc == true then
-      fields.Resourcefulness:SetText(craft.resourcefulnessComplete == true and "Return verified" or
-        "Return observed; some items may be missing")
-    elseif craft.hasResourcefulnessProc == false then
+    if returnVerified and craft.hasResourcefulnessProc == true then
+      fields.Resourcefulness:SetText("Return verified")
+    elseif returnVerified and craft.hasResourcefulnessProc == false then
       fields.Resourcefulness:SetText("No return (verified)")
     elseif total > 0 then
-      fields.Resourcefulness:SetText("Known returns; outcome unavailable")
+      fields.Resourcefulness:SetText("Known returns; other results may be unavailable")
     else
       fields.Resourcefulness:SetText("Outcome unavailable")
     end

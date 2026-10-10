@@ -78,7 +78,12 @@ end
 function UI.MatchedSavingsText(row)
   local savings = UI.MatchedSavings(row)
   if savings == "Unavailable" then return savings end
-  return savings .. " (" .. UI.Number(row.matchedCraftCount) .. ")"
+  return savings .. " / " .. UI.Number(row.matchedCraftCount)
+end
+
+function UI.RecipeReturnedQuantity(row)
+  if not row or row.returnedQuantity == nil then return "-" end
+  return UI.Number(row.returnedQuantity)
 end
 
 function UI.MeasuredShare(totals, numerator, denominator)
@@ -293,17 +298,21 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
-    { title = "Returned", width = 70, value = function(row)
-      return UI.Amount(row.returnedQuantity, row.returnComplete)
-    end, exact = function(row) return UI.AmountTooltip(row.returnedQuantity, row.returnComplete) end },
-    { title = "Saved / required", width = 124, value = function(row)
+    { title = "Returned", width = 70, value = UI.RecipeReturnedQuantity,
+      exact = function(row)
+      return row.returnedQuantity ~= nil and UI.Number(row.returnedQuantity) or "No per-item returned quantity is available."
+    end },
+    { title = "Saved / crafts", width = 124, value = function(row)
       if UI.IsTrivial(row.item.id) then return "Excluded" end
       return UI.MatchedSavingsText(row)
     end, exact = function(row)
-      if UI.IsTrivial(row.item.id) then return "Excluded by the savings preference." end
-      if UI.MatchedSavings(row) == "Unavailable" then return "Unavailable: no matched same-craft input sample." end
+      if UI.IsTrivial(row.item.id) then return "Excluded by your savings preference." end
+      if UI.MatchedSavings(row) == "Unavailable" then
+        return "No comparable crafts have both a complete input quantity for this item and a verified return result."
+      end
       return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
-        " required across " .. UI.Count(row.matchedCraftCount, "matched craft")
+      " required across " .. UI.Count(row.matchedCraftCount, "comparable craft") ..
+      ". Core compares complete input quantities with verified returns for this item."
     end },
     { title = "Ignore", width = 64, value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
       create = function(owner, left) return UI.TrivialCheckbox(owner, left + 8, -2, function() end, true) end,
@@ -312,15 +321,6 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   pane.materialList = materialList
   UI.LazyList(materialList, function(cursor)
     local result, reason = api.GetRecipeReagentStatistics(recipeId, pane:Filter(), { limit = 40, cursor = cursor })
-    if result then
-      local coverage = result.coverage
-      local returnComplete = coverage and coverage.craftCount > 0 and
-        coverage.returnObservedCount == coverage.craftCount
-      for _, row in ipairs(result.reagents) do
-        row.returnComplete = returnComplete == true
-        if returnComplete and row.returnedQuantity == nil then row.returnedQuantity = 0 end
-      end
-    end
     return result and result.reagents, result and result.nextCursor or reason
   end)
   function filters.onLayout(filterHeight)
@@ -379,9 +379,9 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       totals.ingenuityRefundObservedCount == totals.craftCount and UI.Number(totals.concentrationSpent - totals.ingenuityRefund) or "-")
     self.tiles[5].value:SetText("..."); self.tiles[5].note:SetText("")
     self.returnQuantity:SetText("Calculating returned quantity...")
-    UI.ReturnTotals(self.returnWorker, { { id = recipeId } }, filter, totals.craftCount,
-      function(total, population, positive, verified)
-      local complete = total ~= nil and verified == population
+    UI.ReturnTotals(self.returnWorker, { { id = recipeId } }, filter, function(total)
+      local verified = totals.resourcefulnessAuthoritativeProcCountObservedCount
+      local complete = total ~= nil and totals.craftCount > 0 and verified == totals.craftCount
       self.tiles[5]:SetNumber(total, complete)
       self.returnQuantity:SetText(UI.Amount(total, complete) .. " reagents returned")
     end)
