@@ -77,8 +77,7 @@ end
 
 function UI.MatchedSavingsText(row)
   local savings = UI.MatchedSavings(row)
-  if savings == "Unavailable" then return savings end
-  return savings .. " / " .. UI.Number(row.matchedCraftCount)
+  return savings == "Unavailable" and "-" or savings
 end
 
 function UI.RecipeReturnedQuantity(row)
@@ -190,7 +189,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   local status = UI.Text(pane, 370, -16, width - 370, 24)
   local summary = UI.SummaryRow(pane, width, -52, { { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
       { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
-      { "Reagents returned", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } })
+      { "Returned units", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } })
   pane.tiles, pane.summary = summary.tiles, summary
   local tabs = UI.TabbedContent(pane, width, height - 202, -202,
     { "Overview", "Statistics", "Craft History", "Reagents" }, function(name)
@@ -302,17 +301,17 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       exact = function(row)
       return row.returnedQuantity ~= nil and UI.Number(row.returnedQuantity) or "No per-item returned quantity is available."
     end },
-    { title = "Saved / crafts", width = 124, value = function(row)
-      if UI.IsTrivial(row.item.id) then return "Excluded" end
+    { title = "Materials saved", width = 124, value = function(row)
+      if UI.IsTrivial(row.item.id) then return "Ignored" end
       return UI.MatchedSavingsText(row)
     end, exact = function(row)
-      if UI.IsTrivial(row.item.id) then return "Excluded by your savings preference." end
+      if UI.IsTrivial(row.item.id) then return "Ignored in savings by your preference; quantities are unchanged." end
       if UI.MatchedSavings(row) == "Unavailable" then
-        return "No comparable crafts have both a complete input quantity for this item and a verified return result."
+        return "No measured crafts have both complete required and verified return quantities for this item."
       end
       return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
-      " required across " .. UI.Count(row.matchedCraftCount, "comparable craft") ..
-      ". Core compares complete input quantities with verified returns for this item."
+      " required across " .. UI.Count(row.matchedCraftCount, "measured craft") ..
+      ". The share uses this item in the same crafts."
     end },
     { title = "Ignore", width = 64, value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
       create = function(owner, left) return UI.TrivialCheckbox(owner, left + 8, -2, function() end, true) end,
@@ -383,7 +382,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       local verified = totals.resourcefulnessAuthoritativeProcCountObservedCount
       local complete = total ~= nil and totals.craftCount > 0 and verified == totals.craftCount
       self.tiles[5]:SetNumber(total, complete)
-      self.returnQuantity:SetText(UI.Amount(total, complete) .. " reagents returned")
+      self.returnQuantity:SetText(UI.Amount(total, complete) .. " material units returned")
     end)
     stats[1]:SetText(UI.Number(totals.craftCount))
     stats[2]:SetText(UI.CompactOutcome(totals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output"))

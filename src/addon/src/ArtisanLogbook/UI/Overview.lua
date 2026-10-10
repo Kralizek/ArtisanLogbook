@@ -221,8 +221,13 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
       function(population, positive, verified, positiveEvidence)
       local tile = self.tiles[5]
       if population == nil then
-        tile.value:SetText("Unavailable")
-        tile.note:SetText("")
+        tile.value:SetText("-")
+        tile.note:SetText("Results unavailable")
+        tile:SetScript("OnEnter", function(self)
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+          GameTooltip:SetText("Resourcefulness results could not be read.")
+          GameTooltip:Show()
+        end)
       else
         local value, tooltip = UI.ResourcefulnessPresentation({ craftCount = population,
           resourcefulnessAuthoritativeProcCount = verified > 0 and positive or nil,
@@ -230,18 +235,17 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
           resourcefulnessProcCount = positiveEvidence })
         tile.value:SetText(value)
         if verified > 0 then
-          tile.note:SetText(UI.Number(positive) .. " of " .. UI.Number(verified) .. " verified\n" ..
-            UI.Number(verified) .. " of " .. UI.Number(population) .. " selected crafts")
+          tile.note:SetText(UI.Count(verified, "verified craft"))
         elseif positiveEvidence > 0 then
-          tile.note:SetText("Positive returns only")
+          tile.note:SetText("Recorded returns")
         else
-          tile.note:SetText("No verified sample")
+          tile.note:SetText("No verified results")
         end
         tile:SetScript("OnEnter", function(self)
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
           GameTooltip:SetText(tooltip)
           if summary.returnedQuantity ~= nil then
-            GameTooltip:AddLine("Known returned materials: " .. UI.Number(summary.returnedQuantity), 1, 1, 1, true)
+            GameTooltip:AddLine("Known returned material units: " .. UI.Number(summary.returnedQuantity), 1, 1, 1, true)
           end
           GameTooltip:Show()
         end)

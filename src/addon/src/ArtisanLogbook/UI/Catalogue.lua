@@ -60,7 +60,7 @@ function UI.CataloguePage(page, width, height, openRecipe)
   }, function(value) sort = value; page:Refresh(true) end, controlWidth)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
   page.resourcefulnessNote = UI.Text(page, 0, 0, width, 18, "GameFontNormalSmall")
-  page.resourcefulnessNote:SetText("Resourcefulness rates use verified attempts; positive return counts are not rates.")
+  page.resourcefulnessNote:SetText("Rates use reliable results; positive returns without them remain counts.")
   local list = UI.RecipeTable(page, 0, -144, width, height - 144, openRecipe, true)
   page.catalogue = list
   function filters.onLayout(filterHeight)
@@ -117,7 +117,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   local period = filters:Period(state, function() detail:Refresh() end, true)
   local characters = filters:Select("Character", {}, function(value) state.character = value; detail:Refresh() end)
   local professions = filters:Select("Profession", {}, function(value) state.profession = value; detail:Refresh() end)
-  local entries = { { "Required", "allocated" }, { "Returned", "returned" }, { "Crafts in recipes", "crafts" },
+  local entries = { { "Required units", "allocated" }, { "Returned units", "returned" }, { "Crafts in recipes", "crafts" },
     { "Recent crafters", "characters" }, { "Saved share", "rate" }, { "Recipes using this", "recipes" } }
   local metrics = {}
   for index, entry in ipairs(entries) do metrics[index] = { entry[1], "INV_Misc_Herb_19" } end
@@ -224,7 +224,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     end)
     self.tiles.crafts:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.fields.recipes:SetText(UI.Number(row.recipeCount))
-    self.fields.rate:SetText(UI.MatchedSavings(row))
+    self.fields.rate:SetText(UI.MatchedSavingsText(row))
     self.tiles.rate.note:SetText(row.matchedCraftCount and row.matchedCraftCount > 0 and
       UI.Count(row.matchedCraftCount, "comparable craft") .. "\nSelected history" or "No comparable sample")
     self.tiles.rate:SetScript("OnEnter", function(tile)
@@ -378,13 +378,13 @@ function UI.ReagentsPage(page, width, height, openReagent)
   }, function(value) sort = value; page:Refresh(true) end)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
   local summary = UI.SummaryRow(page, width, -142, { { "Reagents", "INV_Misc_Herb_19" },
-    { "Required", "INV_Misc_Bag_10" }, { "Returned", "Trade_Alchemy" } })
+    { "Required units", "INV_Misc_Bag_10" }, { "Returned units", "Trade_Alchemy" } })
   summary:SetHeight(60)
   for _, tile in ipairs(summary.tiles) do tile:SetHeight(60); tile.note:Hide() end
   page.summary, page.summaryRow = summary.tiles, summary
   local listWidth = width
   local available = listWidth - 24
-  local nameWidth = available - 486
+  local nameWidth = available - 498
   local list = UI.ScrollList(page, 0, -224, listWidth, height - 258, {
     { title = "Reagent", width = nameWidth, value = function(row)
         return UI.Name(row.item) .. " (#" .. row.item.id .. ")"
@@ -409,15 +409,15 @@ function UI.ReagentsPage(page, width, height, openReagent)
     { title = "Returned", width = 74, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end, exact = function(row) return UI.AmountTooltip(row.returnedQuantity, row.returnComplete) end },
-    { title = "Saved / crafts", width = 100, value = function(row)
-      return UI.IsTrivial(row.item.id) and "Excluded" or UI.MatchedSavingsText(row)
+    { title = "Materials saved", width = 112, value = function(row)
+      return UI.IsTrivial(row.item.id) and "Ignored" or UI.MatchedSavingsText(row)
     end, exact = function(row)
-      if UI.IsTrivial(row.item.id) then return "Excluded by the savings preference." end
+      if UI.IsTrivial(row.item.id) then return "Ignored in savings by your preference; recorded quantities remain visible." end
       if UI.MatchedSavings(row) == "Unavailable" then
-        return "Unavailable: no comparable crafts have complete required and return quantities for this item."
+        return "No measured crafts have both complete required and verified return quantities for this item."
       end
       return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
-        " required across " .. UI.Count(row.matchedCraftCount, "comparable craft")
+        " required across " .. UI.Count(row.matchedCraftCount, "measured craft")
     end },
     { title = "Ignore", width = 64,
       value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,

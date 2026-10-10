@@ -335,6 +335,12 @@ denominator:
 | Complete return sets | `resourcefulnessCompleteProcCount` / `...ObservedCount` | The authoritative cohort plus legacy complete lists. Legacy capture recorded complete lists mostly for positives, so this population can be biased. |
 | Raw evidence | `resourcefulnessProcCount` / `...ObservedCount` | Any known outcome, including legacy positive-only evidence. **Not a rate.** |
 
+`resourcefulnessProcCount` adds at most one positive observation per saved result
+record, regardless of how many material items that result returned. It is not a
+material-entry count or an authoritative attempt count; unverified results may
+contribute. Compact UI may describe this as recorded returns, but must not treat
+it as a rate or denominator.
+
 Use the authoritative cohort for proc rates. Its coverage is
 `resourcefulnessAuthoritativeProcCountObservedCount` out of `craftCount`; crafts
 outside it (legacy history, partial lists, salvage callbacks) are unknown, not

@@ -90,7 +90,7 @@ function UI.Rate(totals, metric)
   return UI.Percent(totals[metric], totals.craftCount)
 end
 
-function UI.ResourcefulnessPresentation(totals)
+function UI.ResourcefulnessPresentation(totals, inlineSample)
   if not totals then
     return "-", "No Resourcefulness observations are available."
   end
@@ -101,26 +101,25 @@ function UI.ResourcefulnessPresentation(totals)
     if positive == nil then
       return "-", "A verified sample exists, but its positive count is unavailable."
     end
-    local rate = UI.Percent(positive, verified)
-    local value = verified <= 5 and (rate .. " (" .. UI.Number(positive) .. "/" .. UI.Number(verified) .. ")") or rate
+    local rate = UI.Percent(positive, verified):gsub("%.0%%", "%%")
+    local value = inlineSample and verified <= 5 and (rate .. " (" .. UI.Number(verified) .. ")") or rate
     return value, rate .. "\n" .. UI.Number(positive) .. " of " .. UI.Number(verified) ..
       " verified crafts\n" .. UI.Number(verified) .. " of " .. UI.Number(crafts) .. " selected crafts"
   end
 
   local positiveReturns = totals.resourcefulnessProcCount
   if positiveReturns and positiveReturns > 0 then
-    return UI.Count(positiveReturns, "return"), UI.Count(positiveReturns, "known positive return observation") ..
-      ". Positive returns only; legacy history may contribute. This is not a proc rate or an attempt count. " ..
-      "No authoritative denominator is available among " .. UI.Count(crafts, "selected craft") ..
-      ", and missing results are not negative outcomes."
+    return UI.Count(positiveReturns, "return"), "Materials were returned in " ..
+      UI.Count(positiveReturns, "recorded result") .. ". A reliable proc rate is unavailable; this is not a verified attempt count. " ..
+      "Older or uncertain results may contribute; missing results are unknown."
   end
-  return "-", "No verified attempts or known positive returns are available among " ..
-    UI.Count(crafts, "selected craft") .. ". Missing historical results are unknown, not negative outcomes."
+  return "-", "No verified results or known positive returns among " .. UI.Count(crafts, "selected craft") ..
+    ". Missing results are unknown, not negative outcomes."
 end
 
-function UI.ProcValue(totals, metric)
+function UI.ProcValue(totals, metric, inlineSample)
   if metric == "resourcefulnessAuthoritativeProcCount" then
-    return UI.ResourcefulnessPresentation(totals)
+    return UI.ResourcefulnessPresentation(totals, inlineSample)
   end
   local rate = UI.Rate(totals, metric)
   if rate ~= "-" then return rate end
@@ -809,7 +808,7 @@ function UI.Activity(craft, extrasOnly)
     returned = returned + math.max(0, reagent.returnedQuantity or 0)
   end
   if returned > 0 then
-    local lines = { "Reagents returned: " .. returned }
+    local lines = { "Returned material units: " .. returned }
     for _, reagent in ipairs(craft.reagents or {}) do
       if reagent.returnedQuantity and reagent.returnedQuantity > 0 then
         lines[#lines + 1] = UI.ReagentDescription(reagent)
@@ -1181,7 +1180,7 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       value = function(row)
         if metric ~= "resourcefulnessAuthoritativeProcCount" and row.totals and row.totals[metric] == 0 and
             row.totals[metric .. "ObservedCount"] == row.totals.craftCount then return "" end
-        return UI.ProcValue(row.totals, metric)
+        return UI.ProcValue(row.totals, metric, metric == "resourcefulnessAuthoritativeProcCount")
       end,
       exact = function(row) return UI.ProcTooltip(row.totals, metric) end }
   end
@@ -1256,7 +1255,7 @@ function UI.CraftHighlights(craft)
       returned = returned + reagent.returnedQuantity
     end
   end
-  if returned > 0 then details[#details + 1] = "Reagents returned: " .. returned end
+  if returned > 0 then details[#details + 1] = "Returned material units: " .. returned end
   return details
 end
 

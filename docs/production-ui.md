@@ -44,7 +44,7 @@ existing current-entry highlight without replacing the primary selection.
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, authoritative Resourcefulness rate with verified/selected coverage, known returned quantities, and most-crafted recipe. No factual craft list. |
 | Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
-| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required/Returned/Saved-per-craft-count columns and editable Ignore checkboxes. Saved shares use same-craft quantities and show their sample count. Item IDs live in native item tooltips, not row subtitles. |
+| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required units/Returned units/Materials saved columns and editable Ignore checkboxes. Materials saved shows a matched share or a dash; its tooltip gives the comparable-craft count. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
@@ -98,11 +98,16 @@ and Ingenuity retain their complete-population rate rules. Resourcefulness uses
 only authoritative attempts: when some selected crafts lack authoritative
 outcomes, its rate is still calculated over the verified cohort and its tooltip
 shows both verified and selected counts. Historical positive-only returns show
-as a descriptive `N returns` count, never a selective rate or attempt count;
-tooltips call out positive-only evidence and unavailable authoritative coverage.
+as a descriptive `N returns` count: each count is one saved result with one or
+more positive material returns, not an item-unit total or verified attempt count.
+It is never a selective rate; tooltips identify older/uncertain evidence and the
+unavailable authoritative denominator.
 When neither verified attempts nor positive returns exist, the cell is a dash.
 Verified all-negative cohorts show 0%. A genuine 100% from one verified craft
-explicitly reads `100.0% (1/1)` and its verified sample in the tooltip. The result is
+explicitly reads `100% (1)` with the numerator, denominator, and selected coverage
+in the tooltip. Overview, Character, and Profession summaries use the same
+presentation: one short verified-sample subtitle, with selected coverage in the
+tooltip. The result is
 the latest available craft result for that selection, not an inferred quality
 distribution. Rows and the Overview most-crafted tile open Recipe Detail.
 Measured-zero Multicraft and Ingenuity cells are empty rather than `0.0%`.

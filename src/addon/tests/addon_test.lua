@@ -943,7 +943,7 @@ assert(environment.GameTooltip.text == "Multicraft: produced 5 additional items"
 local smallCatalogue = environment.CreateFrame("Frame", nil, paperProbe)
 UI.CataloguePage(smallCatalogue, 732, 576, function() end)
 assert(smallCatalogue.filters:GetHeight() == 46 and smallCatalogue.searchInput.y == -16)
-assert(smallCatalogue.resourcefulnessNote.text:find("positive return counts are not rates", 1, true))
+assert(smallCatalogue.resourcefulnessNote.text:find("positive returns without them remain counts", 1, true))
 local itemProbe = UI.ItemCell(paperProbe, 0, 200)
 itemProbe:Update({ id = 123, name = "Potion" })
 itemProbe.scripts.OnEnter(itemProbe)
@@ -963,24 +963,49 @@ local procCases = {
 for _, totals in ipairs(procCases) do assert(UI.ProcValue(totals, "resourcefulnessProcCount") == totals.expected) end
 assert(UI.ProcTooltip(procCases[3], "resourcefulnessProcCount"):find("1 proc / 1 craft", 1, true))
 assert(UI.ProcTooltip(procCases[4], "resourcefulnessProcCount"):find("22 crafts have no return outcome", 1, true))
+do
 local authoritative = { craftCount = 4, resourcefulnessAuthoritativeProcCount = 1,
   resourcefulnessAuthoritativeProcCountObservedCount = 2, resourcefulnessProcCount = 3 }
-assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "50.0% (1/2)")
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "50%")
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount", true) == "50% (2)")
 local authoritativeTooltip = UI.ProcTooltip(authoritative, "resourcefulnessAuthoritativeProcCount")
 assert(authoritativeTooltip:find("1 of 2 verified crafts", 1, true) and
   authoritativeTooltip:find("2 of 4 selected crafts", 1, true) and
   not authoritativeTooltip:find("3 returns", 1, true))
 authoritative.resourcefulnessAuthoritativeProcCount = 0
-assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "0.0% (0/2)")
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "0%")
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount", true) == "0% (2)")
+local singleNegative = { craftCount = 282, resourcefulnessAuthoritativeProcCount = 0,
+  resourcefulnessAuthoritativeProcCountObservedCount = 1 }
+local singlePositive = { craftCount = 282, resourcefulnessAuthoritativeProcCount = 1,
+  resourcefulnessAuthoritativeProcCountObservedCount = 1 }
+assert(UI.ProcValue(singleNegative, "resourcefulnessAuthoritativeProcCount") == "0%")
+assert(UI.ProcValue(singleNegative, "resourcefulnessAuthoritativeProcCount", true) == "0% (1)")
+assert(UI.ProcValue(singlePositive, "resourcefulnessAuthoritativeProcCount", true) == "100% (1)")
+assert(UI.ProcTooltip(singleNegative, "resourcefulnessAuthoritativeProcCount"):find("0 of 1 verified crafts", 1, true) and
+  UI.ProcTooltip(singleNegative, "resourcefulnessAuthoritativeProcCount"):find("1 of 282 selected crafts", 1, true))
+assert(UI.ResourcefulnessPresentation(singleNegative) == "0%")
+local largerCohort = { craftCount = 100, resourcefulnessAuthoritativeProcCount = 8,
+  resourcefulnessAuthoritativeProcCountObservedCount = 40 }
+assert(UI.ProcValue(largerCohort, "resourcefulnessAuthoritativeProcCount") == "20%")
+assert(UI.ProcTooltip(largerCohort, "resourcefulnessAuthoritativeProcCount"):find("40 of 100 selected crafts", 1, true))
+assert(UI.ProcValue({ craftCount = 1, resourcefulnessAuthoritativeProcCount = 1,
+  resourcefulnessAuthoritativeProcCountObservedCount = 1 }, "resourcefulnessAuthoritativeProcCount", true) == "100% (1)")
 authoritative.resourcefulnessAuthoritativeProcCount = nil
 authoritative.resourcefulnessAuthoritativeProcCountObservedCount = 0
 assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "3 returns")
 local legacyTooltip = UI.ProcTooltip(authoritative, "resourcefulnessAuthoritativeProcCount")
-assert(legacyTooltip:find("Positive returns only; legacy history may contribute", 1, true) and
-  legacyTooltip:find("not a proc rate or an attempt count", 1, true))
+assert(legacyTooltip:find("Materials were returned in 3 recorded results", 1, true) and
+  legacyTooltip:find("A reliable proc rate is unavailable", 1, true) and
+  legacyTooltip:find("not a verified attempt count", 1, true) and
+  legacyTooltip:find("Older or uncertain results may contribute", 1, true) and
+  legacyTooltip:find("missing results are unknown", 1, true))
 local unknown = { craftCount = 30, resourcefulnessAuthoritativeProcCountObservedCount = 0 }
 assert(UI.ProcValue(unknown, "resourcefulnessAuthoritativeProcCount") == "-")
 assert(UI.ProcTooltip(unknown, "resourcefulnessAuthoritativeProcCount"):find("unknown, not negative", 1, true))
+assert(UI.ProcValue({ craftCount = 30, resourcefulnessProcCount = 1234,
+  resourcefulnessAuthoritativeProcCountObservedCount = 0 }, "resourcefulnessAuthoritativeProcCount") == "1.2k returns")
+end
 assert(UI.Percent(1, 3) == "33.3%" and UI.Percent(1, 0) == "-")
 local filterProbe = UI.FilterBar(paperProbe, 700, 0)
 local filterChanges = 0
@@ -1076,7 +1101,7 @@ assert(#UI.CraftHighlights({ concentrationSpent = 0, multicraftBonus = 0,
 local highlights = table.concat(UI.CraftHighlights({ concentrationSpent = 323,
   multicraftBonus = 4, hasIngenuityProc = true, ingenuityRefund = 162,
   reagents = { { returnedQuantity = 4 }, { returnedQuantity = 0 } } }), "; ")
-assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Reagents returned: 4")
+assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Returned material units: 4")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 5,
   returnedQuantity = 1 }) == "Azeroot: 5 required before returns, 1 returned")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
@@ -1313,7 +1338,7 @@ uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity
   reagents = { { returnedQuantity = 3 } } })
 assert(#notices == noticeCount + 1 and notices[#notices] ==
   "|cffffd100Artisan Logbook:|r Crafted " .. cachedItemLink ..
-  "x3 from Potion recipe (Multicraft +2; Ingenuity +10; Reagents returned: 3)")
+  "x3 from Potion recipe (Multicraft +2; Ingenuity +10; Returned material units: 3)")
 environment.C_Item.GetItemInfo = function() return nil end
 uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity = 1,
   recipe = { name = "Potion recipe" } })
@@ -1453,7 +1478,7 @@ uiWindow:Activate("Overview")
 while overview.summary.resourcefulnessWorker.scripts.OnUpdate do
   overview.summary.resourcefulnessWorker.scripts.OnUpdate(overview.summary.resourcefulnessWorker)
 end
-assert(overview.summary.tiles[5].value.text == "-" and overview.summary.tiles[5].note.text == "No verified sample")
+assert(overview.summary.tiles[5].value.text == "-" and overview.summary.tiles[5].note.text == "No verified results")
 uiWindow:Activate("Logbook")
 print("PASS sidebar destinations, independent filters, list preservation, pins and modal Escape")
 local present = environment.GetServerTime
@@ -1660,7 +1685,7 @@ do
     local page = window.pages[destination]
     local list = page.topRecipes or page.catalogue
     while list.worker.scripts.OnUpdate do list.worker.scripts.OnUpdate(list.worker) end
-    local expected = { [9741] = "25.0%", [9742] = "0.0%", [9743] = "100.0%" }
+    local expected = { [9741] = "25%", [9742] = "0%", [9743] = "100%" }
     for _, row in ipairs(list.rows) do
       if row.item then
         local resource
@@ -1915,6 +1940,12 @@ do
   record(9702, 4008, "Bloom", 3, 1, 1)
   assert(#list.items == 2 and list.items[2].item.id == 4009)
   assert(#list.items[1].professions == 2 and list.items[1].recipeCount == 2)
+  local savedCell
+  for _, cell in ipairs(list.rows[1].cells) do
+    if cell.column.title == "Materials saved" then savedCell = cell end
+  end
+  assert(savedCell and savedCell.label.text == helpers.MatchedSavingsText(list.items[1]))
+  assert(savedCell.label.text == "-")
   assert(list.rows[1].widgets[1].widget.label.text == "Bloom" and not list.rows[1].widgets[1].widget.identity)
   list.rows[1].widgets[1].widget.scripts.OnEnter(list.rows[1].widgets[1].widget)
   assert(environment.GameTooltip.itemId == 4008 and environment.GameTooltip.lines[1] == "Item ID: 4008")
@@ -1922,6 +1953,10 @@ do
   local catalogueCheck = list.rows[1].widgets[2].widget
   catalogueCheck:SetChecked(true); catalogueCheck.scripts.OnClick(catalogueCheck)
   assert(helpers.IsTrivial(4008))
+  for _, cell in ipairs(list.rows[1].cells) do
+    if cell.column.title == "Materials saved" then savedCell = cell end
+  end
+  assert(savedCell and savedCell.label.text == "Ignored")
   catalogueCheck:SetChecked(false); catalogueCheck.scripts.OnClick(catalogueCheck)
   assert(not helpers.IsTrivial(4008))
   for index = 1, 45 do record(9701, 4100 + index, string.format("Herb %02d", index), index, index, 1) end
@@ -2039,7 +2074,7 @@ do
   assert(calls == 1 and detail.worker.scripts.OnUpdate and detail.fields.crafts.text == "102")
   detail.worker.scripts.OnUpdate(detail.worker)
   assert(calls == 2 and not detail.worker.scripts.OnUpdate)
-  assert(detail.totals.crafts == 101 and detail.fields.rate.text == "Unavailable")
+  assert(detail.totals.crafts == 101 and detail.fields.rate.text == "-")
   assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
   assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
@@ -2056,7 +2091,7 @@ do
   detail:SelectView("Overview")
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
   assert(detail.item.id == 4502 and detail.totals.crafts == 1)
-  assert(detail.fields.rate.text == "Unavailable" and detail.fields.returned.text == "-")
+  assert(detail.fields.rate.text == "-" and detail.fields.returned.text == "-")
   assert(not detail.chart.bars[1].returned:IsShown())
   assert(detail.chart.bars[1].tooltip:find("Known returned: Unknown", 1, true))
   page.catalogue.rows[1].scripts.OnClick(page.catalogue.rows[1])
@@ -2074,7 +2109,7 @@ do
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
   assert(detail.fields.crafts.text == "102" and detail.fields.returned.text:find("202", 1, true))
   -- Durable gross inputs survive detail pruning; unmatched savings remain unavailable.
-  assert(detail.fields.allocated.text:find("505", 1, true) and detail.fields.rate.text == "Unavailable")
+  assert(detail.fields.allocated.text:find("505", 1, true) and detail.fields.rate.text == "-")
   assert(#detail.recipes.items == 0 and detail.chart.empty:IsShown())
   api.GetCrafts = crafts
   window:Hide()
@@ -2202,19 +2237,26 @@ do
   local overviewValue = ui.UI.ResourcefulnessPresentation(overviewTotals)
   assert(overview.summary.tiles[5].value.text == overviewValue)
   local verified = overviewTotals.resourcefulnessAuthoritativeProcCountObservedCount
-  assert(overview.summary.tiles[5].note.text:find(tostring(verified) .. " of " ..
-    tostring(overviewTotals.craftCount) .. " selected crafts", 1, true))
+  assert(overview.summary.tiles[5].note.text == ui.UI.Count(verified, "verified craft"))
+  assert(overview.summary.tiles[5].note:GetStringHeight() <= overview.summary.tiles[5].note:GetHeight())
   assert(overview.summary.returnedWorker.scripts.OnUpdate)
   api.GetRecipeReturnedReagents = getReturnedReagents
   while overview.summary.returnedWorker.scripts.OnUpdate do
     overview.summary.returnedWorker.scripts.OnUpdate(overview.summary.returnedWorker)
   end
   overview.summary.tiles[5].scripts.OnEnter(overview.summary.tiles[5])
-  assert(table.concat(environment.GameTooltip.lines, "\n"):find("Known returned materials: 2", 1, true))
+  local overviewTooltip = tostring(environment.GameTooltip.text) .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
+  assert(overviewTooltip:find(tostring(verified) .. " of " .. tostring(overviewTotals.craftCount) ..
+    " selected crafts", 1, true) and overviewTooltip:find("Known returned material units: 2", 1, true))
   while overview.topRecipes.worker.scripts.OnUpdate do overview.topRecipes.worker.scripts.OnUpdate(overview.topRecipes.worker) end
   assert(not overview.scroll and #overview.topRecipes.items == 1)
   local ranked = overview.topRecipes.items[1]
   assert(ranked.result.outputItem.id == 5302 and ranked.totals.outputQuantity == 4)
+  local resourcefulnessCell
+  for _, cell in ipairs(overview.topRecipes.rows[1].cells) do
+    if cell.column.title == "Resourcefulness" then resourcefulnessCell = cell end
+  end
+  assert(resourcefulnessCell and resourcefulnessCell.label.text == "100% (1)")
   assert(ui.UI.Rate(ranked.totals, "multicraftProcCount") == "100.0%")
   overview.summary.tiles[6].scripts.OnEnter(overview.summary.tiles[6])
   assert(environment.GameTooltip.itemId == 5302)
@@ -2244,7 +2286,7 @@ do
   reagent.iconHover.scripts.OnEnter(reagent.iconHover)
   assert(environment.GameTooltip.itemId == 5301)
   while reagent.worker.scripts.OnUpdate do reagent.worker.scripts.OnUpdate(reagent.worker) end
-  assert(reagent.fields.rate.text == "Unavailable" and #reagent.history.items == 1)
+  assert(reagent.fields.rate.text == "-" and #reagent.history.items == 1)
   reagent:SelectView("Craft History")
   reagent.history.rows[1].scripts.OnClick(reagent.history.rows[1])
   assert(window.openCraftId == craft.id and window.craftDetailPage.result.item.id == 5302)
@@ -2388,9 +2430,13 @@ do
   assert(helpers.MatchedSavings({ matchedCraftCount = 2, matchedAllocatedQuantity = 8,
     matchedReturnedQuantity = 2, allocationComplete = false, inputCompleteCount = 0 }) == "25.0%")
   assert(helpers.MatchedSavingsText({ matchedCraftCount = 2, matchedAllocatedQuantity = 8,
-    matchedReturnedQuantity = 2, allocationComplete = false }) == "25.0% / 2")
+    matchedReturnedQuantity = 2, allocationComplete = false }) == "25.0%")
+  assert(helpers.MatchedSavingsText({ matchedCraftCount = 0, matchedAllocatedQuantity = 8,
+    matchedReturnedQuantity = 2 }) == "-")
   assert(helpers.MatchedSavings({ matchedCraftCount = 0, matchedAllocatedQuantity = 8,
     matchedReturnedQuantity = 2 }) == "Unavailable")
+  local craftLevelReturns = api.GetRecipeOutcomes(9001).totals.resourcefulnessProcCount
+  assert(craftLevelReturns == 3)
   assert(helpers.RecipeReturnedQuantity({ coverage = { returnObservedCount = 4, craftCount = 4 } }) == "-")
   assert(helpers.RecipeReturnedQuantity({ returnedQuantity = 0,
     coverage = { returnObservedCount = 4, craftCount = 4 } }) == "0")
@@ -2445,7 +2491,7 @@ do
   end
   finishCalculation()
   assert(pane.tiles[5].value.text == "11" and pane.tiles[5].note.text == "")
-  assert(pane.returnQuantity.text:find("11 reagents returned", 1, true))
+  assert(pane.returnQuantity.text:find("11 material units returned", 1, true))
   assert(pane.stats[2].text:find("At least 1 proc", 1, true) and pane.stats[4].text:find("12", 1, true))
   assert(pane.stats[3].text == "75.0% | 3 of 4 verified crafts")
   assert(pane.resourcefulness.nonTrivial.text == "75.0% | 3 of 4 verified crafts")
@@ -2460,12 +2506,21 @@ do
   end
   local materialRows = pane.materialList.rows
   local material = materialRows[1].widgets[1].widget
+  local recipeSavingsCell
+  for _, cell in ipairs(materialRows[1].cells) do
+    if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
+  end
+  assert(recipeSavingsCell and recipeSavingsCell.label.text == helpers.MatchedSavingsText(materialRows[1].item))
   assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
   assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
   assert(materialRows[1].item.returnedQuantity == 3 and materialRows[2].item.returnedQuantity == 5)
   local reagentCheck = materialRows[1].widgets[2].widget
   reagentCheck:SetChecked(true); reagentCheck.scripts.OnClick(reagentCheck)
   assert(helpers.IsTrivial(8))
+  for _, cell in ipairs(pane.materialList.rows[1].cells) do
+    if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
+  end
+  assert(recipeSavingsCell and recipeSavingsCell.label.text == "Ignored")
   reagentCheck:SetChecked(false); reagentCheck.scripts.OnClick(reagentCheck)
   assert(not helpers.IsTrivial(8))
   assert(material.icon.texture and material.quality.atlas == "ReagentQuality-8")
@@ -2687,10 +2742,11 @@ do
       window.pages.Overview.summary.resourcefulnessWorker)
   end
   assert(window.pages.Overview.summary.tiles[5].value.text == "8 returns")
-  assert(window.pages.Overview.summary.tiles[5].note.text == "Positive returns only")
+  assert(window.pages.Overview.summary.tiles[5].note.text == "Recorded returns")
   window.pages.Overview.summary.tiles[5].scripts.OnEnter(window.pages.Overview.summary.tiles[5])
   local overviewTooltip = tostring(environment.GameTooltip.text) .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
-  assert(overviewTooltip:find("not a proc rate or an attempt count", 1, true))
+  assert(overviewTooltip:find("not a verified attempt count", 1, true) and
+    overviewTooltip:find("A reliable proc rate is unavailable", 1, true))
   window:Activate("Recipes")
   local catalogue = window.pages.Recipes.catalogue
   while catalogue.worker.scripts.OnUpdate do catalogue.worker.scripts.OnUpdate(catalogue.worker) end
@@ -2706,9 +2762,10 @@ do
   assert(recipeResource and recipeResource.label.text == "8 returns")
   recipeRow.scripts.OnEnter(recipeRow)
   local recipeTooltip = table.concat(environment.GameTooltip.lines, "\n")
-  assert(recipeTooltip:find("Positive returns only; legacy history may contribute", 1, true) and
-    recipeTooltip:find("No authoritative denominator", 1, true) and
-    recipeTooltip:find("missing results are not negative", 1, true))
+  assert(recipeTooltip:find("Materials were returned in 8 recorded results", 1, true) and
+    recipeTooltip:find("A reliable proc rate is unavailable", 1, true) and
+    recipeTooltip:find("not a verified attempt count", 1, true) and
+    recipeTooltip:find("missing results are unknown", 1, true), recipeTooltip)
   window:OpenRecipe({ id = 9001 })
   while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
