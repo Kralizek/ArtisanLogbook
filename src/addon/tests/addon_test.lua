@@ -943,6 +943,7 @@ assert(environment.GameTooltip.text == "Multicraft: produced 5 additional items"
 local smallCatalogue = environment.CreateFrame("Frame", nil, paperProbe)
 UI.CataloguePage(smallCatalogue, 732, 576, function() end)
 assert(smallCatalogue.filters:GetHeight() == 46 and smallCatalogue.searchInput.y == -16)
+assert(smallCatalogue.resourcefulnessNote.text:find("positive return counts are not rates", 1, true))
 local itemProbe = UI.ItemCell(paperProbe, 0, 200)
 itemProbe:Update({ id = 123, name = "Potion" })
 itemProbe.scripts.OnEnter(itemProbe)
@@ -964,16 +965,22 @@ assert(UI.ProcTooltip(procCases[3], "resourcefulnessProcCount"):find("1 proc / 1
 assert(UI.ProcTooltip(procCases[4], "resourcefulnessProcCount"):find("22 crafts have no return outcome", 1, true))
 local authoritative = { craftCount = 4, resourcefulnessAuthoritativeProcCount = 1,
   resourcefulnessAuthoritativeProcCountObservedCount = 2, resourcefulnessProcCount = 3 }
-assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "50.0%")
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "50.0% (1/2)")
 local authoritativeTooltip = UI.ProcTooltip(authoritative, "resourcefulnessAuthoritativeProcCount")
 assert(authoritativeTooltip:find("1 of 2 verified crafts", 1, true) and
-  authoritativeTooltip:find("2 of 4 selected crafts", 1, true))
+  authoritativeTooltip:find("2 of 4 selected crafts", 1, true) and
+  not authoritativeTooltip:find("3 returns", 1, true))
 authoritative.resourcefulnessAuthoritativeProcCount = 0
-assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "0.0%")
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "0.0% (0/2)")
 authoritative.resourcefulnessAuthoritativeProcCount = nil
 authoritative.resourcefulnessAuthoritativeProcCountObservedCount = 0
-assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "Unavailable")
-assert(UI.ProcTooltip(authoritative, "resourcefulnessAuthoritativeProcCount"):find("Not enough verified crafts", 1, true))
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "3 returns")
+local legacyTooltip = UI.ProcTooltip(authoritative, "resourcefulnessAuthoritativeProcCount")
+assert(legacyTooltip:find("Positive returns only; legacy history may contribute", 1, true) and
+  legacyTooltip:find("not a proc rate or an attempt count", 1, true))
+local unknown = { craftCount = 30, resourcefulnessAuthoritativeProcCountObservedCount = 0 }
+assert(UI.ProcValue(unknown, "resourcefulnessAuthoritativeProcCount") == "-")
+assert(UI.ProcTooltip(unknown, "resourcefulnessAuthoritativeProcCount"):find("unknown, not negative", 1, true))
 assert(UI.Percent(1, 3) == "33.3%" and UI.Percent(1, 0) == "-")
 local filterProbe = UI.FilterBar(paperProbe, 700, 0)
 local filterChanges = 0
@@ -1446,7 +1453,7 @@ uiWindow:Activate("Overview")
 while overview.summary.resourcefulnessWorker.scripts.OnUpdate do
   overview.summary.resourcefulnessWorker.scripts.OnUpdate(overview.summary.resourcefulnessWorker)
 end
-assert(overview.summary.tiles[5].value.text == "Unavailable" and overview.summary.tiles[5].note.text:find("0 of 0", 1, true))
+assert(overview.summary.tiles[5].value.text == "-" and overview.summary.tiles[5].note.text == "No verified sample")
 uiWindow:Activate("Logbook")
 print("PASS sidebar destinations, independent filters, list preservation, pins and modal Escape")
 local present = environment.GetServerTime
@@ -2192,9 +2199,8 @@ do
     overview.summary.resourcefulnessWorker.scripts.OnUpdate(overview.summary.resourcefulnessWorker)
   end
   local overviewTotals = api.GetRecipeOutcomes(9850).totals
-  local overviewRate = ui.UI.AuthoritativeRate(overviewTotals)
-  assert(overview.summary.tiles[5].value.text ==
-    (overviewRate == "Not enough verified crafts" and "Unavailable" or overviewRate))
+  local overviewValue = ui.UI.ResourcefulnessPresentation(overviewTotals)
+  assert(overview.summary.tiles[5].value.text == overviewValue)
   local verified = overviewTotals.resourcefulnessAuthoritativeProcCountObservedCount
   assert(overview.summary.tiles[5].note.text:find(tostring(verified) .. " of " ..
     tostring(overviewTotals.craftCount) .. " selected crafts", 1, true))
@@ -2673,8 +2679,37 @@ do
   core = reload(data)
   local ui = loadUI()
   ui.UI.SetTrivial(8, true)
-  ui.productionWindow:Activate("Recipes")
-  ui.productionWindow:OpenRecipe({ id = 9001 })
+  local window = ui.productionWindow
+  window:Show()
+  window:Activate("Overview")
+  while window.pages.Overview.summary.resourcefulnessWorker.scripts.OnUpdate do
+    window.pages.Overview.summary.resourcefulnessWorker.scripts.OnUpdate(
+      window.pages.Overview.summary.resourcefulnessWorker)
+  end
+  assert(window.pages.Overview.summary.tiles[5].value.text == "8 returns")
+  assert(window.pages.Overview.summary.tiles[5].note.text == "Positive returns only")
+  window.pages.Overview.summary.tiles[5].scripts.OnEnter(window.pages.Overview.summary.tiles[5])
+  local overviewTooltip = tostring(environment.GameTooltip.text) .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
+  assert(overviewTooltip:find("not a proc rate or an attempt count", 1, true))
+  window:Activate("Recipes")
+  local catalogue = window.pages.Recipes.catalogue
+  while catalogue.worker.scripts.OnUpdate do catalogue.worker.scripts.OnUpdate(catalogue.worker) end
+  local recipeRow
+  for _, row in ipairs(catalogue.rows) do
+    if row.item and row.item.recipe.id == 9001 then recipeRow = row; break end
+  end
+  assert(recipeRow)
+  local recipeResource
+  for _, cell in ipairs(recipeRow.cells) do
+    if cell.column.title == "Resourcefulness" then recipeResource = cell end
+  end
+  assert(recipeResource and recipeResource.label.text == "8 returns")
+  recipeRow.scripts.OnEnter(recipeRow)
+  local recipeTooltip = table.concat(environment.GameTooltip.lines, "\n")
+  assert(recipeTooltip:find("Positive returns only; legacy history may contribute", 1, true) and
+    recipeTooltip:find("No authoritative denominator", 1, true) and
+    recipeTooltip:find("missing results are not negative", 1, true))
+  window:OpenRecipe({ id = 9001 })
   while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
   end

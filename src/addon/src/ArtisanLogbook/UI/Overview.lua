@@ -46,12 +46,12 @@ function UI.ReturnTotals(owner, recipes, filter, onResult)
 end
 
 function UI.ResourcefulnessTotals(owner, recipes, filter, population, onResult)
-  local index, positive, verified = 1, 0, 0
+  local index, positive, verified, positiveEvidence = 1, 0, 0, 0
   owner:SetScript("OnUpdate", function(self)
     local recipe = recipes[index]
     if not recipe then
       self:SetScript("OnUpdate", nil)
-      onResult(population, positive, verified)
+      onResult(population, positive, verified, positiveEvidence)
       return
     end
     local outcomeFilter = { time = filter.time, characters = filter.characters }
@@ -65,6 +65,7 @@ function UI.ResourcefulnessTotals(owner, recipes, filter, population, onResult)
     end
     verified = verified + observed
     if count ~= nil then positive = positive + count end
+    positiveEvidence = positiveEvidence + (totals.resourcefulnessProcCount or 0)
     index = index + 1
   end)
 end
@@ -217,22 +218,28 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     self.tiles[5]:SetScript("OnEnter", nil)
     self.tiles[5]:SetScript("OnLeave", nil)
     UI.ResourcefulnessTotals(self.resourcefulnessWorker, recipes, filter, totals.craftCount,
-      function(population, positive, verified)
+      function(population, positive, verified, positiveEvidence)
       local tile = self.tiles[5]
       if population == nil then
         tile.value:SetText("Unavailable")
         tile.note:SetText("")
       else
-        local rate, coverage = UI.AuthoritativeRate({ craftCount = population,
+        local value, tooltip = UI.ResourcefulnessPresentation({ craftCount = population,
           resourcefulnessAuthoritativeProcCount = verified > 0 and positive or nil,
-          resourcefulnessAuthoritativeProcCountObservedCount = verified })
-        tile.value:SetText(rate == "Not enough verified crafts" and "Unavailable" or rate)
-        tile.note:SetText(UI.Number(verified > 0 and positive or 0) .. " of " .. UI.Number(verified) ..
-          " verified\n" .. UI.Number(verified) .. " of " .. UI.Number(population) .. " selected crafts")
+          resourcefulnessAuthoritativeProcCountObservedCount = verified,
+          resourcefulnessProcCount = positiveEvidence })
+        tile.value:SetText(value)
+        if verified > 0 then
+          tile.note:SetText(UI.Number(positive) .. " of " .. UI.Number(verified) .. " verified\n" ..
+            UI.Number(verified) .. " of " .. UI.Number(population) .. " selected crafts")
+        elseif positiveEvidence > 0 then
+          tile.note:SetText("Positive returns only")
+        else
+          tile.note:SetText("No verified sample")
+        end
         tile:SetScript("OnEnter", function(self)
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-          GameTooltip:SetText(rate)
-          GameTooltip:AddLine(coverage, 1, 1, 1, true)
+          GameTooltip:SetText(tooltip)
           if summary.returnedQuantity ~= nil then
             GameTooltip:AddLine("Known returned materials: " .. UI.Number(summary.returnedQuantity), 1, 1, 1, true)
           end

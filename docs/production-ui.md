@@ -98,9 +98,11 @@ and Ingenuity retain their complete-population rate rules. Resourcefulness uses
 only authoritative attempts: when some selected crafts lack authoritative
 outcomes, its rate is still calculated over the verified cohort and its tooltip
 shows both verified and selected counts. Historical positive-only returns show
-Unavailable, not a selective proc count or rate; verified all-negative cohorts
-show 0%. A genuine 100% from one verified craft explicitly reads `1 of 1 verified
-crafts` in its tooltip. The result is
+as a descriptive `N returns` count, never a selective rate or attempt count;
+tooltips call out positive-only evidence and unavailable authoritative coverage.
+When neither verified attempts nor positive returns exist, the cell is a dash.
+Verified all-negative cohorts show 0%. A genuine 100% from one verified craft
+explicitly reads `100.0% (1/1)` and its verified sample in the tooltip. The result is
 the latest available craft result for that selection, not an inferred quality
 distribution. Rows and the Overview most-crafted tile open Recipe Detail.
 Measured-zero Multicraft and Ingenuity cells are empty rather than `0.0%`.

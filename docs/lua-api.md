@@ -390,8 +390,9 @@ rates only from `resourcefulnessAuthoritativeProcCount` and its paired observed
 count. For example, 8 verified positive attempts among 40 verified attempts in a
 selection of 100 crafts is shown as 20% (8 of 40 verified), with 40 of 100
 selected crafts covered. Legacy positive returns remain visible as quantities,
-but never enter that rate. Zero verified attempts are unavailable, not 0%; a
-verified all-negative cohort is a real 0%. Non-trivial return-set rates use
+and as a descriptive positive-return count in compact tables when no authoritative
+denominator exists; they never enter a rate. Zero verified attempts are unavailable,
+not 0%; a verified all-negative cohort is a real 0%. Non-trivial return-set rates use
 `authoritativeCraftCount` over the same authoritative denominator.
 
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
