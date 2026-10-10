@@ -1,8 +1,9 @@
 # Durable Ledger
 
 This document describes the durable storage implemented by issue #4 and the
-personal-craft request capture added by issue #12 and durable outcomes from #17. The raw capture tracer remains
-a separate diagnostic store and is not imported into the ledger.
+personal-craft request capture added by issue #12, durable outcomes from #17, and
+the schema-2 authoritative outcome and reagent measurement model from #24. The raw
+capture tracer remains a separate diagnostic store and is not imported into the ledger.
 
 The stable consumer-facing Lua API is documented separately in
 [lua-api.md](lua-api.md).
@@ -21,17 +22,22 @@ of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-**Schema 1 is the first supported persistence contract**, identified by both
-`schemaVersion = 1` and `schemaIdentity = "ArtisanLogbookLedger"`.
+**Schema 2 is the current persistence contract**, identified by both
+`schemaVersion = 2` and `schemaIdentity = "ArtisanLogbookLedger"`. **Schema 1**
+(`schemaVersion = 1` with the same identity, in every `outcomeVersion` variant
+described below) is the only supported upgrade source and is migrated
+automatically at startup; see [Schema 1 → 2 migration](#schema-1--2-migration).
+No reset or purge is required. Schema 2 is never downgraded: an older Core build
+refuses a schema-2 database with its usual unsupported-schema diagnostic.
 Use authoritative WoW natural IDs directly for WoW entities where a stable
-domain ID exists. This identity layout remains schema v1: changes to earlier
-unreleased development layouts do not increment `Ledger.schemaVersion` and do
-not provide a migration path. Such layouts must be reset, not converted.
-The identity marker distinguishes it from experimental builds that also used
-the number 1. Development/prerelease schemas 0–5 were experimental and are **not
-supported upgrade sources**. There is no migration or historical backfill path
-from them. Changing the version number or adding the marker manually is not a
-supported conversion.
+domain ID exists. Changes to earlier unreleased development layouts did not
+increment `Ledger.schemaVersion` and do not provide a migration path. Such layouts
+must be reset, not converted.
+The identity marker distinguishes supported data from experimental builds that
+also used small version numbers. Development/prerelease schemas 0–5 without the
+marker were experimental and are **not supported upgrade sources**. There is no
+migration or historical backfill path from them. Changing the version number or
+adding the marker manually is not a supported conversion.
 
 Users of development builds may need to reset SavedVariables. With WoW fully
 closed, back up the account's `ArtisanLogbook_Core.lua` SavedVariables file before
@@ -42,25 +48,37 @@ experimental history; the independent diagnostic trace is not imported.
 
 The supported schema contains:
 
-- `crafts` stores one row per observed Retail result callback, with a monotonic
+- `crafts` stores one row per observed Retail primary result callback, with a monotonic
   local `id`, timestamp, optional request ID, session ID and WoW recipe/output
   item IDs, raw game
   `gameOperationId` (the raw `operationID`), observed output quality/item level/quantity,
   Multicraft bonus, concentration spent/currency, Ingenuity proc flag, and
-  refund field. Unsupported values are absent.
+  refund field. Schema 2 adds the compact provenance enum `outcomeSource`
+  (`native`, `partial`, `unverified`; absent for schema-1 captures),
+  `quoteObserved = true` for crafts whose request carried quote allocations, and
+  `inputComplete = true` for crafts whose complete recipe inputs are known (see
+  [Recipe inputs](#recipe-inputs-quote-allocations-vs-complete-inputs)).
+  Unsupported values are absent. First-craft rewards are not craft rows.
 - `requests` stores submitted personal `CraftRecipe` snapshots with separate
   monotonic IDs, timestamps, session/recipe references, `requestedCount`, and
   `useConcentration`. Optional quote fields are `concentrationCost`, `baseSkill`,
   `baseDifficulty`, and `craftingQuality`. Optional `allocations` contain
   positive-quantity quote selections: `dataSlotIndex`, item reference,
   `allocatedQuantity`, and observed `quality` when available. An absent
-  allocations list means no supported quote selection was captured.
+  allocations list means no supported quote selection was captured. Schema 2
+  adds optional `fixedReagents` (`dataSlotIndex`, item reference,
+  `requiredQuantity`) read from the recipe schematic at submission, and
+  `inputComplete = true` when that schematic accounted for every input slot.
 - `reagents` stores craft/item-linked allocations for correlated results and
-  return-only rows for legacy or unmatched results. `allocatedQuantity` is
-  absent on return-only rows. `returnedQuantity` is absent without a return
-  list or when return attribution is ambiguous; it is zero only when a return
-  list establishes that this allocated item was not returned. Ownership/source
-  and commodity lot provenance are never inferred.
+  return-only rows. `allocatedQuantity` is absent on return-only rows. Schema-2
+  rows copied from `fixedReagents` carry `fixed = true` and the schematic's
+  required quantity as `allocatedQuantity`. When the
+  complete return set is known, a single-slot allocation carries its item's
+  returned quantity (zero when nothing returned). Duplicate slots of one item
+  carry zero when that item was not returned; otherwise they stay unknown and
+  a return-only row holds the item's total. Without a complete set, slots stay
+  unknown and provable positives are return-only rows. Ownership/source and
+  commodity lot provenance are never inferred.
 - `dimensions.recipes`, `dimensions.items`, and `dimensions.professions` are
   append-only numeric-keyed maps indexed by WoW recipe ID, item ID, and skill
   line ID respectively. Their row `id` equals the map key. They have no
@@ -74,39 +92,189 @@ The supported schema contains:
 - `craftSeries` contains durable daily rows at UTC day × character × recipe
   grain. Unlike detailed crafts/requests/reagents, these rows do not age out.
 - `resourcefulnessSets` contains UTC day × character × recipe × canonical
-  returned-item-set rows with `craftCount`. Only positive, completely identified
-  return sets participate. Empty/no-return outcomes are covered in `craftSeries`.
-- `returnedReagents` contains UTC day × character × recipe × returned item rows
-  with positive `returnedQuantity`. Different materials are never added together.
+  returned-item-set rows with `craftCount` and optional `authoritativeCraftCount`.
+  Only positive, completely identified return sets participate. Empty/no-return
+  outcomes are covered in `craftSeries`.
+- `reagentSeries` (replacing schema-1 `returnedReagents`) contains UTC day ×
+  character × recipe × item measurement rows. Different materials are never
+  added together.
+- `firstCraftRewards` contains UTC day × character × parent recipe × item rows
+  with `rewardCount`, `quantity` and `quantityObservedCount`.
 
-## Durable Outcome Statistics (#17)
+## Durable Outcome and Reagent Statistics (#17, #24)
 
-The three aggregate grains above are the complete durable outcome model. There
+The four aggregate collections above are the complete durable outcome model. There
 is no compressed dictionary, craft-membership index, per-craft durable outcome
-archive, classification flag, or external data/runtime service. The new tables
+archive, classification flag, or external data/runtime service. The tables
 use the same character and recipe identities as daily craft totals, including
 the unattributed grain. Trivial-item preferences belong exclusively to the UI
 SavedVariables and never enter these facts.
 
 Daily rows add `multicraftProcCount`, `resourcefulnessProcCount`,
-`resourcefulnessCompleteProcCount`, and their
+`resourcefulnessCompleteProcCount`, `resourcefulnessAuthoritativeProcCount`, and their
 respective `...ObservedCount` fields to the existing output, Multicraft bonus,
 concentration spent, Ingenuity proc, and applied refund measures. Each sum is
 absent at zero coverage, not a fabricated zero. A Multicraft proc is an observed
 positive bonus; an observed nonpositive bonus is no proc. Ingenuity continues
 to use its authoritative boolean: false implies an applied refund of zero,
 true uses the observed refund, and unknown does not apply the reported field.
+Schema 2 also adds always-present `quoteObservedCount`, `inputCompleteCount` and
+`matchedCraftCount`.
 
-New capture records `hasResourcefulnessProc` and `resourcefulnessComplete` on
-retained craft facts. Complete-return proc counts and coverage supply the
-denominator for exact non-trivial classification; raw proc coverage may also
-include legacy positive evidence without a complete returned-item set. A readable,
-dense returned-item list with valid item IDs and nonnegative integer quantities
-establishes the outcome: empty/all-zero means false; any positive return means
-true. A missing, malformed, currency-only, or incomplete list leaves outcome
-coverage unknown. Individually provable positive material quantities may still
-be retained without asserting complete set/proc coverage. No proc is inferred
-from an allocated quantity, an absent row, or a nil returned quantity.
+### Result normalization (schema 2)
+
+Each `TRADE_SKILL_ITEM_CRAFTED_RESULT` payload is normalized exactly once, before
+anything is staged:
+
+1. `firstCraftReward = true` marks a **child reward** (Blizzard's crafting output
+   log nests these under the parent with the same `operationID`). It never
+   creates a craft, consumes a request position or touches recipe correlation.
+   It increments `firstCraftRewards` under the parent craft's recipe when a
+   committed craft in this session has that positive operation ID (a 64-entry
+   runtime memory); otherwise it is stored unattributed.
+2. A **validated primary result** needs affirmative supported call context
+  (`CraftRecipe`, `CraftEnchant`, `RecraftRecipe`, or `RecraftRecipeForOrder`),
+  no ambiguous request/begin context, a nonnegative integer `operationID`, a
+  positive item ID, and a positive integer output quantity. Operation ID zero
+  cannot establish identity. Every observed positive operation ID is remembered
+  for the active runtime session, independently of detail retention; another
+  callback for that ID cannot acquire a newer request or authoritative outcome.
+  A bonus or malformed observation may be completed by a valid primary only
+  within the same still-pending request; it never reserves that request's position.
+  `bonusCraft = true`
+  is conservatively excluded until its attempt semantics are verified.
+  Salvage, unavailable/failed hooks, failed submissions, cleared context, and
+  malformed top-level payloads stay `outcomeSource = "unverified"`. A malformed
+  or bonus callback preserves the pending request and begin and receives no
+  input facts. Its useful positive returns remain independent evidence. A valid
+  primary with malformed `resourcesReturned` still owns its known inputs and
+  consumes exactly one position; only its return measurement is partial.
+  Close/cancel of unfinished work, replacement of an unfinished request,
+  invalidation of a live request, a contradictory begin, or transition away from
+  any outstanding nonpersonal call leaves operation ownership uncertain. Enchant,
+  recraft, order and salvage contexts are tracked independently of personal
+  `pendingRequest`; its absence does not establish completion. A result alone
+  does not retire a nonpersonal context because no drain/attempt-count contract
+  has been established. Close, direct personal replacement and another
+  nonpersonal hook therefore apply the same conservative rule. Known stale IDs do not consume
+  a new batch. An unseen ID in that uncertain state stays unowned/unverified and
+  conservatively invalidates the pending batch. Another hook cannot clear this
+  uncertainty: it lasts until a new runtime session. This deliberately sacrifices
+  fresh authoritative/input coverage after such a transition; shape alone cannot
+  identify the actual new craft. Clearing history does not reset this guard.
+  Salvage may
+  emit several callbacks for one operation. These remain craft facts, not
+  authoritative attempt counts. Ordering across replaced operations still
+  requires in-game validation; a matching last call is not a server identity token.
+  The runtime ID registry is not persisted or capped and is reset when a new
+  runtime session is created. It does not alter schema-1 migration or previously
+  committed aggregates. Live evidence is needed before implementing any less
+  conservative recovery rule, or claiming continuity across a reload/login while
+  callbacks are still in flight.
+3. For a validated primary result, `resourcesReturned == nil` and `{}` are
+   **complete negatives** (confirmed product assumption for #24). A dense list
+   whose entries all have a positive integer item ID and a nonnegative integer
+   quantity is complete; duplicate entries for one item are added together.
+   Such outcomes are `outcomeSource = "native"`: `resourcefulnessComplete = true`
+   and `hasResourcefulnessProc` is true exactly when some quantity is positive.
+4. Any other primary payload (sparse/non-array tables, missing or fractional
+   quantities, currency-only entries, non-table values) is `partial`: entries
+   with a positive integer item ID and positive finite quantity remain positive
+   evidence (`hasResourcefulnessProc = true`), and nothing else is claimed.
+5. `unverified` callbacks record positive evidence only; even `nil` or `{}`
+   cannot prove the attempt returned nothing.
+
+Inputs never change the outcome classification above: a known positive or
+negative outcome stays known whatever the input evidence says.
+
+### Recipe inputs: quote allocations vs complete inputs
+
+A quote allocation list and a complete recipe input snapshot are different
+things. Capture now copies the actual `CraftRecipe` submission table, never an
+earlier UI quote. There is no production quote-allocation cache to retain stale
+optional selections or mix levels/concentration states. Operation quotes are
+queried using those submitted selections and remain separate measurements.
+Blizzard's `GetCraftingReagentInfos()` supplies all modified slots in manual mode,
+but only optional/finishing choices in automatic mode. Omitted automatic basic
+quality choices therefore remain unknown, including in later batch attempts.
+Fixed basic reagents (slot data type `Reagent`, for example Luminant Flux) are
+absent from either table. The private snapshot audit found 16 of 211 quoted
+crafts returning such an item; historical quotes remain partial evidence.
+
+Core records two separate coverage facts:
+
+- `quoteObserved`: this compatibility field counts correlated requests carrying
+  positive allocations (submitted selections for new captures, quote snapshots
+  historically). It guarantees nothing about other slots or quote identity.
+- `inputComplete`: every consumed item and its quantity is known. At submission
+  the Retail adapter reads `C_TradeSkillUI.GetRecipeSchematic(recipeID, false,
+  recipeLevel)` and lists a slot as fixed only when it is a required, visible
+  `Reagent` slot of `CraftingReagentType.Basic` with exactly one item, a positive
+  `quantityRequired` and no `variableQuantities`. Every supported modified slot
+  must reconcile submitted item membership and total quantity against its
+  requirement. A missing required slot or an underfilled/overfilled selection
+  is partial. An optional slot may be absent only when a readable dense submitted
+  table establishes zero selection; a selected optional slot must be fully filled.
+  Sparse lists, duplicate slot identities, unknown selections, hidden/automatic
+  types, variable quantities, or unreadable slots cannot certify completeness.
+  `Currency` slots consume no item. A craft inherits the request's completeness
+  only if every positively returned item is among the submitted or fixed rows;
+  an outside return disproves completeness but never the outcome.
+
+The schematic's fixed quantities follow the same rule Blizzard's UI uses
+(`ProfessionsUtil.GetQuantityRequired`). They have not yet been verified in
+game against actual bag consumption for every recipe type; when Blizzard does not
+provide a readable schematic, inputs stay partial rather than being
+reconstructed. No input is guessed for enchants, salvage, recrafts or orders.
+
+### Cohorts and measurement grains
+
+The daily metrics describe three Resourcefulness populations:
+
+- **authoritative** (`resourcefulnessAuthoritativeProcCount`): only `native`
+  outcomes. Every validated primary attempt enters it, positive or negative, so
+  it is the unbiased denominator for proc rates.
+- **complete** (`resourcefulnessCompleteProcCount`): authoritative outcomes plus
+  schema-1 complete lists. Schema-1 capture recorded complete lists mainly for
+  positives, so this population can overstate procs.
+- **raw** (`resourcefulnessProcCount`): any known outcome including legacy
+  positive-only evidence. It is evidence, not a rate.
+
+Validation enforces authoritative ⊆ complete ⊆ raw for both observations and
+negatives, `quoteObservedCount` and `inputCompleteCount <= craftCount`, and
+`matchedCraftCount <= min(inputCompleteCount, authoritative observed)`.
+`resourcefulnessSets` rows sum to the complete proc count, and their
+`authoritativeCraftCount` values sum to the authoritative proc count.
+
+`reagentSeries` rows (UTC day × character × recipe × item) hold optional measures.
+Each craft's reagent facts are first consolidated **per item**; duplicate slots are
+added together and the return is never assigned to a slot:
+
+| Measure | Meaning |
+| --- | --- |
+| `returnedQuantity` | Positive returns of the item from any cohort (legacy sums may be fractional). |
+| `allocatedQuantity`, `allocationCount` | Gross observed allocation subtotals (submitted selections plus schematic fixed rows; historical quotes) and the number of crafts with such evidence. |
+| `matchedCraftCount`, `matchedAllocatedQuantity`, `matchedReturnedQuantity`, `matchedReturnCount` | The same item restricted to crafts with an authoritative (`native`) outcome **and** proof of its complete required total across all applicable slots, including zero returns. |
+
+An unresolved slot blocks every item it could contribute, including submitted
+out-of-slot items. Unknown slot identity blocks all item totals. Other, disjoint
+fully reconciled items remain eligible: an unrelated Flux return does not remove
+proven ore totals. A subtotal of 5 for an item also present in an unsupported
+slot cannot be paired with that item's full return. New retained allocation facts
+store explicit `inputTotalComplete` booleans; repair uses these same contributions.
+Older schema-2 facts without the flag keep their original durable contributions
+during repair, rather than rewriting previously stored history. Schema-1 migration
+still creates no authoritative or matched measurements. The saved-material share is
+`matchedReturnedQuantity / matchedAllocatedQuantity` for one population; gross
+returns are never divided by gross allocations. The daily `matchedCraftCount` is
+stricter: crafts with complete recipe inputs and an authoritative outcome.
+Missing inputs are measured at craft level: `craftCount - inputCompleteCount` on
+the daily grain counts crafts without a complete recipe input snapshot (quoted or
+not), so a craft with no reagent rows, or one whose details were pruned, never
+disappears from the denominator. Rows are absent when no measure exists; matched fields appear
+together. Validation checks references, grain uniqueness, a parent daily grain,
+integer measures, `allocationCount <= craftCount`, matched <= gross, and that
+positive matched return counts agree with positive matched quantities.
 
 Canonical set identity is the comma-separated, numerically sorted sequence of
 distinct positive-return WoW item IDs (for example `3,20`, never `20,3` or
@@ -115,23 +283,26 @@ returning several reagents increments exactly one set's craft count. Repeated
 entries for an item are combined for quantity aggregation, including ambiguous
 multi-slot allocations, without counting allocated quantities as returns.
 
-Capture stages dimensions, daily measures, set counts, and item quantities before
+Capture stages dimensions, daily measures, set counts, and item measurements before
 committing any of them or consuming pending correlation. Checked count/quantity
 overflow rejects the complete update. Runtime indexes point to aggregate rows;
-capture visits only the current result and touched grains, not historical rows.
-Unknown-recipe repair transfers all three aggregate contributions in the same
-staged transaction, validates, and rebuilds indexes before replacing live state.
-Pruning removes details only. Reload validates canonical identity, references,
-unique grains, and set-count agreement with daily complete-return proc totals.
-Clear/purge removes all three aggregate collections but does not clear UI settings.
+the new aggregate-update path visits only current entries, allocations and touched
+grains, not historical rows. This is not a bound on the entire capture path:
+output learning still copies the full `recipeOutputs` map even for an already-known
+relationship. The output-bearing 50,000-craft benchmark covers five recipe-output
+relationships, not scaling with a large output map. No output-learning optimization
+is included here. Unknown-recipe repair transfers every aggregate contribution
+(daily metrics and counts, sets, reagent measurements) in the same staged
+transaction, removes emptied source rows once, validates, and rebuilds indexes
+before replacing live state. Pruning removes details only. Clear/purge removes all
+aggregate collections but does not clear UI settings.
 
-### Additive Schema-v1 Backfill
+### Schema-1 outcome variants
 
-`schemaVersion = 1` and `schemaIdentity` are unchanged. The optional internal
-`outcomeVersion = 2` marker records completion of additive initialization, not
-a feature-start date. Older supported v1 databases are copied and backfilled
-before startup pruning, once, without modifying the supplied SavedVariables on
-failure. Unsupported experimental schemas are still refused.
+Schema 1 itself had three internal variants, all accepted as migration sources.
+The optional `outcomeVersion = 2` marker recorded completion of PR #21's additive
+initialization, not a feature-start date. Before migrating, Core applies the
+same once-only correction schema 1 performed:
 
 - Existing durable output, bonus, concentration, and Ingenuity facts/coverage
   are preserved verbatim, including already-pruned history.
@@ -163,27 +334,93 @@ daily grains, since that revision did not distinguish captured counts from unsaf
 residual inference. Pruned proc/set coverage whose provenance cannot be proved
 becomes unknown; original daily output/bonus/Ingenuity measures remain unchanged.
 
+### Schema 1 → 2 migration
+
+Startup (`Ledger.New`) migrates a schema-1 database inside the same protected
+load used for every database:
+
+1. Deep-copy the supplied SavedVariables (cycles, non-finite numbers and unsupported
+   values refuse the load). All later steps work on the private copy.
+2. Refuse mixed data that already contains schema-2 collections or provenance.
+3. Apply the schema-1 outcome correction above, then run the full schema-1
+   validation (references, counters, coverage, set agreement).
+4. Convert: `returnedReagents` rows become `reagentSeries` rows with the same
+   grain and `returnedQuantity`; `firstCraftRewards` starts empty; daily rows gain
+   `resourcefulnessAuthoritativeProcCountObservedCount = 0`,
+   `quoteObservedCount = 0`, `inputCompleteCount = 0` and `matchedCraftCount = 0`;
+   `outcomeVersion` is removed.
+5. Backfill inputs from **retained** details, still before any retention pruning:
+   each retained craft's allocations are consolidated per item and added to
+   `allocatedQuantity`/`allocationCount` on its existing daily grain. A craft whose
+   request carried allocations gets `quoteObserved = true` and increments
+   `quoteObservedCount`, whether or not it returned an item outside the quote.
+   Schema 1 never stored a schematic, so no migrated craft gets `inputComplete` and
+   fixed reagents of migrated crafts stay unknown. Retained returns are not added
+   again: they already live in the converted rows. Fresh capture applies the same
+   rules, so a schema-1 craft and a quote-only schema-2 craft are measured alike.
+6. Run the full schema-2 validation, apply startup pruning, build indexes, create
+   the session, and only then let Bootstrap replace `ArtisanLogbookDB`.
+
+Any failure returns `ledger data refused: schema 1 migration failed (saved data
+unchanged): <reason>` (or the underlying validation reason). Core stays disabled,
+`ArtisanLogbookDB` remains the original table and is saved back unchanged, and the
+tracer is unaffected. A user can report the diagnostic and keep the backup; the
+confirmed debug purge remains an explicit, separate choice. The migration is
+idempotent: the result is schema 2, so later loads never replay retained details
+into aggregates; reloading an unsaved schema-1 file repeats the same deterministic
+migration. `ArtisanLogbookManagement.Status()` reports `migratedFromSchemaVersion`
+and `migratedQuoteCrafts` for the session that performed the upgrade.
+
+**What is recovered:** every craft/request/reagent fact and immutable ID,
+dimensions and counters, sessions, `recipeOutputs`, all daily measures and
+coverage (including history already pruned), complete return sets, returned
+quantities, positive-only Resourcefulness evidence, and gross quote allocations
+and quote coverage for crafts that were still retained.
+
+**What cannot be recovered:** the authoritative cohort is empty for all schema-1
+history. Schema-1 capture stored nothing that distinguishes a `nil`
+`resourcesReturned` from a malformed or unavailable list, so old unknown outcomes
+are never reinterpreted as negatives, and schema-1 complete lists (selectively
+recorded) never join the authoritative denominator. Matched measurements are
+therefore schema-2 only, as is complete recipe input coverage. Fixed basic
+reagent quantities were never captured. Inputs for crafts pruned before the upgrade, and
+first-craft rewards that schema 1 recorded as crafts, cannot be recovered or
+separated; those crafts remain counted as crafts with unknown inputs.
+
+Cost is O(retained crafts + reagent facts + aggregate rows) with one extra
+private copy, the same order as a normal load. The 50,000-craft stress test below
+reports actual timings.
+
 ### Size and Cost
 
-Growth follows occupied day/character/recipe, return-set, and returned-item
-grains, not the number of retained crafts. Retained craft booleans expire with
-details; durable set membership does not retain craft IDs. Login builds two
-simple aggregate indexes after validation/pruning. Backfill scans retained
-details once; subsequent loads do not replay crafts into aggregates.
+Growth follows occupied day/character/recipe, return-set, reagent-item and
+first-craft-reward grains, not the number of crafts. Retained craft provenance
+(`outcomeSource`, `quoteObserved`, `inputComplete`) expires with details; durable rows never
+retain craft IDs. Login builds three simple aggregate indexes after
+validation/pruning. Migration scans retained details once; subsequent loads do
+not replay crafts into aggregates.
 
-The user-supplied real SavedVariables simulation measured **239 retained crafts,
-62 set rows, and 74 quantity rows**, with an estimated **43 KB (~6%)** total
-increase including daily measures. That database is not checked into this repo
-and was not independently remeasured during this implementation.
+Measured in the development container with Lua 5.1 (timings vary, they are not
+guarantees):
 
-The reproducible ledger test uses 239 synthetic crafts, one daily grain, 62
-sets, and 74 items. Its deterministic indented-Lua text estimate grows from
-**136,530 to 176,417 bytes (+39,887 bytes)** including new retained flags and
-daily fields. Backfill took about **0.006 seconds** in the development container
-(timing varies). This smaller synthetic baseline is not a percentage estimate
-for the real database. Tests also retain the existing 50,000-craft no-history-scan
-guard and verify aggregates survive detail pruning. No evidence currently
-justifies a more elaborate encoding/indexing scheme.
+- The 239-craft synthetic sample (two allocation slots, 62 return sets) grows
+  from **279,797** estimated Lua-text bytes as schema 1 to **290,725** bytes after
+  migration (+10,928, about 3.9%) and **309,398** bytes when captured freshly as
+  schema 2 (+29,601, about 10.6%, mostly retained `outcomeSource`/`quoteObserved`
+  flags and matched measures). It has 62 set rows and 75 reagent rows.
+  Migration took about **0.016 s**.
+- 50,000 crafts across 50 days, 2 characters, 5 recipes and 3 allocation slots
+  with a duplicate item: schema-2 capture **5.0–5.3 s** total (about 100 µs per
+  craft; the schema-1 writer took 3.7–3.9 s), **500** reagent rows, three durable
+  UI-facing queries (`GetReagentSummaries`, `GetRecipeReagentStatistics`,
+  `GetRecipeOutcomes`) about **0.001 s** together without touching craft,
+  reagent, request or aggregate arrays, schema-2 reload **2.4–2.9 s**, and
+  migration of the equivalent schema-1 database **3.3–4.5 s**.
+- A real schema-1 SavedVariables snapshot (688 retained crafts, 473 daily rows,
+  about 3.8 MB of estimated Lua text; not part of the repository) migrates in
+  about **0.15 s** and grows by about 137 KB (+3.6%). Daily measures, return sets
+  and returned quantities are identical before and after, and a reload is
+  idempotent. 211 crafts become `quoteObserved` and none `inputComplete`.
 
 Session dimensions capture session start, addon version, WoW version/build/date,
 interface, project, locale, character and realm references, and the flavor
@@ -248,18 +485,25 @@ It removes crafts, requests, reagents, aggregates, and all prior dimensions;
 only the new session, character, and realm dimensions remain. Core-owned counters and
 retention settings reset to clean-database defaults (including craft and
 request IDs starting at 1). Diagnostic `ArtisanLogbookTraceDB` is unaffected.
+Runtime operation IDs remain remembered. Only after successful purge, every old
+observation's same-request completion exception is retired, including malformed
+and bonus observations. Reusing numeric request ID 1 cannot make it the old
+request. Terminal stale-ID rejection is preserved; the registry is not cleared.
+Normal clear and pruning keep monotonic request IDs and do not retire a live
+same-request completion exception. No operation state is added to SavedVariables.
 If normal ledger initialization refused an invalid or unsupported development
-database, the same confirmed purge builds a clean current schema-v1 ledger and
+database, the same confirmed purge builds a clean current schema-2 ledger and
 current session before installing it. A failed recovery reports a diagnostic,
-leaves Core unready and does not replace SavedVariables. Valid natural-ID schema-v1
-history does not need a purge for this metadata enrichment.
+leaves Core unready and does not replace SavedVariables. Valid natural-ID
+history does not need a purge for this metadata enrichment, and a schema-1
+migration failure should be reported rather than purged by default.
 
 `UnitClass("player")` supplies the optional authoritative `classFile` token on
 the current character dimension at session creation. Existing dimensions with
 the same identity accept this missing fact in place; historical characters
 not observed on the current login remain unknown. The optional class and
-recipe-quality fields remain in the existing `schemaVersion = 1` layout,
-without a migration or destructive reset.
+recipe-quality fields were added to the schema-1 layout without a destructive
+reset and are carried into schema 2 unchanged.
 
 Runtime realm keys use `project:<WOW_PROJECT_ID>:region:<GetCurrentRegion()>:`
 `realm:<GetRealmID()>` only when all three identifiers are available and positive.
@@ -358,6 +602,14 @@ callback is one fact based on PR #3 evidence; the implementation does not infer
 one result to be a duplicate merely because an operation ID repeats, and it
 does not assume a batch request's count equals its result count.
 
+Schema 2 refines this with evidence from Blizzard's crafting output log, which
+treats `firstCraftReward = true` results as children of the parent result with
+the same `operationID`. Such callbacks are not facts or attempts (see
+[Result normalization](#result-normalization-schema-2)); they never consume a
+request position or the pending begin. Operation IDs are still not used to
+deduplicate primary results. Salvage callbacks remain one fact per callback but
+are `unverified`, so they cannot inflate any outcome denominator.
+
 ## Facts and Unknowns
 
 The result payload supplies the output item, quantity, quality, Multicraft,
@@ -369,15 +621,14 @@ as an applied refund. A future derivation may apply it only when the flag is
 explicitly true. The Ogrim export now verifies a successful proc with
 `hasIngenuityProc=true`, `concentrationSpent=323`, and `ingenuityRefund=162`.
 
-`resourcesReturned` is authoritative for returned item IDs and quantities. One
-result may create several reagent rows. A return attaches to a selected input
-only if exactly one allocation uses that item ID. With duplicate allocations
-of the same item, the return stays in a separate return-only row and the input
-rows have unknown return quantities. Net consumption can be derived only for
-unambiguous rows with both quantities. Return-only rows remain
-partial. Reagent item expansion comes only from its own item dimension, not
-from the recipe consuming it. No separate Resourcefulness fact or derived
-aggregate is persisted.
+`resourcesReturned` is authoritative for returned item IDs and quantities on a
+validated primary result, and its absence there means nothing was returned (see
+[Result normalization](#result-normalization-schema-2)). One result may create
+several reagent rows. Per-slot attribution is only stored when it is
+unambiguous; durable statistics consolidate each craft by item, so duplicate
+allocation slots (for example 5 + 7 of item A with 2 returned) are measured as
+12 allocated, 2 returned and 10 net consumed without choosing a slot. Reagent item
+expansion comes only from its own item dimension, not from the recipe consuming it.
 
 Quoted skill/difficulty/expected quality are only available on personal requests
 when the operation query supplies them. No order/recraft allocation,
@@ -410,7 +661,14 @@ The production UI uses the deliberately separate `ArtisanLogbookManagement`
 cross-addon boundary for mutable Settings operations. It is not part of the
 stable read-only factual `ArtisanLogbookAPI` and never exposes raw persistence.
 `Status` returns detached retention,
-record-count, schema and build diagnostics; `CurrentCharacter` exposes the
+record-count, schema and build diagnostics, plus two additive read-only booleans:
+`operationOwnershipUncertain` reports runtime ownership quarantine;
+`authoritativeCaptureSuspended` reports quarantine or ambiguous request/begin
+context. False means no global suspension is active, not that any particular
+callback has verified identity. Neither field changes state, clears quarantine
+or provides an automatic recovery rule. Quarantined callbacks remain raw
+unowned facts; they do not appear in a recipe's authoritative denominator.
+`CurrentCharacter` exposes the
 active ledger identity without exposing SavedVariables. Retention changes take
 effect on the next startup or explicit prune, not on capture. `Prune` applies
 the configured age cutoff to detailed facts and rebuilds indexes, leaving daily
@@ -428,9 +686,9 @@ unchanged. Names can discover candidates but never authorize repair; only
 explicit Blizzard output IDs or attributed crafts supply evidence. Analysis
 is repeated when the confirmation is accepted, without repeating discovery.
 
-The optional schema-v1 `recipeOutputs` map stores only natural-ID relationships:
-`recipeOutputs[recipeId][outputItemId] = true`. Older schema-v1 databases without
-the field load as an empty map. Core bootstraps it idempotently from retained
+The `recipeOutputs` map stores only natural-ID relationships:
+`recipeOutputs[recipeId][outputItemId] = true`. Older schema-1 databases without
+the field migrate with an empty map; schema 2 always persists it. Core bootstraps it idempotently from retained
 attributed crafts before startup repair, then persists it normally. New
 attributed crafts add relationships; duplicate observations do not add rows.
 The runtime reverse index is rebuilt from this map and is never persisted.
@@ -507,18 +765,22 @@ Unknowns. Mocked full startup (including load/indexing/repair) measured roughly
 0.06-0.08 seconds in the development container. This is a practical Lua check,
 not a bound on native API latency or a measurement of the user's live database.
 
-Persistent storage remains only schema-v1 `recipeOutputs` plus any item
+Persistent storage remains only `recipeOutputs` plus any item
 dimensions for newly confirmed outputs. Runtime diagnostics keep one small
 summary and a session learned-relationship count, never evidence histories or
-per-craft recovery state. No schema bump, migration prompt or purge is required.
+per-craft recovery state. Recovery itself needs no migration prompt or purge.
 See [Retail/Forever API findings](capture-tracer.md#recipe-metadata-and-recovery)
 for availability and security limits.
 
-Repair stages a copy of the schema-v1 database, changes only proposed craft
+Repair stages one copy of the database per batch, changes only proposed craft
 `recipeId` values, and transfers each retained craft's additive series
-contribution and per-metric observed coverage from the nil-recipe grain to the
-known recipe grain. Existing target rows merge normally; empty source grains
-are removed. It deliberately does not rebuild durable series from retained
+contribution (metrics, coverage, `quoteObservedCount`, `inputCompleteCount`,
+`matchedCraftCount`),
+its return-set count (including `authoritativeCraftCount`) and its consolidated
+per-item reagent measurements from the nil-recipe grain to the known recipe
+grain. Contributions are recomputed from the craft's retained facts and flags,
+not by scanning history. Existing target rows merge normally; emptied source
+rows are removed in one pass after all transfers. It deliberately does not rebuild durable series from retained
 crafts: those rows can include older crafts already removed by retention, so
 only repaired retained contributions move and pruned historical totals remain
 in their original grain. Schema version and request relationships are unchanged.
@@ -592,7 +854,9 @@ the same absent-sum/zero-coverage rule. Proc count is an integer between zero an
 its coverage; refund coverage cannot exceed known-flag coverage and cannot be
 less than the number of observed false flags (`proc coverage - proc count`).
 If no true proc was observed, a present applied-refund sum must be zero.
-No Resourcefulness/reagent totals or derived net measurements are persisted.
+Resourcefulness and reagent measurements live in the separate grains described in
+[Durable Outcome and Reagent Statistics](#durable-outcome-and-reagent-statistics-17-24);
+no derived net/profit measures are persisted.
 
 A runtime keyed aggregate lookup is rebuilt from these rows once at startup.
 Every successful commit updates exactly its aggregate grain before callback
@@ -608,8 +872,9 @@ Reload preserves persisted daily rows and their coverage even after all details
 expire. Metadata still resolves through append-only dimensions, while stored
 series grain references remain unchanged.
 
-Schema 1 validates aggregate collection shape, unique grain, UTC-day alignment,
-references, counts, metric coverage, finite sums, and Ingenuity consistency.
+Schema 2 validates aggregate collection shape, unique grain, UTC-day alignment,
+references, counts, metric coverage, cohort containment, finite sums, and
+Ingenuity consistency.
 A persisted or configured `maxCrafts` is rejected, not converted.
 The default detailed retention is 60 days; explicit positive settings are
 preserved on reload. Public APIs expose no retention setter.
@@ -649,14 +914,15 @@ Core-owned IDs for other dimensions and facts):
 - Session: `characterDimensionId`, `realmDimensionId`.
 - Recipe: `professionId`, `expansionDimensionId`.
 - Item and profession: `expansionDimensionId`.
-- Daily series: `characterDimensionId`, `recipeId`.
+- Daily series and return sets: `characterDimensionId`, `recipeId`.
+- Reagent series and first-craft rewards: `characterDimensionId`, `recipeId`, `itemId`.
 
 The same reference checks run before live dimension creation/enrichment.
 Unsupported reference fields are refused rather than silently treated as absent.
 Bootstrap replaces `ArtisanLogbookDB` only after successful
 validation and session initialization. A failed load leaves the original
 SavedVariables intact and tracing independent. A missing database creates schema
-1 with the required identity marker; the unrelated trace database is never imported. Malformed result snapshots
+2 with the required identity marker; the unrelated trace database is never imported. Malformed result snapshots
 are rejected before craft/reagent facts are committed; timestamps are never
 fabricated as zero when the clock is unavailable.
 
@@ -678,13 +944,24 @@ multi-item returns, three-result batches, partial failure, ambiguous attribution
 reload and pruning. Index coverage includes rebuild after
 load/pruning, incremental updates, metadata enrichment, sorted ID/time arrays,
 history above 50,000 crafts, direct lookup/no-scan callbacks, and indexed query
-correctness. Run `bash src/addon/scripts/package.sh` from
+correctness. Issue #24 coverage adds 20/80 authoritative cohorts for `nil` and
+`{}` lists, legacy positive-only cohort isolation, duplicate-slot consolidation,
+missing-input coverage after pruning, malformed lists, first-craft rewards in a
+batch, enchanting/prospecting/recraft classification, unknown-recipe repair of
+all grains, rollback for eight corruptions, and a 50,000-craft stress run.
+`tests/fixtures/legacy/` holds three schema-1 SavedVariables (pre-#21,
+`outcomeVersion = 1` and `= 2`) **generated by the historical Ledger code** that
+wrote them (`generate.lua` documents how), each with pruned history, duplicate
+slots, enchanting, synthetic prospecting/crushing, an unknown recipe and a
+legacy first-craft reward row. `Ledger-schema1.lua` is the verbatim schema-1
+Ledger used by tests to write further authentic schema-1 inputs. Run `bash src/addon/scripts/package.sh` from
 the repository root to test and validate the Core-only, UI-only, and bundle ZIPs
 in `src/addon/dist/`.
 
 Remaining evidence gaps include operation-ID reuse scope, true duplicate/late
 callback behavior, crafting-order/recraft
-context, and reagent ownership/source. The Lua API projects only facts already
+context, reagent ownership/source, the exact callback shape of salvage outputs,
+and the meaning of `bonusCraft`. The Lua API projects only facts already
 supported by this ledger; see [lua-api.md](lua-api.md). This slice does not add
 AL1 export, Recent/
 Stats/Data product UI, CraftSim/TSM integration, Forever support, costing,

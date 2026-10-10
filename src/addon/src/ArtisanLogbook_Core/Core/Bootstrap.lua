@@ -338,7 +338,9 @@ function addon.HandleRetailEvent(event, ...)
       tryEnrich(addon.EnrichRecipe, recipe and recipe.id or addon.ledger.pendingRecipeId)
       local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, select(1, ...))
       if not ok or not fact then addon.ledgerCaptureError = true end
-      if fact then
+      if fact and fact.firstCraftReward then
+        tryEnrich(addon.EnrichItem, fact.itemId)
+      elseif fact then
         tryEnrich(addon.EnrichRecipe, fact.recipeId)
         for _, reagent in ipairs(addon.ledger.reagentsByCraftId[fact.id] or {}) do
           tryEnrich(addon.EnrichItem, reagent.itemId)
@@ -362,22 +364,28 @@ function addon.HandleRetailEvent(event, ...)
   addon.Emit(event, ...)
 end
 
-function addon.SubmitCraft(recipeId, count, concentration, quote, selections)
+function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs)
   if addon.ledger then
     local ok, request = pcall(addon.ledger.SubmitCraft, addon.ledger,
-      recipeId, count, concentration, quote, selections)
-    if not ok or not request then addon.ledgerCaptureError = true end
+      recipeId, count, concentration, quote, selections, inputs)
+    if not ok or not request then
+      addon.ledgerCaptureError = true
+      addon.ledger:InvalidateCraft()
+    end
     if request then
       tryEnrich(addon.EnrichRecipe, recipeId)
       for _, allocation in ipairs(request.allocations or {}) do
         tryEnrich(addon.EnrichItem, allocation.itemId)
       end
+      for _, fixed in ipairs(request.fixedReagents or {}) do
+        tryEnrich(addon.EnrichItem, fixed.itemId)
+      end
     end
   end
 end
 
-function addon.InvalidateCraft()
-  if addon.ledger then addon.ledger:InvalidateCraft() end
+function addon.InvalidateCraft(operationKind)
+  if addon.ledger then addon.ledger:InvalidateCraft(operationKind) end
 end
 
 local function optionalIdentity(api)

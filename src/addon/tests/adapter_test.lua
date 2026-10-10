@@ -168,9 +168,9 @@ test("UI quote arguments are observed separately before batch request and result
   assert(received[8][1].operationID == 10)
 end)
 
-test("personal submission freezes quote allocations while diagnostic tracing is paused", function()
+test("personal submission freezes submitted allocations while diagnostic tracing is paused", function()
   local api, _, hooks = environment()
-  local submissions, invalidations = {}, 0
+  local submissions, invalidations, kinds = {}, 0, {}
   api.C_TradeSkillUI.GetCraftingOperationInfo = function(recipe, reagents, order, concentration)
     assert(recipe == 456 and order == nil and concentration == true)
     assert(reagents[1].reagent.itemID == 101)
@@ -179,11 +179,11 @@ test("personal submission freezes quote allocations while diagnostic tracing is 
   addon.CreateFlavorAdapter(api, function() end, function() return false end,
     function(recipe, count, concentration, quote, selections)
       submissions[#submissions + 1] = { recipe, count, concentration, quote, selections }
-    end, function() invalidations = invalidations + 1 end)
+    end, function(kind) invalidations = invalidations + 1; kinds[invalidations] = kind end)
   local selected = { { dataSlotIndex = 2, quantity = 3, reagent = { itemID = 101 } },
     { dataSlotIndex = 2, quantity = 0, reagent = { itemID = 102 } } }
   hooks.GetCraftingOperationInfo(456, selected, nil, true)
-  hooks.CraftRecipe(456, 3, {}, nil, nil, true)
+  hooks.CraftRecipe(456, 3, selected, nil, nil, true)
   selected[1].quantity = 99
   assert(#submissions == 1 and submissions[1][2] == 3)
   assert(submissions[1][4].concentrationCost == 81)
@@ -191,10 +191,62 @@ test("personal submission freezes quote allocations while diagnostic tracing is 
   hooks.CraftRecipe(456, 1, {}, nil, 77, true)
   assert(#submissions == 1 and invalidations == 1)
   hooks.CraftEnchant(456, 1, {}, nil, true)
-  assert(invalidations == 2)
+  assert(invalidations == 2 and kinds[1] == "CraftRecipe" and kinds[2] == "CraftEnchant")
 end)
 
-test("only newer positive matching quotes replace a personal allocation snapshot", function()
+test("schematic snapshots trust only single-item fixed basic slots beside quote slots", function()
+  local function slot(fields)
+    local row = { dataSlotType = 1, reagentType = 1, required = true, hiddenInCraftingForm = false,
+      quantityRequired = 2, dataSlotIndex = 4, reagents = { { itemID = 243060 } }, variableQuantities = {} }
+    for key, value in pairs(fields or {}) do row[key] = value end
+    return row
+  end
+  local function capture(slots, configure)
+    local api, _, hooks = environment()
+    api.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+      CraftingReagentType = { Modifying = 0, Basic = 1, Finishing = 2, Automatic = 3 } }
+    local levels = {}
+    api.C_TradeSkillUI.GetRecipeSchematic = function(recipeId, isRecraft, recipeLevel)
+      levels[#levels + 1] = { recipeId, isRecraft, recipeLevel }
+      return { recipeID = recipeId, reagentSlotSchematics = slots }
+    end
+    if configure then configure(api) end
+    local submitted
+    addon.CreateFlavorAdapter(api, function() end, function() return false end,
+      function(_, _, _, _, _, inputs) submitted = inputs end, function() end)
+    hooks.CraftRecipe(456, 1, {}, 3, nil, false)
+    return submitted, levels
+  end
+  local modified = slot({ dataSlotType = 2, reagents = { { itemID = 101 }, { itemID = 102 } } })
+  local currency = slot({ dataSlotType = 3, reagents = { { currencyID = 9 } } })
+  local inputs, levels = capture({ modified, slot(), currency })
+  assert(levels[1][1] == 456 and levels[1][2] == false and levels[1][3] == 3)
+  assert(inputs.complete == false and #inputs.fixed == 0)
+  inputs = capture({ slot(), currency })
+  assert(inputs.complete == true and #inputs.fixed == 1)
+  assert(inputs.fixed[1].itemID == 243060 and inputs.fixed[1].quantity == 2 and inputs.fixed[1].dataSlotIndex == 4)
+  for _, partial in ipairs({
+    slot({ reagents = { { itemID = 1 }, { itemID = 2 } } }),
+    slot({ variableQuantities = { { reagent = { itemID = 243060 }, quantity = 3 } } }),
+    slot({ hiddenInCraftingForm = true }), slot({ required = false }), slot({ reagentType = 3 }),
+    slot({ quantityRequired = 0 }), slot({ reagents = { { currencyID = 9 } } }), slot({ dataSlotType = 9 }), 7,
+  }) do
+    inputs = capture({ modified, partial })
+    assert(inputs and inputs.complete == false)
+  end
+  assert(capture({ slot() }, function(api) api.Enum = nil end) == nil)
+  assert(capture({ slot() }, function(api)
+    api.C_TradeSkillUI.GetRecipeSchematic = function() error("unavailable") end
+  end) == nil)
+  assert(capture({ slot() }, function(api)
+    api.C_TradeSkillUI.GetRecipeSchematic = function() return { recipeID = 999, reagentSlotSchematics = {} } end
+  end) == nil)
+  assert(capture({ slot() }, function(api)
+    api.issecretvalue = function(value) return type(value) == "table" and value.recipeID ~= nil end
+  end) == nil)
+end)
+
+test("empty and invalid quotes cannot resurrect removed submitted selections", function()
   local api, _, hooks = environment()
   local submissions = {}
   api.C_TradeSkillUI.GetCraftingOperationInfo = function()
@@ -219,15 +271,14 @@ test("only newer positive matching quotes replace a personal allocation snapshot
   hooks.GetCraftingOperationInfo(456, { { quantity = 1, reagent = { itemID = 105 } } }, nil, false)
   hooks.GetCraftingOperationInfo(789, newer, nil, false)
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
-  assert(submissions[1].selections[1].reagent.itemID == 101)
-  assert(submissions[1].selections[1].quantity == 3)
+  assert(#submissions[1].selections == 0)
   hooks.GetCraftingOperationInfo(456, first, nil, false)
   hooks.GetCraftingOperationInfo(456, newer, nil, false)
-  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  hooks.CraftRecipe(456, 1, newer, nil, nil, false)
   assert(submissions[2].selections[1].reagent.itemID == 102)
 end)
 
-test("quote caches are scoped by recipe and concentration and consumed independently", function()
+test("submissions never inherit quotes from another level, concentration or prior batch", function()
   local api, frame, hooks = environment()
   local submissions = {}
   api.C_TradeSkillUI.GetCraftingOperationInfo = function() return {} end
@@ -246,19 +297,16 @@ test("quote caches are scoped by recipe and concentration and consumed independe
   hooks.CraftRecipe(456, 1, {}, nil, nil, true)
   hooks.CraftRecipe(789, 1, {}, nil, nil, false)
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
-  assert(submissions[1].selections[1].reagent.itemID == 102)
-  assert(submissions[2].selections == nil)
-  assert(submissions[3].selections[1].reagent.itemID == 103)
-  assert(submissions[4].selections[1].reagent.itemID == 101)
+  for index = 1, 4 do assert(#submissions[index].selections == 0) end
   hooks.GetCraftingOperationInfo(456, {}, nil, false)
   hooks.CraftRecipe(456, 1, { { dataSlotIndex = 1, quantity = 7,
     reagent = { itemID = 999 } } }, nil, nil, false)
-  assert(submissions[5].selections == nil)
+  assert(submissions[5].selections[1].reagent.itemID == 999)
   hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 2,
     reagent = { itemID = 101 } } }, nil, false)
   frame.onEvent(frame, "TRADE_SKILL_CLOSE")
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
-  assert(submissions[6].selections == nil)
+  assert(#submissions[6].selections == 0)
 end)
 
 test("quote probe suppresses its own nested hook and stays idle while paused", function()
@@ -341,6 +389,175 @@ test("known non-Retail clients get an explicit empty flavor boundary", function(
   assert(name == "classic" and projectID == 2)
   assert(adapter.capabilities.flavor == "classic")
   assert(next(adapter.capabilities.events) == nil and next(adapter.capabilities.measurements) == nil)
+end)
+
+test("review F1-F3 reconcile submitted slots through ledger API reload and repair", function()
+  local function slot(index, item, quantity, fields)
+    local row = { dataSlotType = 2, reagentType = 1, required = true,
+      dataSlotIndex = index, quantityRequired = quantity, reagents = { { itemID = item } } }
+    for key, value in pairs(fields or {}) do row[key] = value end
+    return row
+  end
+  local function selection(index, item, quantity)
+    return { dataSlotIndex = index, reagent = { itemID = item }, quantity = quantity }
+  end
+  local function capture(slots, submitted, quoted, count, inaccessible, negative)
+    local api, _, hooks = environment()
+    if inaccessible then api.canaccesstable = function(value) return value ~= submitted end end
+    api.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+      CraftingReagentType = { Basic = 1 } }
+    api.C_TradeSkillUI.GetRecipeSchematic = function(recipeId, _, level)
+      assert(level == 3)
+      return { recipeID = recipeId, reagentSlotSchematics = slots }
+    end
+    api.C_TradeSkillUI.GetCraftingOperationInfo = function() return {} end
+    local core = {}
+    assert(loadfile(root .. "/Storage/Ledger.lua"))("ArtisanLogbook", core)
+    assert(loadfile(root .. "/Core/API.lua"))("ArtisanLogbook", core)
+    local clock = { wall = function() return 1800000000 end }
+    core.ledger = assert(core.Ledger.New(nil, clock))
+    assert(core.ledger:CreateSession({}))
+    addon.CreateFlavorAdapter(api, function() end, function() return false end,
+      function(...) return assert(core.ledger:SubmitCraft(...)) end,
+      function(kind) core.ledger:InvalidateCraft(kind) end)
+    hooks.GetCraftingOperationInfo(456, quoted or {}, nil, false)
+    hooks.GetCraftingOperationInfo(456, {}, nil, false)
+    hooks.CraftRecipe(456, count or 1, submitted, 3, nil, false)
+    for index = 1, count or 1 do
+      assert(core.ledger:RecordResult({ operationID = index, itemID = 900, quantity = 1,
+        resourcesReturned = not negative and { { reagent = { itemID = 100 }, quantity = 2 } } or nil }))
+    end
+    local function check()
+      local outcomes = ArtisanLogbookAPI.GetRecipeOutcomes(456)
+      local page = ArtisanLogbookAPI.GetRecipeReagentStatistics(456)
+      return outcomes, page.reagents
+    end
+    local before, items = check()
+    core.ledger = assert(core.Ledger.New(core.ledger.database, clock))
+    local after, reloadedItems = check()
+    assert(after.totals.inputCompleteCount == before.totals.inputCompleteCount)
+    assert(after.totals.matchedCraftCount == before.totals.matchedCraftCount)
+    for index, row in ipairs(items) do
+      assert(row.matchedCraftCount == reloadedItems[index].matchedCraftCount)
+      assert(row.matchedAllocatedQuantity == reloadedItems[index].matchedAllocatedQuantity)
+      assert(row.returnedQuantity == reloadedItems[index].returnedQuantity)
+    end
+    return core.ledger, before, items
+  end
+  local quote = { selection(1, 100, 5) }
+  local cases = {
+    { slots = { slot(1, 100, 5), slot(2, 200, 3) }, submitted = quote, matched = true },
+    { slots = { slot(1, 100, 5) }, submitted = { selection(1, 100, 4) } },
+    { slots = { [1] = slot(1, 100, 5), [3] = slot(3, 200, 3) }, submitted = quote },
+    { slots = { slot(1, 100, 5), slot(2, 100, 3, { dataSlotType = 1,
+        variableQuantities = { { quantity = 3 } } }) }, submitted = quote },
+    { slots = { slot(1, 100, 5), slot(2, 100, 3) }, submitted = quote },
+    { slots = { slot(1, 100, 5) }, submitted = {}, count = 2 },
+    { slots = { slot(1, 100, 5) }, submitted = { selection(1, 200, 5) } },
+    { slots = { slot(1, 100, 5), slot(2, 200, 3) }, submitted = { selection(1, 100, 5), selection(2, 100, 3) } },
+    { slots = { slot(1, 100, 5), slot(1, 200, 3) }, submitted = quote },
+    { slots = { slot(1, 100, 5, { reagentType = 3 }) }, submitted = quote },
+    { slots = { slot(1, 100, 5), slot(2, 200, 1, { required = false }) },
+      submitted = { selection(1, 100, 5), selection(2, 200, 2) }, matched = true },
+    { slots = { slot(1, 100, 5) }, submitted = { [2] = selection(1, 100, 5) } },
+  }
+  for _, case in ipairs(cases) do
+    if case.submitted[2] and not case.submitted[1] then
+      local ledger = capture(case.slots, case.submitted, quote)
+      assert(#ledger.database.requests == 0)
+      assert(ledger.database.crafts[1].outcomeSource == "unverified")
+    else
+      local ledger, outcomes, items = capture(case.slots, case.submitted, quote, case.count)
+      assert(ledger.database.crafts[1].inputComplete == nil)
+      assert(outcomes.totals.inputCompleteCount == 0)
+      for _, row in ipairs(ledger.database.reagentSeries) do
+        if row.itemId == 100 then
+          assert(((row.matchedCraftCount or 0) > 0) == (case.matched == true))
+        end
+      end
+      for _, row in ipairs(items) do
+        if row.item.id == 100 then
+          assert((row.matchedCraftCount > 0) == (case.matched == true))
+        end
+      end
+    end
+  end
+  local ledger = capture({ slot(1, 100, 5), slot(2, 200, 1, { required = false }) }, quote, quote)
+  assert(ledger.database.crafts[1].inputComplete == true)
+  ledger = capture({ slot(1, 100, 1, { required = false }) }, {}, quote, nil, false, true)
+  assert(ledger.database.requests[1].allocations == nil)
+  assert(ledger.database.crafts[1].inputComplete == true and #ledger.database.reagentSeries == 0)
+  ledger = capture({ slot(1, 100, 5) }, quote, { selection(1, 200, 5) })
+  assert(ledger.database.requests[1].allocations[1].itemId == 100)
+  assert(ledger.database.crafts[1].inputComplete == true)
+  ledger = capture({ slot(1, 100, 5) }, quote, quote, nil, true)
+  assert(ledger.database.requests[1].allocations == nil and ledger.database.crafts[1].inputComplete == nil)
+end)
+
+test("review F4 unknown cleared failed and malformed primary contexts fail closed", function()
+  local core = {}
+  assert(loadfile(root .. "/Storage/Ledger.lua"))("ArtisanLogbook", core)
+  local clock = { wall = function() return 1800000000 end }
+  local ledger = assert(core.Ledger.New(nil, clock))
+  assert(ledger:CreateSession({}))
+  local result = { operationID = 1, itemID = 900, quantity = 1 }
+  assert(ledger:RecordResult(result).outcomeSource == "unverified")
+  ledger:InvalidateCraft("CraftSalvage")
+  ledger:CancelCraft()
+  assert(ledger:RecordResult(result).outcomeSource == "unverified")
+  result.resourcesReturned = { { reagent = { itemID = 100 }, quantity = 2 } }
+  local positive = assert(ledger:RecordResult(result))
+  assert(positive.hasResourcefulnessProc == true and positive.resourcefulnessComplete == nil)
+  ledger:InvalidateCraft("CraftEnchant")
+  assert(ledger:RecordResult({}).outcomeSource == "unverified")
+  result.resourcesReturned = nil
+  assert(ledger:CreateSession({}))
+  ledger:InvalidateCraft("CraftEnchant")
+  assert(ledger:RecordResult(result).outcomeSource == "native")
+  local api, _, hooks = environment()
+  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    function() error("failed submission") end, function(kind) ledger:InvalidateCraft(kind) end)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(ledger:RecordResult(result).outcomeSource == "unverified")
+  ledger:CancelCraft()
+  assert(ledger:CreateSession({}))
+  assert(ledger:SubmitCraft(456, 1, false))
+  assert(ledger:RecordResult({}).outcomeSource == "unverified")
+  assert(ledger.pendingRequest.remaining == 1)
+  assert(ledger:RecordResult(result).outcomeSource == "native")
+  ledger:BeginCraft(456)
+  ledger:BeginCraft(789)
+  assert(ledger:RecordResult(result).outcomeSource == "unverified")
+  ledger:CancelCraft()
+  local unavailable, frame = environment()
+  unavailable.hooksecurefunc = function() error("hook installation failed") end
+  local adapter = addon.CreateFlavorAdapter(unavailable, function(event, payload)
+    if event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
+      assert(ledger:RecordResult(payload).outcomeSource == "unverified")
+    end
+  end)
+  assert(adapter.capabilities.hooks.CraftRecipe == false)
+  frame.onEvent(frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", result)
+  local loaded = assert(core.Ledger.New(ledger.database, clock))
+  local observed = 0
+  for _, row in ipairs(loaded.database.craftSeries) do
+    observed = observed + row.resourcefulnessAuthoritativeProcCountObservedCount
+  end
+  assert(observed == 2)
+end)
+
+test("unverified malformed operation IDs cannot acquire a newer request", function()
+  local core = {}
+  assert(loadfile(root .. "/Storage/Ledger.lua"))("ArtisanLogbook", core)
+  local ledger = assert(core.Ledger.New(nil, { wall = function() return 1800000000 end }))
+  assert(ledger:CreateSession({}))
+  assert(ledger:RecordResult({ operationID = 99 }).outcomeSource == "unverified")
+  local request = assert(ledger:SubmitCraft(456, 1, false))
+  local late = assert(ledger:RecordResult({ operationID = 99, itemID = 900, quantity = 1 }))
+  assert(late.outcomeSource == "unverified" and late.requestId == nil and late.inputComplete == nil)
+  assert(ledger.pendingRequest.id == request.id and ledger.pendingRequest.remaining == 1)
+  local actual = assert(ledger:RecordResult({ operationID = 100, itemID = 900, quantity = 1 }))
+  assert(actual.outcomeSource == "native" and actual.requestId == request.id)
 end)
 
 print(string.format("%d adapter tests passed", passed))

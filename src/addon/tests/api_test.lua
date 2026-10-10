@@ -34,6 +34,30 @@ local function session(ledger, name, realmId)
     characterGUID = "Player-" .. name }))
 end
 
+local function inputEvidence(itemIds, fixed)
+  local inputs = { evidenceVersion = 1, complete = true, fixed = fixed or {}, completeItemIDs = {} }
+  for _, itemId in ipairs(itemIds) do inputs.completeItemIDs[#inputs.completeItemIDs + 1] = { itemID = itemId } end
+  return inputs
+end
+local completeInputs = inputEvidence({ 8, 9 })
+
+local function primaryResult(ledger, result)
+  local payload = {}
+  for key, value in pairs(result) do payload[key] = value end
+  payload.operationID = payload.operationID or ledger.database.nextCraftId
+  payload.itemID = payload.itemID or 900000
+  payload.quantity = payload.quantity or 1
+  if ledger.database.schemaVersion == 2 and ledger.operationKind == nil then ledger:InvalidateCraft("CraftEnchant") end
+  return ledger:RecordResult(payload)
+end
+
+-- Schema-1 history written by the verbatim schema-1 Ledger, for migration-facing queries.
+local function legacyLedger(clock)
+  local legacy = {}
+  assert(loadfile(testsRoot .. "/fixtures/legacy/Ledger-schema1.lua"))("ArtisanLogbook", legacy)
+  return assert(legacy.Ledger.New(nil, clock))
+end
+
 local function fixture(options)
   local ledger, api, clock, addon = newLedger(options)
   local midnight = assert(ledger:AddDimension("expansion", "midnight", { name = "Midnight", chronologicalOrder = 11 }))
@@ -54,24 +78,24 @@ local function fixture(options)
   assert(ledger:SubmitCraft(101, 1, false,
     { concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0 },
     { { dataSlotIndex = 1, quantity = 3, quality = 0, reagent = { itemID = 202 } } }))
-  assert(ledger:RecordResult({ operationID = 0, itemID = 201, quantity = 5, craftingQuality = 0,
+  assert(ledger:RecordResult({ operationID = 1, itemID = 201, quantity = 5, craftingQuality = 0,
     itemLevel = 0, multicraft = 0, concentrationSpent = 0, concentrationCurrencyID = 0,
     hasIngenuityProc = false, ingenuityRefund = 9, resourcesReturned = {} }))
   clock.current = clock.current + 1
   session(ledger, "B", 1)
   ledger:BeginCraft(102)
-  assert(ledger:RecordResult({ operationID = 2, itemID = 201 }))
+  assert(ledger:RecordResult({ operationID = 2, itemID = 201, quantity = 1 }))
   clock.current = clock.current + 1
   session(ledger, "C", 2)
   ledger:BeginCraft(103)
-  assert(ledger:RecordResult({ operationID = 3 }))
+  assert(ledger:RecordResult({ operationID = 3, itemID = 201, quantity = 1 }))
   session(ledger, "A", 1)
   ledger:BeginCraft(104)
-  assert(ledger:RecordResult({ operationID = 4 }))
+  assert(ledger:RecordResult({ operationID = 4, itemID = 201, quantity = 1 }))
   clock.current = clock.current + 1
   assert(ledger:RecordResult({}))
   ledger:BeginCraft(101)
-  assert(ledger:RecordResult({ operationID = 6 }))
+  assert(ledger:RecordResult({ operationID = 6, itemID = 201, quantity = 1 }))
   return ledger, api, clock, addon
 end
 
@@ -85,7 +109,7 @@ local function errorIs(code, value, reason)
   assert(value == nil and reason == code, tostring(reason) .. " instead of " .. code)
 end
 
-test("reagent catalogue separates recorded allocations and durable returns without doubling facts", function()
+test("reagent catalogue reads durable inputs returns and matched coverage that survive pruning", function()
   local ledger, api, clock = newLedger()
   assert(#api.GetReagentSummaries().reagents == 0)
   session(ledger, "A", 1)
@@ -94,18 +118,20 @@ test("reagent catalogue separates recorded allocations and durable returns witho
   assert(ledger:AddDimension("item", 8, { name = "Bloom" }))
   assert(ledger:SubmitCraft(101, 1, false, nil, {
     { dataSlotIndex = 1, quantity = 5, quality = 2, reagent = { itemID = 8 } },
-  }))
-  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
+  }, completeInputs))
+  assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
   local row = api.GetReagentSummaries().reagents[1]
-  assert(row.item.id == 8 and row.item.name == "Bloom" and row.quality == 2)
+  assert(row.item.id == 8 and row.item.name == "Bloom" and row.quality == nil)
   assert(row.allocatedQuantity == 5 and row.returnedQuantity == 2 and row.recipeCount == 1)
   assert(row.allocationComplete and row.returnComplete and row.professions[1].skillLineId == 171)
+  assert(row.craftCount == 1 and row.allocationCount == 1 and row.matchedCraftCount == 1)
+  assert(row.matchedAllocatedQuantity == 5 and row.matchedReturnedQuantity == 2 and row.matchedReturnCount == 1)
   row.item.name = "Changed"; row.professions[1].name = "Changed"
   assert(api.GetReagentSummaries().reagents[1].item.name == "Bloom")
+  local before = api.GetReagentSummaries()
   ledger:Prune(clock.current + 61 * 86400)
-  row = api.GetReagentSummaries().reagents[1]
-  assert(row.allocatedQuantity == nil and row.returnedQuantity == 2 and row.hasPrunedReturns)
-  assert(not row.allocationComplete and row.returnComplete and row.recipeCount == 1)
+  assert(#ledger.database.crafts == 0)
+  equal(api.GetReagentSummaries(), before)
 end)
 
 test("reagent catalogue filters item identities and professions before globally sorted pages", function()
@@ -120,7 +146,7 @@ test("reagent catalogue filters item identities and professions before globally 
     assert(ledger:SubmitCraft(recipeId, 1, false, nil, {
       { dataSlotIndex = 1, quantity = quantity, quality = quality, reagent = { itemID = itemId } },
     }))
-    assert(ledger:RecordResult({ resourcesReturned = returned > 0 and
+    assert(primaryResult(ledger, { resourcesReturned = returned > 0 and
       { { reagent = { itemID = itemId }, quantity = returned } } or {} }))
   end
   record(101, 8, "Bloom", 3, 1, 1)
@@ -130,7 +156,7 @@ test("reagent catalogue filters item identities and professions before globally 
   record(102, 8, "Bloom", 7, 2, 1)
   local rows = api.GetReagentSummaries().reagents
   assert(rows[1].item.id == 11 and rows[2].item.id == 8 and rows[3].item.id == 9)
-  assert(rows[2].quality == 1 and rows[3].quality == 2 and rows[2].recipeCount == 2)
+  assert(rows[2].recipeCount == 2)
   assert(#rows[2].professions == 2 and rows[2].allocatedQuantity == 10 and rows[2].returnedQuantity == 3)
   assert(rows[1].returnedQuantity == 0 and rows[1].returnComplete)
   local filtered = api.GetReagentSummaries({ profession = 333 }).reagents
@@ -162,8 +188,8 @@ test("reagent periods and characters filter both retained and durable totals", f
     session(ledger, name, 1)
     assert(ledger:SubmitCraft(101, 1, false, nil, {
       { dataSlotIndex = 1, quantity = quantity, reagent = { itemID = 8 } },
-    }))
-    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = returned } } }))
+    }, completeInputs))
+    assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 8 }, quantity = returned } } }))
     return api.GetCrafts().crafts[1].character.key
   end
   local first = record("A", 5, 2)
@@ -183,37 +209,41 @@ test("reagent periods and characters filter both retained and durable totals", f
   end
   ledger:Prune(clock.current + 61 * 86400)
   result = assert(api.GetReagentSummaries(options))
-  assert(result.totals.allocatedQuantity == nil and result.totals.returnedQuantity == 2)
-  assert(not result.totals.allocationComplete and result.totals.returnComplete)
+  assert(result.totals.allocatedQuantity == 5 and result.totals.returnedQuantity == 2)
+  assert(result.totals.allocationComplete and result.totals.returnComplete)
+  assert(result.totals.matchedAllocatedQuantity == 5 and result.totals.matchedReturnedQuantity == 2)
 end)
 
-test("reagent catalogue keeps missing amounts unknown and retained coverage separate", function()
+test("reagent catalogue keeps unknown inputs and returns visible in craft-level coverage", function()
   local ledger, api, clock, addon = newLedger()
   session(ledger, "A", 1)
   assert(ledger:SubmitCraft(101, 1, false, nil, {
     { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } },
-  }))
-  assert(ledger:RecordResult({}))
+  }, completeInputs))
+  assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 8 } } } }))
   local row = api.GetReagentSummaries().reagents[1]
-  assert(row.allocatedQuantity == 5 and row.returnedQuantity == nil)
+  assert(row.allocatedQuantity == 5 and row.returnedQuantity == nil and row.matchedCraftCount == 0)
   assert(row.allocationObservedCount == 1 and row.returnUnknownCount == 1 and not row.returnComplete)
+  -- A craft with no input snapshot stays in the denominator as missing input.
   assert(ledger:SubmitCraft(101, 1, false))
-  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
+  assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
   row = api.GetReagentSummaries().reagents[1]
-  assert(row.allocatedQuantity == 5 and row.returnedQuantity == 2)
+  assert(row.allocatedQuantity == 5 and row.returnedQuantity == 2 and row.craftCount == 2)
   assert(row.allocationUnknownCount == 1 and not row.allocationComplete and not row.returnComplete)
+  assert(row.returnObservedCount == 1 and row.matchedCraftCount == 0)
   assert(ledger:SubmitCraft(102, 1, false))
-  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 9 }, quantity = 1 } } }))
+  assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 9 }, quantity = 1 } } }))
   row = api.GetReagentSummaries({ items = { 9 } }).reagents[1]
-  assert(row.allocatedQuantity == nil and row.returnedQuantity == 1 and row.quality == nil)
+  assert(row.allocatedQuantity == nil and row.returnedQuantity == 1 and row.returnComplete)
+  assert(row.allocationUnknownCount == 1 and not row.allocationComplete)
   local saved = ledger.database
   addon.ledger = assert(addon.Ledger.New(saved, clock))
   row = api.GetReagentSummaries({ items = { 8 } }).reagents[1]
   assert(row.returnedQuantity == 2 and not row.returnComplete)
   addon.ledger:Prune(clock.current + 61 * 86400)
   row = api.GetReagentSummaries({ items = { 8 } }).reagents[1]
-  assert(row.allocatedQuantity == nil and row.returnedQuantity == 2 and not row.returnComplete)
-  assert(row.hasPrunedReturns)
+  assert(row.allocatedQuantity == 5 and row.returnedQuantity == 2 and not row.returnComplete)
+  assert(row.allocationUnknownCount == 1 and row.craftCount == 2)
 end)
 
 test("reagent catalogue bounds validates cursors and never consumes UI preference state", function()
@@ -247,24 +277,29 @@ test("reagent catalogue bounds validates cursors and never consumes UI preferenc
   errorIs("not-ready", api.GetReagentSummaries())
 end)
 
-test("reagent catalogue preserves ambiguous slots and unknown zero coverage without inventing quality", function()
+test("duplicate allocation slots consolidate per craft and item without slot attribution", function()
   local ledger, api = newLedger()
   session(ledger, "A", 1)
   assert(ledger:SubmitCraft(101, 1, false, nil, {
-    { dataSlotIndex = 1, quantity = 3, quality = 1, reagent = { itemID = 8 } },
-    { dataSlotIndex = 2, quantity = 4, quality = 2, reagent = { itemID = 8 } },
-  }))
-  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
+    { dataSlotIndex = 1, quantity = 5, quality = 1, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 7, quality = 1, reagent = { itemID = 8 } },
+  }, completeInputs))
+  assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 8 }, quantity = 2 } } }))
+  local facts = ledger.database.reagents
+  assert(#facts == 3 and facts[1].returnedQuantity == nil and facts[2].returnedQuantity == nil)
+  assert(facts[3].allocatedQuantity == nil and facts[3].returnedQuantity == 2)
   local row = api.GetReagentSummaries().reagents[1]
-  assert(row.allocatedQuantity == 7 and row.returnedQuantity == 2 and row.quality == nil)
-  assert(row.allocationObservedCount == 2 and row.returnUnknownCount == 2)
-  assert(not row.allocationComplete and not row.returnComplete)
+  assert(row.allocatedQuantity == 12 and row.returnedQuantity == 2 and row.allocationCount == 1)
+  assert(row.matchedCraftCount == 1 and row.matchedAllocatedQuantity == 12 and row.matchedReturnedQuantity == 2)
+  assert(row.matchedAllocatedQuantity - row.matchedReturnedQuantity == 10)
+  assert(row.allocationObservedCount == 1 and row.returnObservedCount == 1)
+  assert(row.allocationComplete and row.returnComplete)
   assert(ledger:SubmitCraft(102, 1, false, nil, {
     { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 9 } },
   }))
-  assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 9 } } } }))
+  assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 9 } } } }))
   row = api.GetReagentSummaries({ items = { 9 } }).reagents[1]
-  assert(row.returnedQuantity == nil and not row.returnComplete)
+  assert(row.returnedQuantity == nil and not row.returnComplete and row.matchedCraftCount == 0)
 end)
 
 test("recipe outcomes summarize durable evidence with bounded charts and factual returns", function()
@@ -273,7 +308,7 @@ test("recipe outcomes summarize durable evidence with bounded charts and factual
   local from = math.floor(clock.current / 86400) * 86400
   local function record(recipeId, result)
     assert(ledger:SubmitCraft(recipeId, 1, false))
-    return assert(ledger:RecordResult(result))
+    return assert(primaryResult(ledger, result))
   end
   record(101, { quantity = 5, multicraft = 0, resourcesReturned = {}, hasIngenuityProc = false, ingenuityRefund = 90 })
   record(101, { quantity = 8, multicraft = 3, resourcesReturned = {
@@ -288,18 +323,22 @@ test("recipe outcomes summarize durable evidence with bounded charts and factual
   local all = assert(api.GetRecipeOutcomes(101, nil, { buckets = 2 }))
   assert(all.totals.craftCount == 4 and #all.series == 2 and all.bucketSeconds == 2 * 86400)
   assert(all.totals.multicraftProcCount == 1 and all.totals.multicraftProcCountObservedCount == 2)
-  assert(all.totals.multicraftBonus == 3 and all.totals.outputQuantity == 13)
+  assert(all.totals.multicraftBonus == 3 and all.totals.outputQuantity == 15)
   assert(all.totals.ingenuityRefund == 20 and all.totals.ingenuityRefundObservedCount == 2)
-  assert(all.totals.resourcefulnessProcCount == 2 and all.totals.resourcefulnessProcCountObservedCount == 3)
+  assert(all.totals.resourcefulnessProcCount == 2 and all.totals.resourcefulnessProcCountObservedCount == 4)
+  assert(all.totals.resourcefulnessAuthoritativeProcCount == 2 and
+    all.totals.resourcefulnessAuthoritativeProcCountObservedCount == 4)
+  assert(all.totals.quoteObservedCount == 0 and all.totals.inputCompleteCount == 0 and all.totals.matchedCraftCount == 0)
+  assert(all.totals.firstCraftRewardCount == 0)
   assert(api.GetRecipeOutcomes(101, { characters = { character } }).totals.craftCount == 3)
   assert(api.GetRecipeOutcomes(101, { characters = {} }).totals.craftCount == 0)
   assert(api.GetRecipeOutcomes(101, { time = { from = from, to = from + 86400 } }).totals.craftCount == 3)
   assert(api.GetRecipeOutcomes(101, { time = { from = from, to = from } }).totals.craftCount == 0)
   local page = assert(api.GetRecipeReturnSets(101, nil, { limit = 1 }))
-  equal(page.returns, { { itemIds = { 8 }, craftCount = 1 } })
+  equal(page.returns, { { itemIds = { 8 }, craftCount = 1, authoritativeCraftCount = 1 } })
   assert(page.nextCursor)
   local last = assert(api.GetRecipeReturnSets(101, nil, { limit = 1, cursor = page.nextCursor }))
-  equal(last.returns, { { itemIds = { 8, 9 }, craftCount = 1 } })
+  equal(last.returns, { { itemIds = { 8, 9 }, craftCount = 1, authoritativeCraftCount = 1 } })
   assert(last.nextCursor == nil)
   equal(api.GetRecipeReturnedReagents(101).returns, {
     { item = { id = 8 }, returnedQuantity = 5 }, { item = { id = 9 }, returnedQuantity = 2 },
@@ -336,7 +375,7 @@ test("returned materials total each item identity across characters days and sma
   local function record(itemId, quantity)
     assert(ledger:AddDimension("item", itemId, { name = "Same-named herb" }))
     assert(ledger:SubmitCraft(101, 1, false))
-    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = itemId }, quantity = quantity } } }))
+    assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = itemId }, quantity = quantity } } }))
   end
   for itemId = 12, 8, -1 do record(itemId, itemId) end
   record(8, 2)
@@ -368,17 +407,18 @@ test("returned materials total each item identity across characters days and sma
   verify(nil, { [8] = 13, [9] = 12, [10] = 13, [11] = 14, [12] = 15 })
 end)
 
-test("legacy positive evidence is separate from complete return coverage in recipe queries", function()
-  local ledger, api, clock, addon = newLedger()
-  session(ledger, "A", 1)
-  assert(ledger:SubmitCraft(101, 1, false, nil, {
+test("legacy positive evidence is separate from the authoritative cohort in recipe queries", function()
+  local _, api, clock, addon = newLedger()
+  local legacy = legacyLedger(clock)
+  session(legacy, "A", 1)
+  assert(legacy:SubmitCraft(101, 1, false, nil, {
     { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 8 } },
     { dataSlotIndex = 2, quantity = 2, reagent = { itemID = 9 } },
   }))
-  assert(ledger:RecordResult({ resourcesReturned = {
+  assert(legacy:RecordResult({ resourcesReturned = {
     { reagent = { itemID = 8 }, quantity = 1 }, { reagent = { itemID = 9 } },
   } }))
-  local data = ledger.database
+  local data = legacy.database
   data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
   for _, craft in ipairs(data.crafts) do craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil end
   for _, row in ipairs(data.craftSeries) do
@@ -390,14 +430,20 @@ test("legacy positive evidence is separate from complete return coverage in reci
   local totals = api.GetRecipeOutcomes(101).totals
   assert(totals.resourcefulnessProcCount == 1 and totals.resourcefulnessProcCountObservedCount == 1)
   assert(totals.resourcefulnessCompleteProcCount == nil and totals.resourcefulnessCompleteProcCountObservedCount == 0)
+  assert(totals.resourcefulnessAuthoritativeProcCountObservedCount == 0 and totals.quoteObservedCount == 1)
+  assert(totals.inputCompleteCount == 0)
   assert(#api.GetRecipeReturnSets(101).returns == 0)
   assert(api.GetRecipeReturnedReagents(101).returns[1].returnedQuantity == 1)
   session(addon.ledger, "A", 1)
   assert(addon.ledger:SubmitCraft(101, 1, false))
-  assert(addon.ledger:RecordResult({ resourcesReturned = {} }))
+  assert(primaryResult(addon.ledger, {}))
   totals = api.GetRecipeOutcomes(101).totals
+  assert(totals.craftCount == 2)
   assert(totals.resourcefulnessProcCount == 1 and totals.resourcefulnessProcCountObservedCount == 2)
   assert(totals.resourcefulnessCompleteProcCount == 0 and totals.resourcefulnessCompleteProcCountObservedCount == 1)
+  -- The modern cohort has its own denominator; the legacy positive is not part of it.
+  assert(totals.resourcefulnessAuthoritativeProcCount == 0 and
+    totals.resourcefulnessAuthoritativeProcCountObservedCount == 1)
   clock.current = clock.current + 61 * 86400
   addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
   equal(api.GetRecipeOutcomes(101).totals, totals)
@@ -408,12 +454,12 @@ test("recipe outcome queries never scan craft history or unrelated daily recipes
   session(ledger, "A", 1)
   for index = 1, 205 do
     assert(ledger:SubmitCraft(101, 1, false))
-    assert(ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = index }, quantity = 2 } } }))
+    assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = index }, quantity = 2 } } }))
   end
   local oldPairs, oldIpairs = pairs, ipairs
   local forbidden = { [ledger.database.crafts] = true, [ledger.database.reagents] = true,
     [ledger.database.craftSeries] = true, [ledger.database.resourcefulnessSets] = true,
-    [ledger.database.returnedReagents] = true }
+    [ledger.database.reagentSeries] = true, [ledger.database.requests] = true }
   pairs = function(rows) assert(not forbidden[rows]); return oldPairs(rows) end
   ipairs = function(rows) assert(not forbidden[rows]); return oldIpairs(rows) end
   local ok, reason = pcall(function()
@@ -423,6 +469,8 @@ test("recipe outcome queries never scan craft history or unrelated daily recipes
     assert(#last.returns == 5 and not last.nextCursor)
     assert(api.GetRecipeOutcomes(101).totals.resourcefulnessProcCount == 205)
     assert(#api.GetRecipeReturnSets(101, nil, { limit = 200 }).returns == 200)
+    assert(#api.GetRecipeReagentStatistics(101, nil, { limit = 200 }).reagents == 200)
+    assert(api.GetReagentSummaries({ limit = 200 }).totalCount == 205)
   end)
   pairs, ipairs = oldPairs, oldIpairs
   assert(ok, reason)
@@ -439,13 +487,14 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
   local recipe = { id = 101, name = "Potion", expansion = expansion, profession = profession }
   local reagentItem = { id = 202, name = "Reagent", expansion = oldExpansion }
   equal(craft, {
-    id = 1, timestamp = 1800000000, gameOperationId = 0,
+    id = 1, timestamp = 1800000000, gameOperationId = 1,
     character = { key = realm.key .. ":guid:Player-A", name = "A", guid = "Player-A", realm = realm },
     realm = realm, profession = profession, recipe = recipe, expansion = expansion,
     outputItem = { id = 201, name = "Output", expansion = oldExpansion },
     outputQuality = 0, outputQuantity = 5, outputItemLevel = 0, multicraftBonus = 0,
     concentrationSpent = 0, concentrationCurrencyId = 0, hasIngenuityProc = false, ingenuityRefund = 9,
-    hasResourcefulnessProc = false, resourcefulnessComplete = true,
+    hasResourcefulnessProc = false, resourcefulnessComplete = true, outcomeSource = "native",
+    quoteObserved = true,
     request = { id = 1, timestamp = 1800000000, requestedCount = 1, useConcentration = false,
       concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0, recipe = recipe,
       allocations = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, quality = 0 } } },
@@ -455,6 +504,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
   assert(unknown.recipe == nil and unknown.request == nil and unknown.outputItem == nil)
   assert(unknown.outputQuantity == nil and unknown.hasIngenuityProc == nil and unknown.ingenuityRefund == nil)
   assert(unknown.hasResourcefulnessProc == nil and unknown.resourcefulnessComplete == nil)
+  assert(unknown.outcomeSource == "unverified" and unknown.quoteObserved == nil and unknown.inputComplete == nil)
   equal(unknown.reagents, {})
   errorIs("not-found", api.GetCraft(999))
   errorIs("invalid-id", api.GetCraft(0))
@@ -680,7 +730,7 @@ test("first craft for an existing recipe invalidates the catalogue order", funct
   assert(ledger:AddDimension("recipe", 105))
   assert(#api.GetRecipeSummaries().recipes == 4)
   ledger:BeginCraft(105)
-  assert(ledger:RecordResult({ operationID = 99 }))
+  assert(primaryResult(ledger, { operationID = 99 }))
   assert(#api.GetRecipeSummaries().recipes == 5)
   assert(ledger:AddDimension("recipe", 105, { name = "A new recipe" }))
   local result = api.GetRecipeSummaries({ limit = 1 })
@@ -704,7 +754,7 @@ test("observed identities follow durable indexes across enrichment, pruning, rel
 
   assert(ledger:AddDimension("recipe", 105))
   ledger:BeginCraft(105)
-  assert(ledger:RecordResult({ operationID = 99 }))
+  assert(primaryResult(ledger, { operationID = 99 }))
   local newProfession = assert(ledger:AddDimension("profession", 444, { name = "Inscription" }))
   assert(ledger:AddDimension("recipe", 105, { professionId = newProfession }))
   assert(#api.GetProfessions(first) == 2)
@@ -720,7 +770,7 @@ test("observed identities follow durable indexes across enrichment, pruning, rel
   assert(#api.GetCharacters() == 0 and #api.GetProfessions() == 0)
   session(addon.ledger, "A", 1)
   addon.ledger:BeginCraft(105)
-  assert(addon.ledger:RecordResult({ operationID = 100 }))
+  assert(primaryResult(addon.ledger, { operationID = 100 }))
   assert(api.GetProfessions(first)[1].skillLineId == 444)
 end)
 
@@ -773,7 +823,7 @@ test("callbacks isolate failures and mutations, deliver one projection per commi
   api.RegisterCallback("CRAFT_COMMITTED", function(craft) third = craft end)
   assert(ledger:SubmitCraft(101, 1, false, nil,
     { { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 202 } } }))
-  local craft = assert(ledger:RecordResult({ itemID = 201, resourcesReturned = {} }))
+  local craft = assert(primaryResult(ledger, { itemID = 201, resourcesReturned = {} }))
   assert(calls == 1 and second.recipe.name == "Potion")
   equal(second, api.GetCraft(craft.id))
   equal(second, third)
@@ -823,7 +873,7 @@ test("capture does not prune old history until the next startup", function()
   clock.current = clock.current + 181 * 86400
   assert(ledger:SubmitCraft(101, 1, false, nil,
     { { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 202 } } }))
-  local committed = assert(ledger:RecordResult({ resourcesReturned = {} }))
+  local committed = assert(primaryResult(ledger, { resourcesReturned = {} }))
   assert(received.id == committed.id and received.request.id and received.reagents[1].returnedQuantity == 0)
   assert(api.GetCraft(1) and api.GetCraft(committed.id))
   addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
@@ -852,7 +902,7 @@ test("GetCraft and callbacks use direct lookups without traversing history", fun
     end)
     assert(ledger:SubmitCraft(101, 1, false, nil,
       { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 202 } } }))
-    local craft = assert(ledger:RecordResult({ resourcesReturned = {} }))
+    local craft = assert(primaryResult(ledger, { resourcesReturned = {} }))
     assert(api.GetCraft(craft.id).reagents[1].returnedQuantity == 0)
   end)
   ipairs = rawIpairs
@@ -881,7 +931,7 @@ test("large histories page by indexed boundaries, including backdated timestamps
   for index = 1, 51000 do
     clock.current = start + math.floor(index / 3)
     ledger:BeginCraft(index % 1000 == 0 and 102 or 101)
-    assert(ledger:RecordResult({ operationID = index }))
+    assert(primaryResult(ledger, { operationID = index }))
   end
   assert(#ledger.database.crafts == 51000)
   local page = api.GetCrafts(nil, { limit = 2 })
@@ -948,7 +998,7 @@ test("sanitized replay preserves partial returns and ambiguous allocation eviden
     { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 202 } },
     { dataSlotIndex = 2, quantity = 3, reagent = { itemID = 202 } },
   }))
-  local craft = ledger:RecordResult({ resourcesReturned = { { reagent = { itemID = 202 }, quantity = 1 } } })
+  local craft = primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 202 }, quantity = 1 } } })
   local projected = api.GetCraft(craft.id)
   assert(projected.reagents[1].returnedQuantity == nil and projected.reagents[2].returnedQuantity == nil)
   assert(projected.reagents[3].allocatedQuantity == nil and projected.reagents[3].returnedQuantity == 1)
@@ -998,7 +1048,7 @@ test("series use UTC days and only the specified additive metrics with observati
   assert(#result == 1)
   local row = result[1]
   assert(row.bucketStart == start and row.craftCount == 2)
-  assert(row.outputQuantity == 5 and row.outputQuantityObservedCount == 1)
+  assert(row.outputQuantity == 6 and row.outputQuantityObservedCount == 2)
   assert(row.multicraftBonus == 0 and row.multicraftBonusObservedCount == 1)
   assert(row.concentrationSpent == 0 and row.concentrationSpentObservedCount == 1)
   assert(row.recipe.id == 101 and row.character.name == "A" and row.realm.name == "Realm 1")
@@ -1008,7 +1058,7 @@ test("series use UTC days and only the specified additive metrics with observati
   assert(row.ingenuityProcCount == 0 and row.ingenuityProcCountObservedCount == 1)
   assert(row.id == nil and row.recipeId == nil and row.characterDimensionId == nil)
   local absent = api.GetCraftSeries({ recipes = { 104 } }).series[1]
-  assert(absent.outputQuantity == nil and absent.outputQuantityObservedCount == 0)
+  assert(absent.outputQuantity == 1 and absent.outputQuantityObservedCount == 1)
   assert(absent.concentrationSpent == nil and absent.concentrationSpentObservedCount == 0)
   local original = api.GetCraftSeries()
   row.recipe.name = "Changed"
@@ -1075,7 +1125,7 @@ test("series remain identical across 60-day detail pruning and are visible durin
   end)
   clock.current = clock.current + 61 * 86400
   ledger:BeginCraft(101)
-  local recent = assert(ledger:RecordResult({ operationID = 99, quantity = 7 }))
+  local recent = assert(primaryResult(ledger, { operationID = 99, quantity = 7 }))
   assert(delivered == 1)
   local before = api.GetCraftSeries()
   addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
@@ -1106,7 +1156,7 @@ test("unknown series identities are not inferred and durable metadata enrichment
   clock.current = 0
   session(ledger, "A", 1)
   ledger:BeginCraft(101)
-  assert(ledger:RecordResult({ operationID = 1 }))
+  assert(primaryResult(ledger, { operationID = 1 }))
   clock.current = 61 * 86400
   addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
   ledger = addon.ledger
@@ -1206,7 +1256,7 @@ test("supported aggregate-only history reloads without synthesizing unknown Inge
   clock.current = clock.current + 61 * 86400
   ledger:Prune(clock.current)
   assert(#ledger.database.crafts == 0)
-  assert(ledger.database.schemaVersion == 1)
+  assert(ledger.database.schemaVersion == 2)
   addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
   local row = api.GetCraftSeries().series[1]
   assert(row.craftCount == 1 and row.concentrationSpent == 323)
@@ -1216,6 +1266,170 @@ test("supported aggregate-only history reloads without synthesizing unknown Inge
   local expected = api.GetCraftSeries()
   addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
   equal(api.GetCraftSeries(), expected)
+end)
+
+test("issue 24: one unknown legacy record does not contaminate the authoritative cohort", function()
+  local _, api, clock, addon = newLedger()
+  local legacy = legacyLedger(clock)
+  session(legacy, "A", 1)
+  assert(legacy:SubmitCraft(101, 1, false))
+  assert(legacy:RecordResult({ operationID = 1 }))
+  addon.ledger = assert(addon.Ledger.New(legacy.database, clock))
+  session(addon.ledger, "A", 1)
+  for index = 1, 10 do
+    assert(addon.ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, quantity = 4, reagent = { itemID = 8 } } },
+      completeInputs))
+    assert(primaryResult(addon.ledger, { operationID = 100 + index,
+      resourcesReturned = index <= 4 and { { reagent = { itemID = 8 }, quantity = 1 } } or nil }))
+  end
+  local totals = api.GetRecipeOutcomes(101).totals
+  assert(totals.craftCount == 11 and totals.resourcefulnessProcCountObservedCount == 10)
+  assert(totals.resourcefulnessAuthoritativeProcCount == 4 and totals.resourcefulnessAuthoritativeProcCountObservedCount == 10)
+  assert(totals.quoteObservedCount == 10 and totals.inputCompleteCount == 10 and totals.matchedCraftCount == 10)
+  local statistics = assert(api.GetRecipeReagentStatistics(101))
+  equal(statistics.coverage, { craftCount = 11, quoteObservedCount = 10, inputCompleteCount = 10,
+    matchedCraftCount = 10, returnObservedCount = 10 })
+  equal(statistics.reagents, { { item = { id = 8 }, allocatedQuantity = 40, allocationCount = 10, returnedQuantity = 4,
+    matchedCraftCount = 10, matchedAllocatedQuantity = 40, matchedReturnedQuantity = 4, matchedReturnCount = 4 } })
+  local row = api.GetReagentSummaries().reagents[1]
+  assert(row.craftCount == 11 and row.allocationUnknownCount == 1 and row.returnUnknownCount == 1)
+  assert(not row.allocationComplete and not row.returnComplete)
+  assert(row.matchedAllocatedQuantity == 40 and row.matchedReturnedQuantity == 4)
+end)
+
+test("issue 24: a craft without input rows stays in missing-input coverage after pruning", function()
+  local ledger, api, clock = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 8 } } },
+    completeInputs))
+  assert(primaryResult(ledger, {}))
+  assert(ledger:SubmitCraft(101, 1, false))
+  assert(primaryResult(ledger, {}))
+  ledger:Prune(clock.current + 61 * 86400)
+  assert(#ledger.database.crafts == 0)
+  local row = api.GetReagentSummaries().reagents[1]
+  assert(row.craftCount == 2 and row.allocationObservedCount == 1 and row.allocationUnknownCount == 1)
+  assert(not row.allocationComplete and row.allocatedQuantity == 3)
+  assert(row.returnComplete and row.returnedQuantity == 0)
+  assert(row.matchedCraftCount == 1 and row.matchedAllocatedQuantity == 3 and row.matchedReturnedQuantity == 0)
+  local totals = api.GetRecipeOutcomes(101).totals
+  assert(totals.craftCount == 2 and totals.inputCompleteCount == 1 and totals.matchedCraftCount == 1)
+end)
+
+test("issue 24: Luminant Flux input coverage is never claimed from quote allocations", function()
+  local _, api, clock, addon = newLedger()
+  local ore, flux = 237359, 243060
+  local function alloys(target, inputs, first)
+    for index = 1, 50 do
+      assert(target:SubmitCraft(1229000, 1, false, nil,
+        { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = ore } } }, inputs))
+      assert(primaryResult(target, { operationID = first + index,
+        resourcesReturned = index <= 16 and { { reagent = { itemID = flux }, quantity = 1 } } or nil }))
+    end
+  end
+  local legacy = legacyLedger(clock)
+  session(legacy, "A", 1)
+  alloys(legacy, nil, 0)
+  addon.ledger = assert(addon.Ledger.New(legacy.database, clock))
+  assert(addon.ledger.migration.quoteObservedCrafts == 50)
+  local rows = {}
+  for _, row in ipairs(api.GetReagentSummaries({ items = { ore, flux } }).reagents) do rows[row.item.id] = row end
+  -- Before this correction 34 of 50 crafts claimed known Flux inputs; the 16 proc crafts were excluded.
+  assert(rows[flux].craftCount == 50 and rows[flux].quoteObservedCount == 50)
+  assert(rows[flux].allocationObservedCount == 0 and rows[flux].allocationUnknownCount == 50)
+  assert(not rows[flux].allocationComplete and rows[flux].allocatedQuantity == nil and rows[flux].returnedQuantity == 16)
+  assert(rows[ore].quoteObservedCount == 50 and rows[ore].allocationObservedCount == 0)
+  assert(rows[ore].allocatedQuantity == 250 and rows[ore].allocationCount == 50)
+  -- New captures with schematic inputs make Flux's required quantity known for their population.
+  session(addon.ledger, "A", 1)
+  clock.current = clock.current + 86400
+  local day = math.floor(clock.current / 86400) * 86400
+  alloys(addon.ledger, inputEvidence({ ore, flux },
+    { { dataSlotIndex = 2, itemID = flux, quantity = 2 } }), 1000)
+  local fresh = api.GetReagentSummaries({ items = { flux }, time = { from = day, to = day + 86400 } }).reagents[1]
+  assert(fresh.allocationComplete and fresh.allocationObservedCount == 50 and fresh.allocatedQuantity == 100)
+  assert(fresh.matchedAllocatedQuantity == 100 and fresh.matchedReturnedQuantity == 16 and fresh.matchedCraftCount == 50)
+  local all = api.GetReagentSummaries({ items = { flux } }).reagents[1]
+  assert(all.craftCount == 100 and all.allocationObservedCount == 50 and not all.allocationComplete)
+  assert(api.GetCraft(addon.ledger.database.crafts[#addon.ledger.database.crafts].id).request.fixedReagents[1]
+    .requiredQuantity == 2)
+end)
+
+test("issue 24: reagent statistics page by item identity with dedicated cursors", function()
+  local ledger, api = newLedger()
+  session(ledger, "A", 1)
+  for itemId = 8, 10 do
+    assert(ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, quantity = itemId, reagent = { itemID = itemId } } }))
+    assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = itemId }, quantity = 1 } } }))
+  end
+  local cursor, seen = nil, {}
+  repeat
+    local page = assert(api.GetRecipeReagentStatistics(101, nil, { limit = 1, cursor = cursor }))
+    assert(#page.reagents == 1 and page.coverage.craftCount == 3)
+    seen[#seen + 1] = page.reagents[1].item.id
+    assert(page.reagents[1].allocatedQuantity == page.reagents[1].item.id)
+    cursor = page.nextCursor
+  until not cursor
+  equal(seen, { 8, 9, 10 })
+  local first = api.GetRecipeReagentStatistics(101, nil, { limit = 1 })
+  errorIs("invalid-cursor", api.GetRecipeReturnedReagents(101, nil, { cursor = first.nextCursor }))
+  errorIs("invalid-cursor", api.GetRecipeReagentStatistics(102, nil, { cursor = first.nextCursor }))
+  errorIs("invalid-options", api.GetRecipeReagentStatistics(101, nil, { limit = 201 }))
+  errorIs("invalid-filter", api.GetRecipeReagentStatistics(101, { recipes = { 101 } }))
+end)
+
+test("issue 24: 50,000 crafts with duplicate slots stay within measured query and migration bounds", function()
+  local ledger, api, clock, addon = newLedger()
+  local slots = { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } },
+    { dataSlotIndex = 2, quantity = 7, reagent = { itemID = 8 } },
+    { dataSlotIndex = 3, quantity = 2, reagent = { itemID = 9 } } }
+  local function history(target, count)
+    local start = os.clock()
+    for index = 1, count do
+      if index % 25000 == 1 then session(target, index == 1 and "A" or "B", 1) end
+      clock.current = 1800000000 + math.floor((index - 1) / 1000) * 86400
+      assert(target:SubmitCraft(101 + index % 5, 1, false, nil, slots, completeInputs))
+      assert(primaryResult(target, { operationID = index,
+        resourcesReturned = index % 4 == 0 and { { reagent = { itemID = 8 }, quantity = 2 } } or nil }))
+    end
+    return os.clock() - start
+  end
+  local captureSeconds = history(ledger, 50000)
+  local data = ledger.database
+  assert(#data.crafts == 50000 and #data.reagentSeries <= 50 * 2 * 5 * 2)
+  local oldPairs, oldIpairs = pairs, ipairs
+  local forbidden = { [data.crafts] = true, [data.reagents] = true, [data.requests] = true,
+    [data.craftSeries] = true, [data.reagentSeries] = true, [ledger.craftById] = true }
+  pairs = function(rows) assert(not forbidden[rows]); return oldPairs(rows) end
+  ipairs = function(rows) assert(not forbidden[rows]); return oldIpairs(rows) end
+  local started = os.clock()
+  local ok, reason = pcall(function()
+    local summary = assert(api.GetReagentSummaries({ limit = 200 }))
+    local eight = summary.reagents[1].item.id == 8 and summary.reagents[1] or summary.reagents[2]
+    assert(eight.craftCount == 50000 and eight.allocatedQuantity == 50000 * 12 and eight.allocationComplete)
+    assert(eight.returnedQuantity == 12500 * 2 and eight.returnComplete)
+    assert(eight.matchedAllocatedQuantity == 50000 * 12 and eight.matchedReturnedQuantity == 25000)
+    local statistics = assert(api.GetRecipeReagentStatistics(101))
+    assert(statistics.coverage.craftCount == 10000 and statistics.coverage.matchedCraftCount == 10000)
+    assert(api.GetRecipeOutcomes(101).totals.resourcefulnessAuthoritativeProcCountObservedCount == 10000)
+  end)
+  pairs, ipairs = oldPairs, oldIpairs
+  assert(ok, reason)
+  local querySeconds = os.clock() - started
+  started = os.clock()
+  addon.ledger = assert(addon.Ledger.New(data, clock))
+  local reloadSeconds = os.clock() - started
+  local legacy = legacyLedger(clock)
+  local legacyCaptureSeconds = history(legacy, 50000)
+  started = os.clock()
+  local migrated = assert(addon.Ledger.New(legacy.database, clock))
+  local migrationSeconds = os.clock() - started
+  assert(migrated.migration.quoteObservedCrafts == 50000 and migrated.migration.allocatedCrafts == 50000)
+  local item = migrated.reagentIndex[migrated.seriesDays[1]]
+  assert(item and #migrated.database.reagentSeries == #data.reagentSeries)
+  print(string.format("STRESS 50000 crafts (3 slots, duplicate item): capture %.2fs, 3 durable queries %.3fs, " ..
+    "reload %.2fs, %d reagent rows; schema-1 capture %.2fs, migration %.2fs",
+    captureSeconds, querySeconds, reloadSeconds, #data.reagentSeries, legacyCaptureSeconds, migrationSeconds))
 end)
 
 print(string.format("%d API tests passed", passed))

@@ -93,7 +93,8 @@ local function identity(facet, row)
 end
 
 local function allocation(ledger, row)
-  local result = fields(row, { "dataSlotIndex", "quality", "allocatedQuantity", "returnedQuantity", "source" })
+  local result = fields(row, { "dataSlotIndex", "quality", "allocatedQuantity", "returnedQuantity", "source",
+    "fixed" })
   result.item = item(ledger, row.itemId)
   return result
 end
@@ -101,7 +102,8 @@ end
 local function projectCraft(ledger, craft)
   local result = fields(craft, { "id", "timestamp", "gameOperationId", "outputQuality", "outputItemLevel",
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
-    "hasIngenuityProc", "ingenuityRefund", "hasResourcefulnessProc", "resourcefulnessComplete" })
+    "hasIngenuityProc", "ingenuityRefund", "hasResourcefulnessProc", "resourcefulnessComplete",
+    "outcomeSource", "quoteObserved", "inputComplete" })
   local rows = related(ledger, craft)
   result.character = character(ledger, rows.characters)
   result.realm = realm(ledger, rows.realms)
@@ -116,12 +118,20 @@ local function projectCraft(ledger, craft)
   local request = ledger.requestById[craft.requestId]
   if request then
     result.request = fields(request, { "id", "timestamp", "requestedCount", "useConcentration",
-      "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" })
+      "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality", "inputComplete" })
     result.request.recipe = recipe(ledger, dimension(ledger, "recipe", request.recipeId))
     if request.allocations then
       result.request.allocations = {}
       for _, row in ipairs(request.allocations) do
         result.request.allocations[#result.request.allocations + 1] = allocation(ledger, row)
+      end
+    end
+    if request.fixedReagents then
+      result.request.fixedReagents = {}
+      for _, row in ipairs(request.fixedReagents) do
+        local fixed = fields(row, { "dataSlotIndex", "requiredQuantity" })
+        fixed.item = item(ledger, row.itemId)
+        result.request.fixedReagents[#result.request.fixedReagents + 1] = fixed
       end
     end
   end
@@ -410,7 +420,9 @@ function API.GetCraftSeries(filter, options)
     local projected = fields(row, { "bucketStart", "craftCount", "outputQuantity", "multicraftBonus",
       "concentrationSpent", "outputQuantityObservedCount", "multicraftBonusObservedCount",
       "concentrationSpentObservedCount", "ingenuityProcCount", "ingenuityProcCountObservedCount",
-      "ingenuityRefund", "ingenuityRefundObservedCount" })
+      "ingenuityRefund", "ingenuityRefundObservedCount", "resourcefulnessAuthoritativeProcCount",
+      "resourcefulnessAuthoritativeProcCountObservedCount", "quoteObservedCount", "inputCompleteCount",
+      "matchedCraftCount" })
     local rows = seriesRelated(ledger, row)
     projected.character = character(ledger, rows.characters)
     projected.realm = realm(ledger, rows.realms)
@@ -424,7 +436,8 @@ end
 
 local outcomeMetrics = { "outputQuantity", "multicraftBonus", "multicraftProcCount",
   "concentrationSpent", "ingenuityProcCount", "ingenuityRefund", "resourcefulnessProcCount",
-  "resourcefulnessCompleteProcCount" }
+  "resourcefulnessCompleteProcCount", "resourcefulnessAuthoritativeProcCount" }
+local coverageCounts = { "quoteObservedCount", "inputCompleteCount", "matchedCraftCount" }
 
 local function outcomeQuery(recipeId, filter)
   if not integer(recipeId, 0) then return nil, "invalid-id" end
@@ -474,8 +487,9 @@ function API.GetRecipeOutcomes(recipeId, filter, options)
       (options.buckets ~= nil and (not integer(options.buckets, 1) or options.buckets > 200)) then
     return nil, "invalid-options"
   end
-  local totals, firstDay, lastDay = { craftCount = 0 }, nil, nil
+  local totals, firstDay, lastDay = { craftCount = 0, firstCraftRewardCount = 0 }, nil, nil
   for _, metric in ipairs(outcomeMetrics) do totals[metric .. "ObservedCount"] = 0 end
+  for _, field in ipairs(coverageCounts) do totals[field] = 0 end
   visitOutcomes(query, function(row, day)
     firstDay, lastDay = firstDay or day, day
     totals.craftCount = totals.craftCount + row.craftCount
@@ -483,7 +497,18 @@ function API.GetRecipeOutcomes(recipeId, filter, options)
       if row[metric] ~= nil then totals[metric] = (totals[metric] or 0) + row[metric] end
       totals[metric .. "ObservedCount"] = totals[metric .. "ObservedCount"] + row[metric .. "ObservedCount"]
     end
+    for _, field in ipairs(coverageCounts) do totals[field] = totals[field] + row[field] end
   end)
+  -- First-craft rewards are rare child results (at most a few per recipe and character).
+  local period, characters = query.filter.time, query.filter.characters
+  for _, reward in ipairs(query.ledger.database.firstCraftRewards) do
+    local characterRow = query.ledger.dimensionRows.character[reward.characterDimensionId]
+    if reward.recipeId == recipeId and (not period or ((not period.from or reward.bucketStart >= period.from) and
+        (not period.to or reward.bucketStart < period.to))) and
+        (not characters or (characterRow and characters[characterRow.key])) then
+      totals.firstCraftRewardCount = totals.firstCraftRewardCount + reward.rewardCount
+    end
+  end
   local result = { totals = totals, series = {} }
   if not firstDay then return result end
   local time = query.filter.time or {}
@@ -504,6 +529,13 @@ function API.GetRecipeOutcomes(recipeId, filter, options)
   return result
 end
 
+local pageMeasures = {
+  sets = { "craftCount", "authoritativeCraftCount" },
+  items = { "returnedQuantity" },
+  reagents = { "returnedQuantity", "allocatedQuantity", "allocationCount", "matchedCraftCount",
+    "matchedAllocatedQuantity", "matchedReturnedQuantity", "matchedReturnCount" },
+}
+
 local function returnedPage(recipeId, filter, options, kind)
   local query, reason = outcomeQuery(recipeId, filter)
   if not query then return nil, reason end
@@ -518,19 +550,28 @@ local function returnedPage(recipeId, filter, options, kind)
       return nil, "invalid-cursor"
     end
     after = options.cursor:sub(#prefix + 1)
-    if kind == "items" then
+    if kind ~= "sets" then
       after = tonumber(after)
       if not integer(after, 1) then return nil, "invalid-cursor" end
     elseif not after:match("^%d[%d,]*$") then return nil, "invalid-cursor" end
   end
-  local index = kind == "sets" and query.ledger.returnSetIndex or query.ledger.returnQuantityIndex
-  local metric = kind == "sets" and "craftCount" or "returnedQuantity"
+  local index = kind == "sets" and query.ledger.returnSetIndex or query.ledger.reagentIndex
+  local measures = pageMeasures[kind]
   local selected, keys = {}, {}
-  visitOutcomes(query, function(_, day, characterId)
+  local coverage = { craftCount = 0, quoteObservedCount = 0, inputCompleteCount = 0, matchedCraftCount = 0,
+    returnObservedCount = 0 }
+  visitOutcomes(query, function(series, day, characterId)
+    coverage.craftCount = coverage.craftCount + series.craftCount
+    coverage.quoteObservedCount = coverage.quoteObservedCount + series.quoteObservedCount
+    coverage.inputCompleteCount = coverage.inputCompleteCount + series.inputCompleteCount
+    coverage.matchedCraftCount = coverage.matchedCraftCount + series.matchedCraftCount
+    coverage.returnObservedCount = coverage.returnObservedCount +
+      series.resourcefulnessAuthoritativeProcCountObservedCount
     local bucket = index[day]
     local recipes = bucket and bucket[characterId]
     for key, row in pairs(recipes and recipes[recipeId] or {}) do
-      if (after == nil or key > after) and (#keys < limit + 1 or key <= keys[#keys]) then
+      if (kind ~= "items" or row.returnedQuantity ~= nil) and (after == nil or key > after) and
+          (#keys < limit + 1 or key <= keys[#keys]) then
         if selected[key] == nil then
           keys[#keys + 1] = key
           table.sort(keys)
@@ -538,23 +579,35 @@ local function returnedPage(recipeId, filter, options, kind)
             selected[keys[#keys]] = nil
             keys[#keys] = nil
           end
-          selected[key] = 0
+          selected[key] = {}
         end
-        selected[key] = selected[key] + row[metric]
+        local totals = selected[key]
+        for _, measure in ipairs(measures) do
+          if row[measure] ~= nil then totals[measure] = (totals[measure] or 0) + row[measure] end
+        end
       end
     end
   end)
-  local result = { returns = {} }
+  local rows = {}
+  local result = kind == "reagents" and { reagents = rows, coverage = coverage } or { returns = rows }
   for position = 1, math.min(limit, #keys) do
     local key = keys[position]
+    local totals = selected[key]
+    for _, measure in ipairs(measures) do
+      if totals[measure] ~= nil and not finite(totals[measure]) then return nil, "quantity-overflow" end
+    end
     if kind == "sets" then
       local itemIds = {}
       for text in key:gmatch("[^,]+") do itemIds[#itemIds + 1] = tonumber(text) end
-      result.returns[#result.returns + 1] = { itemIds = itemIds, craftCount = selected[key] }
+      rows[#rows + 1] = { itemIds = itemIds, craftCount = totals.craftCount,
+        authoritativeCraftCount = totals.authoritativeCraftCount or 0 }
+    elseif kind == "items" then
+      rows[#rows + 1] = { item = item(query.ledger, key), returnedQuantity = totals.returnedQuantity }
     else
-      result.returns[#result.returns + 1] = {
-        item = item(query.ledger, key), returnedQuantity = selected[key],
-      }
+      totals.item = item(query.ledger, key)
+      totals.allocationCount = totals.allocationCount or 0
+      totals.matchedCraftCount = totals.matchedCraftCount or 0
+      rows[#rows + 1] = totals
     end
   end
   if #keys > limit then result.nextCursor = prefix .. tostring(keys[limit]) end
@@ -567,6 +620,10 @@ end
 
 function API.GetRecipeReturnedReagents(recipeId, filter, options)
   return returnedPage(recipeId, filter, options, "items")
+end
+
+function API.GetRecipeReagentStatistics(recipeId, filter, options)
+  return returnedPage(recipeId, filter, options, "reagents")
 end
 
 function API.GetReagentSummaries(options)
@@ -621,78 +678,89 @@ function API.GetReagentSummaries(options)
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
   local characterId = options.character and ledger.dimensionIndex.character[options.character]
-  local function inPopulation(timestamp, id)
-    return (not options.character or characterId ~= nil and characterId == id) and
-      (not filter.time or (not filter.time.from or timestamp >= filter.time.from) and
-        (not filter.time.to or timestamp < filter.time.to))
-  end
-  local selected, coverage = {}, {}
-  for _, row in ipairs(ledger.database.craftSeries) do
-    if inPopulation(row.bucketStart, row.characterDimensionId) then
-      local id = row.recipeId or 0
-      local counts = coverage[id] or { crafts = 0, complete = 0 }
-      counts.crafts = counts.crafts + row.craftCount
-      counts.complete = counts.complete + row.resourcefulnessCompleteProcCountObservedCount
-      coverage[id] = counts
-    end
-  end
-  local function reagent(itemId, recipeId, professionId)
-    if selections.items and not selections.items[itemId] or selections.excludeItems and selections.excludeItems[itemId] then return end
-    local recipeRow = dimension(ledger, "recipe", recipeId)
-    professionId = professionId or (recipeRow and recipeRow.professionId)
-    if options.profession and options.profession ~= professionId then return end
-    local identity = item(ledger, itemId)
-    local name = identity and identity.name or ("Item #" .. itemId)
-    if not name:lower():find(search, 1, true) then return end
+  if options.character and characterId == nil then characterId = false end
+  local selected, coverage, skipped = {}, {}, {}
+  local function reagent(itemId, recipeKey, professionId)
+    if skipped[itemId] then return end
     local row = selected[itemId]
     if not row then
-      row = { item = identity, name = name:lower(), recipeIds = {}, professionIds = {},
-        allocationObservedCount = 0, allocationUnknownCount = 0, returnObservedCount = 0,
-        returnUnknownCount = 0, retainedReturned = 0, recipeCount = 0 }
+      local identity = item(ledger, itemId)
+      local name = identity and identity.name or ("Item #" .. itemId)
+      if selections.items and not selections.items[itemId] or
+          selections.excludeItems and selections.excludeItems[itemId] or
+          not name:lower():find(search, 1, true) then
+        skipped[itemId] = true
+        return
+      end
+      row = { item = identity, name = name:lower(), recipeIds = {}, professionIds = {}, recipeCount = 0,
+        allocationCount = 0, matchedCraftCount = 0 }
       selected[itemId] = row
     end
-    if recipeId and recipeId ~= 0 and not row.recipeIds[recipeId] then row.recipeCount = row.recipeCount + 1 end
-    row.recipeIds[recipeId or 0] = true
+    if recipeKey ~= 0 and not row.recipeIds[recipeKey] then row.recipeCount = row.recipeCount + 1 end
+    row.recipeIds[recipeKey] = true
     if professionId then row.professionIds[professionId] = true end
     return row
   end
-  for _, fact in ipairs(ledger.database.reagents) do
-    local craft = ledger.craftById[fact.craftId]
-    local session = craft and dimension(ledger, "session", craft.sessionId)
-    local row = craft and inPopulation(craft.timestamp, session and session.characterDimensionId) and
-      reagent(fact.itemId, craft.recipeId, craft.professionId)
-    if row then
-      if fact.allocatedQuantity ~= nil then
-        row.allocatedQuantity = (row.allocatedQuantity or 0) + fact.allocatedQuantity
-        row.allocationObservedCount = row.allocationObservedCount + 1
-      else row.allocationUnknownCount = row.allocationUnknownCount + 1 end
-      if fact.returnedQuantity ~= nil and fact.returnedQuantity >= 0 then
-        row.returnObservedCount = row.returnObservedCount + 1
-        row.retainedReturned = row.retainedReturned + fact.returnedQuantity
-      else row.returnUnknownCount = row.returnUnknownCount + 1 end
-      if fact.quality ~= nil then
-        if row.quality ~= nil and row.quality ~= fact.quality then row.conflictingQuality = true end
-        row.quality = fact.quality
+  -- Visit only indexed durable day x character x recipe x item grains; retained craft details
+  -- are never scanned, so pruning cannot change these totals or their coverage.
+  local days, time = ledger.seriesDays, filter.time or {}
+  local first, last = 1, #days + 1
+  while time.from and first < last do
+    local middle = math.floor((first + last) / 2)
+    if days[middle] < time.from then first = middle + 1 else last = middle end
+  end
+  for position = first, #days do
+    local day = days[position]
+    if time.to and day >= time.to then break end
+    local reagentDay = ledger.reagentIndex[day]
+    for seriesCharacter, recipes in pairs(ledger.seriesByKey[day]) do
+      if characterId == nil or seriesCharacter == characterId then
+        local reagentRecipes = reagentDay and reagentDay[seriesCharacter]
+        for recipeKey, series in pairs(recipes) do
+          local recipeRow = recipeKey ~= 0 and dimension(ledger, "recipe", recipeKey) or nil
+          local professionId = recipeRow and recipeRow.professionId
+          if not options.profession or options.profession == professionId then
+            local counts = coverage[recipeKey] or { crafts = 0, inputs = 0, quotes = 0, returns = 0 }
+            counts.crafts = counts.crafts + series.craftCount
+            counts.inputs = counts.inputs + series.inputCompleteCount
+            counts.quotes = counts.quotes + series.quoteObservedCount
+            counts.returns = counts.returns + series.resourcefulnessAuthoritativeProcCountObservedCount
+            coverage[recipeKey] = counts
+            for itemId, measures in pairs(reagentRecipes and reagentRecipes[recipeKey] or {}) do
+              local row = reagent(itemId, recipeKey, professionId)
+              if row then
+                for _, measure in ipairs({ "allocatedQuantity", "returnedQuantity", "matchedAllocatedQuantity",
+                    "matchedReturnedQuantity", "matchedReturnCount" }) do
+                  if measures[measure] ~= nil then row[measure] = (row[measure] or 0) + measures[measure] end
+                end
+                row.allocationCount = row.allocationCount + (measures.allocationCount or 0)
+                row.matchedCraftCount = row.matchedCraftCount + (measures.matchedCraftCount or 0)
+              end
+            end
+          end
+        end
       end
     end
   end
-  for _, fact in ipairs(ledger.database.returnedReagents) do
-    local row = inPopulation(fact.bucketStart, fact.characterDimensionId) and reagent(fact.itemId, fact.recipeId)
-    if row then row.returnedQuantity = (row.returnedQuantity or 0) + fact.returnedQuantity end
-  end
   local order = {}
   for _, row in pairs(selected) do
-    row.hasPrunedReturns = (row.returnedQuantity or 0) > row.retainedReturned
-    row.allocationComplete = row.allocationObservedCount > 0 and row.allocationUnknownCount == 0 and not row.hasPrunedReturns
-    row.returnComplete = row.returnUnknownCount == 0
-    for recipeId in pairs(row.recipeIds) do
-      local counts = coverage[recipeId]
-      if not counts or counts.complete < counts.crafts then row.returnComplete = false end
+    local crafts, inputs, quotes, returns = 0, 0, 0, 0
+    for recipeKey in pairs(row.recipeIds) do
+      local counts = coverage[recipeKey]
+      crafts, inputs = crafts + counts.crafts, inputs + counts.inputs
+      quotes, returns = quotes + counts.quotes, returns + counts.returns
     end
-    if row.returnedQuantity == nil and row.returnObservedCount > 0 and row.returnComplete then row.returnedQuantity = 0 end
-    if row.conflictingQuality then row.quality = nil end
-    if (row.allocatedQuantity and not finite(row.allocatedQuantity)) or
-        (row.returnedQuantity and not finite(row.returnedQuantity)) then return nil, "quantity-overflow" end
+    row.craftCount, row.quoteObservedCount = crafts, quotes
+    -- Only a full recipe input snapshot proves this item's quantity; quotes omit fixed reagents.
+    row.allocationObservedCount, row.allocationUnknownCount = inputs, crafts - inputs
+    row.returnObservedCount, row.returnUnknownCount = returns, crafts - returns
+    row.allocationComplete = crafts > 0 and inputs == crafts
+    row.returnComplete = crafts > 0 and returns == crafts
+    if row.returnedQuantity == nil and row.returnComplete then row.returnedQuantity = 0 end
+    for _, measure in ipairs({ "allocatedQuantity", "returnedQuantity", "matchedAllocatedQuantity",
+        "matchedReturnedQuantity" }) do
+      if row[measure] and not finite(row[measure]) then return nil, "quantity-overflow" end
+    end
     order[#order + 1] = row
   end
   local metric = ({ allocated = "allocatedQuantity", returned = "returnedQuantity", recipes = "recipeCount" })[sort]
@@ -706,23 +774,25 @@ function API.GetReagentSummaries(options)
     return left.item.id < right.item.id
   end)
   if offset > #order then return nil, "invalid-cursor" end
+  local summed = { "allocatedQuantity", "returnedQuantity", "matchedAllocatedQuantity", "matchedReturnedQuantity" }
   local result = { reagents = {}, totalCount = #order,
     totals = { allocationComplete = true, returnComplete = true } }
   for _, row in ipairs(order) do
-    for _, metric in ipairs({ "allocatedQuantity", "returnedQuantity" }) do
-      if row[metric] ~= nil then result.totals[metric] = (result.totals[metric] or 0) + row[metric] end
+    for _, measure in ipairs(summed) do
+      if row[measure] ~= nil then result.totals[measure] = (result.totals[measure] or 0) + row[measure] end
     end
     result.totals.allocationComplete = result.totals.allocationComplete and row.allocationComplete
     result.totals.returnComplete = result.totals.returnComplete and row.returnComplete
   end
-  for _, metric in ipairs({ "allocatedQuantity", "returnedQuantity" }) do
-    if result.totals[metric] and not finite(result.totals[metric]) then return nil, "quantity-overflow" end
+  for _, measure in ipairs(summed) do
+    if result.totals[measure] and not finite(result.totals[measure]) then return nil, "quantity-overflow" end
   end
   for index = offset + 1, math.min(offset + limit, #order) do
     local row = order[index]
-    local projected = fields(row, { "quality", "recipeCount", "allocatedQuantity", "returnedQuantity",
-      "allocationObservedCount", "allocationUnknownCount", "returnObservedCount", "returnUnknownCount",
-      "allocationComplete", "returnComplete", "hasPrunedReturns" })
+    local projected = fields(row, { "recipeCount", "craftCount", "allocatedQuantity", "allocationCount",
+      "returnedQuantity", "matchedCraftCount", "matchedAllocatedQuantity", "matchedReturnedQuantity",
+      "matchedReturnCount", "quoteObservedCount", "allocationObservedCount", "allocationUnknownCount", "returnObservedCount",
+      "returnUnknownCount", "allocationComplete", "returnComplete" })
     projected.item, projected.professions = row.item, {}
     for id in pairs(row.professionIds) do
       projected.professions[#projected.professions + 1] = profession(ledger, dimension(ledger, "profession", id))
