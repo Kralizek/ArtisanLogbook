@@ -41,10 +41,10 @@ existing current-entry highlight without replacing the primary selection.
 
 | Destination | Presentation and behavior |
 | --- | --- |
-| Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, returned reagents, and most-crafted recipe. No factual craft list. |
+| Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, authoritative Resourcefulness rate with verified/selected coverage, known returned quantities, and most-crafted recipe. No factual craft list. |
 | Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
-| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, compact Used/Returned columns and editable Ignore checkboxes. Item IDs live in native item tooltips, not row subtitles. |
+| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required/Returned/Saved columns and editable Ignore checkboxes. Saved shares use matched same-craft quantities and show their sample count. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
@@ -64,7 +64,8 @@ latest crafted item is available, hover shows that item's native game tooltip.
 
 Recipe Statistics includes total crafts/output/concentration, output per craft,
 concentration per craft, net concentration, Multicraft proc rate/bonus/output share,
-Resourcefulness rate/returned quantities/useful savings, and Ingenuity rate/refund.
+authoritative Resourcefulness rate and selected-population coverage, known returned
+quantities, per-item matched savings and its sample count, and Ingenuity rate/refund.
 The three mechanics have peer headings. Summary tiles remain visible above every
 tab; Ingenuity includes its proc percentage. Missing denominators leave a dash,
 with a specific missing-result explanation when a rate cannot be calculated.
@@ -92,13 +93,14 @@ Result/reagent item cells show `GameTooltip:SetItemByID` with a safe name fallba
 when native item tooltip support is unavailable. Item hover preserves row clicks.
 
 Most-crafted and catalogue recipe tables use the same rich component: Recipe,
-Latest result, Crafts, Items, Multicraft, Resourcefulness, Ingenuity. Mechanics
-show percentages when every craft has the relevant outcome. Otherwise known
-positive counts appear as, for example, `8 procs`, rather than an unexplained
-dash or a percentage computed from a biased positive-only sample. Tooltips show
-exact sample counts and the missing outcomes preventing a rate. A genuine 100%
-from one craft explicitly reads `1 proc / 1 craft` in its tooltip. No known procs
-with incomplete outcomes remains unavailable, not zero. The result is
+Latest result, Crafts, Items, Multicraft, Resourcefulness, Ingenuity. Multicraft
+and Ingenuity retain their complete-population rate rules. Resourcefulness uses
+only authoritative attempts: when some selected crafts lack authoritative
+outcomes, its rate is still calculated over the verified cohort and its tooltip
+shows both verified and selected counts. Historical positive-only returns show
+Unavailable, not a selective proc count or rate; verified all-negative cohorts
+show 0%. A genuine 100% from one verified craft explicitly reads `1 of 1 verified
+crafts` in its tooltip. The result is
 the latest available craft result for that selection, not an inferred quality
 distribution. Rows and the Overview most-crafted tile open Recipe Detail.
 Measured-zero Multicraft and Ingenuity cells are empty rather than `0.0%`.
@@ -155,37 +157,35 @@ Filters are Period (All time by default), Character, Profession, Savings statist
 (All, Ignored, Included), and literal case-insensitive name search. Search has
 explicit search/clear buttons and Enter support, plus a short debounce. The typed
 term does not change a paging query until applied. Name is the default reagent
-sort; Most used, Most returned and Recipe count sort the full selection before
+sort; Most required, Most returned and Recipe count sort the full selection before
 40-row lazy paging. Recipe catalogue defaults to Most crafted. Filters, rows and
 scroll offsets survive navigation. No user-facing Prev/Next controls remain.
 
 Header totals cover the complete filtered selection, not just loaded rows. The
-Reagent page shows identity/professions, quantities used/returned, craft and crafter
-counts, return efficiency where measurable, recipe uses and craft history. The
-usage worker reads at most 100 crafts per frame; changing the selection replaces
-pending calculations. Histories and recipe uses render 40 rows at a time. Metadata
-events repaint item artwork without restarting aggregate queries.
+Reagent page shows identity/professions, gross required and known returned
+quantities, durable craft and recipe counts, matched saved share with its matched
+craft count, recent crafters, recipe uses and craft history. Required quantities
+are gross inputs before returns, not net consumed. Headline totals and saved share
+come from `GetReagentSummaries`; the usage worker reads retained craft details only
+for chart/history drill-down, at most 100 crafts per frame. Changing the selection
+replaces pending calculations. Histories and recipe uses render 40 rows at a time.
+Metadata events repaint item artwork without restarting aggregate queries.
 
-The two-color chart compares **allocations and returns on retained craft
-details**, shown as Used and Returned, with at most 60 buckets and quantity/date tooltips. The recipe list and
-counts use that same retained population, not inferred historical uses. A return
-percentage is shown only for matched retained uses when every matching allocation
-and return is known, each craft's return result is complete, the allocation is
-positive, and returns do not exceed allocations. Missing quantities never become
-zero. Pruned detail leaves recorded durable totals but no reconstructed chart or
-recipe uses. The chart is allocated-versus-returned, not consumed-versus-returned.
+The two-color chart compares **required quantities and returns on retained craft
+details**, shown as Required and Returned, with at most 60 buckets and quantity/date
+tooltips. These chart points and craft-by-craft recipe uses are retained-detail
+views, not lifetime totals. The Saved column uses only Core's per-item matched
+returned and required quantities from the same crafts; unavailable matched samples
+stay unavailable. Gross returned and required totals are never divided together.
+Duplicate input slots of one item are consolidated by Core before matched savings
+are measured. Missing quantities never become zero. Pruned detail leaves durable
+catalogue totals and matched savings intact without reconstructing craft histories.
 
-Used sums retained craft allocations only; it does not claim net consumption.
-Returned sums durable positive-return facts without adding retained positives
-again. The entity chart states its craft count/date span and reports unavailable
-older use quantities when pruning is evident. Unknown values are dashes. Known
-quantities display normally without `>=` prefixes; exact values and an explanation
-that the total may be higher are in summary/table tooltips. This is a presentation
-change, not an assertion that missing quantities are zero. There is no cross-scope lifetime return percentage. After detail
-pruning, returns remain but allocation-only identities may disappear and
-allocations/quality may become unknown; no new historical allocation store is
-introduced. Recipe/profession associations describe recorded uses, not all game
-recipes capable of using the item.
+Required sums gross known inputs before returns; it does not claim net consumption.
+Returned sums known positive returns from any supported cohort. Exact quantities,
+missing-data caveats, and matched sample details are in row/tile tooltips. There is
+no cross-material savings percentage. Recipe/profession associations describe
+recorded uses, not all game recipes capable of using the item.
 
 Ignore in savings statistics is editable on the standalone Reagent page, Reagents
 catalogue and Recipe Reagents tab. All three share `ArtisanLogbookUISettings.trivialReagents`
@@ -250,8 +250,10 @@ cleans up the shade and modal.
 
 The modal is inspection only. A prominent result row combines item, quality,
 quantity and Multicraft contribution. Paired facts show character, timestamp,
-concentration and outcomes. A separate returned-reagents section has breathing
-room and its own bounded list; rows open Reagent pages after closing the modal.
+concentration and outcomes. A grouped Inputs and returned materials section shows
+known required and returned quantities by item ID beside a short input-evidence
+statement. It does not divide heterogeneous material totals into a misleading
+percentage. Rows open Reagent pages after closing the modal.
 There is no classification dropdown or duplicate metadata footer. No full-modal
 scrollbar is required. Multiple output identities are not synthesized.
 
@@ -274,21 +276,20 @@ scrollbar is required. Multiple output identities are not synthesized.
   are observed for every selected craft and the denominator is positive.
 - Ingenuity uses applied proc/refund semantics from #21, not raw refund values
   on false-proc records. Partial outcomes do not become measured zero.
-- Resourcefulness quantities sum durable returned-item facts. Incomplete positive
-  amounts are lower bounds. No returned quantities with incomplete
-  coverage display a dash; complete known zero displays zero. Lifetime pages do
-  not show returned/allocated percentages because the durable APIs do not expose
-  a complete allocation denominator. Proc percentages remain distinct and require
-  the existing full-population coverage guarantees.
-- Craft Detail may show returned quantity as a percentage of **allocated reagents**
-  only with a complete result, all per-reagent allocations/returns known, a positive
-  denominator, and no returned amount exceeding its allocation. It is not a
-  consumption percentage or a percentage of output.
+- Resourcefulness rates use only the authoritative numerator and its paired
+  observed-attempt denominator. The UI shows verified counts and selected-population
+  coverage; zero denominator is Unavailable, while verified all-negative attempts
+  are 0%. Historical positive returns remain visible as quantities and never bias
+  the rate. Current capture suspension is shown only when Management.Status reports
+  it; it adds no recovery control and does not describe historical coverage.
+- Per-item saved shares use Core's same-craft matched returned and required
+  quantities. A missing matched denominator is Unavailable, not zero. Required is
+  gross input, not net consumption; craft detail displays item facts and input
+  evidence without an aggregate material percentage.
 - Unknown/partial Resourcefulness results retain #21's semantics. Non-trivial
-  savings combine complete durable return sets with known positive returns on
-  retained partial-result crafts, without double counting. Missing result facts
-  never become negative observations. Trivial preferences only change UI
-  interpretation and never rewrite facts or aggregates.
+  rates classify authoritative return sets only. Missing result facts never become
+  negative observations. Trivial preferences only change UI interpretation and
+  never rewrite facts or aggregates.
 - Charts render at most 60 date groups with daily/multi-day buckets. Daily-only
   data for Today renders a concise dated total, never invented hourly activity or
   a full-width bar. Bar widths are capped; reagent pairs stay close within a day

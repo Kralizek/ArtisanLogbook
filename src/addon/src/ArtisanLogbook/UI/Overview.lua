@@ -27,24 +27,31 @@ function UI.Aggregate(series)
   return totals, ranked
 end
 
-function UI.ReturnTotals(owner, recipes, filter, onResult)
+function UI.ReturnTotals(owner, recipes, filter, population, onResult)
   local index, cursor, phase = 1, nil, "outcomes"
-  local total, crafts, complete = 0, 0, 0
+  local total, positive, verified = 0, 0, 0
   owner:SetScript("OnUpdate", function(self)
     local recipe = recipes[index]
     if not recipe then
       self:SetScript("OnUpdate", nil)
-      onResult(total, crafts, complete)
+      onResult(total, population, positive, verified)
       return
     end
     if phase == "outcomes" then
-      local result = ArtisanLogbookAPI.GetRecipeOutcomes(recipe.id, filter, { buckets = 1 })
+      local outcomeFilter = { time = filter.time, characters = filter.characters }
+      local result = ArtisanLogbookAPI.GetRecipeOutcomes(recipe.id, outcomeFilter, { buckets = 1 })
       if not result then self:SetScript("OnUpdate", nil); onResult(nil); return end
-      crafts = crafts + result.totals.craftCount
-      complete = complete + result.totals.resourcefulnessCompleteProcCountObservedCount
+      local totals = result.totals
+      verified = verified + (totals.resourcefulnessAuthoritativeProcCountObservedCount or 0)
+      if totals.resourcefulnessAuthoritativeProcCount ~= nil then
+        positive = positive + totals.resourcefulnessAuthoritativeProcCount
+      elseif totals.resourcefulnessAuthoritativeProcCountObservedCount > 0 then
+        self:SetScript("OnUpdate", nil); onResult(nil); return
+      end
       phase = "returns"
     else
-      local page = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipe.id, filter, { limit = 100, cursor = cursor })
+      local outcomeFilter = { time = filter.time, characters = filter.characters }
+      local page = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipe.id, outcomeFilter, { limit = 100, cursor = cursor })
       if not page then self:SetScript("OnUpdate", nil); onResult(nil); return end
       for _, reagent in ipairs(page.returns) do total = total + reagent.returnedQuantity end
       cursor = page.nextCursor
@@ -112,7 +119,7 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     { "Crafts", "Trade_BlackSmithing", splitProfessions and 1.35 or 1 },
     { splitProfessions and "Output" or "Total output", "INV_Misc_Bag_10", splitProfessions and 1.35 or 1 },
     { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
-    { "Reagents returned", "INV_Misc_Herb_19" }, { "Most crafted", "INV_Misc_Book_09", 2 },
+    { "Resourcefulness", "INV_Misc_Herb_19" }, { "Most crafted", "INV_Misc_Book_09", 2 },
   }
   local summary = UI.SummaryRow(parent, width, y, entries)
   function summary:Render(series, filter)
@@ -193,8 +200,27 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     self.tiles[6]:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.tiles[5].value:SetText("...")
     self.tiles[5].note:SetText("")
-    UI.ReturnTotals(self, recipes, { time = filter.time, characters = filter.characters }, function(total, crafts, complete)
-      self.tiles[5]:SetNumber(total, total ~= nil and complete == crafts)
+    UI.ReturnTotals(self, recipes, filter, totals.craftCount, function(total, population, positive, verified)
+      local tile = self.tiles[5]
+      if total == nil then
+        tile.value:SetText("Unavailable")
+        tile.note:SetText("")
+      else
+        local rate, coverage = UI.AuthoritativeRate({ craftCount = population,
+          resourcefulnessAuthoritativeProcCount = verified > 0 and positive or nil,
+          resourcefulnessAuthoritativeProcCountObservedCount = verified })
+        tile.value:SetText(rate == "Not enough verified crafts" and "Unavailable" or rate)
+        tile.note:SetText(UI.Number(verified > 0 and positive or 0) .. " of " .. UI.Number(verified) ..
+          " verified\n" .. UI.Number(verified) .. " of " .. UI.Number(population) .. " selected crafts")
+        tile:SetScript("OnEnter", function(self)
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+          GameTooltip:SetText(rate)
+          GameTooltip:AddLine(coverage, 1, 1, 1, true)
+          GameTooltip:AddLine("Known returned materials: " .. UI.Number(total), 1, 1, 1, true)
+          GameTooltip:Show()
+        end)
+        tile:SetScript("OnLeave", function() GameTooltip:Hide() end)
+      end
     end)
   end
   return summary

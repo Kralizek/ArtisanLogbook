@@ -112,8 +112,8 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   local period = filters:Period(state, function() detail:Refresh() end, true)
   local characters = filters:Select("Character", {}, function(value) state.character = value; detail:Refresh() end)
   local professions = filters:Select("Profession", {}, function(value) state.profession = value; detail:Refresh() end)
-  local entries = { { "Used", "allocated" }, { "Returned", "returned" }, { "Crafts using this", "crafts" },
-    { "Crafters", "characters" }, { "Returned / used", "rate" }, { "Recipes using this", "recipes" } }
+  local entries = { { "Required", "allocated" }, { "Returned", "returned" }, { "Crafts using this", "crafts" },
+    { "Crafters in history", "characters" }, { "Saved share", "rate" }, { "Recipes using this", "recipes" } }
   local metrics = {}
   for index, entry in ipairs(entries) do metrics[index] = { entry[1], "INV_Misc_Herb_19" } end
   local summary = UI.SummaryRow(content, width, -110, metrics)
@@ -131,7 +131,11 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     { title = "Recipe", width = (inner - 24) * .46, value = function(row) return UI.Name(row.recipe) end,
       icon = function(row) return UI.RecipeIcon(row.recipe) end },
     { title = "Crafts", width = (inner - 24) * .14, value = function(row) return UI.Number(row.crafts) end },
-    { title = "Used", width = (inner - 24) * .20, value = function(row) return UI.ReagentAmount(row, "allocatedQuantity", "returnComplete") end },
+    { title = "Required", width = (inner - 24) * .20,
+      value = function(row) return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete") end,
+      exact = function(row)
+        return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) .. " gross required before returns; not net consumed."
+      end },
     { title = "Returned", width = (inner - 24) * .20, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end },
@@ -151,7 +155,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   end, UI.VisibleRecipe)
   detail.chart = UI.Chart(overview, 0, 0, inner, true)
   local legend = UI.Text(overview, 0, -168, inner, 18)
-  legend:SetText("|cff2787c2Used|r   |cff287040Returned|r")
+  legend:SetText("|cff2787c2Known required|r   |cff287040Known returned|r")
   detail.status = UI.Text(overview, 0, -196, inner, 54)
   detail.worker = CreateFrame("Frame", nil, detail)
   function filters.onLayout(filterHeight)
@@ -171,11 +175,12 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     return { time = period:Time(), characters = state.character and { state.character } or nil,
       professions = state.profession and { state.profession } or nil }
   end
-  local function accumulate(target, allocated, returned, complete)
+  local function accumulate(target, allocated, returned, complete, inputsComplete)
     target.crafts = (target.crafts or 0) + 1
     if allocated ~= nil then target.allocatedQuantity = (target.allocatedQuantity or 0) + allocated end
     if returned ~= nil then target.returnedQuantity = (target.returnedQuantity or 0) + returned end
     target.returnComplete = target.returnComplete ~= false and complete
+    target.allocationComplete = target.allocationComplete ~= false and inputsComplete
   end
   function detail:Render(row, filter, preserve)
     self.worker:SetScript("OnUpdate", nil)
@@ -194,6 +199,33 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     if not row then return end
     self.tiles.allocated:SetNumber(row.allocatedQuantity, row.allocationComplete)
     self.tiles.returned:SetNumber(row.returnedQuantity, row.returnComplete)
+    self.tiles.allocated:SetScript("OnEnter", function(tile)
+      GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
+      GameTooltip:SetText("Gross required quantity")
+      GameTooltip:AddLine(UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete), 1, 1, 1, true)
+      GameTooltip:AddLine("Before returns; not net consumed.", 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    self.tiles.allocated:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    self.fields.crafts:SetText(UI.Number(row.craftCount))
+    self.fields.recipes:SetText(UI.Number(row.recipeCount))
+    self.fields.rate:SetText(UI.MatchedSavings(row))
+    self.tiles.rate.note:SetText(row.matchedCraftCount and row.matchedCraftCount > 0 and
+      UI.Count(row.matchedCraftCount, "matched craft") or "No matched sample")
+    self.tiles.rate:SetScript("OnEnter", function(tile)
+      GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
+      if UI.MatchedSavings(row) == "Unavailable" then
+        GameTooltip:SetText("Saved share unavailable")
+        GameTooltip:AddLine("No matched same-craft input sample.", 1, 1, 1, true)
+      else
+        GameTooltip:SetText(UI.MatchedSavings(row) .. " of required quantity saved")
+        GameTooltip:AddLine(UI.Number(row.matchedReturnedQuantity) .. " saved of " ..
+          UI.Number(row.matchedAllocatedQuantity) .. " required across " ..
+          UI.Count(row.matchedCraftCount, "matched craft"), 1, 1, 1, true)
+      end
+      GameTooltip:Show()
+    end)
+    self.tiles.rate:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.status:SetText("Loading craft history...")
     local cursor, totals, characters, byRecipe, days, ids = nil, { crafts = 0, returnComplete = true }, {}, {}, {}, {}
     self.worker:SetScript("OnUpdate", function(worker)
@@ -215,14 +247,15 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
         if matched then
           ids[#ids + 1] = craft.id
           if allocated and returned and returned > allocated then complete = false end
-          accumulate(totals, allocated, returned, complete)
+          local inputsComplete = craft.inputComplete == true and allocated ~= nil
+          accumulate(totals, allocated, returned, complete, inputsComplete)
           if craft.character then characters[craft.character.key] = true end
           local recipeId = craft.recipe and craft.recipe.id or 0
           local use = byRecipe[recipeId] or { recipe = craft.recipe, id = recipeId }
-          byRecipe[recipeId] = use; accumulate(use, allocated, returned, complete)
+          byRecipe[recipeId] = use; accumulate(use, allocated, returned, complete, inputsComplete)
           local day = math.floor(craft.timestamp / 86400) * 86400
           days[day] = days[day] or { bucketStart = day }
-          accumulate(days[day], allocated, returned, complete)
+          accumulate(days[day], allocated, returned, complete, inputsComplete)
         end
       end
       cursor = result.nextCursor
@@ -238,13 +271,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       for _, day in pairs(days) do series[#series + 1] = day end
       table.sort(series, function(left, right) return left.bucketStart < right.bucketStart end)
       detail.totals, detail.series = totals, series
-      detail.fields.crafts:SetText(UI.Number(totals.crafts))
       detail.fields.characters:SetText(UI.Number(characterCount))
-      detail.fields.recipes:SetText(UI.Number(#ranked))
-      if totals.returnComplete and totals.allocatedQuantity and totals.allocatedQuantity > 0 and
-          totals.allocatedQuantity < math.huge and totals.returnedQuantity and totals.returnedQuantity < math.huge then
-        detail.fields.rate:SetText(UI.Percent(totals.returnedQuantity, totals.allocatedQuantity))
-      end
       UI.LazyList(recipes, function(cursor)
         local offset, rows = cursor or 0, {}
         for index = offset + 1, math.min(offset + 40, #ranked) do rows[#rows + 1] = ranked[index] end
@@ -265,10 +292,10 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       from = filter.time and filter.time.from or (series[1] and series[1].bucketStart) or from
       to = filter.time and filter.time.to or (series[#series] and series[#series].bucketStart + 86400) or to
       detail.chart:Render(series, from, to); detail.chart:Show()
-      detail.status:SetText(totals.crafts == 0 and "No crafts with ingredient quantities in this period." or
-        "Ingredient use from " .. UI.Number(totals.crafts) .. " crafts, " .. date("!%d %b %Y", series[1].bucketStart) ..
-        " to " .. date("!%d %b %Y", series[#series].bucketStart) .. "." ..
-        (row.hasPrunedReturns and " Older ingredient-use quantities are unavailable." or ""))
+      detail.status:SetText(totals.crafts == 0 and "No individual craft details are available in this period." or
+        "Recent craft details: " .. UI.Number(totals.crafts) .. " crafts, " .. date("!%d %b %Y", series[1].bucketStart) ..
+        " to " .. date("!%d %b %Y", series[#series].bucketStart) ..
+        ". The chart shows known gross required and returned quantities. Totals and saved share include all saved history; individual crafts are kept for a limited time.")
     end)
   end
   function detail:Refresh(preserve)
@@ -320,18 +347,18 @@ function UI.ReagentsPage(page, width, height, openReagent)
     trivial = value; page:Refresh(true)
   end)
   local sorts = filters:Select("Sort", {
-    { label = "Name", value = "name" }, { label = "Most used", value = "allocated" },
+    { label = "Name", value = "name" }, { label = "Most required", value = "allocated" },
     { label = "Most returned", value = "returned" }, { label = "Recipe count", value = "recipes" },
   }, function(value) sort = value; page:Refresh(true) end)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
   local summary = UI.SummaryRow(page, width, -142, { { "Reagents", "INV_Misc_Herb_19" },
-    { "Used", "INV_Misc_Bag_10" }, { "Returned", "Trade_Alchemy" } })
+    { "Required", "INV_Misc_Bag_10" }, { "Returned", "Trade_Alchemy" } })
   summary:SetHeight(60)
   for _, tile in ipairs(summary.tiles) do tile:SetHeight(60); tile.note:Hide() end
   page.summary, page.summaryRow = summary.tiles, summary
   local listWidth = width
   local available = listWidth - 24
-  local nameWidth = available - 418
+  local nameWidth = available - 480
   local list = UI.ScrollList(page, 0, -224, listWidth, height - 258, {
     { title = "Reagent", width = nameWidth, value = function(row)
         return UI.Name(row.item) .. " (#" .. row.item.id .. ")"
@@ -342,18 +369,28 @@ function UI.ReagentsPage(page, width, height, openReagent)
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
-    { title = "Profession", width = 140, value = function(row)
+    { title = "Profession", width = 120, value = function(row)
       local names = {}
       for _, profession in ipairs(row.professions or {}) do names[#names + 1] = UI.Name(profession) end
       return table.concat(names, ", ")
     end },
     { title = "Recipes", width = 54, value = function(row) return UI.Number(row.recipeCount) end },
-    { title = "Used", width = 80, value = function(row)
+    { title = "Required", width = 74, value = function(row)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
-    end, exact = function(row) return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) end },
-    { title = "Returned", width = 80, value = function(row)
+    end, exact = function(row)
+      return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) .. " gross required before returns; not net consumed."
+    end },
+    { title = "Returned", width = 74, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end, exact = function(row) return UI.AmountTooltip(row.returnedQuantity, row.returnComplete) end },
+    { title = "Saved", width = 94, value = function(row)
+      return UI.IsTrivial(row.item.id) and "Excluded" or UI.MatchedSavingsText(row)
+    end, exact = function(row)
+      if UI.IsTrivial(row.item.id) then return "Excluded by the savings preference." end
+      if UI.MatchedSavings(row) == "Unavailable" then return "Unavailable: no matched same-craft input sample." end
+      return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
+        " required across " .. UI.Count(row.matchedCraftCount, "matched craft")
+    end },
     { title = "Ignore", width = 64,
       value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
       create = function(parent, left) return UI.TrivialCheckbox(parent, left + 8, -2, function() end, true) end,

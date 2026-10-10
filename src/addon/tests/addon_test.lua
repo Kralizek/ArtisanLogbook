@@ -962,6 +962,18 @@ local procCases = {
 for _, totals in ipairs(procCases) do assert(UI.ProcValue(totals, "resourcefulnessProcCount") == totals.expected) end
 assert(UI.ProcTooltip(procCases[3], "resourcefulnessProcCount"):find("1 proc / 1 craft", 1, true))
 assert(UI.ProcTooltip(procCases[4], "resourcefulnessProcCount"):find("22 crafts have no return outcome", 1, true))
+local authoritative = { craftCount = 4, resourcefulnessAuthoritativeProcCount = 1,
+  resourcefulnessAuthoritativeProcCountObservedCount = 2, resourcefulnessProcCount = 3 }
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "50.0%")
+local authoritativeTooltip = UI.ProcTooltip(authoritative, "resourcefulnessAuthoritativeProcCount")
+assert(authoritativeTooltip:find("1 of 2 verified crafts", 1, true) and
+  authoritativeTooltip:find("2 of 4 selected crafts", 1, true))
+authoritative.resourcefulnessAuthoritativeProcCount = 0
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "0.0%")
+authoritative.resourcefulnessAuthoritativeProcCount = nil
+authoritative.resourcefulnessAuthoritativeProcCountObservedCount = 0
+assert(UI.ProcValue(authoritative, "resourcefulnessAuthoritativeProcCount") == "Unavailable")
+assert(UI.ProcTooltip(authoritative, "resourcefulnessAuthoritativeProcCount"):find("Not enough verified crafts", 1, true))
 assert(UI.Percent(1, 3) == "33.3%" and UI.Percent(1, 0) == "-")
 local filterProbe = UI.FilterBar(paperProbe, 700, 0)
 local filterChanges = 0
@@ -1432,7 +1444,7 @@ assert(not UI.IsPinned(501))
 assertRecipesSelected()
 uiWindow:Activate("Overview")
 while overview.summary.scripts.OnUpdate do overview.summary.scripts.OnUpdate(overview.summary) end
-assert(overview.summary.tiles[5].note.text == "")
+assert(overview.summary.tiles[5].value.text == "Unavailable" and overview.summary.tiles[5].note.text:find("0 of 0", 1, true))
 uiWindow:Activate("Logbook")
 print("PASS sidebar destinations, independent filters, list preservation, pins and modal Escape")
 local present = environment.GetServerTime
@@ -1639,7 +1651,7 @@ do
     local page = window.pages[destination]
     local list = page.topRecipes or page.catalogue
     while list.worker.scripts.OnUpdate do list.worker.scripts.OnUpdate(list.worker) end
-    local expected = { [9741] = "25.0%", [9742] = "0.0%", [9743] = "8 procs" }
+    local expected = { [9741] = "25.0%", [9742] = "0.0%", [9743] = "100.0%" }
     for _, row in ipairs(list.rows) do
       if row.item then
         local resource
@@ -1651,7 +1663,8 @@ do
         if row.item.recipe.id == 9743 then
           row.scripts.OnEnter(row)
           local tooltip = table.concat(environment.GameTooltip.lines, "\n")
-          assert(tooltip:find("12 crafts have no return outcome", 1, true))
+          assert(tooltip:find("8 of 8 verified crafts", 1, true) and
+            tooltip:find("8 of 20 selected crafts", 1, true))
         end
       end
     end
@@ -1915,7 +1928,7 @@ do
   page.searchInput.scripts.OnUpdate(page.searchInput, .3)
   dropdown(page, "Most returned"):Choose("returned")
   assert(#list.items == 40 and list.items[1].item.id == 4145)
-  dropdown(page, "Most used"):Choose("allocated")
+  dropdown(page, "Most required"):Choose("allocated")
   assert(list.items[1].item.id == 4145)
   dropdown(page, "Recipe count"):Choose("recipes")
   assert(list.items[1].item.id == 4008)
@@ -1966,13 +1979,13 @@ do
   dropdown(page, "Ignored"):Choose("all")
   search("Herb")
   dropdown(page, "Alchemy"):Choose(171)
-  dropdown(page, "Most used"):Choose("allocated")
+  dropdown(page, "Most required"):Choose("allocated")
   list.scroll:SetVerticalScroll(1200); list.scroll.scripts.OnVerticalScroll(list.scroll)
   assert(#list.items == 45)
   list.scroll:SetVerticalScroll(150)
   window:Activate("Recipes"); window:Activate("Reagents")
   assert(#list.items == 45 and list.scroll:GetVerticalScroll() == 150 and page.searchInput:GetText() == "Herb")
-  assert(dropdown(page, "Alchemy").value == 171 and dropdown(page, "Most used").value == "allocated")
+  assert(dropdown(page, "Alchemy").value == 171 and dropdown(page, "Most required").value == "allocated")
   search("not recorded")
   assert(#list.items == 0 and list.empty:IsShown())
   assert(helpers.ReagentAmount({ allocatedQuantity = 4, allocationComplete = false }, "allocatedQuantity", "allocationComplete") == "4")
@@ -2014,10 +2027,10 @@ do
   assert(window.activeTab == "Reagent" and detail.item.id == 4501 and page.detail == nil)
   assert(page.summary[1].value.text == "2" and page.summary[2].value.text == "508")
   detail.worker.scripts.OnUpdate(detail.worker)
-  assert(calls == 1 and detail.worker.scripts.OnUpdate and detail.fields.crafts.text == "-")
+  assert(calls == 1 and detail.worker.scripts.OnUpdate and detail.fields.crafts.text == "102")
   detail.worker.scripts.OnUpdate(detail.worker)
   assert(calls == 2 and not detail.worker.scripts.OnUpdate)
-  assert(detail.totals.crafts == 101 and detail.fields.rate.text == "40.0%")
+  assert(detail.totals.crafts == 101 and detail.fields.rate.text == "Unavailable")
   assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
   assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
@@ -2032,7 +2045,7 @@ do
   detail:SelectView("Overview")
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
   assert(detail.item.id == 4502 and detail.totals.crafts == 1)
-  assert(detail.fields.rate.text == "-" and detail.fields.returned.text == "-")
+  assert(detail.fields.rate.text == "Unavailable" and detail.fields.returned.text == "-")
   assert(not detail.chart.bars[1].returned:IsShown())
   assert(detail.chart.bars[1].tooltip:find("Returned: Unknown", 1, true))
   page.catalogue.rows[1].scripts.OnClick(page.catalogue.rows[1])
@@ -2048,9 +2061,9 @@ do
   ledger:Prune(ledger.wall() + 61 * 86400)
   detail:Refresh(true)
   while detail.worker.scripts.OnUpdate do detail.worker.scripts.OnUpdate(detail.worker) end
-  assert(detail.fields.crafts.text == "0" and detail.fields.returned.text:find("202", 1, true))
-  -- Durable input aggregates survive detail pruning; the retained-craft rate does not.
-  assert(detail.fields.allocated.text:find("505", 1, true) and detail.fields.rate.text == "-")
+  assert(detail.fields.crafts.text == "102" and detail.fields.returned.text:find("202", 1, true))
+  -- Durable gross inputs survive detail pruning; unmatched savings remain unavailable.
+  assert(detail.fields.allocated.text:find("505", 1, true) and detail.fields.rate.text == "Unavailable")
   assert(#detail.recipes.items == 0 and detail.chart.empty:IsShown())
   api.GetCrafts = crafts
   window:Hide()
@@ -2168,6 +2181,14 @@ do
   local window = ui.productionWindow
   window:Show()
   local overview = window.pages.Overview
+  while overview.summary.scripts.OnUpdate do overview.summary.scripts.OnUpdate(overview.summary) end
+  local overviewTotals = api.GetRecipeOutcomes(9850).totals
+  local overviewRate = ui.UI.AuthoritativeRate(overviewTotals)
+  assert(overview.summary.tiles[5].value.text ==
+    (overviewRate == "Not enough verified crafts" and "Unavailable" or overviewRate))
+  local verified = overviewTotals.resourcefulnessAuthoritativeProcCountObservedCount
+  assert(overview.summary.tiles[5].note.text:find(tostring(verified) .. " of " ..
+    tostring(overviewTotals.craftCount) .. " selected crafts", 1, true))
   while overview.topRecipes.worker.scripts.OnUpdate do overview.topRecipes.worker.scripts.OnUpdate(overview.topRecipes.worker) end
   assert(not overview.scroll and #overview.topRecipes.items == 1)
   local ranked = overview.topRecipes.items[1]
@@ -2201,7 +2222,7 @@ do
   reagent.iconHover.scripts.OnEnter(reagent.iconHover)
   assert(environment.GameTooltip.itemId == 5301)
   while reagent.worker.scripts.OnUpdate do reagent.worker.scripts.OnUpdate(reagent.worker) end
-  assert(reagent.fields.rate.text == "20.0%" and #reagent.history.items == 1)
+  assert(reagent.fields.rate.text == "Unavailable" and #reagent.history.items == 1)
   reagent:SelectView("Craft History")
   reagent.history.rows[1].scripts.OnClick(reagent.history.rows[1])
   assert(window.openCraftId == craft.id and window.craftDetailPage.result.item.id == 5302)
@@ -2290,6 +2311,15 @@ do
   local ui = loadUI()
   local window, helpers = ui.productionWindow, ui.UI
   local api = environment.ArtisanLogbookAPI
+  local management = environment.ArtisanLogbookManagement
+  local managementStatus = management.Status
+  management.Status = function() return { authoritativeCaptureSuspended = true } end
+  window:RefreshCaptureStatus()
+  assert(window.captureStatus:IsShown() and window.captureStatus.text:find("temporarily unavailable", 1, true))
+  management.Status = function() return { authoritativeCaptureSuspended = false } end
+  window:RefreshCaptureStatus()
+  assert(not window.captureStatus:IsShown())
+  management.Status = managementStatus
   environment.ArtisanLogbookUISettings.trivialReagents = {}
   local function record(result, recipeId)
     assert(ledger:SubmitCraft(recipeId or 9001, 1, false))
@@ -2320,11 +2350,25 @@ do
     concentrationSpent = 7130, concentrationSpentObservedCount = 30,
     resourcefulnessProcCount = 8, resourcefulnessProcCountObservedCount = 8,
     resourcefulnessCompleteProcCountObservedCount = 0,
+    resourcefulnessAuthoritativeProcCount = 2, resourcefulnessAuthoritativeProcCountObservedCount = 10,
   }
   local summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
-  assert(summary.any == "At least 8 crafts returned reagents")
-  assert(not summary.any:find("%%") and not summary.nonTrivial:find("%%"))
-  assert(summary.nonTrivial == "-" and summary.complete:find("22 crafts have no return outcome", 1, true))
+  assert(summary.any == "20.0% | 2 of 10 verified crafts")
+  assert(summary.nonTrivial == "0.0% | 0 of 10 verified crafts")
+  assert(summary.complete == "10 of 30 crafts have verified outcomes.")
+  local historical = helpers.ResourcefulnessSummary({ craftCount = 12, resourcefulnessProcCount = 4,
+    resourcefulnessProcCountObservedCount = 4, resourcefulnessAuthoritativeProcCountObservedCount = 0 }, 0)
+  assert(historical.any == "Not enough verified crafts" and historical.nonTrivial == "Unavailable")
+  local rate, coverage = helpers.AuthoritativeRate({ craftCount = 30, resourcefulnessAuthoritativeProcCount = 2,
+    resourcefulnessAuthoritativeProcCountObservedCount = 10 })
+  assert(rate == "20.0%" and coverage == "2 of 10 verified crafts; 10 of 30 crafts")
+  assert(helpers.AuthoritativeRate({ craftCount = 12 }) == "Not enough verified crafts")
+  assert(helpers.MatchedSavings({ matchedCraftCount = 2, matchedAllocatedQuantity = 8,
+    matchedReturnedQuantity = 2 }) == "25.0%")
+  assert(helpers.MatchedSavingsText({ matchedCraftCount = 2, matchedAllocatedQuantity = 8,
+    matchedReturnedQuantity = 2 }) == "25.0% (2)")
+  assert(helpers.MatchedSavings({ matchedCraftCount = 0, matchedAllocatedQuantity = 8,
+    matchedReturnedQuantity = 2 }) == "Unavailable")
   local multi = helpers.CompactOutcome(screenshotTotals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output")
   local ingenuity = helpers.CompactOutcome(screenshotTotals, "ingenuityProcCount", "ingenuityRefund", "concentrationSpent", "Refund", "of spent")
   assert(multi == "23.3% | 7 procs\nBonus: 52 | 25.7% of output")
@@ -2332,16 +2376,19 @@ do
   screenshotTotals.resourcefulnessProcCountObservedCount = 30
   screenshotTotals.resourcefulnessCompleteProcCountObservedCount = 30
   screenshotTotals.resourcefulnessCompleteProcCount = 8
+  screenshotTotals.resourcefulnessAuthoritativeProcCountObservedCount = 30
   summary = helpers.ResourcefulnessSummary(screenshotTotals, 4)
-  assert(summary.any == "26.7% | 8 crafts" and summary.nonTrivial == "13.3% | 4 crafts")
+  assert(summary.any == "6.7% | 2 of 30 verified crafts" and summary.nonTrivial == "13.3% | 4 of 30 verified crafts")
   assert(summary.complete == "")
   screenshotTotals.resourcefulnessProcCount = 0
+  screenshotTotals.resourcefulnessAuthoritativeProcCount = 0
   summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
-  assert(summary.any == "0.0% | 0 crafts")
+  assert(summary.any == "0.0% | 0 of 30 verified crafts")
   screenshotTotals.resourcefulnessProcCountObservedCount = 8
   screenshotTotals.resourcefulnessCompleteProcCountObservedCount = 8
+  screenshotTotals.resourcefulnessAuthoritativeProcCountObservedCount = 0
   summary = helpers.ResourcefulnessSummary(screenshotTotals, 0)
-  assert(summary.any == "-" and summary.nonTrivial == "-")
+  assert(summary.any == "Not enough verified crafts" and summary.nonTrivial == "Unavailable")
   assert(helpers.ResourcefulnessSummary({ craftCount = 0 }, 0).any == "No crafts")
   assert(ledger:AddDimension("item", 8, { name = "Tranquility Bloom" }))
   assert(ledger:AddDimension("item", 9, { name = "Tranquility Bloom" }))
@@ -2375,9 +2422,9 @@ do
   assert(pane.tiles[5].value.text == "11" and pane.tiles[5].note.text == "")
   assert(pane.returnQuantity.text:find("11 reagents returned", 1, true))
   assert(pane.stats[2].text:find("At least 1 proc", 1, true) and pane.stats[4].text:find("12", 1, true))
-  assert(pane.stats[3].text == "At least 3 crafts returned reagents" and not pane.stats[3].text:find("%%"))
-  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 3 crafts")
-  assert(pane.resourcefulness.complete.text:find("1 craft has no return outcome", 1, true))
+  assert(pane.stats[3].text == "75.0% | 3 of 4 verified crafts")
+  assert(pane.resourcefulness.nonTrivial.text == "75.0% | 3 of 4 verified crafts")
+  assert(pane.resourcefulness.complete.text == "4 of 5 crafts have verified outcomes.")
   assert(pane.stats[2].text:find("craft has no proc result", 1, true))
   for _, labels in ipairs({ pane.stats, pane.resourcefulness }) do
     for _, label in pairs(labels) do
@@ -2420,9 +2467,9 @@ do
   assert(not checkbox and not detail.reagentSelector and not detail.scroll)
   helpers.SetTrivial(8, true)
   assert(helpers.IsTrivial(8))
-  assert(detail.fields.Resourcefulness.text == "1 returned")
+  assert(detail.fields.Resourcefulness.text == "Return verified", detail.fields.Resourcefulness.text)
   assert(#detail.returnedReagents.items == 1 and detail.returnedReagents.items[1].item.id == 8)
-  assert(detail.returnedReagents:GetHeight() >= 170 and detail.result)
+  assert(detail.returnedReagents:GetHeight() >= 150 and detail.result)
   local getCraft = api.GetCraft
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -2434,7 +2481,8 @@ do
   end
   detail:ShowCraft(second.id)
   assert(#detail.returnedReagents.items == 2)
-  assert(detail.fields.Resourcefulness.text == "2 returned (20.0% of used)")
+  assert(detail.fields.Resourcefulness.text == "Return verified")
+  assert(detail.inputEvidence.text == "Input requirements are unavailable.")
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.resourcefulnessComplete = false
@@ -2442,7 +2490,7 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(detail.fields.Resourcefulness.text == ">= 3 returned")
+  assert(detail.fields.Resourcefulness.text == "Return observed; some items may be missing")
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.reagents = {}
@@ -2452,7 +2500,7 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(#detail.returnedReagents.items == 8 and detail.returnedReagents:GetHeight() >= 170)
+  assert(#detail.returnedReagents.items == 8 and detail.returnedReagents:GetHeight() >= 150)
   assert(detail.returnedReagents.child:GetHeight() > detail.returnedReagents.scroll:GetHeight())
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -2469,15 +2517,15 @@ do
   finishCalculation()
   assert(window.visiblePage == recipePage, "craft close did not restore recipe page")
   assert(window.recipeDetailPage:IsShown() and not window.craftDetailWindow:IsShown() and not window.modalShade:IsShown())
-  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 2 crafts",
+  assert(pane.resourcefulness.nonTrivial.text == "50.0% | 2 of 4 verified crafts",
     "unexpected non-trivial summary: " .. tostring(pane.resourcefulness.nonTrivial.text))
   helpers.SetTrivial(9, true)
   finishCalculation()
-  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 1 craft")
+  assert(pane.resourcefulness.nonTrivial.text == "25.0% | 1 of 4 verified crafts")
   helpers.SetTrivial(10, true); pane:Refresh(); finishCalculation()
-  assert(pane.resourcefulness.nonTrivial.text == "-")
+  assert(pane.resourcefulness.nonTrivial.text == "0.0% | 0 of 4 verified crafts")
   helpers.SetTrivial(9, false); pane:Refresh(); finishCalculation()
-  assert(pane.resourcefulness.nonTrivial.text == "Savings in at least 2 crafts")
+  assert(pane.resourcefulness.nonTrivial.text == "50.0% | 2 of 4 verified crafts")
   local settings = environment.ArtisanLogbookUISettings
   local anotherUI = loadUI()
   assert(anotherUI.UI.IsTrivial(8) and anotherUI.UI.IsTrivial(10) and not anotherUI.UI.IsTrivial(9))
@@ -2503,7 +2551,7 @@ do
   assert(#ledger.database.crafts == 0)
   pane:Refresh()
   finishCalculation()
-  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "Savings in at least 2 crafts")
+  assert(pane.stats[1].text == "6" and pane.resourcefulness.nonTrivial.text == "40.0% | 2 of 5 verified crafts")
   for index = 1, 205 do
     record({ resourcesReturned = { { reagent = { itemID = 1000 + index }, quantity = 1 } } }, 9002)
   end
@@ -2520,7 +2568,7 @@ do
   pane.scripts.OnUpdate()
   assert(pages == 2 and pane.scripts.OnUpdate)
   pane.scripts.OnUpdate()
-  assert(pages == 3 and pane.scripts.OnUpdate)
+  assert(pages == 3 and pane.scripts.OnUpdate == nil)
   finishCalculation()
   assert(pane.scripts.OnUpdate == nil and pane.resourcefulness.nonTrivial.text:find("100.0%%"))
   pane.materialList:LoadNext()
@@ -2601,15 +2649,15 @@ do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
   end
   local text = ui.productionWindow.recipeOutcomes.stats[3].text
-  assert(text == "At least 8 crafts returned reagents" and not text:find("%%"))
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text:find("22 crafts have no return outcome", 1, true))
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "-")
+  assert(text == "Not enough verified crafts")
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.complete.text == "No verified outcomes among 30 selected crafts.")
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "Unavailable")
   ui.UI.SetTrivial(8, false)
   ui.productionWindow.recipeOutcomes:Refresh()
   while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
   end
-  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "Savings in at least 8 crafts")
+  assert(ui.productionWindow.recipeOutcomes.resourcefulness.nonTrivial.text == "Unavailable")
   print("PASS legacy incomplete positive sets never become measured non-trivial false")
 end
 

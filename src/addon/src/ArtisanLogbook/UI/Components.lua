@@ -91,6 +91,11 @@ function UI.Rate(totals, metric)
 end
 
 function UI.ProcValue(totals, metric)
+  if metric == "resourcefulnessAuthoritativeProcCount" then
+    local observed = totals and totals[metric .. "ObservedCount"]
+    local count = totals and totals[metric]
+    return observed and observed > 0 and count ~= nil and UI.Percent(count, observed) or "Unavailable"
+  end
   local rate = UI.Rate(totals, metric)
   if rate ~= "-" then return rate end
   local count = totals and totals[metric]
@@ -102,6 +107,13 @@ function UI.ProcTooltip(totals, metric)
   local count, crafts = totals[metric] or 0, totals.craftCount or 0
   local known = totals[metric .. "ObservedCount"] or 0
   if crafts == 0 then return "No crafts in this selection" end
+  if metric == "resourcefulnessAuthoritativeProcCount" then
+    if known == 0 or totals[metric] == nil then
+      return "Not enough verified crafts\n0 of " .. UI.Number(crafts) .. " selected crafts have verified outcomes."
+    end
+    return UI.Percent(totals[metric], known) .. "\n" .. UI.Number(totals[metric]) .. " of " ..
+      UI.Number(known) .. " verified crafts\n" .. UI.Number(known) .. " of " .. UI.Number(crafts) .. " selected crafts"
+  end
   if known == crafts then
     return UI.Rate(totals, metric) .. "\n" .. count .. (count == 1 and " proc / " or " procs / ") ..
       crafts .. (crafts == 1 and " craft" or " crafts")
@@ -1139,11 +1151,11 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
     end },
   }
     for _, entry in ipairs({ { "Multicraft", "multicraftProcCount" },
-      { "Resourcefulness", "resourcefulnessProcCount" }, { "Ingenuity", "ingenuityProcCount" } }) do
+      { "Resourcefulness", "resourcefulnessAuthoritativeProcCount" }, { "Ingenuity", "ingenuityProcCount" } }) do
     local title, metric = entry[1], entry[2]
     columns[#columns + 1] = { title = title, width = available * (.38 / 3),
       value = function(row)
-        if metric ~= "resourcefulnessProcCount" and row.totals and row.totals[metric] == 0 and
+        if metric ~= "resourcefulnessAuthoritativeProcCount" and row.totals and row.totals[metric] == 0 and
             row.totals[metric .. "ObservedCount"] == row.totals.craftCount then return "" end
         return UI.ProcValue(row.totals, metric)
       end,

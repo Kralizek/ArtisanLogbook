@@ -46,21 +46,10 @@ function UI.NonTrivialCount(sets)
   local count = 0
   for _, returned in ipairs(sets) do
     for _, itemId in ipairs(returned.itemIds) do
-      if not UI.IsTrivial(itemId) then count = count + returned.craftCount; break end
+      if not UI.IsTrivial(itemId) then count = count + (returned.authoritativeCraftCount or 0); break end
     end
   end
   return count
-end
-
-function UI.CraftHasNonTrivialReturn(craft)
-  if craft.resourcefulnessComplete == true then return false end
-  for _, reagent in ipairs(craft.reagents or {}) do
-    local itemId = reagent.item and reagent.item.id
-    if itemId and reagent.returnedQuantity and reagent.returnedQuantity > 0 and not UI.IsTrivial(itemId) then
-      return true
-    end
-  end
-  return false
 end
 
 function UI.ProcRate(count, observed)
@@ -68,20 +57,35 @@ function UI.ProcRate(count, observed)
   return UI.Percent(count, observed) .. "\n" .. UI.Number(count) .. " / " .. UI.Number(observed) .. " crafts"
 end
 
+function UI.AuthoritativeRate(totals)
+  local crafts = totals.craftCount or 0
+  local observed = totals.resourcefulnessAuthoritativeProcCountObservedCount
+  local positive = totals.resourcefulnessAuthoritativeProcCount
+  if not observed or observed <= 0 or positive == nil then
+    return "Not enough verified crafts", "0 of " .. UI.Number(crafts) .. " crafts verified"
+  end
+  return UI.Percent(positive, observed), UI.Number(positive) .. " of " .. UI.Number(observed) ..
+    " verified crafts; " .. UI.Number(observed) .. " of " .. UI.Number(crafts) .. " crafts"
+end
+
+function UI.MatchedSavings(row)
+  if not row or not row.matchedCraftCount or row.matchedCraftCount <= 0 or
+      not row.matchedAllocatedQuantity or row.matchedAllocatedQuantity <= 0 or
+      row.matchedReturnedQuantity == nil then return "Unavailable" end
+  return UI.Percent(row.matchedReturnedQuantity, row.matchedAllocatedQuantity)
+end
+
+function UI.MatchedSavingsText(row)
+  local savings = UI.MatchedSavings(row)
+  if savings == "Unavailable" then return savings end
+  return savings .. " (" .. UI.Number(row.matchedCraftCount) .. ")"
+end
+
 function UI.MeasuredShare(totals, numerator, denominator)
   if totals.craftCount == 0 or totals[numerator .. "ObservedCount"] ~= totals.craftCount or
       totals[denominator .. "ObservedCount"] ~= totals.craftCount or
       not totals[denominator] or totals[denominator] <= 0 then return "Unknown" end
   return UI.Percent(totals[numerator], totals[denominator])
-end
-
-local function outcomeText(count, observed, crafts, noun, partialLabel)
-  count = count or 0
-  noun = count == 1 and noun or noun .. "s"
-  if crafts > 0 and observed == crafts then
-    return UI.Percent(count, crafts) .. " | " .. UI.Number(count) .. " " .. noun
-  end
-  return count > 0 and string.format(partialLabel .. " %d %s", count, noun) or "-"
 end
 
 function UI.CompactOutcome(totals, proc, amount, denominator, amountLabel, shareLabel)
@@ -107,34 +111,29 @@ end
 
 function UI.ResourcefulnessSummary(totals, nonTrivial)
   local crafts = totals.craftCount
-  local observed = totals.resourcefulnessProcCountObservedCount
-  local positive = totals.resourcefulnessProcCount or 0
-  local complete = totals.resourcefulnessCompleteProcCountObservedCount
+  local observed = totals.resourcefulnessAuthoritativeProcCountObservedCount or 0
+  local positive = totals.resourcefulnessAuthoritativeProcCount
   local result = { complete = "" }
   if crafts == 0 then
     return { any = "No crafts", complete = "", nonTrivial = "-" }
   end
-  if observed == crafts then
-    result.any = outcomeText(positive, observed, crafts, "craft")
+  if observed > 0 and positive ~= nil then
+    result.any = UI.Percent(positive, observed) .. " | " .. UI.Number(positive) .. " of " ..
+      UI.Number(observed) .. " verified crafts"
+    if observed < crafts then
+      result.complete = UI.Number(observed) .. " of " .. UI.Number(crafts) .. " crafts have verified outcomes."
+    end
   else
-    local missing = crafts - observed
-    result.any = positive > 0 and "At least " .. UI.Count(positive, "craft") .. " returned reagents" or "-"
-    result.complete = "Resourcefulness rate unavailable: " .. UI.Count(missing, "craft") ..
-      (missing == 1 and " has" or " have") .. " no return outcome."
+    result.any = "Not enough verified crafts"
+    result.complete = "No verified outcomes among " .. UI.Count(crafts, "selected craft") .. "."
   end
   if nonTrivial == nil then
     result.nonTrivial = "Calculating..."
-  elseif complete == crafts and crafts > 0 then
-    result.nonTrivial = outcomeText(nonTrivial, complete, crafts, "craft")
-  elseif nonTrivial > 0 then
-    result.nonTrivial = "Savings in at least " .. UI.Count(nonTrivial, "craft")
+  elseif observed > 0 then
+    result.nonTrivial = UI.Percent(nonTrivial, observed) .. " | " .. UI.Number(nonTrivial) .. " of " ..
+      UI.Number(observed) .. " verified crafts"
   else
-    result.nonTrivial = "-"
-  end
-  if complete < crafts and observed == crafts then
-    local missing = crafts - complete
-    result.complete = "Savings rate unavailable: " .. UI.Count(missing, "craft") ..
-      (missing == 1 and " has" or " have") .. " no ingredient breakdown."
+    result.nonTrivial = "Unavailable"
   end
   return result
 end
@@ -289,21 +288,40 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     complete = UI.Text(statistics, 0, -232, inner, 40) }
   pane.returnQuantity = UI.Text(statistics, 0, -208, inner / 3 - 14, 22)
   local materialList = UI.ScrollList(materials, 0, 0, inner, height - 253, {
-    { title = "Reagent", width = inner - 168, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, inner - 168) end,
+    { title = "Reagent", width = inner - 288, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, inner - 288) end,
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
-    { title = "Returned", width = 80, value = function(row) return UI.Number(row.returnedQuantity) end,
-      exact = function(row) return tostring(row.returnedQuantity) end },
+    { title = "Returned", width = 70, value = function(row)
+      return UI.Amount(row.returnedQuantity, row.returnComplete)
+    end, exact = function(row) return UI.AmountTooltip(row.returnedQuantity, row.returnComplete) end },
+    { title = "Saved / required", width = 124, value = function(row)
+      if UI.IsTrivial(row.item.id) then return "Excluded" end
+      return UI.MatchedSavingsText(row)
+    end, exact = function(row)
+      if UI.IsTrivial(row.item.id) then return "Excluded by the savings preference." end
+      if UI.MatchedSavings(row) == "Unavailable" then return "Unavailable: no matched same-craft input sample." end
+      return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
+        " required across " .. UI.Count(row.matchedCraftCount, "matched craft")
+    end },
     { title = "Ignore", width = 64, value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
       create = function(owner, left) return UI.TrivialCheckbox(owner, left + 8, -2, function() end, true) end,
       update = function(check, row) check:SetItem(row.item.id) end },
-  }, function(row) if openReagent then openReagent(row.item) end end, "No reagents returned in this period")
+  }, function(row) if openReagent then openReagent(row.item) end end, "No reagent measurements in this period")
   pane.materialList = materialList
   UI.LazyList(materialList, function(cursor)
-    local result, reason = api.GetRecipeReturnedReagents(recipeId, pane:Filter(), { limit = 40, cursor = cursor })
-    return result and result.returns, result and result.nextCursor or reason
+    local result, reason = api.GetRecipeReagentStatistics(recipeId, pane:Filter(), { limit = 40, cursor = cursor })
+    if result then
+      local coverage = result.coverage
+      local returnComplete = coverage and coverage.craftCount > 0 and
+        coverage.returnObservedCount == coverage.craftCount
+      for _, row in ipairs(result.reagents) do
+        row.returnComplete = returnComplete == true
+        if returnComplete and row.returnedQuantity == nil then row.returnedQuantity = 0 end
+      end
+    end
+    return result and result.reagents, result and result.nextCursor or reason
   end)
   function filters.onLayout(filterHeight)
     summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -filterHeight - 6)
@@ -361,9 +379,11 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       totals.ingenuityRefundObservedCount == totals.craftCount and UI.Number(totals.concentrationSpent - totals.ingenuityRefund) or "-")
     self.tiles[5].value:SetText("..."); self.tiles[5].note:SetText("")
     self.returnQuantity:SetText("Calculating returned quantity...")
-    UI.ReturnTotals(self.returnWorker, { { id = recipeId } }, filter, function(total, crafts, complete)
-      self.tiles[5]:SetNumber(total, total ~= nil and complete == crafts)
-      self.returnQuantity:SetText(UI.Amount(total, total ~= nil and complete == crafts) .. " reagents returned")
+    UI.ReturnTotals(self.returnWorker, { { id = recipeId } }, filter, totals.craftCount,
+      function(total, population, positive, verified)
+      local complete = total ~= nil and verified == population
+      self.tiles[5]:SetNumber(total, complete)
+      self.returnQuantity:SetText(UI.Amount(total, complete) .. " reagents returned")
     end)
     stats[1]:SetText(UI.Number(totals.craftCount))
     stats[2]:SetText(UI.CompactOutcome(totals, "multicraftProcCount", "multicraftBonus", "outputQuantity", "Bonus", "of output"))
@@ -375,26 +395,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     end
     showReturns(nil)
     if generation ~= self.calculationGeneration then return end
-    local craftFilter = { recipes = { recipeId } }
-    for key, value in pairs(filter) do craftFilter[key] = value end
-    local cursor, craftCursor, nonTrivial = nil, nil, 0
-    local function nextCrafts()
-      local page, pageReason = api.GetCrafts(craftFilter, { limit = 100, cursor = craftCursor })
-      if not page then
-        self.resourcefulness.nonTrivial:SetText("Unavailable"); status:SetText(pageReason or "Unavailable")
-        self:SetScript("OnUpdate", nil); return
-      end
-      for _, craft in ipairs(page.crafts) do
-        if UI.CraftHasNonTrivialReturn(craft) then
-          nonTrivial = nonTrivial + 1
-        end
-      end
-      craftCursor = page.nextCursor
-      if not craftCursor then
-        showReturns(nonTrivial)
-        self:SetScript("OnUpdate", nil)
-      else self:SetScript("OnUpdate", nextCrafts) end
-    end
+    local cursor, nonTrivial = nil, 0
     local function nextSets()
       if generation ~= self.calculationGeneration then return end
       local page, pageReason = api.GetRecipeReturnSets(recipeId, filter, { limit = 100, cursor = cursor })
@@ -406,8 +407,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       nonTrivial = nonTrivial + setCount
       cursor = page.nextCursor
       if not cursor then
-        craftCursor = nil
-        self:SetScript("OnUpdate", nextCrafts)
+        showReturns(nonTrivial)
+        self:SetScript("OnUpdate", nil)
       else self:SetScript("OnUpdate", nextSets) end
     end
     nextSets()

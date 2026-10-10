@@ -385,14 +385,14 @@ discard unavailable entries. Zero complete-return coverage means an unknown
 non-trivial rate, even if the raw positive proc rate is known.
 
 These observations need not be a representative sample: legacy backfill may
-prove only positive outcomes. For example, 8 positive return records in 30
-crafts do not establish a 100% population proc rate. The production UI says
-`Returns recorded for 8 crafts` and `Return results missing for 22 crafts`; it
-does not claim the other crafts had no returns. It shows an overall any-return
-rate only when all selected crafts have known outcomes. Non-trivial savings
-likewise show recorded craft counts instead of subset percentages when full
-return details are missing; missing figures display a dash. These presentation
-choices do not change the factual API's counts or observation fields.
+prove only positive outcomes. The production UI therefore computes Resourcefulness
+rates only from `resourcefulnessAuthoritativeProcCount` and its paired observed
+count. For example, 8 verified positive attempts among 40 verified attempts in a
+selection of 100 crafts is shown as 20% (8 of 40 verified), with 40 of 100
+selected crafts covered. Legacy positive returns remain visible as quantities,
+but never enter that rate. Zero verified attempts are unavailable, not 0%; a
+verified all-negative cohort is a real 0%. Non-trivial return-set rates use
+`authoritativeCraftCount` over the same authoritative denominator.
 
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
 `{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.
@@ -433,7 +433,8 @@ selected recipe population's coverage:
   unquoted Flux. `matchedReturnedQuantity / matchedAllocatedQuantity` is the
   saved-material share for one population; `matchedAllocatedQuantity -
   matchedReturnedQuantity` is matched net consumption. `matchedReturnCount` counts
-  matched crafts that returned this item. Never divide `returnedQuantity` by
+  matched crafts that returned this item. The production UI shows the matched
+  sample beside each per-item share. Never divide `returnedQuantity` by
   `allocatedQuantity`: they cover different crafts.
 - `coverage.returnObservedCount` is the authoritative-cohort observed count.
   `coverage.matchedCraftCount` is the craft-level complete-input ∩ authoritative
