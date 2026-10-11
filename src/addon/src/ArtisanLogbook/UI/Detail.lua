@@ -198,9 +198,9 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       if row.returnedQuantity and row.returnedQuantity > 0 then total = total + row.returnedQuantity end
     end
     if returnVerified and craft.hasResourcefulnessProc == true then
-      fields.Resourcefulness:SetText("Return verified")
+      fields.Resourcefulness:SetText("Return recorded")
     elseif returnVerified and craft.hasResourcefulnessProc == false then
-      fields.Resourcefulness:SetText("No return (verified)")
+      fields.Resourcefulness:SetText("No return recorded")
     elseif total > 0 then
       fields.Resourcefulness:SetText("Known returns; other results may be unavailable")
     else

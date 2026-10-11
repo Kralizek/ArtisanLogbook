@@ -284,7 +284,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       if row.allocatedQuantity == nil then return "No required quantity is recorded for this item." end
       local text = UI.Number(row.allocatedQuantity) .. " known gross units required before returns; this may be incomplete and is not net consumed."
       if row.matchedCraftCount and row.matchedCraftCount > 0 then
-        text = text .. " Savings use " .. UI.Count(row.matchedCraftCount, "measured craft") .. " with complete same-item quantities."
+        text = text .. " Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. " with both same-item quantities known."
       end
       return text
     end },
@@ -298,10 +298,10 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     end, exact = function(row)
       if UI.IsTrivial(row.item.id) then return "Ignored in savings by your preference; quantities are unchanged." end
       if UI.MatchedSavings(row) == "Unavailable" then
-        return "No measured crafts have both complete required and verified return quantities for this item."
+        return "No comparable crafts have both required and returned quantities known for this item."
       end
       return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
-      " required across " .. UI.Count(row.matchedCraftCount, "measured craft") ..
+      " required across " .. UI.Count(row.matchedCraftCount, "comparable craft") ..
       ". The share uses this item in the same crafts."
     end },
     { title = "Ignore", width = 64, value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,

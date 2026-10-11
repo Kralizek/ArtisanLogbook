@@ -1365,6 +1365,9 @@ assert(notices[#notices] ==
 uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity = 1 })
 assert(notices[#notices]:find("Unknown recipe", 1, true) and
   notices[#notices]:find("if it remains unresolved, recovery will be attempted after /reload", 1, true))
+uiAddon.NotifyCraft({ outputItem = { id = 124, name = "Second unknown output" }, outputQuantity = 1 })
+assert(notices[#notices]:find("Second unknown output", 1, true) and
+  not notices[#notices]:find("recovery will be attempted after /reload", 1, true))
 environment.C_Item = nil
 uiWindow:Show()
 assert(displayedRow(logbook, function(item) return item.id == 15 end))
@@ -2100,7 +2103,7 @@ do
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
   assert(detail.chart.bars[1].tooltip:find("Known required: 505", 1, true))
   assert(detail.status.text:find("Item details are available for 101 of 102 crafts", 1, true))
-  assert(detail.status.text:find("Saved share compares complete input amounts", 1, true))
+  assert(detail.status.text:find("Saved share compares known input amounts", 1, true))
   detail:SelectView("Used in Recipes")
   assert(detail.tabs["Used in Recipes"].selected and detail.recipes:IsShown())
   detail.recipes.rows[1].scripts.OnClick(detail.recipes.rows[1])
@@ -2600,7 +2603,7 @@ do
   helpers.SetTrivial(8, true)
   assert(helpers.IsTrivial(8))
   assert(pane.stats[3].text == overallResourcefulness)
-  assert(detail.fields.Resourcefulness.text == "Return verified", detail.fields.Resourcefulness.text)
+  assert(detail.fields.Resourcefulness.text == "Return recorded", detail.fields.Resourcefulness.text)
   assert(#detail.returnedReagents.items == 1 and detail.returnedReagents.items[1].item.id == 8)
   assert(detail.returnedReagents:GetHeight() >= 150 and detail.result)
   local getCraft = api.GetCraft
@@ -2614,7 +2617,7 @@ do
   end
   detail:ShowCraft(second.id)
   assert(#detail.returnedReagents.items == 2)
-  assert(detail.fields.Resourcefulness.text == "Return verified")
+  assert(detail.fields.Resourcefulness.text == "Return recorded")
   assert(detail.inputEvidence.text == "Input requirements are unavailable.")
   api.GetCraft = function()
     local craft = getCraft(second.id)

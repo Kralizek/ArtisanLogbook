@@ -1,5 +1,6 @@
 local addonName, addon = ...
 local lifecycle = CreateFrame("Frame")
+local unknownRecipeRecoveryNotified
 
 function addon.Notify(message)
   DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook: " .. message)
@@ -19,7 +20,8 @@ function addon.NotifyCraft(craft)
   end
   if craft.outputQuantity ~= nil then output = output .. "x" .. craft.outputQuantity end
   local message = "Crafted " .. output .. " from " .. addon.UI.Name(craft.recipe, "Unknown recipe")
-  if not craft.recipe then
+  if not craft.recipe and not unknownRecipeRecoveryNotified then
+    unknownRecipeRecoveryNotified = true
     message = message .. " (Recipe unknown; if it remains unresolved, recovery will be attempted after /reload.)"
   end
   local highlights = addon.UI.CraftHighlights(craft)

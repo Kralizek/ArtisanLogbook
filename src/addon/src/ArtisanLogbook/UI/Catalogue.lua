@@ -226,7 +226,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
       if UI.MatchedSavings(row) == "Unavailable" then
         GameTooltip:SetText("Saved share unavailable")
-        GameTooltip:AddLine("No comparable crafts have both a complete input quantity for this item and a verified return result.", 1, 1, 1, true)
+        GameTooltip:AddLine("No comparable crafts have both required and returned amounts known for this item.", 1, 1, 1, true)
       else
         GameTooltip:SetText("Saved share for this selection: " .. UI.MatchedSavings(row))
         GameTooltip:AddLine(UI.Number(row.matchedReturnedQuantity) .. " saved of " ..
@@ -307,7 +307,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       detail.chart:Render(series, from, to); detail.chart:Show()
       local detailCoverage = "Item details are available for " .. UI.Number(totals.crafts) .. " of " ..
         UI.Number(retainedCraftCount) .. " crafts; input quantities appear in " ..
-        UI.Number(totals.allocationObservedCount or 0) .. " item rows and verified return results for " ..
+        UI.Number(totals.allocationObservedCount or 0) .. " item rows and recorded return results for " ..
         UI.Number(totals.returnObservedCount or 0) .. "."
       local savingsCoverage = row.matchedCraftCount and row.matchedCraftCount > 0 and
         UI.Count(row.matchedCraftCount, "comparable craft") .. " in the selected saved history." or
@@ -316,7 +316,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
         "No individual craft details are available in this period. Saved share: " .. savingsCoverage or
         "Recent craft details: " .. UI.Number(retainedCraftCount) .. " crafts, " .. date("!%d %b %Y", series[1].bucketStart) ..
         " to " .. date("!%d %b %Y", series[#series].bucketStart) .. ". " .. detailCoverage ..
-        " Saved share compares complete input amounts with verified returns for the same item: " .. savingsCoverage)
+        " Saved share compares known input amounts with recorded returns for the same item: " .. savingsCoverage)
     end)
   end
   function detail:Refresh(preserve)
@@ -409,7 +409,7 @@ function UI.ReagentsPage(page, width, height, openReagent)
     end, exact = function(row)
       if UI.IsTrivial(row.item.id) then return "Ignored in savings by your preference; recorded quantities remain visible." end
       if UI.MatchedSavings(row) == "Unavailable" then
-        return "No measured crafts have both complete required and verified return quantities for this item."
+        return "No comparable crafts have both required and returned quantities known for this item."
       end
       return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
         " required across " .. UI.Count(row.matchedCraftCount, "measured craft")
