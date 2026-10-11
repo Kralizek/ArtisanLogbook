@@ -924,9 +924,37 @@ assert(professionSummary.tiles[1].value.text == "55" and professionSummary.tiles
 assert(professionSummary.tiles[1].value:GetHeight() == 20 and professionSummary.tiles[1].note:IsShown())
 professionSummary:Render({}, {})
 assert(professionSummary.tiles[1].value.text == "0" and professionSummary.tiles[2].value.text == "-")
-local accountSummary = UI.ProductionSummary(paperProbe, 732, 0, function() end)
+local accountSummary = UI.ProductionSummary(paperProbe, 900, 0, function() end)
+professionSeries[1].resourcefulnessProcCount = 12
+professionSeries[2].resourcefulnessProcCount = 7
 accountSummary:Render(professionSeries, {})
 assert(accountSummary.tiles[1].value.text == "102" and accountSummary.tiles[2].value.text == "307")
+assert(accountSummary.tiles[5].note.text == "19 of 102 crafts", accountSummary.tiles[5].note.text)
+assert(accountSummary.tiles[5].title.text == "Resourcefulness")
+local narrowCharacterSummary = UI.ProductionSummary(paperProbe, 550, 0, function() end, true)
+narrowCharacterSummary:Render(professionSeries, {})
+assert(narrowCharacterSummary.tiles[5].title.text == "Proc rate")
+assert(narrowCharacterSummary.tiles[5].note.text == "19 / 102")
+local veryNarrowCharacterSummary = UI.ProductionSummary(paperProbe, 400, 0, function() end, true)
+veryNarrowCharacterSummary:Render(professionSeries, {})
+assert(veryNarrowCharacterSummary.tiles[5].title.text == "Proc")
+assert(veryNarrowCharacterSummary.tiles[5].note.text == "19 / 102")
+do
+  local api = environment.ArtisanLogbookAPI
+  local originalReturnSets = api.GetRecipeReturnSets
+  UI.SetTrivial(99999, true)
+  api.GetRecipeReturnSets = function()
+    return { returns = { { itemIds = { 88888 }, craftCount = 5 } } }
+  end
+  local guarded = UI.ProductionSummary(paperProbe, 732, 0, function() end)
+  guarded:Render({ { craftCount = 4, resourcefulnessProcCount = 1, recipe = { id = 503, name = "Guarded" } } }, {})
+  while guarded.usefulWorker.scripts.OnUpdate do
+    guarded.usefulWorker.scripts.OnUpdate(guarded.usefulWorker)
+  end
+  assert(guarded.usefulResourcefulness == 1)
+  api.GetRecipeReturnSets = originalReturnSets
+  UI.SetTrivial(99999, false)
+end
 local logbookColumns = UI.HistoryColumns(732, "Logbook")
 for _, column in ipairs(logbookColumns) do assert(column.title ~= "When") end
 local hasSixtyDays = false
@@ -943,7 +971,7 @@ assert(environment.GameTooltip.text == "Multicraft: produced 5 additional items"
 local smallCatalogue = environment.CreateFrame("Frame", nil, paperProbe)
 UI.CataloguePage(smallCatalogue, 732, 576, function() end)
 assert(smallCatalogue.filters:GetHeight() == 46 and smallCatalogue.searchInput.y == -16)
-assert(smallCatalogue.resourcefulnessNote.text:find("positive returns without them remain counts", 1, true))
+assert(smallCatalogue.resourcefulnessNote == nil)
 local itemProbe = UI.ItemCell(paperProbe, 0, 200)
 itemProbe:Update({ id = 123, name = "Potion" })
 itemProbe.scripts.OnEnter(itemProbe)
@@ -1448,7 +1476,7 @@ uiWindow:Activate("Overview")
 local selectedCrafts = overview.summary.totals.craftCount
 local expectedOverviewZero = UI.ResourcefulnessPresentation({ craftCount = selectedCrafts, resourcefulnessProcCount = 0 })
 assert(overview.summary.tiles[5].value.text == expectedOverviewZero)
-assert(overview.summary.tiles[5].note.text == (selectedCrafts > 0 and UI.Count(selectedCrafts, "craft") or "No crafts"))
+assert(overview.summary.tiles[5].note.text == (selectedCrafts > 0 and "0 / " .. UI.Number(selectedCrafts) or "No crafts"))
 uiWindow:Activate("Logbook")
 print("PASS sidebar destinations, independent filters, list preservation, pins and modal Escape")
 local present = environment.GetServerTime
@@ -2205,7 +2233,10 @@ do
   local overviewValue = ui.UI.ResourcefulnessPresentation(overviewTotals)
   assert(overview.summary.tiles[5].value.text == overviewValue)
   local selectedCrafts = overviewTotals.craftCount
-  assert(overview.summary.tiles[5].note.text == ui.UI.Count(selectedCrafts, "craft"))
+  local expectedSample = overview.summary.tiles[5]:GetWidth() < 100 and
+    ui.UI.Number(overviewTotals.resourcefulnessProcCount or 0) .. " / " .. ui.UI.Number(selectedCrafts) or
+    ui.UI.Number(overviewTotals.resourcefulnessProcCount or 0) .. " of " .. ui.UI.Count(selectedCrafts, "craft")
+  assert(overview.summary.tiles[5].note.text == expectedSample)
   assert(overview.summary.tiles[5].note:GetStringHeight() <= overview.summary.tiles[5].note:GetHeight())
   assert(overview.summary.returnedWorker.scripts.OnUpdate)
   api.GetRecipeReturnedReagents = getReturnedReagents
@@ -2214,6 +2245,7 @@ do
   end
   overview.summary.tiles[5].scripts.OnEnter(overview.summary.tiles[5])
   local overviewTooltip = tostring(environment.GameTooltip.text) .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
+  assert(overviewTooltip:find("Resourcefulness:", 1, true))
   assert(overviewTooltip:find(ui.UI.Count(overviewTotals.resourcefulnessProcCount or 0, "proc") .. " in " ..
     ui.UI.Count(overviewTotals.craftCount, "craft"), 1, true))
   assert(overviewTooltip:find("Useful Resourcefulness: 1 of 1 crafts (100%)", 1, true), overviewTooltip)
@@ -2740,7 +2772,7 @@ do
   window:Activate("Overview")
   assert(window.pages.Overview.summary.tiles[5].value.text == "26.7%",
     window.pages.Overview.summary.tiles[5].value.text .. " / " .. window.pages.Overview.summary.tiles[5].note.text)
-  assert(window.pages.Overview.summary.tiles[5].note.text == "30 crafts")
+  assert(window.pages.Overview.summary.tiles[5].note.text == "8 / 30")
   window.pages.Overview.summary.tiles[5].scripts.OnEnter(window.pages.Overview.summary.tiles[5])
   local overviewTooltip = tostring(environment.GameTooltip.text) .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
   assert(overviewTooltip:find("8 procs in 30 crafts (26.7%)", 1, true))

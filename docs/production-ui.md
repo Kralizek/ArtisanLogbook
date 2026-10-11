@@ -103,8 +103,11 @@ recorded proc for this display only; Core facts remain unchanged. This recorded
 rate is not a claim about the true probability. A true zero is shown when no
 positive proc was recorded; an empty selection is a dash. Small table samples show
 a compact craft count, and tooltips give the numerator and total-craft denominator.
-Overview, Character, and Profession summaries show the rate and a short total-craft
-subtitle. Useful Resourcefulness counts distinct durable return-set crafts
+Overview, Character, and Profession summaries show the rate and the
+positive-result numerator in the subtitle when space permits. Narrow Character
+cards use a compact `procs / crafts` form and a shortened `Proc rate` heading
+(`Proc` at very narrow widths); the tooltip names Resourcefulness and gives the
+full counts. Useful Resourcefulness counts distinct durable return-set crafts
 containing at least one non-ignored item and divides by the same total craft
 population. Changing Ignore preferences affects only that useful numerator, not
 overall Resourcefulness or Core facts. A return set contributes only when its

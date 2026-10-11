@@ -59,16 +59,11 @@ function UI.CataloguePage(page, width, height, openRecipe)
     { label = "Most crafted", value = "count" },
   }, function(value) sort = value; page:Refresh(true) end, controlWidth)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
-  page.resourcefulnessNote = UI.Text(page, 0, 0, width, 18, "GameFontNormalSmall")
-  page.resourcefulnessNote:SetText("Rates use reliable results; positive returns without them remain counts.")
   local list = UI.RecipeTable(page, 0, -144, width, height - 144, openRecipe, true)
   page.catalogue = list
   function filters.onLayout(filterHeight)
-    local top = 48 + filterHeight
-    page.resourcefulnessNote:ClearAllPoints(); page.resourcefulnessNote:SetPoint("TOPLEFT", 0, -top)
-    local listTop = top + 22
-    list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -listTop)
-    list:SetViewportHeight(height - listTop)
+    list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -48 - filterHeight)
+    list:SetViewportHeight(height - 48 - filterHeight)
   end
   UI.LazyList(list, function(cursor)
     local result, reason = ArtisanLogbookAPI.GetRecipeSummaries({ character = character or nil,

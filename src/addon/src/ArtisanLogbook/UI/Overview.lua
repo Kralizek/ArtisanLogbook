@@ -200,6 +200,20 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     end
     local share = UI.MeasuredShare(totals, "multicraftBonus", "outputQuantity")
     if share ~= "Unknown" then self.tiles[4].note:SetText(share .. " of total output") end
+    local resourcefulnessTile = self.tiles[5]
+    if resourcefulnessTile:GetWidth() < 100 then
+      resourcefulnessTile.icon:Hide()
+      resourcefulnessTile.title:ClearAllPoints()
+      resourcefulnessTile.title:SetPoint("TOPLEFT", 0, -2)
+      resourcefulnessTile.title:SetWidth(resourcefulnessTile:GetWidth())
+      resourcefulnessTile.title:SetText(resourcefulnessTile:GetWidth() < 60 and "Proc" or "Proc rate")
+    else
+      resourcefulnessTile.icon:Show()
+      resourcefulnessTile.title:ClearAllPoints()
+      resourcefulnessTile.title:SetPoint("TOPLEFT", 24, -2)
+      resourcefulnessTile.title:SetWidth(resourcefulnessTile:GetWidth() - 24)
+      resourcefulnessTile.title:SetText("Resourcefulness")
+    end
     local top = self.recipes[1]
     local emptyRecipeMessage = totals.craftCount > 0 and "No visible recipes" or "No crafts in this period"
     self.tiles[6].icon:SetTexture(UI.RecipeIcon(top and top.recipe))
@@ -227,10 +241,14 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     local value, tooltip = UI.ResourcefulnessPresentation({ craftCount = totals.craftCount,
       resourcefulnessProcCount = totals.resourcefulnessProcCount })
     self.tiles[5].value:SetText(value)
-    self.tiles[5].note:SetText(totals.craftCount > 0 and UI.Count(totals.craftCount, "craft") or "No crafts")
+    local positive = totals.resourcefulnessProcCount or 0
+    local crafts = totals.craftCount
+    local sample = self.tiles[5]:GetWidth() < 100 and (UI.Number(positive) .. " / " .. UI.Number(crafts)) or
+      (UI.Number(positive) .. " of " .. UI.Count(crafts, "craft"))
+    self.tiles[5].note:SetText(crafts > 0 and sample or "No crafts")
     self.tiles[5]:SetScript("OnEnter", function(self)
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:SetText(tooltip)
+      GameTooltip:SetText("Resourcefulness: " .. tooltip)
       if summary.usefulResourcefulness ~= nil then
         local usefulRate = UI.Percent(summary.usefulResourcefulness, totals.craftCount):gsub("%.0%%", "%%")
         GameTooltip:AddLine("Useful Resourcefulness: " .. UI.Number(summary.usefulResourcefulness) .. " of " ..
@@ -248,7 +266,10 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     else
       self.usefulResourcefulness = nil
       UI.UsefulResourcefulnessTotals(self.usefulWorker, recipes, filter, generation, function(count)
-        if self.generation == generation then self.usefulResourcefulness = count end
+        if self.generation == generation then
+          if count ~= nil then count = math.min(count, totals.resourcefulnessProcCount or 0) end
+          self.usefulResourcefulness = count
+        end
       end)
     end
     UI.ReturnTotals(self.returnedWorker, recipes, filter, function(total)
