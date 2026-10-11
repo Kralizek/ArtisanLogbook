@@ -1362,6 +1362,9 @@ uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity
   recipe = { name = "Potion recipe" } })
 assert(notices[#notices] ==
   "|cffffd100Artisan Logbook:|r Crafted |Hitem:123|h[Potion]|hx1 from Potion recipe")
+uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity = 1 })
+assert(notices[#notices]:find("Unknown recipe", 1, true) and
+  notices[#notices]:find("if it remains unresolved, recovery will be attempted after /reload", 1, true))
 environment.C_Item = nil
 uiWindow:Show()
 assert(displayedRow(logbook, function(item) return item.id == 15 end))

@@ -19,6 +19,9 @@ function addon.NotifyCraft(craft)
   end
   if craft.outputQuantity ~= nil then output = output .. "x" .. craft.outputQuantity end
   local message = "Crafted " .. output .. " from " .. addon.UI.Name(craft.recipe, "Unknown recipe")
+  if not craft.recipe then
+    message = message .. " (Recipe unknown; if it remains unresolved, recovery will be attempted after /reload.)"
+  end
   local highlights = addon.UI.CraftHighlights(craft)
   if #highlights > 0 then message = message .. " (" .. table.concat(highlights, "; ") .. ")" end
   DEFAULT_CHAT_FRAME:AddMessage("|cffffd100Artisan Logbook:|r " .. message)

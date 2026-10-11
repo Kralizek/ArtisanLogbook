@@ -143,6 +143,9 @@ are included. Ordinary navigation does not discard loaded history. New data mark
 cached pages stale and reloads lists in bounded batches while retaining position.
 Profession metadata events refresh safely on the next frame. Page selections are
 session state, not reload-persistent preferences.
+When a committed craft has no established recipe identity, its chat notification
+marks the recipe Unknown and explains that recovery will be retried after `/reload`
+if it remains unresolved.
 
 ## Global Reagents catalogue
 
