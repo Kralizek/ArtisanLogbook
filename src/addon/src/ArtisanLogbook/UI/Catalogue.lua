@@ -135,7 +135,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       value = function(row) return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete") end,
       exact = function(row)
         return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-          " Known gross inputs from recent craft details; not net consumed or a complete item total."
+          " Known gross inputs from recent craft details; not net consumed or necessarily the full item total."
       end },
     { title = "Returned", width = (inner - 24) * .20, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")

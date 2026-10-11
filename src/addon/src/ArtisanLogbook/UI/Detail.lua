@@ -209,7 +209,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     if craft.inputComplete == true then
       detail.inputEvidence:SetText("All required inputs are known (gross quantities before returns).")
     elseif craft.quoteObserved == true or craft.request and craft.request.allocations then
-      detail.inputEvidence:SetText("Some gross inputs are known; complete requirements are unavailable.")
+      detail.inputEvidence:SetText("Some gross inputs are known; the full required amount is unavailable.")
     else
       detail.inputEvidence:SetText("Input requirements are unavailable.")
     end

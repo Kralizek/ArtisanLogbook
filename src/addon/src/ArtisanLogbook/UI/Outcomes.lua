@@ -282,7 +282,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
     end, exact = function(row)
       if row.allocatedQuantity == nil then return "No required quantity is recorded for this item." end
-      local text = UI.Number(row.allocatedQuantity) .. " known gross units required before returns; this may be incomplete and is not net consumed."
+      local text = UI.Number(row.allocatedQuantity) .. " known gross units required before returns; more may be required, and this is not net consumed."
       if row.matchedCraftCount and row.matchedCraftCount > 0 then
         text = text .. " Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. " with both same-item quantities known."
       end
