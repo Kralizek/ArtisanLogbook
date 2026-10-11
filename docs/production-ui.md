@@ -41,7 +41,7 @@ existing current-entry highlight without replacing the primary selection.
 
 | Destination | Presentation and behavior |
 | --- | --- |
-| Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, authoritative Resourcefulness rate with verified/selected coverage, known returned quantities, and most-crafted recipe. No factual craft list. |
+| Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, recorded Resourcefulness proc rate over all selected crafts, known returned material units, and most-crafted recipe. No factual craft list. |
 | Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
 | Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required units/Returned units/Materials saved columns and editable Ignore checkboxes. Materials saved shows a matched share or a dash; its tooltip gives the comparable-craft count. Item IDs live in native item tooltips, not row subtitles. |
@@ -64,8 +64,11 @@ latest crafted item is available, hover shows that item's native game tooltip.
 
 Recipe Statistics includes total crafts/output/concentration, output per craft,
 concentration per craft, net concentration, Multicraft proc rate/bonus/output share,
-authoritative Resourcefulness rate and selected-population coverage, known returned
-quantities, per-item matched savings and its sample count, and Ingenuity rate/refund.
+overall and Useful Resourcefulness rates over the same selected craft population,
+returned material units, per-item matched savings and its sample count, and
+Ingenuity rate/refund. Useful counts distinct durable return-set crafts containing
+at least one non-ignored material. Both rates use the total craft count; the useful
+numerator cannot exceed the overall proc numerator.
 The three mechanics have peer headings. Summary tiles remain visible above every
 tab; Ingenuity includes its proc percentage. Missing denominators leave a dash,
 with a specific missing-result explanation when a rate cannot be calculated.
@@ -93,21 +96,20 @@ Result/reagent item cells show `GameTooltip:SetItemByID` with a safe name fallba
 when native item tooltip support is unavailable. Item hover preserves row clicks.
 
 Most-crafted and catalogue recipe tables use the same rich component: Recipe,
-Latest result, Crafts, Items, Multicraft, Resourcefulness, Ingenuity. Multicraft
-and Ingenuity retain their complete-population rate rules. Resourcefulness uses
-only authoritative attempts: when some selected crafts lack authoritative
-outcomes, its rate is still calculated over the verified cohort and its tooltip
-shows both verified and selected counts. Historical positive-only returns show
-as a descriptive `N returns` count: each count is one saved result with one or
-more positive material returns, not an item-unit total or verified attempt count.
-It is never a selective rate; tooltips identify older/uncertain evidence and the
-unavailable authoritative denominator.
-When neither verified attempts nor positive returns exist, the cell is a dash.
-Verified all-negative cohorts show 0%. A genuine 100% from one verified craft
-explicitly reads `100% (1)` with the numerator, denominator, and selected coverage
-in the tooltip. Overview, Character, and Profession summaries use the same
-presentation: one short verified-sample subtitle, with selected coverage in the
-tooltip. The result is
+Latest result, Crafts, Items, Multicraft, Resourcefulness, Ingenuity. Resourcefulness
+is the count of saved result records with a known positive Resourcefulness return,
+divided by all recorded crafts in the selection. Missing/unclear outcomes mean no
+recorded proc for this display only; Core facts remain unchanged. This recorded
+rate is not a claim about the true probability. A true zero is shown when no
+positive proc was recorded; an empty selection is a dash. Small table samples show
+a compact craft count, and tooltips give the numerator and total-craft denominator.
+Overview, Character, and Profession summaries show the rate and a short total-craft
+subtitle. Useful Resourcefulness counts distinct durable return-set crafts
+containing at least one non-ignored item and divides by the same total craft
+population. Changing Ignore preferences affects only that useful numerator, not
+overall Resourcefulness or Core facts. A return set contributes only when its
+item identities can be classified against Ignore preferences; unclear membership
+is not guessed. The result is
 the latest available craft result for that selection, not an inferred quality
 distribution. Rows and the Overview most-crafted tile open Recipe Detail.
 Measured-zero Multicraft and Ingenuity cells are empty rather than `0.0%`.
@@ -286,20 +288,24 @@ scrollbar is required. Multiple output identities are not synthesized.
   are observed for every selected craft and the denominator is positive.
 - Ingenuity uses applied proc/refund semantics from #21, not raw refund values
   on false-proc records. Partial outcomes do not become measured zero.
-- Resourcefulness rates use only the authoritative numerator and its paired
-  observed-attempt denominator. The UI shows verified counts and selected-population
-  coverage; zero denominator is Unavailable, while verified all-negative attempts
-  are 0%. Historical positive returns remain visible as quantities and never bias
-  the rate. Current capture suspension is shown only when Management.Status reports
-  it; it adds no recovery control and does not describe historical coverage.
+- Resourcefulness presentation uses Core's positive-result count over total
+  recorded crafts. Missing or unclear outcomes do not enter the UI numerator; this
+  display convention does not change Core's authoritative/complete/raw populations
+  or stored facts. Core's authoritative cohort remains the correct choice for an
+  unbiased probability analysis; the gameplay-facing rate is a recorded-proc
+  frequency. Useful Resourcefulness is counted from distinct durable return sets
+  and uses the same craft denominator. Current capture suspension is shown only
+  when Management.Status reports it; it adds no recovery control.
 - Per-item saved shares use Core's same-craft matched returned and required
   quantities. A missing matched denominator is Unavailable, not zero. Required is
   gross input, not net consumption; craft detail displays item facts and input
   evidence without an aggregate material percentage.
-- Unknown/partial Resourcefulness results retain #21's semantics. Non-trivial
-  rates classify authoritative return sets only. Missing result facts never become
-  negative observations. Trivial preferences only change UI interpretation and
-  never rewrite facts or aggregates.
+- Unknown/partial Resourcefulness results retain #21's semantics. Useful
+  Resourcefulness counts durable positive return sets with classifiable
+  non-ignored items over the selected craft population; incomplete membership is
+  not guessed and can make this count conservative after detail pruning. Missing
+  result facts never become negative observations. Trivial preferences only
+  change UI interpretation and never rewrite facts or aggregates.
 - Charts render at most 60 date groups with daily/multi-day buckets. Daily-only
   data for Today renders a concise dated total, never invented hourly activity or
   a full-width bar. Bar widths are capped; reagent pairs stay close within a day

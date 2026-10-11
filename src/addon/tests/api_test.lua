@@ -326,6 +326,14 @@ test("recipe outcomes summarize durable evidence with bounded charts and factual
   assert(all.totals.multicraftBonus == 3 and all.totals.outputQuantity == 15)
   assert(all.totals.ingenuityRefund == 20 and all.totals.ingenuityRefundObservedCount == 2)
   assert(all.totals.resourcefulnessProcCount == 2 and all.totals.resourcefulnessProcCountObservedCount == 4)
+  local seriesRaw = assert(api.GetCraftSeries({ recipes = { 101 } })).series
+  local seriesCraftCount, seriesProcCount, seriesObservedCount = 0, 0, 0
+  for _, row in ipairs(seriesRaw) do
+    seriesCraftCount = seriesCraftCount + row.craftCount
+    seriesProcCount = seriesProcCount + row.resourcefulnessProcCount
+    seriesObservedCount = seriesObservedCount + row.resourcefulnessProcCountObservedCount
+  end
+  assert(seriesCraftCount == 4 and seriesProcCount == 2 and seriesObservedCount == 4)
   assert(all.totals.resourcefulnessAuthoritativeProcCount == 2 and
     all.totals.resourcefulnessAuthoritativeProcCountObservedCount == 4)
   assert(all.totals.quoteObservedCount == 0 and all.totals.inputCompleteCount == 0 and all.totals.matchedCraftCount == 0)
@@ -1043,12 +1051,14 @@ end)
 
 test("series use UTC days and only the specified additive metrics with observation coverage", function()
   local ledger, api, clock = fixture()
+  assert(ledger:SubmitCraft(101, 1, false))
+  assert(primaryResult(ledger, { resourcesReturned = { { reagent = { itemID = 202 }, quantity = 1 } } }))
   local start = math.floor(clock.current / 86400) * 86400
   local result = api.GetCraftSeries({ recipes = { 101 } }).series
   assert(#result == 1)
   local row = result[1]
-  assert(row.bucketStart == start and row.craftCount == 2)
-  assert(row.outputQuantity == 6 and row.outputQuantityObservedCount == 2)
+  assert(row.bucketStart == start and row.craftCount == 3)
+  assert(row.outputQuantity == 7 and row.outputQuantityObservedCount == 3)
   assert(row.multicraftBonus == 0 and row.multicraftBonusObservedCount == 1)
   assert(row.concentrationSpent == 0 and row.concentrationSpentObservedCount == 1)
   assert(row.recipe.id == 101 and row.character.name == "A" and row.realm.name == "Realm 1")
@@ -1056,6 +1066,7 @@ test("series use UTC days and only the specified additive metrics with observati
   assert(row.reagents == nil and row.hasIngenuityProc == nil)
   assert(row.ingenuityRefund == 0 and row.ingenuityRefundObservedCount == 1)
   assert(row.ingenuityProcCount == 0 and row.ingenuityProcCountObservedCount == 1)
+  assert(row.resourcefulnessProcCount == 1 and row.resourcefulnessProcCountObservedCount == 2)
   assert(row.id == nil and row.recipeId == nil and row.characterDimensionId == nil)
   local absent = api.GetCraftSeries({ recipes = { 104 } }).series[1]
   assert(absent.outputQuantity == 1 and absent.outputQuantityObservedCount == 1)
@@ -1065,7 +1076,7 @@ test("series use UTC days and only the specified additive metrics with observati
   row.character.realm.name = "Changed"
   row.outputQuantityObservedCount = 999
   equal(api.GetCraftSeries(), original)
-  assert(ledger.database.craftSeries[1].craftCount == 2)
+  assert(ledger.database.craftSeries[1].craftCount == 3)
 end)
 
 test("series require aligned half-open day bounds; factual queries allow arbitrary timestamps", function()

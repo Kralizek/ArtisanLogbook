@@ -46,7 +46,7 @@ function UI.NonTrivialCount(sets)
   local count = 0
   for _, returned in ipairs(sets) do
     for _, itemId in ipairs(returned.itemIds) do
-      if not UI.IsTrivial(itemId) then count = count + (returned.authoritativeCraftCount or 0); break end
+      if not UI.IsTrivial(itemId) then count = count + (returned.craftCount or 0); break end
     end
   end
   return count
@@ -55,17 +55,6 @@ end
 function UI.ProcRate(count, observed)
   if not observed or observed == 0 then return "-" end
   return UI.Percent(count, observed) .. "\n" .. UI.Number(count) .. " / " .. UI.Number(observed) .. " crafts"
-end
-
-function UI.AuthoritativeRate(totals)
-  local crafts = totals.craftCount or 0
-  local observed = totals.resourcefulnessAuthoritativeProcCountObservedCount
-  local positive = totals.resourcefulnessAuthoritativeProcCount
-  if not observed or observed <= 0 or positive == nil then
-    return "Not enough verified crafts", "0 of " .. UI.Number(crafts) .. " crafts verified"
-  end
-  return UI.Percent(positive, observed), UI.Number(positive) .. " of " .. UI.Number(observed) ..
-    " verified crafts; " .. UI.Number(observed) .. " of " .. UI.Number(crafts) .. " crafts"
 end
 
 function UI.MatchedSavings(row)
@@ -114,30 +103,20 @@ function UI.CompactOutcome(totals, proc, amount, denominator, amountLabel, share
 end
 
 function UI.ResourcefulnessSummary(totals, nonTrivial)
-  local crafts = totals.craftCount
-  local observed = totals.resourcefulnessAuthoritativeProcCountObservedCount or 0
-  local positive = totals.resourcefulnessAuthoritativeProcCount
+  local crafts = totals.craftCount or 0
+  local positive = totals.resourcefulnessProcCount or 0
   local result = { complete = "" }
   if crafts == 0 then
     return { any = "No crafts", complete = "", nonTrivial = "-" }
   end
-  if observed > 0 and positive ~= nil then
-    result.any = UI.Percent(positive, observed) .. " | " .. UI.Number(positive) .. " of " ..
-      UI.Number(observed) .. " verified crafts"
-    if observed < crafts then
-      result.complete = UI.Number(observed) .. " of " .. UI.Number(crafts) .. " crafts have verified outcomes."
-    end
-  else
-    result.any = "Not enough verified crafts"
-    result.complete = "No verified outcomes among " .. UI.Count(crafts, "selected craft") .. "."
-  end
+  result.any = UI.Percent(positive, crafts):gsub("%.0%%", "%%") .. " | " .. UI.Number(positive) .. " of " ..
+    UI.Number(crafts) .. " crafts"
   if nonTrivial == nil then
     result.nonTrivial = "Calculating..."
-  elseif observed > 0 then
-    result.nonTrivial = UI.Percent(nonTrivial, observed) .. " | " .. UI.Number(nonTrivial) .. " of " ..
-      UI.Number(observed) .. " verified crafts"
   else
-    result.nonTrivial = "Unavailable"
+    nonTrivial = math.min(nonTrivial, positive)
+    result.nonTrivial = UI.Percent(nonTrivial, crafts):gsub("%.0%%", "%%") .. " | " .. UI.Number(nonTrivial) .. " of " ..
+      UI.Number(crafts) .. " crafts"
   end
   return result
 end
@@ -288,15 +267,27 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   end
   pane.stats = stats
   pane.returnWorker = CreateFrame("Frame", nil, pane)
-  pane.resourcefulness = { any = stats[3], nonTrivial = UI.Text(statistics, inner / 3, -160, inner / 3 - 14, 64),
+  stats[3]:SetHeight(50)
+  UI.Text(statistics, inner / 3, -154, inner / 3 - 14, 20, "GameFontNormalSmall"):SetText("Useful Resourcefulness")
+  pane.resourcefulness = { any = stats[3], nonTrivial = UI.Text(statistics, inner / 3, -178, inner / 3 - 14, 48),
     complete = UI.Text(statistics, 0, -232, inner, 40) }
   pane.returnQuantity = UI.Text(statistics, 0, -208, inner / 3 - 14, 22)
   local materialList = UI.ScrollList(materials, 0, 0, inner, height - 253, {
-    { title = "Reagent", width = inner - 288, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, inner - 288) end,
+    { title = "Reagent", width = inner - 358, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, inner - 358) end,
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
+    { title = "Required", width = 70, value = function(row)
+      return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
+    end, exact = function(row)
+      if row.allocatedQuantity == nil then return "No required quantity is recorded for this item." end
+      local text = UI.Number(row.allocatedQuantity) .. " known gross units required before returns; this may be incomplete and is not net consumed."
+      if row.matchedCraftCount and row.matchedCraftCount > 0 then
+        text = text .. " Savings use " .. UI.Count(row.matchedCraftCount, "measured craft") .. " with complete same-item quantities."
+      end
+      return text
+    end },
     { title = "Returned", width = 70, value = UI.RecipeReturnedQuantity,
       exact = function(row)
       return row.returnedQuantity ~= nil and UI.Number(row.returnedQuantity) or "No per-item returned quantity is available."
@@ -395,22 +386,26 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     showReturns(nil)
     if generation ~= self.calculationGeneration then return end
     local cursor, nonTrivial = nil, 0
-    local function nextSets()
-      if generation ~= self.calculationGeneration then return end
-      local page, pageReason = api.GetRecipeReturnSets(recipeId, filter, { limit = 100, cursor = cursor })
-      if not page then
-        self.resourcefulness.nonTrivial:SetText("Unavailable"); status:SetText(pageReason or "Unavailable")
-        self:SetScript("OnUpdate", nil); return
+    if #UI.TrivialItemIds() == 0 then
+      showReturns(totals.resourcefulnessProcCount or 0)
+    else
+      local function nextSets()
+        if generation ~= self.calculationGeneration then return end
+        local page, pageReason = api.GetRecipeReturnSets(recipeId, filter, { limit = 100, cursor = cursor })
+        if not page then
+          self.resourcefulness.nonTrivial:SetText("Unavailable"); status:SetText(pageReason or "Unavailable")
+          self:SetScript("OnUpdate", nil); return
+        end
+        local setCount = UI.NonTrivialCount(page.returns)
+        nonTrivial = nonTrivial + setCount
+        cursor = page.nextCursor
+        if not cursor then
+          showReturns(nonTrivial)
+          self:SetScript("OnUpdate", nil)
+        else self:SetScript("OnUpdate", nextSets) end
       end
-      local setCount = UI.NonTrivialCount(page.returns)
-      nonTrivial = nonTrivial + setCount
-      cursor = page.nextCursor
-      if not cursor then
-        showReturns(nonTrivial)
-        self:SetScript("OnUpdate", nil)
-      else self:SetScript("OnUpdate", nextSets) end
+      nextSets()
     end
-    nextSets()
     local start, finish = result.from, result.to
     if filter.time then start, finish = filter.time.from, filter.time.to end
     if not start then start, finish = UI.Range(GetServerTime(), 30) end

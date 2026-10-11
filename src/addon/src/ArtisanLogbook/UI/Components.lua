@@ -92,33 +92,18 @@ end
 
 function UI.ResourcefulnessPresentation(totals, inlineSample)
   if not totals then
-    return "-", "No Resourcefulness observations are available."
+    return "-", "No crafts are available in this selection."
   end
   local crafts = totals.craftCount or 0
-  local verified = totals.resourcefulnessAuthoritativeProcCountObservedCount or 0
-  if verified > 0 then
-    local positive = totals.resourcefulnessAuthoritativeProcCount
-    if positive == nil then
-      return "-", "A verified sample exists, but its positive count is unavailable."
-    end
-    local rate = UI.Percent(positive, verified):gsub("%.0%%", "%%")
-    local value = inlineSample and verified <= 5 and (rate .. " (" .. UI.Number(verified) .. ")") or rate
-    return value, rate .. "\n" .. UI.Number(positive) .. " of " .. UI.Number(verified) ..
-      " verified crafts\n" .. UI.Number(verified) .. " of " .. UI.Number(crafts) .. " selected crafts"
-  end
-
-  local positiveReturns = totals.resourcefulnessProcCount
-  if positiveReturns and positiveReturns > 0 then
-    return UI.Count(positiveReturns, "return"), "Materials were returned in " ..
-      UI.Count(positiveReturns, "recorded result") .. ". A reliable proc rate is unavailable; this is not a verified attempt count. " ..
-      "Older or uncertain results may contribute; missing results are unknown."
-  end
-  return "-", "No verified results or known positive returns among " .. UI.Count(crafts, "selected craft") ..
-    ". Missing results are unknown, not negative outcomes."
+  if crafts <= 0 then return "-", "No crafts are available in this selection." end
+  local positive = totals.resourcefulnessProcCount or 0
+  local rate = UI.Percent(positive, crafts):gsub("%.0%%", "%%")
+  local value = inlineSample and crafts <= 5 and (rate .. " (" .. UI.Number(crafts) .. ")") or rate
+  return value, UI.Count(positive, "proc") .. " in " .. UI.Count(crafts, "craft") .. " (" .. rate .. ")."
 end
 
 function UI.ProcValue(totals, metric, inlineSample)
-  if metric == "resourcefulnessAuthoritativeProcCount" then
+  if metric == "resourcefulnessProcCount" then
     return UI.ResourcefulnessPresentation(totals, inlineSample)
   end
   local rate = UI.Rate(totals, metric)
@@ -132,7 +117,7 @@ function UI.ProcTooltip(totals, metric)
   local count, crafts = totals[metric] or 0, totals.craftCount or 0
   local known = totals[metric .. "ObservedCount"] or 0
   if crafts == 0 then return "No crafts in this selection" end
-  if metric == "resourcefulnessAuthoritativeProcCount" then
+  if metric == "resourcefulnessProcCount" then
     local _, tooltip = UI.ResourcefulnessPresentation(totals)
     return tooltip
   end
@@ -1174,13 +1159,13 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
     end },
   }
     for _, entry in ipairs({ { "Multicraft", "multicraftProcCount" },
-      { "Resourcefulness", "resourcefulnessAuthoritativeProcCount" }, { "Ingenuity", "ingenuityProcCount" } }) do
+      { "Resourcefulness", "resourcefulnessProcCount" }, { "Ingenuity", "ingenuityProcCount" } }) do
     local title, metric = entry[1], entry[2]
     columns[#columns + 1] = { title = title, width = available * (.38 / 3),
       value = function(row)
-        if metric ~= "resourcefulnessAuthoritativeProcCount" and row.totals and row.totals[metric] == 0 and
+        if metric ~= "resourcefulnessProcCount" and row.totals and row.totals[metric] == 0 and
             row.totals[metric .. "ObservedCount"] == row.totals.craftCount then return "" end
-        return UI.ProcValue(row.totals, metric, metric == "resourcefulnessAuthoritativeProcCount")
+        return UI.ProcValue(row.totals, metric, metric == "resourcefulnessProcCount")
       end,
       exact = function(row) return UI.ProcTooltip(row.totals, metric) end }
   end

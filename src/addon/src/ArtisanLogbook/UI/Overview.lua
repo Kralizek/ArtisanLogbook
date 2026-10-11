@@ -4,7 +4,8 @@ local UI = addon.UI
 function UI.Aggregate(series)
   local totals = { craftCount = 0 }
   local recipes = {}
-  local metrics = { "outputQuantity", "concentrationSpent", "multicraftBonus", "ingenuityRefund" }
+  local metrics = { "outputQuantity", "concentrationSpent", "multicraftBonus", "ingenuityRefund",
+    "resourcefulnessProcCount" }
   for _, metric in ipairs(metrics) do totals[metric], totals[metric .. "ObservedCount"] = 0, 0 end
   for _, row in ipairs(series) do
     totals.craftCount = totals.craftCount + row.craftCount
@@ -45,28 +46,23 @@ function UI.ReturnTotals(owner, recipes, filter, onResult)
   end)
 end
 
-function UI.ResourcefulnessTotals(owner, recipes, filter, population, onResult)
-  local index, positive, verified, positiveEvidence = 1, 0, 0, 0
+function UI.UsefulResourcefulnessTotals(owner, recipes, filter, generation, onResult)
+  local index, cursor, total = 1, nil, 0
+  owner.generation = generation
   owner:SetScript("OnUpdate", function(self)
+    if self.generation ~= generation then self:SetScript("OnUpdate", nil); return end
     local recipe = recipes[index]
     if not recipe then
       self:SetScript("OnUpdate", nil)
-      onResult(population, positive, verified, positiveEvidence)
+      onResult(total)
       return
     end
     local outcomeFilter = { time = filter.time, characters = filter.characters }
-    local result = ArtisanLogbookAPI.GetRecipeOutcomes(recipe.id, outcomeFilter, { buckets = 1 })
-    if not result then self:SetScript("OnUpdate", nil); onResult(nil); return end
-    local totals = result.totals
-    local observed = totals.resourcefulnessAuthoritativeProcCountObservedCount
-    local count = totals.resourcefulnessAuthoritativeProcCount
-    if type(observed) ~= "number" or count == nil and observed > 0 then
-      self:SetScript("OnUpdate", nil); onResult(nil); return
-    end
-    verified = verified + observed
-    if count ~= nil then positive = positive + count end
-    positiveEvidence = positiveEvidence + (totals.resourcefulnessProcCount or 0)
-    index = index + 1
+    local page = ArtisanLogbookAPI.GetRecipeReturnSets(recipe.id, outcomeFilter, { limit = 100, cursor = cursor })
+    if not page then self:SetScript("OnUpdate", nil); onResult(nil); return end
+    total = total + UI.NonTrivialCount(page.returns)
+    cursor = page.nextCursor
+    if not cursor then index = index + 1 end
   end)
 end
 
@@ -132,14 +128,25 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     { "Resourcefulness", "INV_Misc_Herb_19" }, { "Most crafted", "INV_Misc_Book_09", 2 },
   }
   local summary = UI.SummaryRow(parent, width, y, entries)
-  summary.resourcefulnessWorker = CreateFrame("Frame", nil, summary)
   summary.returnedWorker = CreateFrame("Frame", nil, summary)
+  summary.usefulWorker = CreateFrame("Frame", nil, summary)
+  summary.generation = 0
+  UI.RegisterTrivialCallback(function()
+    parent.dirty = true
+    if parent:IsShown() and summary.series and summary.filter then
+      parent.dirty = false
+      summary:Render(summary.series, summary.filter)
+    end
+  end)
   function summary:Render(series, filter)
-    self.resourcefulnessWorker:SetScript("OnUpdate", nil)
+    self.generation = self.generation + 1
+    local generation = self.generation
     self.returnedWorker:SetScript("OnUpdate", nil)
+    self.usefulWorker:SetScript("OnUpdate", nil)
     self.returnedQuantity = nil
     local totals, recipes = UI.Aggregate(series)
     self.totals, self.allRecipes = totals, recipes
+    self.series, self.filter = series, filter
     self.recipes = {}
     for _, row in ipairs(recipes) do if UI.VisibleRecipe(row) then self.recipes[#self.recipes + 1] = row end end
     local professions, professionRows = {}, {}
@@ -217,43 +224,35 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     self.tiles[5].note:SetText("")
     self.tiles[5]:SetScript("OnEnter", nil)
     self.tiles[5]:SetScript("OnLeave", nil)
-    UI.ResourcefulnessTotals(self.resourcefulnessWorker, recipes, filter, totals.craftCount,
-      function(population, positive, verified, positiveEvidence)
-      local tile = self.tiles[5]
-      if population == nil then
-        tile.value:SetText("-")
-        tile.note:SetText("Results unavailable")
-        tile:SetScript("OnEnter", function(self)
-          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-          GameTooltip:SetText("Resourcefulness results could not be read.")
-          GameTooltip:Show()
-        end)
-      else
-        local value, tooltip = UI.ResourcefulnessPresentation({ craftCount = population,
-          resourcefulnessAuthoritativeProcCount = verified > 0 and positive or nil,
-          resourcefulnessAuthoritativeProcCountObservedCount = verified,
-          resourcefulnessProcCount = positiveEvidence })
-        tile.value:SetText(value)
-        if verified > 0 then
-          tile.note:SetText(UI.Count(verified, "verified craft"))
-        elseif positiveEvidence > 0 then
-          tile.note:SetText("Recorded returns")
-        else
-          tile.note:SetText("No verified results")
-        end
-        tile:SetScript("OnEnter", function(self)
-          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-          GameTooltip:SetText(tooltip)
-          if summary.returnedQuantity ~= nil then
-            GameTooltip:AddLine("Known returned material units: " .. UI.Number(summary.returnedQuantity), 1, 1, 1, true)
-          end
-          GameTooltip:Show()
-        end)
-        tile:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    local value, tooltip = UI.ResourcefulnessPresentation({ craftCount = totals.craftCount,
+      resourcefulnessProcCount = totals.resourcefulnessProcCount })
+    self.tiles[5].value:SetText(value)
+    self.tiles[5].note:SetText(totals.craftCount > 0 and UI.Count(totals.craftCount, "craft") or "No crafts")
+    self.tiles[5]:SetScript("OnEnter", function(self)
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:SetText(tooltip)
+      if summary.usefulResourcefulness ~= nil then
+        local usefulRate = UI.Percent(summary.usefulResourcefulness, totals.craftCount):gsub("%.0%%", "%%")
+        GameTooltip:AddLine("Useful Resourcefulness: " .. UI.Number(summary.usefulResourcefulness) .. " of " ..
+          UI.Number(totals.craftCount) .. " crafts (" .. usefulRate .. ")",
+          1, 1, 1, true)
       end
+      if summary.returnedQuantity ~= nil then
+        GameTooltip:AddLine("Known returned material units: " .. UI.Number(summary.returnedQuantity), 1, 1, 1, true)
+      end
+      GameTooltip:Show()
     end)
+    self.tiles[5]:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    if #UI.TrivialItemIds() == 0 then
+      self.usefulResourcefulness = totals.resourcefulnessProcCount or 0
+    else
+      self.usefulResourcefulness = nil
+      UI.UsefulResourcefulnessTotals(self.usefulWorker, recipes, filter, generation, function(count)
+        if self.generation == generation then self.usefulResourcefulness = count end
+      end)
+    end
     UI.ReturnTotals(self.returnedWorker, recipes, filter, function(total)
-      self.returnedQuantity = total
+      if self.generation == generation then self.returnedQuantity = total end
     end)
   end
   return summary
@@ -318,9 +317,9 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     page.history = UI.ScrollList(content, 0, -110, width, height - 110, UI.HistoryColumns(width, "Logbook"),
       function(craft) openCraft(craft.id) end, "No crafts in this period")
   end
+  local inner = entity and width - 24 or width
   local recipesHeading
   if kind ~= "Logbook" then
-    local inner = entity and width - 24 or width
     page.chart = UI.Chart(overview, 0, entity and 0 or -248, inner)
     recipesHeading = UI.Section(overview, "Most-crafted recipes", 0, entity and -168 or -416, inner)
     page.topRecipes = UI.RecipeTable(overview, 0, entity and -200 or -448, inner,

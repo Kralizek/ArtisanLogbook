@@ -338,8 +338,7 @@ denominator:
 `resourcefulnessProcCount` adds at most one positive observation per saved result
 record, regardless of how many material items that result returned. It is not a
 material-entry count or an authoritative attempt count; unverified results may
-contribute. Compact UI may describe this as recorded returns, but must not treat
-it as a rate or denominator.
+contribute.
 
 Use the authoritative cohort for proc rates. Its coverage is
 `resourcefulnessAuthoritativeProcCountObservedCount` out of `craftCount`; crafts
@@ -391,15 +390,18 @@ discard unavailable entries. Zero complete-return coverage means an unknown
 non-trivial rate, even if the raw positive proc rate is known.
 
 These observations need not be a representative sample: legacy backfill may
-prove only positive outcomes. The production UI therefore computes Resourcefulness
-rates only from `resourcefulnessAuthoritativeProcCount` and its paired observed
-count. For example, 8 verified positive attempts among 40 verified attempts in a
-selection of 100 crafts is shown as 20% (8 of 40 verified), with 40 of 100
-selected crafts covered. Legacy positive returns remain visible as quantities,
-and as a descriptive positive-return count in compact tables when no authoritative
-denominator exists; they never enter a rate. Zero verified attempts are unavailable,
-not 0%; a verified all-negative cohort is a real 0%. Non-trivial return-set rates use
-`authoritativeCraftCount` over the same authoritative denominator.
+prove only positive outcomes. For an unbiased probability, use only
+`resourcefulnessAuthoritativeProcCount` over its paired observed count. The
+gameplay UI intentionally presents a recorded-proc frequency instead: positive
+`resourcefulnessProcCount` result records divided by all selected `craftCount`
+rows. Missing outcomes contribute no recorded proc to this display but remain
+unknown in Core's factual populations; this is not a claim about the true
+probability. The numerator is at most one per saved result record, regardless of
+how many items it returned; first-craft rewards are not craft rows. Useful
+Resourcefulness counts each durable positive return-set row once when it
+contains a non-ignored item, then divides by that same total craft count. Core's
+`authoritativeCraftCount` remains available for consumers that require an
+unbiased cohort rate; the UI does not substitute it for the gameplay frequency.
 
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
 `{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.
@@ -509,6 +511,7 @@ details never removes these daily rows.
   concentrationSpentObservedCount = 0, -- concentrationSpent absent, not zero
   ingenuityProcCount = 1, ingenuityProcCountObservedCount = 3,
   ingenuityRefund = 162, ingenuityRefundObservedCount = 2, -- APPLIED refund only
+  resourcefulnessProcCount = 2, resourcefulnessProcCountObservedCount = 3, -- known positive result records; not a rate denominator
   resourcefulnessAuthoritativeProcCount = 1, resourcefulnessAuthoritativeProcCountObservedCount = 3,
   quoteObservedCount = 3, inputCompleteCount = 3, matchedCraftCount = 3,
 }
@@ -539,6 +542,14 @@ Verified Ingenuity adds two metrics to this same series shape:
   is positive or absent. An absent flag contributes no value or coverage. True
   with no refund amount contributes to proc coverage but not refund coverage.
   `ingenuityRefundObservedCount` counts crafts with a known applied amount.
+
+  `resourcefulnessProcCount` and its observed count are also projected in the
+  series so consumers can calculate display-only recorded-proc rates over the
+  same `craftCount` population without querying every recipe. The positive count
+  is at most one per saved craft-result record with a known positive return, not
+  per material entry; it may include unverified/legacy records and is not an
+  attempt denominator by itself. First-craft rewards remain separate from
+  `craftCount`.
 
 Both metrics retain absent-sum/zero-coverage semantics. The Ogrim export's true
 proc, spend 323, refund 162 contributes one proc and 162 applied refund; a
