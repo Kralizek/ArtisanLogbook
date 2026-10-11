@@ -176,7 +176,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       if pane.OnSelect then pane:OnSelect(name) end
     end)
   pane.tabbed, pane.views = tabs, tabs.views
-  function pane:SelectView(name) tabs:Select(name) end
+    function pane:SelectView(name) tabs:Select(name) end
   local overview, statistics, materials = pane.views.Overview, pane.views.Statistics, pane.views.Reagents
   local inner = width - 24
   local statisticsContent, statisticsScroll = UI.PageScroll(statistics, inner, height - 253, 288)
@@ -273,16 +273,17 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     complete = UI.Text(statistics, 0, -232, inner, 40) }
   pane.returnQuantity = UI.Text(statistics, 0, -208, inner / 3 - 14, 22)
   local materialList = UI.ScrollList(materials, 0, 0, inner, height - 253, {
-    { title = "Reagent", width = inner - 358, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, inner - 358) end,
+    { title = "Reagent", width = inner - 374, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, inner - 374) end,
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
-    { title = "Required", width = 70, value = function(row)
+    { title = "Known input", width = 86, value = function(row)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
     end, exact = function(row)
-      if row.allocatedQuantity == nil then return "No required quantity is recorded for this item." end
-      local text = UI.Number(row.allocatedQuantity) .. " known gross units required before returns; more may be required, and this is not net consumed."
+      if row.allocatedQuantity == nil then return "No submitted or fixed schematic input quantity is available for this item." end
+      local text = UI.Number(row.allocatedQuantity) ..
+        " input units from submitted selections or fixed schematic rows before returns. This is not net consumed and may not be a reconciled total."
       if row.matchedCraftCount and row.matchedCraftCount > 0 then
         text = text .. " Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. " with both same-item quantities known."
       end
@@ -309,20 +310,56 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       update = function(check, row) check:SetItem(row.item.id) end },
   }, function(row) if openReagent then openReagent(row.item) end end, "No reagent measurements in this period")
   pane.materialList = materialList
-  local requirementNote = UI.Text(materials, 0, -4, inner, 36, "GameFontNormalSmall")
+  local requirementNote = UI.Text(materials, 0, -4, inner, 18, "GameFontNormalSmall")
   requirementNote:SetJustifyH("LEFT")
-  materialList:ClearAllPoints(); materialList:SetPoint("TOPLEFT", 0, -42)
+  requirementNote:SetWordWrap(false); requirementNote:SetMaxLines(1); requirementNote:Hide()
+  pane.requirementNote = requirementNote
+  pane.requirementFamilies = {}
+  pane.requirementMore = false
+  local function showRequirementDetails()
+    if #pane.requirementFamilies == 0 then return end
+    GameTooltip:SetOwner(requirementNote, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Schematic requirements")
+    for _, family in ipairs(pane.requirementFamilies) do
+      local candidates = {}
+      for _, candidate in ipairs(family.candidateItems) do
+        candidates[#candidates + 1] = UI.Name(candidate)
+      end
+      local allocationNote = #family.candidateItems > 1 and
+        "Quantity is not apportioned among quality alternatives." or
+        "Submitted/consumed quantity was not reconciled to this expectation."
+      GameTooltip:AddLine(UI.Number(family.requiredQuantity) .. " expected units across " ..
+        UI.Count(family.craftCount, "craft") .. "; candidate items: " .. table.concat(candidates, " / ") ..
+        ". " .. allocationNote, 1, 1, 1, true)
+    end
+    if pane.requirementMore then
+      GameTooltip:AddLine("Additional schematic alternatives are available in the Core API.", 1, 1, 1, true)
+    end
+    GameTooltip:Show()
+  end
+  requirementNote:SetScript("OnEnter", showRequirementDetails)
+  requirementNote:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  materialList:ClearAllPoints(); materialList:SetPoint("TOPLEFT", 0, -4)
   UI.LazyList(materialList, function(cursor)
     local result, reason = api.GetRecipeReagentStatistics(recipeId, pane:Filter(), { limit = 40, cursor = cursor })
     return result and result.reagents, result and result.nextCursor or reason
   end)
+  local materialViewHeight
+  local function layoutMaterialList()
+    if not materialViewHeight then return end
+    local offset = pane.requirementVisible and 26 or 0
+    materialList:ClearAllPoints()
+    materialList:SetPoint("TOPLEFT", 0, -4 - offset)
+    materialList:SetViewportHeight(math.max(0, materialViewHeight - offset))
+  end
   function filters.onLayout(filterHeight)
     summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -filterHeight - 6)
     local top = filterHeight + summary:GetHeight() + 14
     local viewHeight = height - top - 51
     tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top)
     tabs:Resize(height - top)
-    materialList:SetViewportHeight(viewHeight - 42)
+    materialViewHeight = viewHeight
+    layoutMaterialList()
     statisticsScroll:SetHeight(viewHeight)
     qualityList:SetViewportHeight(math.max(58, viewHeight - 242))
     qualityStatus:ClearAllPoints(); qualityStatus:SetPoint("TOPLEFT", 0, -viewHeight + 34)
@@ -346,6 +383,9 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       for _, tile in ipairs(self.tiles) do tile.value:SetText("Unavailable"); tile.note:SetText("") end
       self.returnQuantity:SetText("Unavailable")
       requirementNote:SetText("")
+      requirementNote:Hide()
+      pane.requirementFamilies, pane.requirementMore, pane.requirementVisible = {}, false, false
+      layoutMaterialList()
       for _, label in ipairs(stats) do label:SetText("Unavailable") end
       for _, label in pairs(self.resourcefulness) do label:SetText("Unavailable") end
       materialList:Reset("Reagents unavailable")
@@ -353,19 +393,18 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       return
     end
     local totals = result.totals
-    local requirements = api.GetRecipeReagentRequirements(recipeId, filter, { limit = 20 })
-    local requirementLines = {}
-    for _, requirement in ipairs(requirements and requirements.requirements or {}) do
-      local names = {}
-      for _, candidate in ipairs(requirement.candidateItems) do names[#names + 1] = UI.Name(candidate) end
-      requirementLines[#requirementLines + 1] = table.concat(names, " / ") .. ": " ..
-        UI.Number(requirement.requiredQuantity) .. " required across " .. UI.Count(requirement.craftCount, "craft") ..
-        "; exact quality split unavailable."
+    local requirements = api.GetRecipeReagentRequirements(recipeId, filter, { limit = 200 })
+    pane.requirementFamilies = requirements and requirements.requirements or {}
+    pane.requirementMore = requirements and requirements.nextCursor ~= nil or false
+    pane.requirementVisible = #pane.requirementFamilies > 0
+    requirementNote:SetShown(pane.requirementVisible)
+    if pane.requirementVisible then
+      local count = tostring(#pane.requirementFamilies) .. (pane.requirementMore and "+" or "")
+      requirementNote:SetText(count .. " schematic requirement groups; hover for details")
+    else
+      requirementNote:SetText("")
     end
-    if requirements and requirements.nextCursor then
-      requirementLines[#requirementLines + 1] = "More alternative reagent requirements are recorded."
-    end
-    requirementNote:SetText(table.concat(requirementLines, "\n"))
+    layoutMaterialList()
     self:QualityBreakdown(filter, totals)
     self.tiles[1]:SetNumber(totals.craftCount, true)
     for index, metric in pairs({ [2] = "outputQuantity", [3] = "concentrationSpent",

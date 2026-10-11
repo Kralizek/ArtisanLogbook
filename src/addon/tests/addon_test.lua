@@ -1121,10 +1121,16 @@ local highlights = table.concat(UI.CraftHighlights({ concentrationSpent = 323,
   reagents = { { returnedQuantity = 4 }, { returnedQuantity = 0 } } }), "; ")
 assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Returned material units: 4")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 5,
-  returnedQuantity = 1 }) == "Azeroot: 5 required before returns, 1 returned")
+  returnedQuantity = 1 }) ==
+  "Azeroot: 5 submitted input units; the exact item total is not reconciled, 1 returned")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
   "Azeroot: 4 returned (required quantity unavailable)")
-assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) == "#100: 2 required before returns")
+assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) ==
+  "#100: 2 submitted input units; the exact item total is not reconciled")
+assert(UI.ReagentDescription({ item = { name = "Flux" }, allocatedQuantity = 2, fixed = true }) ==
+  "Flux: 2 expected by the recipe schematic")
+assert(UI.ReagentDescription({ item = { name = "Ore" }, allocatedQuantity = 3,
+  inputTotalComplete = true }) == "Ore: 3 submitted and reconciled input units")
 local longName = "Silvermoon Health Potion of the Long Night"
 local sampleTable = UI.ScrollList(environment.CreateFrame("Frame"), 0, 0, 140, 140,
   { { title = "Recipe", width = 116, value = function(row) return row.name end } }, function() end)
@@ -2101,7 +2107,7 @@ do
   assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
   assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
-  assert(detail.chart.bars[1].tooltip:find("Known required: 505", 1, true))
+  assert(detail.chart.bars[1].tooltip:find("Known input: 505", 1, true))
   assert(detail.status.text:find("Item details are available for 101 of 102 crafts", 1, true))
   assert(detail.status.text:find("Saved share compares known input amounts", 1, true))
   detail:SelectView("Used in Recipes")
@@ -2553,18 +2559,18 @@ do
   end
   local materialRows = pane.materialList.rows
   local material = materialRows[1].widgets[1].widget
-  local recipeSavingsCell, recipeRequiredCell
+  local recipeSavingsCell, recipeInputCell
   for _, cell in ipairs(materialRows[1].cells) do
     if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
-    if cell.column.title == "Required" then recipeRequiredCell = cell end
+    if cell.column.title == "Known input" then recipeInputCell = cell end
   end
   assert(recipeSavingsCell and recipeSavingsCell.label.text == helpers.MatchedSavingsText(materialRows[1].item))
-  assert(recipeRequiredCell and recipeRequiredCell.label.text ==
+  assert(recipeInputCell and recipeInputCell.label.text ==
     (materialRows[1].item.allocatedQuantity and ui.UI.Number(materialRows[1].item.allocatedQuantity) or "-"))
   if materialRows[1].item.allocatedQuantity then
-    local requiredTooltip = recipeRequiredCell.column.exact(materialRows[1].item)
-    assert(requiredTooltip:find("gross units required before returns", 1, true) and
-      requiredTooltip:find("not net consumed", 1, true))
+    local inputTooltip = recipeInputCell.column.exact(materialRows[1].item)
+    assert(inputTooltip:find("submitted selections or fixed schematic rows", 1, true) and
+      inputTooltip:find("not net consumed", 1, true))
   end
   assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
   assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
@@ -2746,6 +2752,34 @@ do
   window.craftDetailWindow:Hide()
   assert(window.pages.Recipe.activeView == "Craft History")
   assert(window.pages.Recipe.history.scroll:GetVerticalScroll() == 60)
+  local oldRequirementQuery = api.GetRecipeReagentRequirements
+  api.GetRecipeReagentRequirements = function(recipeId, filter, options)
+    assert(recipeId == 9001 and options.limit == 200)
+    return { requirements = {
+      { requiredQuantity = 5, craftCount = 2, candidateItems = {
+        { id = 243060, name = "Azeroot Quality One with a deliberately long localized reagent name" },
+        { id = 243061, name = "Azeroot Quality Two" },
+      } },
+      { requiredQuantity = 3, craftCount = 1, candidateItems = {
+        { id = 243070, name = "A second alternative reagent family" },
+        { id = 243071, name = "A second quality" },
+      } },
+    } }
+  end
+  pane:Refresh()
+  assert(pane.requirementNote:IsShown())
+  assert(pane.requirementNote.height == 18 and pane.requirementNote.text ==
+    "2 schematic requirement groups; hover for details")
+  assert(pane.materialList.y == -30)
+  pane.requirementNote.scripts.OnEnter(pane.requirementNote)
+  local requirementTooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
+  assert(requirementTooltip:find("5 expected units across 2 crafts", 1, true))
+  assert(requirementTooltip:find("Azeroot Quality One with a deliberately long localized reagent name", 1, true))
+  assert(requirementTooltip:find("A second alternative reagent family", 1, true))
+  assert(requirementTooltip:find("Quantity is not apportioned among quality alternatives", 1, true))
+  api.GetRecipeReagentRequirements = oldRequirementQuery
+  pane:Refresh()
+  assert(not pane.requirementNote:IsShown() and pane.materialList.y == -4)
   print("PASS recipe-local views and filters, per-recipe state, durable returned quantities and guarded allocation ratios")
   assert(environment.ArtisanLogbookManagement.Clear())
   assert(helpers.IsTrivial(8) and helpers.IsTrivial(10))
@@ -2784,6 +2818,8 @@ do
   end
   for _, request in ipairs(data.requests) do
     request.requirements, request.grossRequirementsComplete, request.materialsSavingsEligible = nil, nil, nil
+    for _, allocation in ipairs(request.allocations or {}) do allocation.inputTotalComplete = nil end
+    for _, fixed in ipairs(request.fixedReagents or {}) do fixed.inputTotalComplete = nil end
   end
   for _, reagent in ipairs(data.reagents) do reagent.inputTotalComplete = nil end
   for _, row in ipairs(data.craftSeries) do

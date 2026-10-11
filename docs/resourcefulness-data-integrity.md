@@ -30,14 +30,17 @@ Consolidate repeated input slots at the craft × item grain. Example: two comple
 A valid primary result with an incomplete return list may still retain known inputs, but its return outcome remains partial. Invalid primary identity and incomplete return-list evidence are different conditions.
 
 For a required Basic slot with multiple schematic item alternatives, `quantityRequired`
-establishes a gross slot-family total even when automatic crafting omits that choice
-from the submitted `CraftingReagentInfo` list. A returned quality identifies a
-possible candidate, not the allocation of all consumed units. `grossRequirementsComplete`
-and the durable candidate-family aggregate preserve this evidence independently
-from `inputComplete` and exact per-item savings. Patron order requirements and
-returns are retained, but supplier ownership is not inferred and order crafts do
-not enter the personal matched-savings cohort. Resourcefulness rate denominators
-are unchanged.
+establishes the recipe's expected gross slot-family total even when automatic
+crafting omits that choice from the submitted `CraftingReagentInfo` list. This
+does not prove that submitted or consumed inputs matched the schematic. A returned
+quality identifies a possible candidate, not the allocation of all consumed units.
+`grossRequirementsComplete` and the durable candidate-set aggregate preserve
+the expectation independently from `inputComplete` and exact per-item savings.
+Contradictory selections leave exact input completeness false and never enter
+matched savings, while independently supported schematic expectations remain
+available. Patron order requirements and returns are retained, but supplier
+ownership is not inferred and order crafts do not enter the personal matched-savings
+cohort. Resourcefulness rate denominators are unchanged.
 
 ## Durable cohorts and aggregation
 

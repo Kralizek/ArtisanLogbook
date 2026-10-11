@@ -532,7 +532,8 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
       concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0, recipe = recipe,
       materialsSavingsEligible = true,
       allocations = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, quality = 0 } } },
-    reagents = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, returnedQuantity = 0, quality = 0 } },
+    reagents = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, returnedQuantity = 0,
+      quality = 0, inputTotalComplete = false } },
   })
   local unknown = assert(api.GetCraft(5))
   assert(unknown.recipe == nil and unknown.request == nil and unknown.outputItem == nil)
@@ -1432,7 +1433,7 @@ test("issue 30: family requirements API filters dimensions and pages stable cand
   local function record(items, quantity)
     local candidateIDs = {}
     for _, id in ipairs(items) do candidateIDs[#candidateIDs + 1] = id end
-    local inputs = { evidenceVersion = 1, complete = false, grossComplete = true, fixed = {},
+    local inputs = { evidenceVersion = 1, complete = false, grossRequirementsComplete = true, fixed = {},
       requirements = { { dataSlotIndex = 1, candidateItemIDs = candidateIDs,
         requiredQuantity = quantity, source = "schematic" } }, completeItemIDs = {} }
     assert(ledger:SubmitCraft(101, 1, false, nil, {}, inputs))
@@ -1442,21 +1443,46 @@ test("issue 30: family requirements API filters dimensions and pages stable cand
   clock.current = clock.current + 86400
   session(ledger, "B", 2)
   record({ 611, 612 }, 3)
+  record({ 701 }, 1)
   local all = assert(api.GetRecipeReagentRequirements(101, nil, { limit = 1 }))
   assert(#all.requirements == 1 and all.requirements[1].requiredQuantity == 5)
   assert(all.requirements[1].craftCount == 1 and all.requirements[1].candidateItems[1].id == 601)
   assert(all.nextCursor)
   local nextPage = assert(api.GetRecipeReagentRequirements(101, nil, { limit = 1, cursor = all.nextCursor }))
   assert(#nextPage.requirements == 1 and nextPage.requirements[1].requiredQuantity == 3)
+  local finalPage = assert(api.GetRecipeReagentRequirements(101, nil,
+    { limit = 1, cursor = nextPage.nextCursor }))
+  assert(#finalPage.requirements == 1 and finalPage.requirements[1].candidateItems[1].id == 701)
+  assert(finalPage.requirements[1].requiredQuantity == 1 and not finalPage.nextCursor)
   errorIs("invalid-cursor", api.GetRecipeReagentRequirements(101, nil, { cursor = "requirements:bad\nnot-a-family" }))
   local firstCharacter = assert(api.GetRecipeReagentRequirements(101, { characters = { ledger.database.dimensions.characters[1].key } }))
   assert(#firstCharacter.requirements == 1 and firstCharacter.requirements[1].requiredQuantity == 5)
   local secondDay = assert(api.GetRecipeReagentRequirements(101, { time = {
     from = math.floor(clock.current / 86400) * 86400, to = math.floor(clock.current / 86400) * 86400 + 86400 } }))
-  assert(#secondDay.requirements == 1 and secondDay.requirements[1].requiredQuantity == 3)
+  assert(#secondDay.requirements == 2)
+  local secondDayTotal = 0
+  for _, requirement in ipairs(secondDay.requirements) do secondDayTotal = secondDayTotal + requirement.requiredQuantity end
+  assert(secondDayTotal == 4)
   local projected = api.GetCraft(ledger.database.crafts[1].id)
   assert(projected.reagentRequirements[1].requiredQuantity == 5 and
     projected.reagentRequirements[1].candidateItems[2].id == 602)
+  local conflictingInputs = { evidenceVersion = 1, complete = false, grossRequirementsComplete = true,
+    fixed = {}, requirements = { { dataSlotIndex = 2, candidateItemIDs = { 801, 802 },
+      requiredQuantity = 4, source = "schematic" } }, completeItemIDs = {} }
+  assert(ledger:SubmitCraft(101, 1, false, nil,
+    { { dataSlotIndex = 2, quantity = 4, reagent = { itemID = 999 } } }, conflictingInputs))
+  local conflicting = assert(primaryResult(ledger, { resourcesReturned = {
+    { reagent = { itemID = 999 }, quantity = 1 } } }))
+  local conflictingProjection = api.GetCraft(conflicting.id)
+  assert(conflictingProjection.grossRequirementsComplete == true and conflictingProjection.inputComplete == nil)
+  assert(conflictingProjection.request.grossRequirementsComplete == true)
+  assert(conflictingProjection.request.allocations[1].inputTotalComplete == false)
+  assert(conflictingProjection.reagents[1].inputTotalComplete == false)
+  local itemRows = assert(api.GetRecipeReagentStatistics(101)).reagents
+  local conflictingRow
+  for _, row in ipairs(itemRows) do if row.item.id == 999 then conflictingRow = row end end
+  assert(conflictingRow.allocatedQuantity == 4 and conflictingRow.returnedQuantity == 1 and
+    conflictingRow.matchedCraftCount == 0)
   addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
   assert(api.GetRecipeReagentRequirements(101).requirements[1].requiredQuantity == 5)
 end)

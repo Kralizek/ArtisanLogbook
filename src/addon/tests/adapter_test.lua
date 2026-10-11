@@ -229,7 +229,7 @@ test("schematic snapshots preserve required basic quality families without assig
   local qualityFamily = slot({ dataSlotIndex = 7, quantityRequired = 5,
     reagents = { { itemID = 243060 }, { itemID = 243061 }, { itemID = 243062 } } })
   inputs = capture({ qualityFamily })
-  assert(inputs.complete == false and inputs.grossComplete == true and #inputs.requirements == 1)
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
   assert(inputs.requirements[1].dataSlotIndex == 7 and inputs.requirements[1].requiredQuantity == 5)
   assert(inputs.requirements[1].source == "schematic")
   assert(inputs.requirements[1].candidateItemIDs[1] == 243060 and
@@ -238,13 +238,48 @@ test("schematic snapshots preserve required basic quality families without assig
     { dataSlotIndex = 7, quantity = 3, reagent = { itemID = 243060 } },
     { dataSlotIndex = 7, quantity = 2, reagent = { itemID = 243061 } },
   })
-  assert(inputs.complete == true and #inputs.requirements == 0 and inputs.grossComplete == true)
+  assert(inputs.complete == true and #inputs.requirements == 0 and inputs.grossRequirementsComplete == true)
   assert(inputs.completeItemIDs[1].itemID == 243060 and inputs.completeItemIDs[2].itemID == 243061)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 2, reagent = { itemID = 243060 } },
+    { dataSlotIndex = 7, quantity = 3, reagent = { itemID = 243060 } },
+  })
+  assert(inputs.complete == true and #inputs.requirements == 0 and #inputs.completeItemIDs == 1)
+  assert(inputs.completeItemIDs[1].itemID == 243060)
   inputs = capture({ qualityFamily }, nil, {
     { dataSlotIndex = 7, quantity = 4, reagent = { itemID = 243060 } },
   })
-  assert(inputs.complete == false and inputs.grossComplete == true and #inputs.requirements == 1)
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
   assert(inputs.requirements[1].requiredQuantity == 5 and #inputs.completeItemIDs == 0)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 6, reagent = { itemID = 243060 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  local singleBasic = slot({ dataSlotIndex = 9, quantityRequired = 2, reagents = { { itemID = 243080 } } })
+  inputs = capture({ singleBasic }, nil, {
+    { dataSlotIndex = 9, quantity = 1, reagent = { itemID = 243080 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.fixed == 0)
+  assert(#inputs.requirements == 1 and inputs.requirements[1].candidateItemIDs[1] == 243080)
+  assert(inputs.requirements[1].requiredQuantity == 2 and #inputs.completeItemIDs == 0)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 2, reagent = { itemID = 243060 } },
+    { dataSlotIndex = 7, quantity = 3, reagent = { itemID = 249999 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  assert(#inputs.completeItemIDs == 0 and inputs.requirements[1].candidateItemIDs[3] == 243062)
+  local duplicateAlternatives = slot({ dataSlotIndex = 8, quantityRequired = 4,
+    reagents = { { itemID = 243060 }, { itemID = 243060 }, { itemID = 243061 } } })
+  inputs = capture({ duplicateAlternatives })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  assert(#inputs.requirements[1].candidateItemIDs == 2 and inputs.requirements[1].candidateItemIDs[1] == 243060)
+  inputs = capture({ qualityFamily, slot({ dataSlotIndex = 7, quantityRequired = 2, reagents = { { itemID = 243099 } } }) })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == false)
+  inputs = capture({ qualityFamily }, nil, {
+    [1] = { dataSlotIndex = 7, quantity = 5, reagent = { itemID = 243060 } },
+    [3] = { dataSlotIndex = 7, quantity = 1, reagent = { itemID = 243061 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == false and #inputs.requirements == 1)
   for _, partial in ipairs({
     slot({ reagents = { { itemID = 1 }, { itemID = 2 } } }),
     slot({ variableQuantities = { { reagent = { itemID = 243060 }, quantity = 3 } } }),

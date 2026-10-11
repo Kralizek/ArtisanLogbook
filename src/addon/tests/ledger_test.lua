@@ -2843,7 +2843,7 @@ test("issue 30 ambiguous basic requirements retain gross family totals without e
   local inputs = {
     evidenceVersion = 1,
     complete = false,
-    grossComplete = true,
+    grossRequirementsComplete = true,
     fixed = {},
     requirements = { { dataSlotIndex = 1, candidateItemIDs = { 10, 11, 12 },
       requiredQuantity = 5, source = "schematic" } },
@@ -2877,7 +2877,7 @@ end)
 
 test("issue 30 order requirements never enter personal material-savings aggregates", function()
   local ledger = newLedger()
-  local inputs = { evidenceVersion = 1, complete = false, grossComplete = true, fixed = {},
+  local inputs = { evidenceVersion = 1, complete = false, grossRequirementsComplete = true, fixed = {},
     requirements = { { dataSlotIndex = 1, candidateItemIDs = { 30, 31 }, requiredQuantity = 2, source = "schematic" } },
     completeItemIDs = { { itemID = 40 } } }
   local request = assert(ledger:SubmitCraft(456, 1, false, nil,
@@ -2887,10 +2887,114 @@ test("issue 30 order requirements never enter personal material-savings aggregat
     resourcesReturned = { { reagent = { itemID = 40 }, quantity = 1 } } }))
   assert(craft.materialsSavingsEligible == false and craft.grossRequirementsComplete == true)
   assert(ledger.database.craftSeries[1].matchedCraftCount == 0)
+  assert(ledger.database.craftSeries[1].resourcefulnessAuthoritativeProcCount == 1 and
+    ledger.database.craftSeries[1].resourcefulnessAuthoritativeProcCountObservedCount == 1)
+  assert(ledger.pendingOrderRequest == nil)
   local returned = reagentRow(ledger.database, 40)
   assert(returned.allocatedQuantity == 4 and returned.returnedQuantity == 1)
   assert(returned.matchedCraftCount == nil and returned.matchedAllocatedQuantity == nil)
   assert(ledger.database.reagentRequirementSeries[1].requiredQuantity == 2)
+end)
+
+test("issue 31 mismatched submitted quality choices stay visible but never match schematic family savings", function()
+  local ledger = newLedger()
+  local inputs = { evidenceVersion = 1, complete = false, grossRequirementsComplete = true, fixed = {},
+    requirements = { { dataSlotIndex = 7, candidateItemIDs = { 60, 61, 62 },
+      requiredQuantity = 5, source = "schematic" } }, completeItemIDs = {} }
+  local request = assert(ledger:SubmitCraft(456, 1, false, nil, {
+    { dataSlotIndex = 7, quantity = 2, reagent = { itemID = 60 } },
+    { dataSlotIndex = 7, quantity = 3, reagent = { itemID = 999 }, quality = 1 },
+  }, inputs))
+  assert(request.grossRequirementsComplete == true and request.inputComplete == nil)
+  assert(request.allocations[1].inputTotalComplete == false and request.allocations[2].inputTotalComplete == false)
+  local craft = assert(primaryResult(ledger, { operationID = 9102,
+    resourcesReturned = { { reagent = { itemID = 999 }, quantity = 1 } } }))
+  assert(craft.grossRequirementsComplete == true and craft.inputComplete == nil)
+  assert(craft.reagentRequirements[1].requiredQuantity == 5)
+  local unknown = reagentRow(ledger.database, 999)
+  assert(unknown.allocatedQuantity == 3 and unknown.returnedQuantity == 1 and unknown.matchedCraftCount == nil)
+  assert(reagentRow(ledger.database, 60).matchedCraftCount == nil)
+  assert(ledger.database.reagentRequirementSeries[1].candidateKey == "60,61,62")
+
+  local exactExpectation = { evidenceVersion = 1, complete = false, grossRequirementsComplete = true,
+    fixed = {}, requirements = { { dataSlotIndex = 8, candidateItemIDs = { 70 },
+      requiredQuantity = 2, source = "schematic" } }, completeItemIDs = {} }
+  assert(ledger:SubmitCraft(456, 1, false, nil,
+    { { dataSlotIndex = 8, quantity = 1, reagent = { itemID = 70 } } }, exactExpectation))
+  assert(primaryResult(ledger, { operationID = 9103,
+    resourcesReturned = { { reagent = { itemID = 70 }, quantity = 1 } } }))
+  local single = reagentRow(ledger.database, 70)
+  assert(single.allocatedQuantity == 1 and single.returnedQuantity == 1 and single.matchedCraftCount == nil)
+  local expectedQuantity
+  for _, family in ipairs(ledger.database.reagentRequirementSeries) do
+    if family.candidateKey == "70" then expectedQuantity = family.requiredQuantity end
+  end
+  assert(expectedQuantity == 2)
+end)
+
+test("issue 31 malformed requirement arrays cannot establish gross completeness", function()
+  local ledger = newLedger()
+  local inputs = { evidenceVersion = 1, complete = false, grossRequirementsComplete = true, fixed = {},
+    requirements = { [2] = { dataSlotIndex = 1, candidateItemIDs = { 80, 81 },
+      requiredQuantity = 4, source = "schematic" } }, completeItemIDs = {} }
+  local request = assert(ledger:SubmitCraft(456, 1, false, nil, {}, inputs))
+  assert(request.grossRequirementsComplete == nil and request.requirements == nil)
+  local craft = assert(primaryResult(ledger, { operationID = 9105, resourcesReturned = {} }))
+  assert(craft.grossRequirementsComplete == false and #craft.reagentRequirements == 0)
+  assert(#ledger.database.reagentRequirementSeries == 0)
+end)
+
+test("issue 31 clearing an outstanding order retires its request before later crafts", function()
+  local ledger = newLedger()
+  local order = assert(ledger:SubmitCraft(456, 1, false, nil, {}, nil, false))
+  assert(ledger.pendingOrderRequest.id == order.id and ledger.pendingRequest == nil)
+  assert(ledger.nonpersonalOperationOutstanding == true)
+
+  ledger:ClearHistory()
+  assert(ledger.pendingOrderRequest == nil and ledger.pendingRequest == nil)
+  assert(ledger.nonpersonalOperationOutstanding == nil and ledger.requestById[order.id] == nil)
+  assert(#ledger.database.requests == 0 and #ledger.database.crafts == 0)
+
+  local personal = assert(ledger:SubmitCraft(457, 1, false))
+  assert(ledger.pendingOrderRequest == nil and ledger.pendingRequest.id == personal.id)
+  local result = assert(ledger:RecordResult({ operationID = 9101, itemID = 902, quantity = 1,
+    resourcesReturned = {} }))
+  assert(result.requestId == nil and result.recipeId == nil and result.outcomeSource == "unverified")
+  assert(ledger.pendingRequest == nil and ledger.requestAmbiguous == true)
+  assert(ledger.requestById[order.id] == nil and result.requestId ~= order.id)
+end)
+
+test("issue 31 session reset and purge clear pending order state", function()
+  local ledger, clock = newLedger()
+  local first = assert(ledger:SubmitCraft(456, 1, false, nil, {}, nil, false))
+  assert(ledger.pendingOrderRequest.id == first.id)
+  assert(ledger:CreateSession({ startedAt = clock.current + 1 }))
+  assert(ledger.pendingOrderRequest == nil and ledger.nonpersonalOperationOutstanding == nil)
+
+  local second = assert(ledger:SubmitCraft(457, 1, false, nil, {}, nil, false))
+  assert(ledger.pendingOrderRequest.id == second.id)
+  assert(ledger:Purge())
+  assert(ledger.pendingOrderRequest == nil and ledger.pendingRequest == nil)
+  assert(ledger.nonpersonalOperationOutstanding == nil and #ledger.database.requests == 0)
+
+  local ambiguous = newLedger()
+  assert(ambiguous:SubmitCraft(456, 1, false, nil, {}, nil, false))
+  ambiguous:BeginCraft(456)
+  ambiguous:BeginCraft(456)
+  assert(ambiguous.pendingOrderRequest == nil and ambiguous.operationOwnershipUncertain == true)
+  assert(ambiguous.nonpersonalOperationOutstanding == true)
+  local late = assert(ambiguous:RecordResult({ operationID = 9104, itemID = 904, quantity = 1 }))
+  assert(late.requestId == nil and late.outcomeSource == "unverified")
+
+  local cancelled = newLedger()
+  assert(cancelled:SubmitCraft(456, 1, false, nil, {}, nil, false))
+  cancelled:CancelCraft()
+  assert(cancelled.pendingOrderRequest == nil and cancelled.nonpersonalOperationOutstanding == nil)
+
+  local invalidated = newLedger()
+  assert(invalidated:SubmitCraft(456, 1, false, nil, {}, nil, false))
+  invalidated:InvalidateCraft("CraftEnchant")
+  assert(invalidated.pendingOrderRequest == nil and invalidated.operationOwnershipUncertain == true)
 end)
 
 test("issue 30 schema-2 migration preserves facts and is idempotent without inventing family allocations", function()

@@ -269,8 +269,11 @@ cleans up the shade and modal.
 The modal is inspection only. A prominent result row combines item, quality,
 quantity and Multicraft contribution. Paired facts show character, timestamp,
 concentration and outcomes. A grouped Inputs and returned materials section shows
-known required and returned quantities by item ID beside a short input-evidence
-statement. It does not divide heterogeneous material totals into a misleading
+known submitted or schematic-fixed input quantities and returned quantities by
+item ID beside a short input-evidence statement. Alternative schematic
+requirements appear as a compact expected-quantity note; hovering the recipe
+requirement summary lists candidate items without assigning quantities to
+qualities. It does not divide heterogeneous material totals into a misleading
 percentage. Rows open Reagent pages after closing the modal.
 There is no classification dropdown or duplicate metadata footer. No full-modal
 scrollbar is required. Multiple output identities are not synthesized.

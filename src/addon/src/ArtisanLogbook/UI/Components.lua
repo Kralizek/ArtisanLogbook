@@ -1070,7 +1070,7 @@ function UI.Chart(parent, x, y, width, quantities)
     self.plot:SetShown(days > 1 and total > 0)
     self.empty:SetShown(days == 1 or total == 0)
     if days == 1 and total > 0 then
-      self.empty:SetText(quantities and ("Known required: " .. UI.Number(daily[from]) ..
+      self.empty:SetText(quantities and ("Known input: " .. UI.Number(daily[from]) ..
         "   Known returned: " .. UI.Number(returned[from])) or
         UI.Count(total, "craft") .. " on " .. date("!%d %b", from))
     else self.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period") end
@@ -1123,7 +1123,7 @@ function UI.Chart(parent, x, y, width, quantities)
       if quantities then
         local amount = returned[from + day * bucketSeconds]
         bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
-          "\nKnown required: " .. UI.Value(daily[from + day * bucketSeconds]) ..
+          "\nKnown input: " .. UI.Value(daily[from + day * bucketSeconds]) ..
           "\nKnown returned: " .. UI.Value(amount)
         bar.returned.tooltip = bar.tooltip
         bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft + visibleWidth + groupGap, 0)
@@ -1247,7 +1247,13 @@ end
 function UI.ReagentDescription(reagent)
   local description = UI.Name(reagent.item) .. ": "
   if reagent.allocatedQuantity ~= nil then
-    description = description .. reagent.allocatedQuantity .. " required before returns"
+    if reagent.fixed then
+      description = description .. reagent.allocatedQuantity .. " expected by the recipe schematic"
+    elseif reagent.inputTotalComplete == true then
+      description = description .. reagent.allocatedQuantity .. " submitted and reconciled input units"
+    else
+      description = description .. reagent.allocatedQuantity .. " submitted input units; the exact item total is not reconciled"
+    end
     if reagent.returnedQuantity ~= nil then
       description = description .. ", " .. reagent.returnedQuantity .. " returned"
     end

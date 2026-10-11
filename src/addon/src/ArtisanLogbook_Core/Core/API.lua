@@ -94,7 +94,7 @@ end
 
 local function allocation(ledger, row)
   local result = fields(row, { "dataSlotIndex", "quality", "allocatedQuantity", "returnedQuantity", "source",
-    "fixed" })
+    "fixed", "inputTotalComplete" })
   result.item = item(ledger, row.itemId)
   return result
 end
@@ -128,7 +128,8 @@ local function projectCraft(ledger, craft)
   local request = ledger.requestById[craft.requestId]
   if request then
     result.request = fields(request, { "id", "timestamp", "requestedCount", "useConcentration",
-      "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality", "inputComplete" })
+      "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality", "inputComplete",
+      "grossRequirementsComplete" })
     result.request.recipe = recipe(ledger, dimension(ledger, "recipe", request.recipeId))
     if request.allocations then
       result.request.allocations = {}
@@ -141,6 +142,8 @@ local function projectCraft(ledger, craft)
       for _, row in ipairs(request.fixedReagents) do
         local fixed = fields(row, { "dataSlotIndex", "requiredQuantity" })
         fixed.item = item(ledger, row.itemId)
+        fixed.source = "schematic"
+        fixed.inputTotalComplete = row.inputTotalComplete == true
         result.request.fixedReagents[#result.request.fixedReagents + 1] = fixed
       end
     end
@@ -672,7 +675,7 @@ function API.GetRecipeReagentRequirements(recipeId, filter, options)
       if not integer(itemId, 1) or (previous and itemId <= previous) then return nil, "invalid-cursor" end
       previous, count = itemId, count + 1
     end
-    if count < 2 then return nil, "invalid-cursor" end
+    if count < 1 then return nil, "invalid-cursor" end
   end
   local totals = {}
   local ledger, selection = query.ledger, query.filter

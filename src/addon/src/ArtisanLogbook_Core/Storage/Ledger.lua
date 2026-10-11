@@ -387,7 +387,7 @@ local function validateDatabase(data, version)
       local slots = {}
       for _, requirement in ipairs(craft.reagentRequirements or {}) do
         if not isInteger(requirement.dataSlotIndex) or slots[requirement.dataSlotIndex] or
-            not isDenseList(requirement.candidateItemIDs) or #requirement.candidateItemIDs < 2 or
+            not isDenseList(requirement.candidateItemIDs) or #requirement.candidateItemIDs < 1 or
             not isInteger(requirement.requiredQuantity) or requirement.source ~= "schematic" then
           return nil, "invalid craft reagent requirement"
         end
@@ -504,7 +504,9 @@ local function validateDatabase(data, version)
     for _, allocation in ipairs(request.allocations or {}) do
       if not isInteger(allocation.dataSlotIndex) or not isInteger(allocation.allocatedQuantity) or
           allocation.itemId == nil or
-          (allocation.inputTotalComplete ~= nil and (not v2 or allocation.inputTotalComplete ~= true)) or
+          (allocation.inputTotalComplete ~= nil and (not v2 or
+            (not v3 and allocation.inputTotalComplete ~= true) or
+            (v3 and type(allocation.inputTotalComplete) ~= "boolean"))) or
           (allocation.quality ~= nil and not isGameId(allocation.quality)) then
         return nil, "request allocation is invalid"
       end
@@ -513,7 +515,8 @@ local function validateDatabase(data, version)
     end
     for _, fixed in ipairs(request.fixedReagents or {}) do
       if not isInteger(fixed.dataSlotIndex) or not isInteger(fixed.requiredQuantity) or fixed.itemId == nil or
-          (fixed.inputTotalComplete ~= nil and (not v2 or fixed.inputTotalComplete ~= true)) then
+          (fixed.inputTotalComplete ~= nil and (not v2 or
+            (not v3 and fixed.inputTotalComplete ~= true) or (v3 and type(fixed.inputTotalComplete) ~= "boolean"))) then
         return nil, "request fixed reagent is invalid"
       end
       ok, reason = validateReferences("allocation", fixed, ids)
@@ -523,7 +526,7 @@ local function validateDatabase(data, version)
     for _, requirement in ipairs(request.requirements or {}) do
       if not isInteger(requirement.dataSlotIndex) or requirementSlots[requirement.dataSlotIndex] or
           type(requirement.candidateItemIDs) ~= "table" or not isDenseList(requirement.candidateItemIDs) or
-          #requirement.candidateItemIDs < 2 or
+          #requirement.candidateItemIDs < 1 or
           (requirement.source == "schematic" and not isInteger(requirement.requiredQuantity)) or
           (requirement.requiredQuantity ~= nil and not isInteger(requirement.requiredQuantity)) or
           (requirement.source ~= "schematic" and requirement.source ~= "unknown") then
@@ -966,7 +969,7 @@ local function validateOutcomes(data, version)
         previous = itemId
         key[#key + 1] = text
       end
-      if #key < 2 or table.concat(key, ",") ~= row.candidateKey then
+      if #key < 1 or table.concat(key, ",") ~= row.candidateKey then
         return nil, "invalid reagent requirement family"
       end
       local parent = daily[row.bucketStart] and daily[row.bucketStart][row.characterDimensionId or 0] and
@@ -1649,6 +1652,10 @@ function Ledger:BeginCraft(recipeId)
   if self.pendingRecipeId then
     self.pendingRecipeId = nil
     self.ambiguousRecipe = true
+    if self.pendingOrderRequest then
+      self.pendingOrderRequest = nil
+      self.operationOwnershipUncertain = true
+    end
     return
   end
   if isGameId(recipeId) then
@@ -1718,6 +1725,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   local recipeInputs = snapshot.inputs
   if recipeInputs then
     local evidenced = recipeInputs.evidenceVersion == 1 and isArray(recipeInputs.completeItemIDs)
+    local grossEvidence = recipeInputs.grossRequirementsComplete == true
     local completeItems = {}
     if evidenced and selectionsComplete then
       for _, item in ipairs(recipeInputs.completeItemIDs) do
@@ -1726,16 +1734,22 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
         completeItems[itemId] = true
       end
     end
+    if recipeInputs.requirements ~= nil and not isArray(recipeInputs.requirements) then
+      evidenced, grossEvidence = false, false
+    end
+    if recipeInputs.fixed ~= nil and not isArray(recipeInputs.fixed) then
+      evidenced, grossEvidence = false, false
+    end
     local requirements = {}
     for _, requirement in ipairs(type(recipeInputs.requirements) == "table" and recipeInputs.requirements or {}) do
       if type(requirement) == "table" and isInteger(requirement.dataSlotIndex) and
           isDenseList(requirement.candidateItemIDs) and isInteger(requirement.requiredQuantity) and
           (requirement.source == "schematic" or requirement.source == "unknown") then
-        local candidateItemIDs, previous = {}, nil
+        local candidateItemIDs, previous, candidatesValid = {}, nil, true
         for _, itemId in ipairs(requirement.candidateItemIDs) do
           local observedItemId
           if not isInteger(itemId) or (previous and itemId <= previous) then
-            evidenced = false
+            evidenced, grossEvidence, candidatesValid = false, false, false
             break
           end
           observedItemId, reason = stageDimension(staged, "item", itemId)
@@ -1743,15 +1757,15 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
           candidateItemIDs[#candidateItemIDs + 1] = observedItemId
           previous = itemId
         end
-        if #candidateItemIDs > 1 then
+        if candidatesValid and #candidateItemIDs > 0 then
           requirements[#requirements + 1] = { dataSlotIndex = requirement.dataSlotIndex,
             candidateItemIDs = candidateItemIDs, requiredQuantity = requirement.requiredQuantity,
             source = requirement.source }
         else
-          evidenced = false
+          evidenced, grossEvidence = false, false
         end
       else
-        evidenced = false
+        evidenced, grossEvidence = false, false
       end
     end
     local complete = evidenced and recipeInputs.complete == true and selectionsComplete and
@@ -1767,19 +1781,20 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
           requiredQuantity = fixed.quantity }
       else
         complete = false
+        grossEvidence = false
       end
     end
     if #fixedReagents > 0 then request.fixedReagents = fixedReagents end
     if #requirements > 0 then request.requirements = requirements end
-    if evidenced and recipeInputs.grossComplete == true and selectionsComplete then
+    if evidenced and grossEvidence then
       request.grossRequirementsComplete = true
     end
     for _, allocation in ipairs(allocations) do
-      allocation.inputTotalComplete = evidenced and completeItems[allocation.itemId] or nil
+      allocation.inputTotalComplete = evidenced and completeItems[allocation.itemId] == true or false
       if not allocation.inputTotalComplete then complete = false end
     end
     for _, fixed in ipairs(fixedReagents) do
-      fixed.inputTotalComplete = evidenced and completeItems[fixed.itemId] or nil
+      fixed.inputTotalComplete = evidenced and completeItems[fixed.itemId] == true or false
       if not fixed.inputTotalComplete then complete = false end
     end
     if complete then request.inputComplete = true end

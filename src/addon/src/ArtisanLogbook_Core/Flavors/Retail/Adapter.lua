@@ -148,7 +148,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         type(schematic.reagentSlotSchematics) ~= "table" or not readable(schematic.reagentSlotSchematics) then
       return nil
     end
-    local inputs = { fixed = {}, requirements = {}, complete = true, grossComplete = true,
+    local inputs = { fixed = {}, requirements = {}, complete = true, grossRequirementsComplete = true,
       evidenceVersion = 1, completeItemIDs = {} }
     local totals, blocked, slots, unknown = {}, {}, {}, false
     local selected = {}
@@ -165,6 +165,24 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
       end
     end
     if not dense(schematic.reagentSlotSchematics) then unknown = true end
+    local function preserveBasicRequirement(index, candidates, requiredQuantity, allocationConflict)
+      local candidateIDs = {}
+      for itemId in pairs(candidates) do candidateIDs[#candidateIDs + 1] = itemId end
+      table.sort(candidateIDs)
+      if #candidateIDs == 1 and not allocationConflict then
+        local itemId = candidateIDs[1]
+        inputs.fixed[#inputs.fixed + 1] = { dataSlotIndex = index, itemID = itemId,
+          quantity = requiredQuantity }
+        totals[itemId] = true
+        return false
+      end
+      inputs.requirements[#inputs.requirements + 1] = {
+        dataSlotIndex = index, candidateItemIDs = candidateIDs,
+        requiredQuantity = requiredQuantity, source = "schematic",
+      }
+      if allocationConflict and #candidateIDs == 1 then blocked[candidateIDs[1]] = true end
+      return true
+    end
     for _, slot in pairs(schematic.reagentSlotSchematics) do
       local slotType = type(slot) == "table" and readable(slot) and slot.dataSlotType
       if slotType ~= slotTypes.Currency then
@@ -185,7 +203,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           slot.hiddenInCraftingForm ~= true and type(slot.required) == "boolean" and
           isPositiveInteger(slot.quantityRequired) and
           (slot.variableQuantities == nil or (dense(slot.variableQuantities) and #slot.variableQuantities == 0))
-        local familyRequirement = false
+        local grossRequirementKnown = false
         local allocations, quantity = selected[index] or {}, 0
         if slotType == slotTypes.Reagent and supported and slot.reagentType == reagentTypes.Basic then
           if #allocations > 0 then
@@ -203,34 +221,16 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
               end
             else
               supported = false
-              if slot.required and #slot.reagents > 1 then
-                local candidateIDs = {}
-                for itemId in pairs(candidates) do candidateIDs[#candidateIDs + 1] = itemId end
-                table.sort(candidateIDs)
-                inputs.requirements[#inputs.requirements + 1] = {
-                  dataSlotIndex = index, candidateItemIDs = candidateIDs,
-                  requiredQuantity = slot.quantityRequired, source = "schematic",
-                }
-                familyRequirement = true
+              if slot.required then
+                preserveBasicRequirement(index, candidates, slot.quantityRequired, true)
+                grossRequirementKnown = true
               end
             end
           elseif not slot.required then
             supported = dense(selections)
-          elseif #slot.reagents == 1 then
-            local only = slot.reagents[1]
-            inputs.fixed[#inputs.fixed + 1] = { dataSlotIndex = index, itemID = only.itemID,
-              quantity = slot.quantityRequired }
-            totals[only.itemID] = true
           else
-            local candidateIDs = {}
-            for itemId in pairs(candidates) do candidateIDs[#candidateIDs + 1] = itemId end
-            table.sort(candidateIDs)
-            inputs.requirements[#inputs.requirements + 1] = {
-              dataSlotIndex = index, candidateItemIDs = candidateIDs,
-              requiredQuantity = slot.quantityRequired, source = "schematic",
-            }
-            familyRequirement = true
-            supported = false
+            grossRequirementKnown = preserveBasicRequirement(index, candidates, slot.quantityRequired, false)
+            if grossRequirementKnown then supported = false end
           end
         elseif slotType == slotTypes.ModifiedReagent and supported and dense(selections) and
             (slot.reagentType == reagentTypes.Basic or
@@ -252,15 +252,15 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         if isPositiveInteger(index) then slots[index] = true end
         if not supported then
           inputs.complete = false
-          if not familyRequirement then inputs.grossComplete = false end
-          if not known then unknown = true; inputs.grossComplete = false end
+          if not grossRequirementKnown then inputs.grossRequirementsComplete = false end
+          if not known then unknown = true; inputs.grossRequirementsComplete = false end
           for itemId in pairs(candidates) do blocked[itemId] = true end
           for _, selection in ipairs(allocations) do blocked[selection.reagent.itemID] = true end
         end
       end
     end
     for index in pairs(selected) do if not slots[index] then unknown = true end end
-    if unknown then inputs.complete, inputs.grossComplete = false, false end
+    if unknown then inputs.complete, inputs.grossRequirementsComplete = false, false end
     if not unknown then
       for itemId in pairs(totals) do
         if not blocked[itemId] then inputs.completeItemIDs[#inputs.completeItemIDs + 1] = { itemID = itemId } end

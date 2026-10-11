@@ -131,9 +131,13 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     { title = "Reagent", width = (width - 60) * .56, value = function(row) return UI.Name(row.item) end,
       create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .56) end,
       update = function(cell, row) UI.ReagentCell(cell, row.item) end },
-    { title = "Required", width = (width - 60) * .22, value = function(row)
+    { title = "Known input", width = (width - 60) * .22, value = function(row)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
-    end, exact = function(row) return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "Unavailable" end },
+    end, exact = function(row)
+      if row.allocatedQuantity == nil then return "No submitted or fixed schematic input quantity is available." end
+      if row.inputTotalComplete then return UI.Number(row.allocatedQuantity) .. " exact item units reconciled to the recipe." end
+      return UI.Number(row.allocatedQuantity) .. " submitted or schematic-fixed units; the exact item total is not reconciled and is not a savings basis."
+    end },
     { title = "Returned", width = (width - 60) * .22, value = function(row)
       if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
       return row.returnComplete and row.allocatedQuantity ~= nil and "0" or "-"
@@ -180,7 +184,13 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
         local row = byItem[itemId]
         if not row then row = { item = reagent.item }; byItem[itemId] = row end
         if reagent.allocatedQuantity ~= nil then
+          local hadAllocation = row.allocatedQuantity ~= nil
           row.allocatedQuantity = (row.allocatedQuantity or 0) + reagent.allocatedQuantity
+          if not hadAllocation then
+            row.inputTotalComplete = reagent.inputTotalComplete == true
+          else
+            row.inputTotalComplete = row.inputTotalComplete == true and reagent.inputTotalComplete == true
+          end
         end
         if reagent.returnedQuantity ~= nil then
           row.returnedQuantity = (row.returnedQuantity or 0) + reagent.returnedQuantity
@@ -215,8 +225,8 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     end
     if #craft.reagentRequirements > 0 then
       local requirement = craft.reagentRequirements[1]
-      local text = UI.Number(requirement.requiredQuantity) .. " required across " ..
-        UI.Count(#requirement.candidateItems, "quality option") .. "; exact split unavailable."
+      local text = "Schematic expects " .. UI.Number(requirement.requiredQuantity) .. " units across " ..
+        UI.Count(#requirement.candidateItems, "candidate item") .. "; submitted allocation not reconciled."
       if #craft.reagentRequirements > 1 then
         text = text .. " + " .. UI.Count(#craft.reagentRequirements - 1, "other slot")
       end
