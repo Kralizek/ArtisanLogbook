@@ -42,7 +42,7 @@ existing current-entry highlight without replacing the primary selection.
 | Destination | Presentation and behavior |
 | --- | --- |
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, recorded Resourcefulness proc rate over all selected crafts, known returned material units, and most-crafted recipe. No factual craft list. |
-| Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
+| Logbook | Period/character/profession filters plus a multi-checkbox craft-visibility menu above a newest-first ledger. Hide unknown recipes is selected by default and applies to craft-history lists; it can be cleared to show unattributed crafts. Show hidden recipes includes hidden recipes in Logbook only. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
 | Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required units/Returned units/Materials saved columns and editable Ignore checkboxes. Materials saved shows a matched share or a dash; its tooltip gives the comparable-craft count. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |

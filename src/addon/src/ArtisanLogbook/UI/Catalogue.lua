@@ -153,7 +153,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       if craft then rows[#rows + 1] = craft end
     end
     return rows, offset + 40 < #ids and offset + 40 or nil
-  end, UI.VisibleRecipe)
+  end, UI.VisibleCraft)
   detail.chart = UI.Chart(overview, 0, 0, inner, true)
   local legend = UI.Text(overview, 0, -168, inner, 18)
   legend:SetText("|cff2787c2Known input|r   |cff287040Known returned|r")
@@ -289,7 +289,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
         local offset, rows = cursor or 0, {}
         for index = offset + 1, math.min(offset + 40, #ranked) do rows[#rows + 1] = ranked[index] end
         return rows, offset + 40 < #ranked and offset + 40 or nil
-      end, UI.VisibleRecipe)
+      end, UI.VisibleCraft)
       recipes:Reload()
       if preserve then
         recipes.restoreCount, recipes.restoreOffset = recipeCount, recipeOffset

@@ -304,6 +304,14 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   if kind ~= "Profession" then
     professions = filters:Select("Profession", {}, function(value) state.profession = value; page:Refresh(true) end)
   end
+  local craftVisibility
+  if kind == "Logbook" then
+    craftVisibility = filters:Checks("Craft visibility", {
+      { label = "Hide unknown recipes", value = "hideUnknownRecipes" },
+      { label = "Show hidden recipes", value = "showHiddenRecipes" },
+    }, UI.CraftVisibilityOptions(), UI.SetCraftVisibilityOptions)
+  end
+  page.craftVisibility = craftVisibility
   local status = UI.Text(content, 520, -58, width - 520, 24)
   function page:Filter()
     local filter = UI.Population(kind == "Character" and self.identity.key or state.character,
@@ -374,7 +382,10 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     UI.LazyList(page.history, function(cursor)
       local result, reason = ArtisanLogbookAPI.GetCrafts(page:Filter(), { limit = 40, cursor = cursor })
       return result and result.crafts, result and result.nextCursor or reason
-    end, UI.VisibleRecipe)
+    end, function(craft)
+      local showHidden = kind == "Logbook" and UI.CraftVisibilityOptions().showHiddenRecipes
+      return UI.VisibleCraft(craft, showHidden)
+    end)
   end
   function page:Refresh(reset, preserve)
     local character = kind == "Character" and self.identity.key or state.character

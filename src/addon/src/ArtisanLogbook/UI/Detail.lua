@@ -50,7 +50,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     filter.recipes = { page.recipe.id }
     local result, reason = ArtisanLogbookAPI.GetCrafts(filter, { limit = 40, cursor = cursor })
     return result and result.crafts, result and result.nextCursor or reason
-  end, UI.VisibleRecipe)
+  end, UI.VisibleCraft)
   function page:Open(recipe)
     local changed = not self.recipe or self.recipe.id ~= recipe.id
     if changed and self.recipe then

@@ -4,6 +4,40 @@ addon.UI = UI
 
 UI.ink = { .20, .16, .10 }
 local hiddenRecipeCallbacks = {}
+local craftVisibilityCallbacks = {}
+
+local function craftVisibilitySettings()
+  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
+  if type(ArtisanLogbookUISettings.hideUnknownCrafts) ~= "boolean" then
+    ArtisanLogbookUISettings.hideUnknownCrafts = true
+  end
+  if type(ArtisanLogbookUISettings.showHiddenRecipesInLogbook) ~= "boolean" then
+    ArtisanLogbookUISettings.showHiddenRecipesInLogbook = false
+  end
+  return ArtisanLogbookUISettings
+end
+
+function UI.CraftVisibilityOptions()
+  local settings = craftVisibilitySettings()
+  return { hideUnknownRecipes = settings.hideUnknownCrafts,
+    showHiddenRecipes = settings.showHiddenRecipesInLogbook }
+end
+
+function UI.SetCraftVisibilityOptions(options)
+  local settings = craftVisibilitySettings()
+  local hideUnknown = options.hideUnknownRecipes == true
+  local showHidden = options.showHiddenRecipes == true
+  local changed = settings.hideUnknownCrafts ~= hideUnknown or
+    settings.showHiddenRecipesInLogbook ~= showHidden
+  settings.hideUnknownCrafts, settings.showHiddenRecipesInLogbook = hideUnknown, showHidden
+  if changed then
+    for _, callback in ipairs(craftVisibilityCallbacks) do callback() end
+  end
+end
+
+function UI.RegisterCraftVisibilityCallback(callback)
+  craftVisibilityCallbacks[#craftVisibilityCallbacks + 1] = callback
+end
 
 function UI.IsRecipeHidden(recipeId)
   local settings = ArtisanLogbookUISettings
@@ -27,7 +61,13 @@ function UI.RegisterHiddenRecipeCallback(callback)
 end
 
 function UI.VisibleRecipe(row)
-  return not row.recipe or not UI.IsRecipeHidden(row.recipe.id)
+  if not row.recipe then return not craftVisibilitySettings().hideUnknownCrafts end
+  return not UI.IsRecipeHidden(row.recipe.id)
+end
+
+function UI.VisibleCraft(row, showHiddenRecipes)
+  if not row.recipe then return not craftVisibilitySettings().hideUnknownCrafts end
+  return showHiddenRecipes == true or not UI.IsRecipeHidden(row.recipe.id)
 end
 
 function UI.HiddenRecipeCheckbox(parent, x, y, compact)
@@ -520,6 +560,13 @@ function UI.FilterBar(parent, width, y)
     self.controls[#self.controls + 1] = control
     return control
   end
+  function bar:Checks(title, choices, selected, onChange, size)
+    size = math.min(size or 176, 176)
+    local left, top = self:Slot(size)
+    local control = UI.MultiSelector(self, left, top, size, choices, selected, onChange, title)
+    self.controls[#self.controls + 1] = control
+    return control
+  end
   function bar:Search(onSearch)
     local size = 190
     local left, top = self:Slot(size)
@@ -704,6 +751,60 @@ function UI.Selector(parent, x, y, width, choices, onChoose, title)
     end
   end)
   dropdown:Update(choices, choices[1] and choices[1].value)
+  return dropdown
+end
+
+function UI.MultiSelector(parent, x, y, width, choices, selected, onChange, title)
+  local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
+  if title then
+    dropdown.caption = UI.Text(dropdown, 15, 13, width, 16, "GameFontNormalSmall")
+    dropdown.caption:SetText(title)
+  end
+  dropdown:SetPoint("TOPLEFT", x - 15, y + (title and -13 or 2))
+  UIDropDownMenu_SetWidth(dropdown, width - 35)
+  UIDropDownMenu_JustifyText(dropdown, "LEFT")
+  dropdown.choices = choices
+  dropdown.selected = {}
+  for key, value in pairs(selected or {}) do dropdown.selected[key] = value == true end
+  local function refreshText(self)
+    local count = 0
+    for _, choice in ipairs(self.choices) do
+      if self.selected[choice.value] then count = count + 1 end
+    end
+    UIDropDownMenu_SetText(self, count == 0 and "No craft filters" or
+      (count == 1 and "1 craft filter" or UI.Number(count) .. " craft filters"))
+  end
+  function dropdown:SetSelected(key, value)
+    self.selected[key] = value == true
+    refreshText(self)
+    onChange(self:GetSelection())
+  end
+  function dropdown:GetSelection()
+    local result = {}
+    for key, value in pairs(self.selected) do result[key] = value end
+    return result
+  end
+  dropdown:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(title or "Craft list")
+    for _, choice in ipairs(self.choices) do
+      if self.selected[choice.value] then GameTooltip:AddLine(choice.label, 1, 1, 1, true) end
+    end
+    GameTooltip:Show()
+  end)
+  dropdown:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  UIDropDownMenu_Initialize(dropdown, function(self)
+    for _, choice in ipairs(self.choices) do
+      local info = UIDropDownMenu_CreateInfo()
+      info.text = choice.label
+      info.checked = self.selected[choice.value] == true
+      info.isNotRadio = true
+      info.keepShownOnClick = true
+      info.func = function() self:SetSelected(choice.value, not self.selected[choice.value]) end
+      UIDropDownMenu_AddButton(info)
+    end
+  end)
+  refreshText(dropdown)
   return dropdown
 end
 
@@ -1200,8 +1301,13 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
     self.hiddenCount = 0
     if not hideToggle then
       local filtered = {}
-      for _, row in ipairs(rows) do if UI.VisibleRecipe(row) then filtered[#filtered + 1] = row end end
-      self.hiddenCount = #rows - #filtered
+      for _, row in ipairs(rows) do
+        if UI.VisibleRecipe(row) then
+          filtered[#filtered + 1] = row
+        elseif row.recipe and UI.IsRecipeHidden(row.recipe.id) then
+          self.hiddenCount = self.hiddenCount + 1
+        end
+      end
       rows = filtered
     end
     UI.LazyList(self, function(cursor)
