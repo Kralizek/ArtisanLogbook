@@ -90,7 +90,22 @@ function UI.Rate(totals, metric)
   return UI.Percent(totals[metric], totals.craftCount)
 end
 
-function UI.ProcValue(totals, metric)
+function UI.ResourcefulnessPresentation(totals, inlineSample)
+  if not totals then
+    return "-", "No crafts are available in this selection."
+  end
+  local crafts = totals.craftCount or 0
+  if crafts <= 0 then return "-", "No crafts are available in this selection." end
+  local positive = totals.resourcefulnessProcCount or 0
+  local rate = UI.Percent(positive, crafts):gsub("%.0%%", "%%")
+  local value = inlineSample and crafts <= 5 and (rate .. " (" .. UI.Number(crafts) .. ")") or rate
+  return value, UI.Count(positive, "proc") .. " in " .. UI.Count(crafts, "craft") .. " (" .. rate .. ")."
+end
+
+function UI.ProcValue(totals, metric, inlineSample)
+  if metric == "resourcefulnessProcCount" then
+    return UI.ResourcefulnessPresentation(totals, inlineSample)
+  end
   local rate = UI.Rate(totals, metric)
   if rate ~= "-" then return rate end
   local count = totals and totals[metric]
@@ -102,6 +117,10 @@ function UI.ProcTooltip(totals, metric)
   local count, crafts = totals[metric] or 0, totals.craftCount or 0
   local known = totals[metric .. "ObservedCount"] or 0
   if crafts == 0 then return "No crafts in this selection" end
+  if metric == "resourcefulnessProcCount" then
+    local _, tooltip = UI.ResourcefulnessPresentation(totals)
+    return tooltip
+  end
   if known == crafts then
     return UI.Rate(totals, metric) .. "\n" .. count .. (count == 1 and " proc / " or " procs / ") ..
       crafts .. (crafts == 1 and " craft" or " crafts")
@@ -774,7 +793,7 @@ function UI.Activity(craft, extrasOnly)
     returned = returned + math.max(0, reagent.returnedQuantity or 0)
   end
   if returned > 0 then
-    local lines = { "Reagents returned: " .. returned }
+    local lines = { "Returned material units: " .. returned }
     for _, reagent in ipairs(craft.reagents or {}) do
       if reagent.returnedQuantity and reagent.returnedQuantity > 0 then
         lines[#lines + 1] = UI.ReagentDescription(reagent)
@@ -1051,7 +1070,8 @@ function UI.Chart(parent, x, y, width, quantities)
     self.plot:SetShown(days > 1 and total > 0)
     self.empty:SetShown(days == 1 or total == 0)
     if days == 1 and total > 0 then
-      self.empty:SetText(quantities and ("Used: " .. UI.Number(daily[from]) .. "   Returned: " .. UI.Number(returned[from])) or
+      self.empty:SetText(quantities and ("Known required: " .. UI.Number(daily[from]) ..
+        "   Known returned: " .. UI.Number(returned[from])) or
         UI.Count(total, "craft") .. " on " .. date("!%d %b", from))
     else self.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period") end
     self.start:SetText(date(width < 400 and "!%d %b" or "!%d %b %Y", from))
@@ -1103,8 +1123,8 @@ function UI.Chart(parent, x, y, width, quantities)
       if quantities then
         local amount = returned[from + day * bucketSeconds]
         bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
-          "\nUsed: " .. UI.Value(daily[from + day * bucketSeconds]) ..
-          "\nReturned: " .. UI.Value(amount)
+          "\nKnown required: " .. UI.Value(daily[from + day * bucketSeconds]) ..
+          "\nKnown returned: " .. UI.Value(amount)
         bar.returned.tooltip = bar.tooltip
         bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft + visibleWidth + groupGap, 0)
         bar.returned:SetSize(math.max(.5, visibleWidth), math.max(1, (amount or 0) * (self.plot:GetHeight() - 6) / maximum))
@@ -1145,7 +1165,7 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       value = function(row)
         if metric ~= "resourcefulnessProcCount" and row.totals and row.totals[metric] == 0 and
             row.totals[metric .. "ObservedCount"] == row.totals.craftCount then return "" end
-        return UI.ProcValue(row.totals, metric)
+        return UI.ProcValue(row.totals, metric, metric == "resourcefulnessProcCount")
       end,
       exact = function(row) return UI.ProcTooltip(row.totals, metric) end }
   end
@@ -1220,19 +1240,19 @@ function UI.CraftHighlights(craft)
       returned = returned + reagent.returnedQuantity
     end
   end
-  if returned > 0 then details[#details + 1] = "Reagents returned: " .. returned end
+  if returned > 0 then details[#details + 1] = "Returned material units: " .. returned end
   return details
 end
 
 function UI.ReagentDescription(reagent)
   local description = UI.Name(reagent.item) .. ": "
   if reagent.allocatedQuantity ~= nil then
-    description = description .. reagent.allocatedQuantity .. " used"
+    description = description .. reagent.allocatedQuantity .. " required before returns"
     if reagent.returnedQuantity ~= nil then
       description = description .. ", " .. reagent.returnedQuantity .. " returned"
     end
   elseif reagent.returnedQuantity ~= nil then
-    description = description .. reagent.returnedQuantity .. " returned (quantity used unavailable)"
+    description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
   else
     description = description .. "quantity unknown"
   end

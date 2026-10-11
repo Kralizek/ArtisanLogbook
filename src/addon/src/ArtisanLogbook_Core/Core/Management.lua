@@ -131,6 +131,9 @@ local function performUnknownRecipeRepair(mode, outputFilter)
     "unknown-recipe-repair %s unknown=%d repairable=%d repaired=%d ambiguous=%d insufficient=%d missing-output=%d success=true",
     mode, analysis.unattributedCount, analysis.repairableCount, result.repairedCount,
     analysis.ambiguousCount, analysis.insufficientEvidenceCount, analysis.missingOutputCount)
+  if result.repairedCount > 0 and type(management.OnUnknownRecipesRepaired) == "function" then
+    pcall(management.OnUnknownRecipesRepaired, result.repairedCount)
+  end
   return result
 end
 

@@ -46,13 +46,34 @@ function addon.CreateProductionWindow()
     pages[name]:Hide()
   end
   window.pages, window.activeTab = pages, "Overview"
-  local navContent, navScroll = UI.PageScroll(sidebar, sideWidth - 4, height - 86, height - 86)
+  local navContent, navScroll = UI.PageScroll(sidebar, sideWidth - 4, height - 132, height - 132)
   navScroll:ClearAllPoints(); navScroll:SetPoint("TOPLEFT", 2, -8)
   window.sidebar, window.sidebarScroll, window.navItems = sidebar, navScroll, {}
   local headings = {}
   local settingsNav = UI.NavItem(sidebar, sideWidth - 8, function() window:Activate("Settings") end)
   settingsNav:SetPoint("BOTTOMLEFT", 4, 4)
   window.settingsNav = settingsNav
+  local captureStatus = UI.Text(sidebar, 0, 0, sideWidth - 24, 40, "GameFontNormalSmall")
+  captureStatus:ClearAllPoints(); captureStatus:SetPoint("BOTTOMLEFT", settingsNav, "TOPLEFT", 4, 6)
+  captureStatus:SetJustifyH("LEFT"); captureStatus:SetTextColor(.72, .52, .24); captureStatus:Hide()
+  window.captureStatus = captureStatus
+  function window:RefreshCaptureStatus(status)
+    if status == nil then status = management.Status() end
+    local suspended = status and status.authoritativeCaptureSuspended == true
+    captureStatus:SetShown(suspended)
+    if suspended then
+      captureStatus:SetText("Detailed crafting statistics are temporarily unavailable. Crafts are still being recorded.")
+    end
+  end
+  local statusPoller, statusElapsed = CreateFrame("Frame", nil, window), 0
+  statusPoller:SetScript("OnUpdate", function(_, elapsed)
+    if not window:IsShown() then return end
+    statusElapsed = statusElapsed + elapsed
+    if statusElapsed >= 1 then
+      statusElapsed = 0
+      window:RefreshCaptureStatus()
+    end
+  end)
 
   function window:RefreshSidebar()
     local entries = {
@@ -192,6 +213,7 @@ function addon.CreateProductionWindow()
     if (name == "Character" or name == "Profession" or name == "Recipe" or name == "Reagent") and not identity then return end
     if self.openCraftId then closeCraft() end
     local status = management.Status()
+    self:RefreshCaptureStatus(status)
     local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)
     if signature ~= self.dataSignature then self:Invalidate(); self.dataSignature = signature end
     for _, page in pairs(pages) do page:Hide() end
@@ -202,6 +224,7 @@ function addon.CreateProductionWindow()
   end
   function window:Refresh()
     self:RefreshSidebar()
+    self:RefreshCaptureStatus()
     if not self.openCraftId then pages[self.activeTab]:Open(self.identity) end
   end
   function window:Invalidate()
@@ -209,6 +232,10 @@ function addon.CreateProductionWindow()
       page.dirty = true
       page.revision = (page.revision or 0) + 1
     end
+  end
+  management.OnUnknownRecipesRepaired = function()
+    window:Invalidate()
+    if window:IsShown() then window:Refresh() end
   end
   UI.RegisterHiddenRecipeCallback(function()
     window:Invalidate()

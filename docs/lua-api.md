@@ -335,6 +335,11 @@ denominator:
 | Complete return sets | `resourcefulnessCompleteProcCount` / `...ObservedCount` | The authoritative cohort plus legacy complete lists. Legacy capture recorded complete lists mostly for positives, so this population can be biased. |
 | Raw evidence | `resourcefulnessProcCount` / `...ObservedCount` | Any known outcome, including legacy positive-only evidence. **Not a rate.** |
 
+`resourcefulnessProcCount` adds at most one positive observation per saved result
+record, regardless of how many material items that result returned. It is not a
+material-entry count or an authoritative attempt count; unverified results may
+contribute.
+
 Use the authoritative cohort for proc rates. Its coverage is
 `resourcefulnessAuthoritativeProcCountObservedCount` out of `craftCount`; crafts
 outside it (legacy history, partial lists, salvage callbacks) are unknown, not
@@ -385,14 +390,18 @@ discard unavailable entries. Zero complete-return coverage means an unknown
 non-trivial rate, even if the raw positive proc rate is known.
 
 These observations need not be a representative sample: legacy backfill may
-prove only positive outcomes. For example, 8 positive return records in 30
-crafts do not establish a 100% population proc rate. The production UI says
-`Returns recorded for 8 crafts` and `Return results missing for 22 crafts`; it
-does not claim the other crafts had no returns. It shows an overall any-return
-rate only when all selected crafts have known outcomes. Non-trivial savings
-likewise show recorded craft counts instead of subset percentages when full
-return details are missing; missing figures display a dash. These presentation
-choices do not change the factual API's counts or observation fields.
+prove only positive outcomes. For an unbiased probability, use only
+`resourcefulnessAuthoritativeProcCount` over its paired observed count. The
+gameplay UI intentionally presents a recorded-proc frequency instead: positive
+`resourcefulnessProcCount` result records divided by all selected `craftCount`
+rows. Missing outcomes contribute no recorded proc to this display but remain
+unknown in Core's factual populations; this is not a claim about the true
+probability. The numerator is at most one per saved result record, regardless of
+how many items it returned; first-craft rewards are not craft rows. Useful
+Resourcefulness counts each durable positive return-set row once when it
+contains a non-ignored item, then divides by that same total craft count. Core's
+`authoritativeCraftCount` remains available for consumers that require an
+unbiased cohort rate; the UI does not substitute it for the gameplay frequency.
 
 `GetRecipeReturnedReagents` has the same parameters/paging shape and returns
 `{ returns = { { item = { id = 3, name = "..." }, returnedQuantity = 12 } } }`.
@@ -400,6 +409,8 @@ Each row combines one material's positive quantities across the selected period
 and characters, including individually known quantities from partially observed
 results. Identity is the item ID, not its name: same-named quality variants can
 legitimately have separate rows. No proc rate may be derived from these quantity rows.
+An absent per-item quantity remains unavailable; recipe-wide return coverage does
+not create a row-level zero measurement.
 
 `GetRecipeReagentStatistics` has the same parameters and paging (ordered by item
 ID, with its own cursors) and returns per-item durable measurements plus the
@@ -433,7 +444,8 @@ selected recipe population's coverage:
   unquoted Flux. `matchedReturnedQuantity / matchedAllocatedQuantity` is the
   saved-material share for one population; `matchedAllocatedQuantity -
   matchedReturnedQuantity` is matched net consumption. `matchedReturnCount` counts
-  matched crafts that returned this item. Never divide `returnedQuantity` by
+  matched crafts that returned this item. The production UI shows the matched
+  sample beside each per-item share. Never divide `returnedQuantity` by
   `allocatedQuantity`: they cover different crafts.
 - `coverage.returnObservedCount` is the authoritative-cohort observed count.
   `coverage.matchedCraftCount` is the craft-level complete-input ∩ authoritative
@@ -499,6 +511,7 @@ details never removes these daily rows.
   concentrationSpentObservedCount = 0, -- concentrationSpent absent, not zero
   ingenuityProcCount = 1, ingenuityProcCountObservedCount = 3,
   ingenuityRefund = 162, ingenuityRefundObservedCount = 2, -- APPLIED refund only
+  resourcefulnessProcCount = 2, resourcefulnessProcCountObservedCount = 3, -- known positive result records; not a rate denominator
   resourcefulnessAuthoritativeProcCount = 1, resourcefulnessAuthoritativeProcCountObservedCount = 3,
   quoteObservedCount = 3, inputCompleteCount = 3, matchedCraftCount = 3,
 }
@@ -529,6 +542,14 @@ Verified Ingenuity adds two metrics to this same series shape:
   is positive or absent. An absent flag contributes no value or coverage. True
   with no refund amount contributes to proc coverage but not refund coverage.
   `ingenuityRefundObservedCount` counts crafts with a known applied amount.
+
+  `resourcefulnessProcCount` and its observed count are also projected in the
+  series so consumers can calculate display-only recorded-proc rates over the
+  same `craftCount` population without querying every recipe. The positive count
+  is at most one per saved craft-result record with a known positive return, not
+  per material entry; it may include unverified/legacy records and is not an
+  attempt denominator by itself. First-craft rewards remain separate from
+  `craftCount`.
 
 Both metrics retain absent-sum/zero-coverage semantics. The Ogrim export's true
 proc, spend 323, refund 162 contributes one proc and 162 applied refund; a

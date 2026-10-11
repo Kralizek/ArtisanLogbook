@@ -125,14 +125,23 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     fields[title] = UI.Text(content, left + 112, offset, (width - 36) / 2 - 126, 34)
   end
   detail.fields = fields
-  UI.Section(content, "Reagents returned", 0, -270, width - 36)
-  local reagents = UI.ScrollList(content, 0, -306, width - 36, height - 378, {
-    { title = "Reagent", width = (width - 60) * .78, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .78) end,
+  detail.inputEvidence = UI.Text(content, 0, -258, width - 36, 18, "GameFontNormalSmall")
+  UI.Section(content, "Inputs and returned materials", 0, -286, width - 36)
+  local reagents = UI.ScrollList(content, 0, -322, width - 36, height - 394, {
+    { title = "Reagent", width = (width - 60) * .56, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .56) end,
       update = function(cell, row) UI.ReagentCell(cell, row.item) end },
-    { title = "Returned", width = (width - 60) * .22, value = function(row) return UI.Number(row.returnedQuantity) end,
-      exact = function(row) return tostring(row.returnedQuantity) end },
-  }, function(row) if openReagent then goBack(); openReagent(row.item) end end, "No reagents returned")
+    { title = "Required", width = (width - 60) * .22, value = function(row)
+      return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
+    end, exact = function(row) return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "Unavailable" end },
+    { title = "Returned", width = (width - 60) * .22, value = function(row)
+      if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
+      return row.returnComplete and row.allocatedQuantity ~= nil and "0" or "-"
+    end, exact = function(row)
+      if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
+      return row.returnComplete and row.allocatedQuantity ~= nil and "0" or "Unavailable"
+    end },
+  }, function(row) if openReagent then goBack(); openReagent(row.item) end end, "No input or return details")
   detail.returnedReagents = reagents
 
   function detail:ShowCraft(id)
@@ -142,6 +151,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       subtitle:SetText(reason or "Unknown craft")
       for _, field in pairs(fields) do field:SetText("-") end
       reagents:Reset(); resultRow:Update(nil); resultRow.quantity:SetText("-"); resultRow.bonus:SetText("")
+      detail.inputEvidence:SetText("")
       identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); quality:Hide()
       return
     end
@@ -163,22 +173,46 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     fields.Ingenuity:SetText(craft.hasIngenuityProc == true and
       (craft.ingenuityRefund and UI.Number(craft.ingenuityRefund) .. " refunded" or "Proc") or
       (craft.hasIngenuityProc == false and "No proc" or "-"))
-    local returned, total, allocated, complete = {}, 0, 0, craft.resourcefulnessComplete == true
+    local byItem, returned, total = {}, {}, 0
     for _, reagent in ipairs(craft.reagents or {}) do
-      if reagent.allocatedQuantity == nil or reagent.returnedQuantity == nil then complete = false end
-      allocated = allocated + (reagent.allocatedQuantity or 0)
-      if reagent.returnedQuantity and reagent.returnedQuantity > 0 then
-        returned[#returned + 1] = reagent; total = total + reagent.returnedQuantity
-        if reagent.allocatedQuantity and reagent.returnedQuantity > reagent.allocatedQuantity then complete = false end
+      local itemId = reagent.item and reagent.item.id
+      if itemId then
+        local row = byItem[itemId]
+        if not row then row = { item = reagent.item }; byItem[itemId] = row end
+        if reagent.allocatedQuantity ~= nil then
+          row.allocatedQuantity = (row.allocatedQuantity or 0) + reagent.allocatedQuantity
+        end
+        if reagent.returnedQuantity ~= nil then
+          row.returnedQuantity = (row.returnedQuantity or 0) + reagent.returnedQuantity
+        end
       end
     end
-    local returnText = craft.hasResourcefulnessProc == nil and total == 0 and "-" or UI.Number(total) .. " returned"
-    if complete and allocated > 0 then
-      returnText = returnText .. " (" .. UI.Percent(total, allocated) .. " of used)"
-    elseif craft.resourcefulnessComplete ~= true and total > 0 then
-      returnText = ">= " .. returnText
+    local itemIds = {}
+    for itemId in pairs(byItem) do itemIds[#itemIds + 1] = itemId end
+    table.sort(itemIds)
+    local returnVerified = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
+    for _, itemId in ipairs(itemIds) do
+      local row = byItem[itemId]
+      row.returnComplete = returnVerified
+      returned[#returned + 1] = row
+      if row.returnedQuantity and row.returnedQuantity > 0 then total = total + row.returnedQuantity end
     end
-    fields.Resourcefulness:SetText(returnText)
+    if returnVerified and craft.hasResourcefulnessProc == true then
+      fields.Resourcefulness:SetText("Return recorded")
+    elseif returnVerified and craft.hasResourcefulnessProc == false then
+      fields.Resourcefulness:SetText("No return recorded")
+    elseif total > 0 then
+      fields.Resourcefulness:SetText("Known returns; other results may be unavailable")
+    else
+      fields.Resourcefulness:SetText("Outcome unavailable")
+    end
+    if craft.inputComplete == true then
+      detail.inputEvidence:SetText("All required inputs are known (gross quantities before returns).")
+    elseif craft.quoteObserved == true or craft.request and craft.request.allocations then
+      detail.inputEvidence:SetText("Some gross inputs are known; the full required amount is unavailable.")
+    else
+      detail.inputEvidence:SetText("Input requirements are unavailable.")
+    end
     reagents:Reset(); reagents:Append(returned)
   end
   detail:Hide()

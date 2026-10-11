@@ -420,7 +420,8 @@ function API.GetCraftSeries(filter, options)
     local projected = fields(row, { "bucketStart", "craftCount", "outputQuantity", "multicraftBonus",
       "concentrationSpent", "outputQuantityObservedCount", "multicraftBonusObservedCount",
       "concentrationSpentObservedCount", "ingenuityProcCount", "ingenuityProcCountObservedCount",
-      "ingenuityRefund", "ingenuityRefundObservedCount", "resourcefulnessAuthoritativeProcCount",
+      "ingenuityRefund", "ingenuityRefundObservedCount", "resourcefulnessProcCount",
+      "resourcefulnessProcCountObservedCount", "resourcefulnessAuthoritativeProcCount",
       "resourcefulnessAuthoritativeProcCountObservedCount", "quoteObservedCount", "inputCompleteCount",
       "matchedCraftCount" })
     local rows = seriesRelated(ledger, row)
