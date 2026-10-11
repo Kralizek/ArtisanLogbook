@@ -233,6 +233,10 @@ function addon.CreateProductionWindow()
       page.revision = (page.revision or 0) + 1
     end
   end
+  management.OnUnknownRecipesRepaired = function()
+    window:Invalidate()
+    if window:IsShown() then window:Refresh() end
+  end
   UI.RegisterHiddenRecipeCallback(function()
     window:Invalidate()
     if window:IsShown() then window:Refresh() end

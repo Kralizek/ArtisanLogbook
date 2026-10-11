@@ -359,6 +359,26 @@ maintenanceDatabase = maintenance.ledger.database
 environment.popup = nil
 repairButton.scripts.OnClick(repairButton)
 assert(environment.popup == nil and maintenance.ledger.database == maintenanceDatabase)
+assert(maintenance.ledger:AddDimension("recipe", 9903, { name = "Recovered recipe" }))
+assert(maintenance.ledger:AddDimension("item", 9903, { name = "Recovered recipe" }))
+assert(maintenance.ledger:LearnRecipeOutput(9903, 9903))
+do
+  local maintenanceUI = loadUI()
+  local productionWindow = maintenanceUI.productionWindow
+  productionWindow:Show()
+  productionWindow:Activate("Logbook")
+  local maintenanceHistory = productionWindow.pages.Logbook.history
+  local function recoveredRow()
+    for _, row in ipairs(maintenanceHistory.items) do
+      if row.outputItem and row.outputItem.id == 9903 then return row end
+    end
+  end
+  assert(recoveredRow() and recoveredRow().recipe == nil)
+  local liveRepair = assert(environment.ArtisanLogbookManagement.RepairUnknownRecipes())
+  assert(liveRepair.repairedCount == 1)
+  assert(recoveredRow() and recoveredRow().recipe.id == 9903,
+    "visible Logbook did not refresh after recipe repair")
+end
 print("PASS confirmed offline recipe repair preview and no-evidence no-write flow")
 
 local function startupDatabase(knownOutput, unknownOutputs, competingRecipe)
