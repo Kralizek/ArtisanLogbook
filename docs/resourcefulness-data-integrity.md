@@ -9,7 +9,7 @@ tags:
 
 # Resourcefulness data integrity
 
-This document records the durable invariants and design boundaries of the schema-v2 Core recorder. The public Lua API is documented in [lua-api.md](lua-api.md); storage layout and retention in [storage-ledger.md](storage-ledger.md).
+This document records the durable invariants and design boundaries of the schema-v3 Core recorder. The public Lua API is documented in [lua-api.md](lua-api.md); storage layout and retention in [storage-ledger.md](storage-ledger.md).
 
 ## What a measurement means
 
@@ -29,6 +29,16 @@ Consolidate repeated input slots at the craft × item grain. Example: two comple
 
 A valid primary result with an incomplete return list may still retain known inputs, but its return outcome remains partial. Invalid primary identity and incomplete return-list evidence are different conditions.
 
+For a required Basic slot with multiple schematic item alternatives, `quantityRequired`
+establishes a gross slot-family total even when automatic crafting omits that choice
+from the submitted `CraftingReagentInfo` list. A returned quality identifies a
+possible candidate, not the allocation of all consumed units. `grossRequirementsComplete`
+and the durable candidate-family aggregate preserve this evidence independently
+from `inputComplete` and exact per-item savings. Patron order requirements and
+returns are retained, but supplier ownership is not inferred and order crafts do
+not enter the personal matched-savings cohort. Resourcefulness rate denominators
+are unchanged.
+
 ## Durable cohorts and aggregation
 
 The durable reagent grain is UTC day × character × recipe × item, alongside daily craft series and return-set summaries. It tracks gross allocations, positive returns, quote/input coverage, complete authoritative outcomes, and same-population matched required/returned amounts. The material-saving proportion is **sum of matched returned quantity / sum of matched required quantity** for the same eligible crafts; never mix lifetime returns with retained-only input details, or confuse gross allocated with net consumed. A zero denominator means *unavailable*, not 0%.
@@ -45,13 +55,13 @@ Interrupting, closing, cancelling or replacing outstanding work may leave delaye
 
 Uncertainty can last for the remainder of a runtime session. `ArtisanLogbookManagement.Status()` exposes `operationOwnershipUncertain` and `authoritativeCaptureSuspended`; these describe capture state, not a promise that every callback is eligible. Starting another craft, waiting an arbitrary delay, or merely closing a profession window does not establish a reliable server-side drain boundary. Runtime registry entries are not persisted into SavedVariables; game reload with events in flight has not been proven to provide a cross-session correlation guarantee.
 
-## Schema-v1 to schema-v2 migration
+## Schema-v1 to schema-v3 migration
 
 Migration stages a validated replacement database rather than destructively modifying schema-v1 data first. Preserve craft/request identifiers, dimensions, sessions, daily series, return sets, returned item quantities, recipe/output knowledge and retained facts. Backfill only quantities justified by surviving input/return facts **before** retention pruning. Never synthesize historical authoritative negatives or complete input evidence. Historical v1 `quoteObserved` is not equivalent to `inputComplete`; old schema-v2 measurements made before strengthened evidence rules are preserved, not retrospectively certified.
 
-Reload must be idempotent; a rejected upgrade must leave the original SavedVariables usable. There is no necessary schema change for runtime operation-ID provenance and quarantine.
+Reload must be idempotent; a rejected upgrade must leave the original SavedVariables usable. Schema-1 data passes through the validated schema-1-to-2 conversion and then schema-2-to-3 initialization. Schema 2 family alternatives cannot be reconstructed from a current schematic or return-only item ID, so migration leaves family coverage unknown and preserves prior exact facts and aggregates unchanged.
 
-A real in-game migration comparison of a backed-up schema-v1 SavedVariables file to a schema-v2 save preserved 746 crafts, 761 reagent facts, 174 requests, 519 daily series, 133 return-set rows, 489 returned units and 8,808 recipe-output relationships. It added one game session, marked 230 historical crafts as quote-observed and created 545 durable reagent grains; it manufactured **zero** authoritative or matched historical crafts. Persisted file size grew about 4%. Private SavedVariables are not checked into the repository.
+A real in-game migration comparison of a backed-up schema-v1 SavedVariables file to a schema-v2 save preserved 746 crafts, 761 reagent facts, 174 requests, 519 daily series, 133 return-set rows, 489 returned units and 8,808 recipe-output relationships. It added one game session, marked 230 historical crafts as quote-observed and created 545 durable reagent grains; it manufactured **zero** authoritative or matched historical crafts. Schema-2-to-3 adds no inferred historical family requirements. Private SavedVariables are not checked into the repository.
 
 ## Failure scenarios protected by regression tests
 

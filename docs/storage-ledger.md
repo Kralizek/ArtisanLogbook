@@ -5,7 +5,7 @@ personal-craft request capture added by issue #12, durable outcomes from #17, an
 the schema-2 authoritative outcome and reagent measurement model from #24. The raw
 capture tracer remains a separate diagnostic store and is not imported into the ledger.
 
-The stable consumer-facing Lua API is documented separately in
+The schema-v3 gross reagent requirement and candidate-family model is documented below. The stable consumer-facing Lua API is documented separately in
 [lua-api.md](lua-api.md).
 
 ## SavedVariables and Versions
@@ -22,11 +22,14 @@ of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-**Schema 2 is the current persistence contract**, identified by both
-`schemaVersion = 2` and `schemaIdentity = "ArtisanLogbookLedger"`. **Schema 1**
+**Schema 3 is the current persistence contract**, identified by both
+`schemaVersion = 3` and `schemaIdentity = "ArtisanLogbookLedger"`. Schemas 1 and 2
+with this identity migrate automatically and conservatively at startup. **Schema 1**
 (`schemaVersion = 1` with the same identity, in every `outcomeVersion` variant
 described below) is the only supported upgrade source and is migrated
-automatically at startup; see [Schema 1 → 2 migration](#schema-1--2-migration).
+automatically at startup; see the [schema migrations](#schema-1--2-migration).
+Schema 2 → 3 preserves existing item facts and aggregates and initializes family
+coverage as unknown; schema 2 did not retain the craft-time alternative set.
 No reset or purge is required. Schema 2 is never downgraded: an older Core build
 refuses a schema-2 database with its usual unsupported-schema diagnostic.
 Use authoritative WoW natural IDs directly for WoW entities where a stable
@@ -57,7 +60,9 @@ The supported schema contains:
   (`native`, `partial`, `unverified`; absent for schema-1 captures),
   `quoteObserved = true` for crafts whose request carried quote allocations, and
   `inputComplete = true` for crafts whose complete recipe inputs are known (see
-  [Recipe inputs](#recipe-inputs-quote-allocations-vs-complete-inputs)).
+  [Recipe inputs](#recipe-inputs-quote-allocations-vs-complete-inputs)). Schema 3
+  adds optional slot-level `reagentRequirements`, `grossRequirementsComplete`,
+  and `materialsSavingsEligible` evidence.
   Unsupported values are absent. First-craft rewards are not craft rows.
 - `requests` stores submitted personal `CraftRecipe` snapshots with separate
   monotonic IDs, timestamps, session/recipe references, `requestedCount`, and
@@ -68,7 +73,11 @@ The supported schema contains:
   allocations list means no supported quote selection was captured. Schema 2
   adds optional `fixedReagents` (`dataSlotIndex`, item reference,
   `requiredQuantity`) read from the recipe schematic at submission, and
-  `inputComplete = true` when that schematic accounted for every input slot.
+  `inputComplete = true` when that schematic accounted for every exact item input.
+  Schema 3 also stores schematic-backed candidate `requirements` and
+  `grossRequirementsComplete = true` when required quantities are known even if
+  quality alternatives prevent exact item allocation. Order requests explicitly
+  carry `materialsSavingsEligible = false`.
 - `reagents` stores craft/item-linked allocations for correlated results and
   return-only rows. `allocatedQuantity` is absent on return-only rows. Schema-2
   rows copied from `fixedReagents` carry `fixed = true` and the schematic's
@@ -98,12 +107,15 @@ The supported schema contains:
 - `reagentSeries` (replacing schema-1 `returnedReagents`) contains UTC day ×
   character × recipe × item measurement rows. Different materials are never
   added together.
+- Schema 3 `reagentRequirementSeries` contains UTC day × character × recipe ×
+  sorted candidate-family rows. `requiredQuantity` and `requirementCraftCount`
+  preserve gross slot totals without assigning quantity to a specific alternative.
 - `firstCraftRewards` contains UTC day × character × parent recipe × item rows
   with `rewardCount`, `quantity` and `quantityObservedCount`.
 
-## Durable Outcome and Reagent Statistics (#17, #24)
+## Durable Outcome and Reagent Statistics (#17, #24, #30)
 
-The four aggregate collections above are the complete durable outcome model. There
+The five aggregate collections above are the complete durable outcome model. There
 is no compressed dictionary, craft-membership index, per-craft durable outcome
 archive, classification flag, or external data/runtime service. The tables
 use the same character and recipe identities as daily craft totals, including
@@ -119,7 +131,8 @@ positive bonus; an observed nonpositive bonus is no proc. Ingenuity continues
 to use its authoritative boolean: false implies an applied refund of zero,
 true uses the observed refund, and unknown does not apply the reported field.
 Schema 2 also adds always-present `quoteObservedCount`, `inputCompleteCount` and
-`matchedCraftCount`.
+`matchedCraftCount`. Schema 3 adds `grossRequirementsCompleteCount`; this is not
+the same as exact `inputCompleteCount`.
 
 ### Result normalization (schema 2)
 
@@ -201,7 +214,7 @@ Fixed basic reagents (slot data type `Reagent`, for example Luminant Flux) are
 absent from either table. The private snapshot audit found 16 of 211 quoted
 crafts returning such an item; historical quotes remain partial evidence.
 
-Core records two separate coverage facts:
+Core records exact item inputs and gross recipe requirements as separate coverage:
 
 - `quoteObserved`: this compatibility field counts correlated requests carrying
   positive allocations (submitted selections for new captures, quote snapshots
@@ -221,11 +234,28 @@ Core records two separate coverage facts:
   only if every positively returned item is among the submitted or fixed rows;
   an outside return disproves completeness but never the outcome.
 
+- `grossRequirementsComplete`: each required item's gross quantity or candidate
+  family quantity is known. A required `Reagent`/`Basic` slot with several
+  alternative item IDs and no submitted selection is preserved as its
+  `quantityRequired` plus sorted candidate IDs, not rejected and not allocated
+  to whichever quality happened to be returned. Actual submitted choices, when
+  present, are authoritative only after slot membership and total quantity
+  reconcile. Variable, hidden, malformed, or unsupported slots keep gross
+  requirements incomplete. These facts roll up to `reagentRequirementSeries`;
+  they never create exact item allocations or matched savings.
+
+- `materialsSavingsEligible`: false for Patron/order submissions whose reagent
+  supplier is not established. Their recipe-required quantities, returned
+  quantities and Resourcefulness outcomes remain measurable; they are excluded
+  from matched required/returned material savings and its denominator.
+
 The schematic's fixed quantities follow the same rule Blizzard's UI uses
 (`ProfessionsUtil.GetQuantityRequired`). They have not yet been verified in
 game against actual bag consumption for every recipe type; when Blizzard does not
 provide a readable schematic, inputs stay partial rather than being
-reconstructed. No input is guessed for enchants, salvage, recrafts or orders.
+reconstructed. Enchant, salvage and recraft calls do not receive guessed recipe
+inputs. Order `CraftRecipe` snapshots use their submitted selections and
+schematic, without assigning ownership to either the crafter or customer.
 
 ### Cohorts and measurement grains
 
@@ -242,7 +272,9 @@ The daily metrics describe three Resourcefulness populations:
 
 Validation enforces authoritative ⊆ complete ⊆ raw for both observations and
 negatives, `quoteObservedCount` and `inputCompleteCount <= craftCount`, and
-`matchedCraftCount <= min(inputCompleteCount, authoritative observed)`.
+`matchedCraftCount <= min(inputCompleteCount, authoritative observed)`; order
+crafts marked ineligible for personal savings are excluded from this matched
+count.
 `resourcefulnessSets` rows sum to the complete proc count, and their
 `authoritativeCraftCount` values sum to the authoritative proc count.
 
@@ -254,7 +286,7 @@ added together and the return is never assigned to a slot:
 | --- | --- |
 | `returnedQuantity` | Positive returns of the item from any cohort (legacy sums may be fractional). |
 | `allocatedQuantity`, `allocationCount` | Gross observed allocation subtotals (submitted selections plus schematic fixed rows; historical quotes) and the number of crafts with such evidence. |
-| `matchedCraftCount`, `matchedAllocatedQuantity`, `matchedReturnedQuantity`, `matchedReturnCount` | The same item restricted to crafts with an authoritative (`native`) outcome **and** proof of its complete required total across all applicable slots, including zero returns. |
+| `matchedCraftCount`, `matchedAllocatedQuantity`, `matchedReturnedQuantity`, `matchedReturnCount` | The same item restricted to personally attributable crafts with an authoritative (`native`) outcome **and** proof of its complete required total across all applicable slots, including zero returns. |
 
 An unresolved slot blocks every item it could contribute, including submitted
 out-of-slot items. Unknown slot identity blocks all item totals. Other, disjoint
@@ -267,7 +299,8 @@ during repair, rather than rewriting previously stored history. Schema-1 migrati
 still creates no authoritative or matched measurements. The saved-material share is
 `matchedReturnedQuantity / matchedAllocatedQuantity` for one population; gross
 returns are never divided by gross allocations. The daily `matchedCraftCount` is
-stricter: crafts with complete recipe inputs and an authoritative outcome.
+stricter: personally attributable crafts with complete recipe inputs and an
+authoritative outcome. Gross family requirements never enter item-level savings.
 Missing inputs are measured at craft level: `craftCount - inputCompleteCount` on
 the daily grain counts crafts without a complete recipe input snapshot (quoted or
 not), so a craft with no reagent rows, or one whose details were pruned, never
@@ -386,6 +419,27 @@ therefore schema-2 only, as is complete recipe input coverage. Fixed basic
 reagent quantities were never captured. Inputs for crafts pruned before the upgrade, and
 first-craft rewards that schema 1 recorded as crafts, cannot be recovered or
 separated; those crafts remain counted as crafts with unknown inputs.
+
+### Schema 2 → 3 migration
+
+The validated schema-2 database is copied as part of normal loading. Migration
+preserves every existing craft, request, reagent fact, dimension, return measure,
+and daily aggregate without replaying crafts or re-adding returned quantities.
+It adds an empty `reagentRequirementSeries` and initializes
+`grossRequirementsCompleteCount` to zero on existing daily rows. Reopening the
+result is a no-op because it is already schema 3. No current schematic lookup is
+used to rewrite historical crafts.
+
+Schema 2 retained recipe IDs, submitted modified allocations and some fixed
+single-item inputs, but did not preserve the full schematic candidate set or its
+slot-level quantity when alternatives were ambiguous. Those historical family
+requirements cannot be reconstructed safely, even when a positive return names
+one candidate; mixed qualities may have contributed. Existing exact item facts
+and matched aggregates remain unchanged. New schema-3 captures persist
+schematic-backed families independently from exact per-item measurements; only
+validated owned allocations remain eligible for Materials saved statistics.
+Order captures can contribute gross recipe requirements and returns but have
+`materialsSavingsEligible = false` because supplier ownership is not established.
 
 Cost is O(retained crafts + reagent facts + aggregate rows) with one extra
 private copy, the same order as a normal load. The 50,000-craft stress test below

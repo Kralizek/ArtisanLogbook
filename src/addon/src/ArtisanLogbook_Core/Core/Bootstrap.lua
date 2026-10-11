@@ -364,10 +364,10 @@ function addon.HandleRetailEvent(event, ...)
   addon.Emit(event, ...)
 end
 
-function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs)
+function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible)
   if addon.ledger then
     local ok, request = pcall(addon.ledger.SubmitCraft, addon.ledger,
-      recipeId, count, concentration, quote, selections, inputs)
+      recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible)
     if not ok or not request then
       addon.ledgerCaptureError = true
       addon.ledger:InvalidateCraft()

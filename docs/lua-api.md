@@ -33,6 +33,7 @@ local outcomes, reason = ArtisanLogbookAPI.GetRecipeOutcomes(recipeId, filter, {
 local sets, reason = ArtisanLogbookAPI.GetRecipeReturnSets(recipeId, filter, { limit = 50 })
 local materials, reason = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipeId, filter, { limit = 50 })
 local statistics, reason = ArtisanLogbookAPI.GetRecipeReagentStatistics(recipeId, filter, { limit = 50 })
+local requirements, reason = ArtisanLogbookAPI.GetRecipeReagentRequirements(recipeId, filter, { limit = 50 })
 local unsubscribe, reason = ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft)
   -- Refresh consumer state using the committed craft projection.
 end)
@@ -65,7 +66,8 @@ Both craft queries and callback payloads use the same shape:
   multicraftBonus = 0, concentrationSpent = 0, concentrationCurrencyId = 0,
   hasIngenuityProc = false, ingenuityRefund = 9,
   hasResourcefulnessProc = false, resourcefulnessComplete = true,
-  outcomeSource = "native", quoteObserved = true, inputComplete = true,
+  outcomeSource = "native", quoteObserved = true, grossRequirementsComplete = true,
+  grossRequirementsComplete = true, materialsSavingsEligible = true,
   request = {
     id = 42, timestamp = 1800000000, recipe = recipe,
     requestedCount = 1, useConcentration = false,
@@ -76,7 +78,16 @@ Both craft queries and callback payloads use the same shape:
     fixedReagents = {
       { item = fluxItem, dataSlotIndex = 2, requiredQuantity = 2 },
     },
-    inputComplete = true,
+    requirements = {
+      { dataSlotIndex = 3, candidateItems = { quality1, quality2, quality3 },
+        requiredQuantity = 5, source = "schematic" },
+    },
+    grossRequirementsComplete = true,
+    materialsSavingsEligible = true,
+  },
+  reagentRequirements = {
+    { dataSlotIndex = 3, candidateItems = { quality1, quality2, quality3 },
+      requiredQuantity = 5, source = "schematic" },
   },
   reagents = {
     { item = item, dataSlotIndex = 1, quality = 0,
@@ -118,7 +129,12 @@ New input evidence comes from the actual submitted `CraftRecipe` selections,
 never a cached quote. Blizzard submits full modified choices in manual mode but
 only optional/finishing choices in automatic mode. Missing automatic basic choices
 stay unknown. Fixed basic reagents such as Luminant Flux are absent from either
-table. A validated primary additionally requires a supported call, nonambiguous
+table. A Basic/Reagent slot may list several alternative item IDs and
+`quantityRequired`; when that required schematic slot is unallocated in the
+submitted table, Core stores the gross quantity and candidate family without
+assigning quantity to any one quality. If actual submitted selections are
+present, their item/slot/quantity are authoritative only when they reconcile to
+the schematic. A validated primary additionally requires a supported call, nonambiguous
 context, nonnegative integer operation ID, positive item ID and positive integer
 output quantity and a positive operation ID not already observed in this runtime
 session, except that a non-primary observation may be completed within the same
@@ -160,6 +176,16 @@ quarantine nor change factual API version 1; no UI or recovery control is added.
   among the submitted or fixed rows. Every required modified slot must have valid
   submitted items whose quantities exactly fill its requirement. Optional absence
   needs a readable dense submission; selected optional slots must also be filled.
+
+- `grossRequirementsComplete = true`: required recipe quantities are known from
+  the craft-time schematic, although one or more slots may have multiple item
+  alternatives. `reagentRequirements` preserves each such slot's candidate items
+  and gross quantity. A Resourcefulness return of one quality does not prove that
+  all required units used that quality.
+- `materialsSavingsEligible = false`: an order's gross recipe requirements and
+  returns may be reported, but the supplier/owner of ingredients is unknown. Such
+  crafts never enter personal `Materials saved` matched quantities. This flag
+  does not change Resourcefulness proc-rate populations.
 
 A returned item outside the known inputs never changes the craft's outcome
 (`hasResourcefulnessProc`, `outcomeSource`); it only prevents `inputComplete`.
@@ -315,7 +341,8 @@ not measured-zero outcomes. Invalid inputs use the existing API error codes.
     resourcefulnessProcCount = 2, resourcefulnessProcCountObservedCount = 3,
     resourcefulnessCompleteProcCount = 1, resourcefulnessCompleteProcCountObservedCount = 2,
     resourcefulnessAuthoritativeProcCount = 1, resourcefulnessAuthoritativeProcCountObservedCount = 2,
-    quoteObservedCount = 2, inputCompleteCount = 2, matchedCraftCount = 2, firstCraftRewardCount = 0,
+    quoteObservedCount = 2, inputCompleteCount = 2, matchedCraftCount = 2,
+    grossRequirementsCompleteCount = 3, firstCraftRewardCount = 0,
     ingenuityProcCount = 1, ingenuityProcCountObservedCount = 2,
     ingenuityRefund = 20, ingenuityRefundObservedCount = 2,
     concentrationSpentObservedCount = 0, -- sum absent when unobserved
@@ -350,11 +377,17 @@ count: positive evidence was observed selectively.
 `quoteObservedCount` counts crafts with quote allocations (partial input
 evidence). `inputCompleteCount` counts crafts with complete recipe inputs, a
 subset of crafts whose fixed basic reagents were read from the schematic.
-`matchedCraftCount` counts crafts in **both** the complete-input and
-authoritative cohorts. `craftCount - inputCompleteCount` is the missing-input
+`matchedCraftCount` counts personally attributable crafts in **both** the
+complete-input and authoritative cohorts. Patron/order crafts with unknown
+supplier ownership are excluded from matched savings even when gross recipe
+requirements are known. `craftCount - inputCompleteCount` is the missing-input
 count, including quoted crafts without fixed-reagent evidence, crafts with no
 reagent rows at all and crafts whose details were later pruned. Schema-1 history
 never has complete inputs.
+`grossRequirementsCompleteCount` counts crafts whose required slot quantities
+are known, including crafts where a multi-item Basic slot prevents exact quality
+allocation. It can exceed `inputCompleteCount` and is not an ownership or savings
+denominator.
 `firstCraftRewardCount` counts first-craft reward callbacks attributed to this
 recipe; they are not crafts and never enter any denominator.
 
@@ -419,7 +452,7 @@ selected recipe population's coverage:
 ```lua
 {
   coverage = { craftCount = 11, quoteObservedCount = 10, inputCompleteCount = 10,
-    matchedCraftCount = 10, returnObservedCount = 10 },
+    matchedCraftCount = 10, grossRequirementsCompleteCount = 10, returnObservedCount = 10 },
   reagents = {
     { item = { id = 8, name = "..." },
       allocatedQuantity = 40, allocationCount = 10, returnedQuantity = 4,
@@ -456,6 +489,22 @@ selected recipe population's coverage:
 
 Absent quantities mean no measurement; `allocationCount` and `matchedCraftCount`
 are always present (zero when no crafts qualify).
+
+`GetRecipeReagentRequirements(recipeId, filter, { limit = 50, cursor = nil })`
+returns gross slot requirements grouped by their exact candidate item family:
+
+```lua
+{ requirements = {
+  { candidateItems = { quality1, quality2, quality3 }, requiredQuantity = 25, craftCount = 5 },
+}, nextCursor = "..." }
+```
+
+The sum and craft count cover the selected day/character population. Candidate
+items are canonicalized by item ID, rows have separate opaque cursors, and no
+quantity is assigned to an individual alternative. These rows can include order
+crafts; that is recipe requirement evidence, not player-owned savings. Use
+`GetCraft` for the retained per-craft slot index and provenance. The result is
+durable after detail pruning.
 
 Return-page limits default to 50 and have a hard maximum of 200. Pass opaque
 `nextCursor` values unchanged with the same recipe, filter, and query method;

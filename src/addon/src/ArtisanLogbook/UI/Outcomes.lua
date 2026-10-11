@@ -309,6 +309,9 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       update = function(check, row) check:SetItem(row.item.id) end },
   }, function(row) if openReagent then openReagent(row.item) end end, "No reagent measurements in this period")
   pane.materialList = materialList
+  local requirementNote = UI.Text(materials, 0, -4, inner, 36, "GameFontNormalSmall")
+  requirementNote:SetJustifyH("LEFT")
+  materialList:ClearAllPoints(); materialList:SetPoint("TOPLEFT", 0, -42)
   UI.LazyList(materialList, function(cursor)
     local result, reason = api.GetRecipeReagentStatistics(recipeId, pane:Filter(), { limit = 40, cursor = cursor })
     return result and result.reagents, result and result.nextCursor or reason
@@ -319,7 +322,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     local viewHeight = height - top - 51
     tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top)
     tabs:Resize(height - top)
-    materialList:SetViewportHeight(viewHeight)
+    materialList:SetViewportHeight(viewHeight - 42)
     statisticsScroll:SetHeight(viewHeight)
     qualityList:SetViewportHeight(math.max(58, viewHeight - 242))
     qualityStatus:ClearAllPoints(); qualityStatus:SetPoint("TOPLEFT", 0, -viewHeight + 34)
@@ -342,6 +345,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     if not result then
       for _, tile in ipairs(self.tiles) do tile.value:SetText("Unavailable"); tile.note:SetText("") end
       self.returnQuantity:SetText("Unavailable")
+      requirementNote:SetText("")
       for _, label in ipairs(stats) do label:SetText("Unavailable") end
       for _, label in pairs(self.resourcefulness) do label:SetText("Unavailable") end
       materialList:Reset("Reagents unavailable")
@@ -349,6 +353,19 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       return
     end
     local totals = result.totals
+    local requirements = api.GetRecipeReagentRequirements(recipeId, filter, { limit = 20 })
+    local requirementLines = {}
+    for _, requirement in ipairs(requirements and requirements.requirements or {}) do
+      local names = {}
+      for _, candidate in ipairs(requirement.candidateItems) do names[#names + 1] = UI.Name(candidate) end
+      requirementLines[#requirementLines + 1] = table.concat(names, " / ") .. ": " ..
+        UI.Number(requirement.requiredQuantity) .. " required across " .. UI.Count(requirement.craftCount, "craft") ..
+        "; exact quality split unavailable."
+    end
+    if requirements and requirements.nextCursor then
+      requirementLines[#requirementLines + 1] = "More alternative reagent requirements are recorded."
+    end
+    requirementNote:SetText(table.concat(requirementLines, "\n"))
     self:QualityBreakdown(filter, totals)
     self.tiles[1]:SetNumber(totals.craftCount, true)
     for index, metric in pairs({ [2] = "outputQuantity", [3] = "concentrationSpent",

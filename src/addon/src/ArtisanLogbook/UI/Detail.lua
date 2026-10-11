@@ -213,6 +213,15 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     else
       detail.inputEvidence:SetText("Input requirements are unavailable.")
     end
+    if #craft.reagentRequirements > 0 then
+      local requirement = craft.reagentRequirements[1]
+      local text = UI.Number(requirement.requiredQuantity) .. " required across " ..
+        UI.Count(#requirement.candidateItems, "quality option") .. "; exact split unavailable."
+      if #craft.reagentRequirements > 1 then
+        text = text .. " + " .. UI.Count(#craft.reagentRequirements - 1, "other slot")
+      end
+      detail.inputEvidence:SetText(text)
+    end
     reagents:Reset(); reagents:Append(returned)
   end
   detail:Hide()

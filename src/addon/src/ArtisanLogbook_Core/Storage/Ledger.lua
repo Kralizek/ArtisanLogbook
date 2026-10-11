@@ -1,7 +1,7 @@
 local _, addon = ...
 
 local Ledger = {}
-Ledger.schemaVersion = 2
+Ledger.schemaVersion = 3
 Ledger.schemaIdentity = "ArtisanLogbookLedger"
 Ledger.retentionDays = 60
 Ledger.recentOperationLimit = 64
@@ -15,7 +15,9 @@ local seriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent
   "resourcefulnessCompleteProcCount", "resourcefulnessAuthoritativeProcCount" }
 local procMetrics = { "ingenuityProcCount", "multicraftProcCount", "resourcefulnessProcCount",
   "resourcefulnessCompleteProcCount", "resourcefulnessAuthoritativeProcCount" }
-local seriesCounts = { "quoteObservedCount", "inputCompleteCount", "matchedCraftCount" }
+local schema2SeriesCounts = { "quoteObservedCount", "inputCompleteCount", "matchedCraftCount" }
+local seriesCounts = { "quoteObservedCount", "inputCompleteCount", "matchedCraftCount",
+  "grossRequirementsCompleteCount" }
 local outcomeMetrics = { "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount" }
 local outcomeSources = { native = true, partial = true, unverified = true }
 -- Integer measures on reagentSeries rows; returnedQuantity may hold legacy fractional sums.
@@ -92,6 +94,7 @@ local function emptyDatabase()
     craftSeries = {},
     resourcefulnessSets = {},
     reagentSeries = {},
+    reagentRequirementSeries = {},
     firstCraftRewards = {},
     recipeOutputs = {},
     requests = {},
@@ -119,6 +122,16 @@ local function isArray(rows)
     if type(rows[index]) ~= "table" then return false end
   end
   return true
+end
+
+local function isDenseList(rows)
+  if type(rows) ~= "table" then return false end
+  local count, maximum = 0, 0
+  for key in pairs(rows) do
+    if not isInteger(key) then return false end
+    count, maximum = count + 1, math.max(maximum, key)
+  end
+  return count == maximum
 end
 
 local function maximumId(rows, field)
@@ -198,12 +211,14 @@ end
 
 -- A matched craft knows every recipe input and its complete return set.
 local function isMatched(craft)
-  return craft.inputComplete == true and craft.outcomeSource == "native"
+  return craft.inputComplete == true and craft.outcomeSource == "native" and
+    craft.materialsSavingsEligible ~= false
 end
 
 local function seriesCount(craft, field)
   if field == "quoteObservedCount" then return craft.quoteObserved == true and 1 or 0 end
   if field == "inputCompleteCount" then return craft.inputComplete == true and 1 or 0 end
+  if field == "grossRequirementsCompleteCount" then return craft.grossRequirementsComplete == true and 1 or 0 end
   return isMatched(craft) and 1 or 0
 end
 
@@ -309,11 +324,11 @@ end
 
 local function validateDatabase(data, version)
   version = version or Ledger.schemaVersion
-  local v2 = version == 2
+  local v2, v3 = version >= 2, version >= 3
   if data.schemaVersion ~= version or data.schemaIdentity ~= Ledger.schemaIdentity then
     return nil, "unsupported ledger schema"
   end
-  if v2 and data.outcomeVersion ~= nil then return nil, "schema 2 does not support outcomeVersion" end
+  if v2 and data.outcomeVersion ~= nil then return nil, "schema 2+ does not support outcomeVersion" end
   if not isArray(data.crafts) or not isArray(data.reagents) or not isArray(data.requests) or
       type(data.dimensions) ~= "table" or type(data.nextDimensionId) ~= "table" then
     return nil, "ledger collections are invalid"
@@ -354,6 +369,44 @@ local function validateDatabase(data, version)
     end
     if not v2 and (craft.outcomeSource ~= nil or craft.quoteObserved ~= nil or craft.inputComplete ~= nil) then
       return nil, "schema 1 craft has schema 2 provenance"
+    end
+    if not v3 and (craft.reagentRequirements ~= nil or craft.grossRequirementsComplete ~= nil or
+        craft.materialsSavingsEligible ~= nil) then
+      return nil, "pre-schema-3 craft has schema 3 input evidence"
+    end
+    if v3 and craft.grossRequirementsComplete ~= nil and type(craft.grossRequirementsComplete) ~= "boolean" then
+      return nil, "invalid gross requirement completeness"
+    end
+    if v3 and craft.materialsSavingsEligible ~= nil and type(craft.materialsSavingsEligible) ~= "boolean" then
+      return nil, "invalid material savings eligibility"
+    end
+    if v3 and craft.reagentRequirements ~= nil and not isArray(craft.reagentRequirements) then
+      return nil, "invalid craft reagent requirements"
+    end
+    if v3 then
+      local slots = {}
+      for _, requirement in ipairs(craft.reagentRequirements or {}) do
+        if not isInteger(requirement.dataSlotIndex) or slots[requirement.dataSlotIndex] or
+            not isDenseList(requirement.candidateItemIDs) or #requirement.candidateItemIDs < 2 or
+            not isInteger(requirement.requiredQuantity) or requirement.source ~= "schematic" then
+          return nil, "invalid craft reagent requirement"
+        end
+        slots[requirement.dataSlotIndex] = true
+        local previous
+        for _, itemId in ipairs(requirement.candidateItemIDs) do
+          if not isGameId(itemId) or itemId == 0 or (previous and itemId <= previous) or
+              not data.dimensions.items[itemId] then
+            return nil, "invalid craft reagent requirement candidate"
+          end
+          previous = itemId
+        end
+      end
+      if craft.inputComplete == true and #(craft.reagentRequirements or {}) > 0 then
+        return nil, "complete exact inputs conflict with an alternative requirement"
+      end
+      if craft.grossRequirementsComplete == true and craft.requestId == nil then
+        return nil, "gross recipe requirements require a correlated submission"
+      end
     end
     if craft.outcomeSource ~= nil and not outcomeSources[craft.outcomeSource] then
       return nil, "invalid craft outcome source"
@@ -434,6 +487,16 @@ local function validateDatabase(data, version)
         (request.inputComplete ~= nil and (not v2 or request.inputComplete ~= true)) then
       return nil, "request recipe inputs are invalid"
     end
+    if not v3 and (request.requirements ~= nil or request.grossRequirementsComplete ~= nil) then
+      return nil, "pre-schema-3 request has schema 3 input evidence"
+    end
+    if v3 and ((request.requirements ~= nil and not isArray(request.requirements)) or
+        (request.grossRequirementsComplete ~= nil and request.grossRequirementsComplete ~= true)) then
+      return nil, "request gross requirements are invalid"
+    end
+    if v3 and request.materialsSavingsEligible ~= nil and request.materialsSavingsEligible ~= false then
+      return nil, "invalid request material ownership evidence"
+    end
   end
   for _, request in ipairs(data.requests) do
     local ok, reason = validateReferences("request", request, ids)
@@ -449,12 +512,34 @@ local function validateDatabase(data, version)
       if not ok then return nil, reason end
     end
     for _, fixed in ipairs(request.fixedReagents or {}) do
-        if not isInteger(fixed.dataSlotIndex) or not isInteger(fixed.requiredQuantity) or fixed.itemId == nil or
+      if not isInteger(fixed.dataSlotIndex) or not isInteger(fixed.requiredQuantity) or fixed.itemId == nil or
           (fixed.inputTotalComplete ~= nil and (not v2 or fixed.inputTotalComplete ~= true)) then
         return nil, "request fixed reagent is invalid"
       end
       ok, reason = validateReferences("allocation", fixed, ids)
       if not ok then return nil, reason end
+    end
+    local requirementSlots = {}
+    for _, requirement in ipairs(request.requirements or {}) do
+      if not isInteger(requirement.dataSlotIndex) or requirementSlots[requirement.dataSlotIndex] or
+          type(requirement.candidateItemIDs) ~= "table" or not isDenseList(requirement.candidateItemIDs) or
+          #requirement.candidateItemIDs < 2 or
+          (requirement.source == "schematic" and not isInteger(requirement.requiredQuantity)) or
+          (requirement.requiredQuantity ~= nil and not isInteger(requirement.requiredQuantity)) or
+          (requirement.source ~= "schematic" and requirement.source ~= "unknown") then
+        return nil, "request reagent requirement is invalid"
+      end
+      requirementSlots[requirement.dataSlotIndex] = true
+      local previous
+      for _, itemId in ipairs(requirement.candidateItemIDs) do
+        if not isGameId(itemId) or itemId == 0 or (previous and itemId <= previous) or not ids.item[itemId] then
+          return nil, "request requirement candidate is invalid"
+        end
+        previous = itemId
+      end
+    end
+    if request.inputComplete == true and #(request.requirements or {}) > 0 then
+      return nil, "complete exact inputs conflict with alternative requirements"
     end
   end
   local linkedCounts = {}
@@ -545,7 +630,7 @@ local function validateDatabase(data, version)
             row.resourcefulnessCompleteProcCountObservedCount - (row.resourcefulnessCompleteProcCount or 0) then
         return nil, "authoritative Resourcefulness coverage conflicts with complete coverage"
       end
-      for _, field in ipairs(seriesCounts) do
+      for _, field in ipairs(v3 and seriesCounts or schema2SeriesCounts) do
         if not isCount(row[field]) or row[field] > row.craftCount then
           return nil, "invalid craft series count: " .. field
         end
@@ -555,7 +640,7 @@ local function validateDatabase(data, version)
         return nil, "matched crafts exceed complete input or authoritative return coverage"
       end
     else
-      for _, field in ipairs(seriesCounts) do
+      for _, field in ipairs(schema2SeriesCounts) do
         if row[field] ~= nil or row.resourcefulnessAuthoritativeProcCountObservedCount ~= nil then
           return nil, "schema 1 series has schema 2 measures"
         end
@@ -594,6 +679,15 @@ local function canonicalReturns(quantities)
     if quantity > 0 then ids[#ids + 1] = itemId end
   end
   if #ids > 1 then table.sort(ids) end
+  for _, itemId in ipairs(ids) do encoded[#encoded + 1] = string.format("%.0f", itemId) end
+  return table.concat(encoded, ",")
+end
+
+local function candidateKey(itemIds)
+  local ids = {}
+  for _, itemId in ipairs(itemIds) do ids[#ids + 1] = itemId end
+  table.sort(ids)
+  local encoded = {}
   for _, itemId in ipairs(ids) do encoded[#encoded + 1] = string.format("%.0f", itemId) end
   return table.concat(encoded, ",")
 end
@@ -674,7 +768,19 @@ local function craftItems(rows)
 end
 
 local function craftDeltas(craft, items)
-  local result = { reagents = {} }
+  local result = { reagents = {}, requirements = {} }
+  local requirementGroups = {}
+  for _, requirement in ipairs(craft.reagentRequirements or {}) do
+    local key = candidateKey(requirement.candidateItemIDs)
+    local group = requirementGroups[key]
+    if not group then group = { requiredQuantity = 0 }; requirementGroups[key] = group end
+    group.requiredQuantity = group.requiredQuantity + requirement.requiredQuantity
+    if not isCount(group.requiredQuantity) then return nil, "reagent requirement sum overflow" end
+  end
+  for key, requirement in pairs(requirementGroups) do
+    result.requirements[#result.requirements + 1] = { key = key,
+      delta = { requirementCraftCount = 1, requiredQuantity = requirement.requiredQuantity } }
+  end
   if craft.hasResourcefulnessProc == true and craft.resourcefulnessComplete == true then
     local quantities = {}
     for itemId, item in pairs(items) do quantities[itemId] = item.returned end
@@ -683,7 +789,7 @@ local function craftDeltas(craft, items)
     result.set = { key = key, delta = { craftCount = 1,
       authoritativeCraftCount = craft.outcomeSource == "native" and 1 or nil } }
   end
-  local matched = craft.outcomeSource == "native"
+  local matched = craft.outcomeSource == "native" and craft.materialsSavingsEligible ~= false
   for itemId, item in pairs(items) do
     local delta = { returnedQuantity = item.returned }
     if item.allocated then
@@ -699,11 +805,11 @@ local function craftDeltas(craft, items)
   return result
 end
 
-local function stageOutcomes(setIndex, reagentIndex, craft, characterId, items)
+local function stageOutcomes(setIndex, reagentIndex, requirementIndex, craft, characterId, items)
   local deltas, reason = craftDeltas(craft, items)
   if not deltas then return nil, reason end
   local day = dayOf(craft.timestamp)
-  local staged = { sets = {}, reagents = {} }
+  local staged = { sets = {}, reagents = {}, requirements = {} }
   if deltas.set then
     staged.sets[1], reason = stageGrain(setIndex, day, characterId, craft.recipeId,
       "returnedItemSet", deltas.set.key, deltas.set.delta)
@@ -714,6 +820,13 @@ local function stageOutcomes(setIndex, reagentIndex, craft, characterId, items)
     change, reason = stageGrain(reagentIndex, day, characterId, craft.recipeId, "itemId", entry.itemId, entry.delta)
     if not change then return nil, reason end
     staged.reagents[#staged.reagents + 1] = change
+  end
+  for _, entry in ipairs(deltas.requirements) do
+    local change
+    change, reason = stageGrain(requirementIndex, day, characterId, craft.recipeId,
+      "candidateKey", entry.key, entry.delta)
+    if not change then return nil, reason end
+    staged.requirements[#staged.requirements + 1] = change
   end
   return staged
 end
@@ -761,10 +874,13 @@ local function validateReagentMeasures(row, parent)
 end
 
 local function validateOutcomes(data, version)
-  local v2 = (version or Ledger.schemaVersion) == 2
+  version = version or Ledger.schemaVersion
+  local v2, v3 = version >= 2, version >= 3
   local quantities = v2 and data.reagentSeries or data.returnedReagents
   if (not v2 and data.outcomeVersion ~= 2) or not isArray(data.resourcefulnessSets) or
-      not isArray(quantities) or (v2 and (data.returnedReagents ~= nil or not isArray(data.firstCraftRewards))) then
+      not isArray(quantities) or (v2 and (data.returnedReagents ~= nil or not isArray(data.firstCraftRewards))) or
+      (v3 and not isArray(data.reagentRequirementSeries)) or
+      (not v3 and data.reagentRequirementSeries ~= nil) then
     return nil, "invalid outcome collections"
   end
   local daily = {}
@@ -829,6 +945,39 @@ local function validateOutcomes(data, version)
     if (completeTotals[row] or 0) ~= (row.resourcefulnessCompleteProcCount or 0) or
         (v2 and (authoritativeTotals[row] or 0) ~= (row.resourcefulnessAuthoritativeProcCount or 0)) then
       return nil, "returned sets conflict with proc count"
+    end
+  end
+  if v3 then
+    local requirements = {}
+    for _, row in ipairs(data.reagentRequirementSeries) do
+      if not isFinite(row.bucketStart) or row.bucketStart % 86400 ~= 0 or
+          type(row.candidateKey) ~= "string" or row.candidateKey == "" or
+          not isInteger(row.requirementCraftCount) or row.requirementCraftCount < 1 or
+          not isInteger(row.requiredQuantity) or row.requiredQuantity < row.requirementCraftCount then
+        return nil, "invalid reagent requirement aggregate"
+      end
+      local key, previous = {}, nil
+      for text in row.candidateKey:gmatch("[^,]+") do
+        if not text:match("^[1-9]%d*$") then return nil, "invalid reagent requirement identity" end
+        local itemId = tonumber(text)
+        if not isGameId(itemId) or (previous and itemId <= previous) or not data.dimensions.items[itemId] then
+          return nil, "invalid reagent requirement candidate"
+        end
+        previous = itemId
+        key[#key + 1] = text
+      end
+      if #key < 2 or table.concat(key, ",") ~= row.candidateKey then
+        return nil, "invalid reagent requirement family"
+      end
+      local parent = daily[row.bucketStart] and daily[row.bucketStart][row.characterDimensionId or 0] and
+        daily[row.bucketStart][row.characterDimensionId or 0][row.recipeId or 0]
+      local familyDay = seriesGroup(requirements, row.bucketStart, row.characterDimensionId)
+      local grain = familyDay[row.recipeId or 0]
+      if not grain then grain = {}; familyDay[row.recipeId or 0] = grain end
+      if not parent or row.requirementCraftCount > parent.craftCount or grain[row.candidateKey] then
+        return nil, "reagent requirement aggregate has an invalid grain"
+      end
+      grain[row.candidateKey] = row
     end
   end
   return true
@@ -982,6 +1131,20 @@ local function migrateFromV1(data)
   return report
 end
 
+local function migrateFromV2(data)
+  if data.reagentRequirementSeries ~= nil then
+    return nil, "schema 2 data contains schema 3 requirement aggregates"
+  end
+  local ok, reason = validateDatabase(data, 2)
+  if not ok then return nil, reason end
+  ok, reason = validateOutcomes(data, 2)
+  if not ok then return nil, reason end
+  data.schemaVersion = 3
+  data.reagentRequirementSeries = {}
+  for _, row in ipairs(data.craftSeries) do row.grossRequirementsCompleteCount = 0 end
+  return { recoverableFamilyRequirements = 0, ambiguousHistoricalRequirements = "not persisted in schema 2" }
+end
+
 local function nowFunction(clock)
   if clock and type(clock.wall) == "function" then
     return clock.wall
@@ -1079,6 +1242,7 @@ function Ledger:RebuildIndexes()
   self.recipeOrder = nil
   self.returnSetIndex = returnIndex(self.database.resourcefulnessSets, "returnedItemSet")
   self.reagentIndex = returnIndex(self.database.reagentSeries, "itemId")
+  self.requirementIndex = returnIndex(self.database.reagentRequirementSeries, "candidateKey")
   self.rewardIndex = returnIndex(self.database.firstCraftRewards, "itemId")
   self.dimensionIndex, self.dimensionRows = {}, {}
   for kind, collection in pairs(dimensions) do
@@ -1248,7 +1412,7 @@ local function openDatabase(database, clock, options)
     data = copyValue(database)
   end
   if data.schemaIdentity ~= Ledger.schemaIdentity or
-      (data.schemaVersion ~= 1 and data.schemaVersion ~= Ledger.schemaVersion) then
+      (data.schemaVersion ~= 1 and data.schemaVersion ~= 2 and data.schemaVersion ~= Ledger.schemaVersion) then
     return nil, "ledger data refused: unsupported ledger schema"
   end
   local migration
@@ -1261,6 +1425,17 @@ local function openDatabase(database, clock, options)
     migration = report
     migration.fromSchemaVersion = 1
   end
+  if data.schemaVersion == 2 then
+    local report, migrationReason = migrateFromV2(data)
+    if not report then
+      return nil, "ledger data refused: schema 2 migration failed (saved data unchanged): " ..
+        tostring(migrationReason)
+    end
+    migration = migration or report
+    migration.toSchemaVersion = 3
+    if migration.fromSchemaVersion == nil then migration.fromSchemaVersion = 2 end
+    for field, value in pairs(report) do migration[field] = value end
+  end
   local valid, reason = validateDatabase(data)
   if not valid then
     return nil, "ledger data refused: " .. reason
@@ -1269,7 +1444,7 @@ local function openDatabase(database, clock, options)
   if not valid then return nil, "ledger data refused: " .. reason end
   if options then
     if options.maxCrafts ~= nil then
-      return nil, "ledger options refused: schema 2 does not support maxCrafts"
+      return nil, "ledger options refused: schema 3 does not support maxCrafts"
     end
     if options.retentionDays ~= nil then data.retentionDays = options.retentionDays end
     valid, reason = validateDatabase(data)
@@ -1451,6 +1626,7 @@ local function createSession(self, metadata)
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
   self.pendingRequest = nil
+  self.pendingOrderRequest = nil
   self.requestAmbiguous = nil
   self.operationKind = nil
   self.nonpersonalOperationOutstanding = nil
@@ -1489,7 +1665,8 @@ local function observedNumber(value)
   return nil
 end
 
-function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, selections, inputs)
+function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, selections, inputs,
+  materialsSavingsEligible)
   if not self.currentSessionId or not isGameId(recipeId) or not isInteger(requestedCount) or
       type(useConcentration) ~= "boolean" then
     return nil, "personal craft submission is incomplete"
@@ -1498,6 +1675,9 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   if quote ~= nil and type(quote) ~= "table" then return nil, "quote is invalid" end
   if selections ~= nil and not isArray(selections) then return nil, "allocations are invalid" end
   if inputs ~= nil and type(inputs) ~= "table" then return nil, "recipe inputs are invalid" end
+  if materialsSavingsEligible ~= nil and type(materialsSavingsEligible) ~= "boolean" then
+    return nil, "material savings eligibility is invalid"
+  end
   local copied, snapshot = pcall(copyValue, { selections = selections, inputs = inputs })
   local timestamp = observedNumber(self.wall())
   if not copied or timestamp == nil then return nil, "request snapshot or timestamp is unavailable" end
@@ -1512,6 +1692,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
     requestedCount = requestedCount,
     useConcentration = useConcentration,
   }
+  if materialsSavingsEligible == false then request.materialsSavingsEligible = false end
   for _, field in ipairs({ "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality" }) do
     request[field] = quote and observedNumber(quote[field]) or nil
   end
@@ -1545,6 +1726,34 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
         completeItems[itemId] = true
       end
     end
+    local requirements = {}
+    for _, requirement in ipairs(type(recipeInputs.requirements) == "table" and recipeInputs.requirements or {}) do
+      if type(requirement) == "table" and isInteger(requirement.dataSlotIndex) and
+          isDenseList(requirement.candidateItemIDs) and isInteger(requirement.requiredQuantity) and
+          (requirement.source == "schematic" or requirement.source == "unknown") then
+        local candidateItemIDs, previous = {}, nil
+        for _, itemId in ipairs(requirement.candidateItemIDs) do
+          local observedItemId
+          if not isInteger(itemId) or (previous and itemId <= previous) then
+            evidenced = false
+            break
+          end
+          observedItemId, reason = stageDimension(staged, "item", itemId)
+          if not observedItemId then return nil, reason end
+          candidateItemIDs[#candidateItemIDs + 1] = observedItemId
+          previous = itemId
+        end
+        if #candidateItemIDs > 1 then
+          requirements[#requirements + 1] = { dataSlotIndex = requirement.dataSlotIndex,
+            candidateItemIDs = candidateItemIDs, requiredQuantity = requirement.requiredQuantity,
+            source = requirement.source }
+        else
+          evidenced = false
+        end
+      else
+        evidenced = false
+      end
+    end
     local complete = evidenced and recipeInputs.complete == true and selectionsComplete and
       isArray(recipeInputs.fixed or {})
     local fixedReagents = {}
@@ -1561,6 +1770,10 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
       end
     end
     if #fixedReagents > 0 then request.fixedReagents = fixedReagents end
+    if #requirements > 0 then request.requirements = requirements end
+    if evidenced and recipeInputs.grossComplete == true and selectionsComplete then
+      request.grossRequirementsComplete = true
+    end
     for _, allocation in ipairs(allocations) do
       allocation.inputTotalComplete = evidenced and completeItems[allocation.itemId] or nil
       if not allocation.inputTotalComplete then complete = false end
@@ -1580,14 +1793,24 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
   self.operationKind = "CraftRecipe"
-  self.pendingRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
+  if materialsSavingsEligible == false then
+    self.pendingRequest = nil
+    self.pendingOrderRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
+    self.nonpersonalOperationOutstanding = true
+  else
+    self.pendingOrderRequest = nil
+    self.pendingRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
+  end
   return request
 end
 
 function Ledger:CancelCraft()
-  if self.pendingRequest or self.nonpersonalOperationOutstanding then self.operationOwnershipUncertain = true end
+  if self.pendingRequest or self.pendingOrderRequest or self.nonpersonalOperationOutstanding then
+    self.operationOwnershipUncertain = true
+  end
   self.nonpersonalOperationOutstanding = nil
   self.pendingRequest = nil
+  self.pendingOrderRequest = nil
   self.requestAmbiguous = nil
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
@@ -1604,6 +1827,10 @@ function Ledger:InvalidateCraft(operationKind)
     self.operationOwnershipUncertain = true
     self.pendingRequest = nil
     self.requestAmbiguous = true
+  end
+  if self.pendingOrderRequest then
+    self.operationOwnershipUncertain = true
+    self.pendingOrderRequest = nil
   end
   self.operationKind = type(operationKind) == "string" and operationKind or nil
   self.nonpersonalOperationOutstanding = self.operationKind ~= nil or nil
@@ -1739,7 +1966,8 @@ function Ledger:RecordResult(result)
   end
   local primaryKinds = { CraftRecipe = true, CraftEnchant = true, RecraftRecipe = true, RecraftRecipeForOrder = true }
   local observation = result.operationID and self.observedOperationIds[result.operationID]
-  local pendingOwner = self.pendingRequest and self.requestById[self.pendingRequest.id]
+  local pendingOwnerState = self.pendingRequest or self.pendingOrderRequest
+  local pendingOwner = pendingOwnerState and self.requestById[pendingOwnerState.id]
   local seen = observation and (observation.consumed or not pendingOwner or observation.requestId ~= pendingOwner.id)
   local contradictoryBegin = pendingOwner and self.pendingRecipeId and self.pendingRecipeId ~= pendingOwner.recipeId
   local validPrimary = isGameId(result.operationID) and result.operationID > 0 and
@@ -1754,11 +1982,14 @@ function Ledger:RecordResult(result)
   craft.hasResourcefulnessProc = returns.proc
   craft.resourcefulnessComplete = returns.complete or nil
 
-  local pending = self.pendingRequest
+  local pending = self.pendingRequest or self.pendingOrderRequest
   local request = pending and self.requestById[pending.id]
   if request and primary then
     craft.requestId = request.id
     craft.recipeId = request.recipeId
+    craft.reagentRequirements = copyValue(request.requirements or {})
+    craft.grossRequirementsComplete = request.grossRequirementsComplete == true
+    craft.materialsSavingsEligible = request.materialsSavingsEligible ~= false
   else
     request = nil
   end
@@ -1834,13 +2065,14 @@ function Ledger:RecordResult(result)
   items, reason = craftItems(reagentFacts)
   if not items then return nil, reason end
   local stagedOutcomes
-  stagedOutcomes, reason = stageOutcomes(self.returnSetIndex, self.reagentIndex,
+  stagedOutcomes, reason = stageOutcomes(self.returnSetIndex, self.reagentIndex, self.requirementIndex,
     craft, stagedSeries.characterDimensionId, items)
   if not stagedOutcomes then return nil, reason end
   commitDimensions(self, stagedDimensions)
   commitStagedSeries(data, self.seriesByKey, self.seriesDays, stagedSeries)
   commitGrains(data.resourcefulnessSets, self.returnSetIndex, stagedOutcomes.sets)
   commitGrains(data.reagentSeries, self.reagentIndex, stagedOutcomes.reagents)
+  commitGrains(data.reagentRequirementSeries, self.requirementIndex, stagedOutcomes.requirements)
   indexSeriesChoices(self, stagedSeries.characterDimensionId, craft.recipeId)
   if craft.recipeId then
     if not self.recipeCounts[craft.recipeId] then self.recipeOrder = nil end
@@ -1854,10 +2086,14 @@ function Ledger:RecordResult(result)
   data.crafts[#data.crafts + 1] = craft
   if pending and request then
     pending.remaining = pending.remaining - 1
-    if pending.remaining == 0 then self.pendingRequest = nil end
+    if pending.remaining == 0 then
+      if self.pendingRequest == pending then self.pendingRequest = nil end
+      if self.pendingOrderRequest == pending then self.pendingOrderRequest = nil end
+    end
   end
   if validPrimary and not seen and (self.operationOwnershipUncertain or contradictoryBegin) and pending then
     self.pendingRequest = nil
+    self.pendingOrderRequest = nil
     self.requestAmbiguous = true
     self.operationOwnershipUncertain = true
   end
@@ -2084,6 +2320,7 @@ function Ledger:RepairUnknownRecipes(outputFilter)
   local seriesIndex = seriesRowsByGrain(stagedData.craftSeries)
   local setIndex = returnIndex(stagedData.resourcefulnessSets, "returnedItemSet")
   local reagentIndex = returnIndex(stagedData.reagentSeries, "itemId")
+  local requirementIndex = returnIndex(stagedData.reagentRequirementSeries, "candidateKey")
   local removed = {}
   local sessions = {}
   for _, session in ipairs(stagedData.dimensions.sessions) do sessions[session.id] = session end
@@ -2118,12 +2355,18 @@ function Ledger:RepairUnknownRecipes(outputFilter)
           "itemId", entry.itemId, entry.delta, removed)
         if not ok then return nil, reason end
       end
+      for _, entry in ipairs(deltas.requirements) do
+        ok, reason = moveGrain(requirementIndex, stagedData.reagentRequirementSeries, day, characterId, repair.recipeId,
+          "candidateKey", entry.key, entry.delta, removed)
+        if not ok then return nil, reason end
+      end
       craft.recipeId = repair.recipeId
     end
   end
   stagedData.craftSeries = withoutRemoved(stagedData.craftSeries, removed)
   stagedData.resourcefulnessSets = withoutRemoved(stagedData.resourcefulnessSets, removed)
   stagedData.reagentSeries = withoutRemoved(stagedData.reagentSeries, removed)
+  stagedData.reagentRequirementSeries = withoutRemoved(stagedData.reagentRequirementSeries, removed)
 
   local valid
   valid, reason = validateDatabase(stagedData)
@@ -2199,6 +2442,7 @@ function Ledger:ClearHistory()
   self.database.craftSeries = {}
   self.database.resourcefulnessSets = {}
   self.database.reagentSeries = {}
+  self.database.reagentRequirementSeries = {}
   self.database.firstCraftRewards = {}
   self.pendingRequest, self.pendingRecipeId = nil, nil
   self.requestAmbiguous, self.ambiguousRecipe = nil, nil

@@ -47,7 +47,7 @@ local function primaryResult(ledger, result)
   payload.operationID = payload.operationID or ledger.database.nextCraftId
   payload.itemID = payload.itemID or 900000
   payload.quantity = payload.quantity or 1
-  if ledger.database.schemaVersion == 2 and ledger.operationKind == nil then ledger:InvalidateCraft("CraftEnchant") end
+  if ledger.database.schemaVersion >= 2 and ledger.operationKind == nil then ledger:InvalidateCraft("CraftEnchant") end
   return ledger:RecordResult(payload)
 end
 
@@ -526,9 +526,11 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
     outputQuality = 0, outputQuantity = 5, outputItemLevel = 0, multicraftBonus = 0,
     concentrationSpent = 0, concentrationCurrencyId = 0, hasIngenuityProc = false, ingenuityRefund = 9,
     hasResourcefulnessProc = false, resourcefulnessComplete = true, outcomeSource = "native",
-    quoteObserved = true,
+    quoteObserved = true, grossRequirementsComplete = false, materialsSavingsEligible = true,
+    reagentRequirements = {},
     request = { id = 1, timestamp = 1800000000, requestedCount = 1, useConcentration = false,
       concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0, recipe = recipe,
+      materialsSavingsEligible = true,
       allocations = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, quality = 0 } } },
     reagents = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, returnedQuantity = 0, quality = 0 } },
   })
@@ -1302,7 +1304,7 @@ test("supported aggregate-only history reloads without synthesizing unknown Inge
   clock.current = clock.current + 61 * 86400
   ledger:Prune(clock.current)
   assert(#ledger.database.crafts == 0)
-  assert(ledger.database.schemaVersion == 2)
+  assert(ledger.database.schemaVersion == addon.Ledger.schemaVersion)
   addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
   local row = api.GetCraftSeries().series[1]
   assert(row.craftCount == 1 and row.concentrationSpent == 323)
@@ -1422,6 +1424,41 @@ test("issue 24: reagent statistics page by item identity with dedicated cursors"
   errorIs("invalid-cursor", api.GetRecipeReagentStatistics(102, nil, { cursor = first.nextCursor }))
   errorIs("invalid-options", api.GetRecipeReagentStatistics(101, nil, { limit = 201 }))
   errorIs("invalid-filter", api.GetRecipeReagentStatistics(101, { recipes = { 101 } }))
+end)
+
+test("issue 30: family requirements API filters dimensions and pages stable candidate identities", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  local function record(items, quantity)
+    local candidateIDs = {}
+    for _, id in ipairs(items) do candidateIDs[#candidateIDs + 1] = id end
+    local inputs = { evidenceVersion = 1, complete = false, grossComplete = true, fixed = {},
+      requirements = { { dataSlotIndex = 1, candidateItemIDs = candidateIDs,
+        requiredQuantity = quantity, source = "schematic" } }, completeItemIDs = {} }
+    assert(ledger:SubmitCraft(101, 1, false, nil, {}, inputs))
+    assert(primaryResult(ledger, { resourcesReturned = {} }))
+  end
+  record({ 601, 602, 603 }, 5)
+  clock.current = clock.current + 86400
+  session(ledger, "B", 2)
+  record({ 611, 612 }, 3)
+  local all = assert(api.GetRecipeReagentRequirements(101, nil, { limit = 1 }))
+  assert(#all.requirements == 1 and all.requirements[1].requiredQuantity == 5)
+  assert(all.requirements[1].craftCount == 1 and all.requirements[1].candidateItems[1].id == 601)
+  assert(all.nextCursor)
+  local nextPage = assert(api.GetRecipeReagentRequirements(101, nil, { limit = 1, cursor = all.nextCursor }))
+  assert(#nextPage.requirements == 1 and nextPage.requirements[1].requiredQuantity == 3)
+  errorIs("invalid-cursor", api.GetRecipeReagentRequirements(101, nil, { cursor = "requirements:bad\nnot-a-family" }))
+  local firstCharacter = assert(api.GetRecipeReagentRequirements(101, { characters = { ledger.database.dimensions.characters[1].key } }))
+  assert(#firstCharacter.requirements == 1 and firstCharacter.requirements[1].requiredQuantity == 5)
+  local secondDay = assert(api.GetRecipeReagentRequirements(101, { time = {
+    from = math.floor(clock.current / 86400) * 86400, to = math.floor(clock.current / 86400) * 86400 + 86400 } }))
+  assert(#secondDay.requirements == 1 and secondDay.requirements[1].requiredQuantity == 3)
+  local projected = api.GetCraft(ledger.database.crafts[1].id)
+  assert(projected.reagentRequirements[1].requiredQuantity == 5 and
+    projected.reagentRequirements[1].candidateItems[2].id == 602)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(api.GetRecipeReagentRequirements(101).requirements[1].requiredQuantity == 5)
 end)
 
 test("issue 24: 50,000 crafts with duplicate slots stay within measured query and migration bounds", function()
