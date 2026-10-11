@@ -365,8 +365,8 @@ assert(maintenance.ledger:LearnRecipeOutput(9903, 9903))
 do
   local previousSettings = environment.ArtisanLogbookUISettings
   if type(environment.ArtisanLogbookUISettings) ~= "table" then environment.ArtisanLogbookUISettings = {} end
-  local previousHideUnknown = environment.ArtisanLogbookUISettings.hideUnknownCrafts
-  environment.ArtisanLogbookUISettings.hideUnknownCrafts = false
+  local previousShowUnknown = environment.ArtisanLogbookUISettings.showUnknownCrafts
+  environment.ArtisanLogbookUISettings.showUnknownCrafts = true
   local maintenanceUI = loadUI()
   local productionWindow = maintenanceUI.productionWindow
   productionWindow:Show()
@@ -382,7 +382,7 @@ do
   assert(liveRepair.repairedCount == 1)
   assert(recoveredRow() and recoveredRow().recipe.id == 9903,
     "visible Logbook did not refresh after recipe repair")
-  if previousSettings then environment.ArtisanLogbookUISettings.hideUnknownCrafts = previousHideUnknown
+  if previousSettings then environment.ArtisanLogbookUISettings.showUnknownCrafts = previousShowUnknown
   else environment.ArtisanLogbookUISettings = nil end
 end
 print("PASS confirmed offline recipe repair preview and no-evidence no-write flow")
@@ -901,6 +901,7 @@ local uiWindow = uiAddon.productionWindow
 local UI = uiAddon.UI
 local paperProbe = environment.CreateFrame("Frame", nil, environment.UIParent)
 environment.ArtisanLogbookUISettings.hideUnknownCrafts = nil
+environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
 environment.ArtisanLogbookUISettings.showHiddenRecipesInLogbook = nil
 local paperSurface = UI.Surface(paperProbe, true)
 assert(paperSurface.color[4] == 1 and paperSurface.allPoints == paperProbe)
@@ -915,10 +916,19 @@ assert(UI.Amount(260, false) == "260" and UI.Amount(0, false) == "-" and UI.Amou
 assert(UI.AmountTooltip(260, false):find("total may be higher", 1, true))
 assert(UI.AmountTooltip(260, true) == "260")
 assert(not UI.IsRecipeHidden(501))
-assert(UI.CraftVisibilityOptions().hideUnknownRecipes == true and
+assert(UI.CraftVisibilityOptions().showUnknownRecipes == false and
   UI.CraftVisibilityOptions().showHiddenRecipes == false)
 assert(not UI.VisibleCraft({}))
 assert(UI.VisibleCraft({ recipe = { id = 501 } }))
+environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
+environment.ArtisanLogbookUISettings.hideUnknownCrafts = false
+assert(UI.CraftVisibilityOptions().showUnknownRecipes == true and
+  environment.ArtisanLogbookUISettings.hideUnknownCrafts == nil)
+environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
+environment.ArtisanLogbookUISettings.hideUnknownCrafts = true
+assert(UI.CraftVisibilityOptions().showUnknownRecipes == false and
+  environment.ArtisanLogbookUISettings.hideUnknownCrafts == nil)
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = false, showHiddenRecipes = false })
 assert(not UI.SetRecipeHidden(0, true) and not UI.SetRecipeHidden(0 / 0, true))
 assert(not UI.SetRecipeHidden(math.huge, true) and not UI.SetRecipeHidden(501, "true"))
 local hiddenProbe = UI.HiddenRecipeCheckbox(paperProbe, 0, 0, true)
@@ -927,11 +937,11 @@ assert(UI.SetRecipeHidden(501, true) and hiddenProbe:GetChecked())
 assert(environment.ArtisanLogbookUISettings.hiddenRecipes[501])
 assert(not UI.VisibleRecipe({ recipe = { id = 501 } }) and not UI.VisibleRecipe({}))
 assert(not UI.VisibleCraft({ recipe = { id = 501 } }) and not UI.VisibleCraft({}))
-UI.SetCraftVisibilityOptions({ hideUnknownRecipes = false, showHiddenRecipes = false })
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = true, showHiddenRecipes = false })
 assert(UI.VisibleCraft({}) and not UI.VisibleCraft({ recipe = { id = 501 } }))
-UI.SetCraftVisibilityOptions({ hideUnknownRecipes = true, showHiddenRecipes = true })
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = false, showHiddenRecipes = true })
 assert(not UI.VisibleCraft({}) and UI.VisibleCraft({ recipe = { id = 501 } }, true))
-UI.SetCraftVisibilityOptions({ hideUnknownRecipes = true, showHiddenRecipes = false })
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = false, showHiddenRecipes = false })
 hiddenProbe:SetChecked(false); hiddenProbe.scripts.OnClick(hiddenProbe)
 assert(not UI.IsRecipeHidden(501) and environment.ArtisanLogbookUISettings.hiddenRecipes[501] == nil)
 local professionSummary = UI.ProductionSummary(paperProbe, 732, 0, function() end, true)
@@ -1829,6 +1839,7 @@ do
   environment.ArtisanLogbookUISettings.hiddenRecipes = {}
   environment.ArtisanLogbookUISettings.pinnedRecipes = {}
   environment.ArtisanLogbookUISettings.hideUnknownCrafts = nil
+  environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
   environment.ArtisanLogbookUISettings.showHiddenRecipesInLogbook = nil
   ledger:AddDimension("profession", 171, { name = "Alchemy" })
   ledger:AddDimension("item", 6401, { name = "Shared herb" })
@@ -1893,12 +1904,12 @@ do
   window:Activate("Logbook")
   local logbook = window.pages.Logbook.history
   local visibility = window.pages.Logbook.craftVisibility
-  assert(visibility.selected.hideUnknownRecipes == true and visibility.selected.showHiddenRecipes == false)
+  assert(visibility.selected.showUnknownRecipes == false and visibility.selected.showHiddenRecipes == false)
   local menuItems, addMenuButton = {}, environment.UIDropDownMenu_AddButton
   environment.UIDropDownMenu_AddButton = function(info) menuItems[#menuItems + 1] = info end
   visibility.initialize(visibility)
   environment.UIDropDownMenu_AddButton = addMenuButton
-  assert(#menuItems == 2 and menuItems[1].isNotRadio and menuItems[1].keepShownOnClick and menuItems[1].checked)
+  assert(#menuItems == 2 and menuItems[1].isNotRadio and menuItems[1].keepShownOnClick and not menuItems[1].checked)
   assert(menuItems[2].isNotRadio and menuItems[2].keepShownOnClick and not menuItems[2].checked)
   assert(pageQueries == 1 and #logbook.items == 0 and logbook.pageLoader.scripts.OnUpdate)
   logbook.pageLoader.scripts.OnUpdate(logbook.pageLoader)
@@ -1918,13 +1929,13 @@ do
   end
   assert(sawHidden and not sawUnknown)
   visibility:SetSelected("showHiddenRecipes", false)
-  visibility:SetSelected("hideUnknownRecipes", false)
+  visibility:SetSelected("showUnknownRecipes", true)
   finishAllPages(logbook)
   assert(#logbook.items == 6)
   sawUnknown = false
   for _, row in ipairs(logbook.items) do sawUnknown = sawUnknown or row.recipe == nil end
   assert(sawUnknown)
-  visibility:SetSelected("hideUnknownRecipes", true)
+  visibility:SetSelected("showUnknownRecipes", false)
   finishAllPages(logbook)
   assert(#logbook.items == 5)
   local character = api.GetCharacters()[1]
@@ -1933,7 +1944,7 @@ do
     local page = window.pages[destination[1]]
     finishList(page.history)
       assert(#page.history.items == 5 and #page.topRecipes.items == 1,
-        #page.history.items .. " / " .. #page.topRecipes.items .. " / " .. tostring(helpers.CraftVisibilityOptions().hideUnknownRecipes))
+        #page.history.items .. " / " .. #page.topRecipes.items .. " / " .. tostring(helpers.CraftVisibilityOptions().showUnknownRecipes))
     assert(page.topRecipes.items[1].recipe.id == 10052)
   end
   window:Activate("Reagent", { id = 6401, name = "Shared herb" })

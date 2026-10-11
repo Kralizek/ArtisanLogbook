@@ -307,7 +307,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   local craftVisibility
   if kind == "Logbook" then
     craftVisibility = filters:Checks("Craft visibility", {
-      { label = "Hide unknown recipes", value = "hideUnknownRecipes" },
+      { label = "Show crafts from unknown recipes", value = "showUnknownRecipes" },
       { label = "Show hidden recipes", value = "showHiddenRecipes" },
     }, UI.CraftVisibilityOptions(), UI.SetCraftVisibilityOptions)
   end

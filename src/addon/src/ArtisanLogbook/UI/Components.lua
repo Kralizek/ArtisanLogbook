@@ -8,9 +8,11 @@ local craftVisibilityCallbacks = {}
 
 local function craftVisibilitySettings()
   if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
-  if type(ArtisanLogbookUISettings.hideUnknownCrafts) ~= "boolean" then
-    ArtisanLogbookUISettings.hideUnknownCrafts = true
+  if type(ArtisanLogbookUISettings.showUnknownCrafts) ~= "boolean" then
+    local legacyHide = ArtisanLogbookUISettings.hideUnknownCrafts
+    ArtisanLogbookUISettings.showUnknownCrafts = type(legacyHide) == "boolean" and not legacyHide or false
   end
+  ArtisanLogbookUISettings.hideUnknownCrafts = nil
   if type(ArtisanLogbookUISettings.showHiddenRecipesInLogbook) ~= "boolean" then
     ArtisanLogbookUISettings.showHiddenRecipesInLogbook = false
   end
@@ -19,17 +21,17 @@ end
 
 function UI.CraftVisibilityOptions()
   local settings = craftVisibilitySettings()
-  return { hideUnknownRecipes = settings.hideUnknownCrafts,
+  return { showUnknownRecipes = settings.showUnknownCrafts,
     showHiddenRecipes = settings.showHiddenRecipesInLogbook }
 end
 
 function UI.SetCraftVisibilityOptions(options)
   local settings = craftVisibilitySettings()
-  local hideUnknown = options.hideUnknownRecipes == true
+  local showUnknown = options.showUnknownRecipes == true
   local showHidden = options.showHiddenRecipes == true
-  local changed = settings.hideUnknownCrafts ~= hideUnknown or
+  local changed = settings.showUnknownCrafts ~= showUnknown or
     settings.showHiddenRecipesInLogbook ~= showHidden
-  settings.hideUnknownCrafts, settings.showHiddenRecipesInLogbook = hideUnknown, showHidden
+  settings.showUnknownCrafts, settings.showHiddenRecipesInLogbook = showUnknown, showHidden
   if changed then
     for _, callback in ipairs(craftVisibilityCallbacks) do callback() end
   end
@@ -61,12 +63,12 @@ function UI.RegisterHiddenRecipeCallback(callback)
 end
 
 function UI.VisibleRecipe(row)
-  if not row.recipe then return not craftVisibilitySettings().hideUnknownCrafts end
+  if not row.recipe then return craftVisibilitySettings().showUnknownCrafts end
   return not UI.IsRecipeHidden(row.recipe.id)
 end
 
 function UI.VisibleCraft(row, showHiddenRecipes)
-  if not row.recipe then return not craftVisibilitySettings().hideUnknownCrafts end
+  if not row.recipe then return craftVisibilitySettings().showUnknownCrafts end
   return showHiddenRecipes == true or not UI.IsRecipeHidden(row.recipe.id)
 end
 
