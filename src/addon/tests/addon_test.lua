@@ -3019,6 +3019,53 @@ environment.C_TradeSkillUI.GetAllRecipeIDs = oldRecipeIds
 environment.C_TradeSkillUI.GetRecipeSchematic = oldSchematic
 environment.C_TradeSkillUI.IsDataSourceChanging = oldChanging
 print("PASS Retail output batch exposes shared ambiguity before targeted repair")
+do
+  local oldRecipeInfo, oldProfessionInfo = environment.C_TradeSkillUI.GetRecipeInfo,
+    environment.C_TradeSkillUI.GetProfessionInfoByRecipeID
+  local oldRecipeIds, oldSchematic = environment.C_TradeSkillUI.GetAllRecipeIDs,
+    environment.C_TradeSkillUI.GetRecipeSchematic
+  local oldQualityItems, oldChanging = environment.C_TradeSkillUI.GetRecipeQualityItemIDs,
+    environment.C_TradeSkillUI.IsDataSourceChanging
+  local recipes = {
+    [1236083] = { name = "Enchant Helm - Rune of Avoidance", outputItemID = 244004, professionID = 333 },
+    [1239999] = { name = "Inquisitor's Gaze of Madness", outputItemID = 237698, professionID = 164 },
+  }
+  environment.C_TradeSkillUI.GetAllRecipeIDs = function() return { 1236083, 1239999 } end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(id)
+    return recipes[id] and { recipeID = id, name = recipes[id].name }
+  end
+  environment.C_TradeSkillUI.GetProfessionInfoByRecipeID = function(id)
+    local recipe = recipes[id]
+    return recipe and { professionID = recipe.professionID,
+      professionName = recipe.professionID == 333 and "Enchanting" or "Blacksmithing" }
+  end
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(id, isRecraft)
+    assert(isRecraft == false)
+    return recipes[id] and { recipeID = id, outputItemID = recipes[id].outputItemID }
+  end
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function() return {} end
+  environment.C_TradeSkillUI.IsDataSourceChanging = function() return false end
+  local recovery = reload(nil)
+  for index, itemId in ipairs({ 244004, 237698 }) do
+    recovery.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", {
+      operationID = 500 + index, itemID = itemId, quantity = 1,
+    })
+  end
+  assert(recovery.ledger.unknownRecipeCount == 2)
+  assert(recovery.ledger.craftById[1].recipeId == nil and recovery.ledger.craftById[2].recipeId == nil)
+  recovery.HandleRetailEvent("TRADE_SKILL_SHOW")
+  assert(recovery.ledger.craftById[1].recipeId == 1236083)
+  assert(recovery.ledger.craftById[2].recipeId == 1239999)
+  assert(recovery.ledger.database.recipeOutputs[1236083][244004] and
+    recovery.ledger.database.recipeOutputs[1239999][237698])
+  assert(recovery.ledger.unknownRecipeCount == 0)
+  environment.C_TradeSkillUI.GetRecipeInfo = oldRecipeInfo
+  environment.C_TradeSkillUI.GetProfessionInfoByRecipeID = oldProfessionInfo
+  environment.C_TradeSkillUI.GetAllRecipeIDs = oldRecipeIds
+  environment.C_TradeSkillUI.GetRecipeSchematic = oldSchematic
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = oldQualityItems
+  environment.C_TradeSkillUI.IsDataSourceChanging = oldChanging
+end
 restored = reload(restored.ledger.database)
 
 local traceDatabase = restored.recorder.database
@@ -3285,6 +3332,35 @@ end)()
       assert(pruned.reagents[index].matchedAllocatedQuantity == row.matchedAllocatedQuantity)
       assert(pruned.reagents[index].matchedReturnedQuantity == row.matchedReturnedQuantity)
     end
+  end
+  do
+    local core, api, event, result = start()
+    hooks.CraftEnchant(1236083, 1, {}, { bagID = 0, slotIndex = 9 }, false)
+    event("TRADE_SKILL_CRAFT_BEGIN", 1236083)
+    local fact = result({ operationID = 321, itemID = 244004, quantity = 1 })
+    assert(fact.recipeId == 1236083 and fact.requestId == nil and fact.outcomeSource == "native")
+    assert((core.ledger.database.recipeOutputs[1236083] or {})[244004])
+    assert(api.GetCraft(fact.id).recipe.id == 1236083)
+  end
+  do
+    local core, api, _, result = start()
+    hooks.CraftEnchant(1236083, 1, {}, { bagID = 0, slotIndex = 9 }, false)
+    local fact = result({ operationID = 322, itemID = 244004, quantity = 1 })
+    assert(fact.recipeId == nil and fact.requestId == nil and fact.outcomeSource == "native")
+    assert(api.GetCraft(fact.id).recipe == nil)
+    assert(not (core.ledger.database.recipeOutputs[1236083] or {})[244004])
+  end
+  do
+    local core, api, event, result = start()
+    hooks.CraftEnchant(1236083, 1, {}, { bagID = 0, slotIndex = 9 }, false)
+    event("TRADE_SKILL_CRAFT_BEGIN", 1236083)
+    hooks.CraftEnchant(1236083, 1, {}, { bagID = 0, slotIndex = 10 }, false)
+    event("TRADE_SKILL_CRAFT_BEGIN", 1236083)
+    local fact = result({ operationID = 323, itemID = 244004, quantity = 1 })
+    assert(core.ledger.operationOwnershipUncertain)
+    assert(fact.recipeId == nil and fact.requestId == nil and fact.outcomeSource == "unverified")
+    assert(api.GetCraft(fact.id).recipe == nil)
+    assert(not (core.ledger.database.recipeOutputs[1236083] or {})[244004])
   end
   for _, positive in ipairs({ false, true }) do
     local core, api, event, result, submit = start()
