@@ -193,7 +193,10 @@ jobs:
           else
             tag="$CREATED_TAG"
           fi
-          [[ "$tag" =~ ^addon-v[0-9]+\\.[0-9]+\\.[0-9]+(-(alpha|beta)\\.[0-9]+)?$ ]] || {\n            echo "::error::Unexpected Artisan Logbook release tag: $tag"; exit 1;\n          }\n          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft >/dev/null
+          [[ "$tag" =~ ^addon-v[0-9]+\\.[0-9]+\\.[0-9]+(-(alpha|beta)\\.[0-9]+)?$ ]] || {
+            echo "::error::Unexpected Artisan Logbook release tag: $tag"; exit 1;
+          }
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft >/dev/null
           version="${tag#addon-v}"
           if [[ "$version" == *-alpha.* ]]; then channel=alpha
           elif [[ "$version" == *-beta.* ]]; then channel=beta
@@ -204,6 +207,7 @@ jobs:
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - name: Download authoritative bundle and changelog
+        id: notes
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
@@ -215,7 +219,12 @@ jobs:
             --pattern "ArtisanLogbook-Bundle-$VERSION.zip" --dir artifacts
           test -s "artifacts/ArtisanLogbook-Bundle-$VERSION.zip"
           unzip -tq "artifacts/ArtisanLogbook-Bundle-$VERSION.zip"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > release-notes.md\n          {\n            echo "body<<CURSEFORGE_NOTES_EOF"\n            cat release-notes.md\n            echo "CURSEFORGE_NOTES_EOF"\n          } >> "$GITHUB_OUTPUT"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > release-notes.md
+          {
+            echo "body<<CURSEFORGE_NOTES_EOF"
+            cat release-notes.md
+            echo "CURSEFORGE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Require CurseForge configuration
         env:
@@ -240,5 +249,5 @@ jobs:
           file_path: artifacts/ArtisanLogbook-Bundle-${{ steps.release.outputs.version }}.zip
           release_type: ${{ steps.release.outputs.channel }}
           display_name: Artisan Logbook ${{ steps.release.outputs.version }}
-          changelog: ${{ steps.release.outputs.tag }}
-          changelog_type: text
+          changelog: ${{ steps.notes.outputs.body }}
+          changelog_type: markdown
