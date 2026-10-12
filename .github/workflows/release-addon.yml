@@ -3,97 +3,74 @@ name: Release addon
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: Create a release or retry CurseForge for an existing GitHub release
-        type: choice
-        required: true
-        default: create
-        options: [create, retry-curseforge]
       bump:
-        description: Version component to bump (create mode)
+        description: Version component to bump
+        required: true
         type: choice
+        options:
+          - patch
+          - minor
+          - major
+      channel:
+        description: Release channel
         required: true
-        default: minor
-        options: [major, minor, patch]
-      release_channel:
-        description: Release channel (create mode)
         type: choice
-        required: true
-        default: alpha
-        options: [stable, alpha, beta]
-      existing_tag:
-        description: Existing GitHub release tag (retry-curseforge mode)
-        type: string
-        required: false
-      dry_run:
-        description: Build and validate without publishing
-        type: boolean
-        required: true
-        default: false
+        options:
+          - alpha
+          - beta
+          - stable
 
 concurrency:
-  group: artisan-logbook-release
+  group: addon-release
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  github-release:
-    name: Build and publish authoritative GitHub release
-    if: inputs.mode == 'create'
+  release:
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: write
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
-      version: ${{ steps.version.outputs.version }}
-      channel: ${{ inputs.release_channel }}
     steps:
-      - name: Validate release source
-        env:
-          SOURCE_REF: ${{ github.ref }}
+      - name: Require master branch
+        if: github.ref != 'refs/heads/master'
         run: |
-          test "$SOURCE_REF" = "refs/heads/master" || {
-            echo "::error::New releases must be dispatched from master."
-            exit 1
-          }
-
-      - name: Require successful CI for this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          successful_runs=$(gh api --method GET \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/ci-addon.yml/runs" \
-            -f head_sha="$GITHUB_SHA" -f event=push -f status=success -f per_page=1 \
-            --jq '.total_count')
-          if [[ "$successful_runs" -lt 1 ]]; then
-            echo "::error::No successful Addon CI push run exists for $GITHUB_SHA on master."
-            exit 1
-          fi
+          echo "::error::Releases must be dispatched from master."
+          exit 1
 
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Resolve release channel
+        id: release-inputs
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [[ "$CHANNEL" == "stable" ]]; then
+            echo "channel=" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Calculate version
         id: version
-        uses: Kralizek/github-actions/actions/calculate-next-version@v0.4
+        uses: Kralizek/github-actions/actions/calculate-next-version@v0.4.0
         with:
           bump: ${{ inputs.bump }}
-          channel: ${{ inputs.release_channel != 'stable' && inputs.release_channel || '' }}
+          channel: ${{ steps.release-inputs.outputs.channel }}
           tag-prefix: addon-v
-          minimum-version: 0.1.0
 
-      - name: Stamp both TOC files
+      - name: Stamp addon metadata
+        shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          set -euo pipefail
-          for toc in src/addon/src/ArtisanLogbook/ArtisanLogbook.toc src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc; do
+          for toc in \
+            src/addon/src/ArtisanLogbook/ArtisanLogbook.toc \
+            src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc
+          do
             sed -i "s/^## Version: .*/## Version: $VERSION/" "$toc"
             sed -i "s/^## X-Release-Tag: .*/## X-Release-Tag: $RELEASE_TAG/" "$toc"
             grep -Fx "## Version: $VERSION" "$toc"
@@ -106,148 +83,128 @@ jobs:
       - name: Test and package
         run: bash src/addon/scripts/package.sh
 
-      - name: Name release artifacts
+      - name: Prepare release artifacts
+        shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          set -euo pipefail
           cd src/addon/dist
           mv ArtisanLogbook_Core.zip "ArtisanLogbook_Core-$VERSION.zip"
           mv ArtisanLogbook.zip "ArtisanLogbook-$VERSION.zip"
           mv ArtisanLogbook-Bundle.zip "ArtisanLogbook-Bundle-$VERSION.zip"
-          for file in *.zip; do unzip -tq "$file"; done
-          unzip -p "ArtisanLogbook-Bundle-$VERSION.zip" ArtisanLogbook/ArtisanLogbook.toc | grep -Fx "## X-Release-Tag: $TAG"
-          unzip -p "ArtisanLogbook-Bundle-$VERSION.zip" ArtisanLogbook_Core/ArtisanLogbook_Core.toc | grep -Fx "## X-Release-Tag: $TAG"
 
-      - name: Dry-run summary
-        if: inputs.dry_run
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          echo "Dry run: prepared $TAG ($VERSION). No release or uploads."
-          ls -lh src/addon/dist/*.zip
-
-      - name: Publish or reuse GitHub release on the same commit
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-          NOTES_START_TAG: ${{ steps.version.outputs['release-notes-start-tag'] }}
-          CHANNEL: ${{ inputs.release_channel }}
-        run: |
-          set -euo pipefail
-          # Never accept an existing tag for a different commit, whether or not it has a release.
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
-            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-            existing_sha=$(git rev-parse "$TAG^{commit}")
-            test "$existing_sha" = "$GITHUB_SHA" || {
-              echo "::error::Tag $TAG identifies $existing_sha, expected $GITHUB_SHA"
-              exit 1
-            }
-          else
-            git tag "$TAG" "$GITHUB_SHA"
-            git push origin "$TAG"
-          fi
-
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Reusing GitHub release $TAG"
-          else
-            # Do not treat API failures as missing releases.
-            response=$(gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1) && {
-              echo "::error::Unexpected successful release lookup"
-              exit 1
-            }
-            status=$(printf '%s\n' "$response" | awk '/^HTTP\// {print $2; exit}')
-            test "$status" = 404 || { echo "::error::GitHub release lookup failed (HTTP ${status:-unknown})"; exit 1; }
-            args=("$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --generate-notes)
-            if [[ "$CHANNEL" != stable ]]; then args+=(--prerelease); fi
-            if [[ -n "$NOTES_START_TAG" ]]; then args+=(--notes-start-tag "$NOTES_START_TAG"); fi
-            gh release create "${args[@]}"
-          fi
-          # Re-uploading on retry is safe: GitHub is authoritative and assets are replaceable.
-          gh release upload "$TAG" src/addon/dist/*.zip --repo "$GITHUB_REPOSITORY" --clobber
-
-  curseforge:
-    name: Publish GitHub release bundle to CurseForge
-    needs: github-release
-    if: ${{ always() && !inputs.dry_run && ((inputs.mode == 'retry-curseforge') || needs.github-release.result == 'success') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Resolve authoritative GitHub release
+      - name: Ensure GitHub release
         id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MODE: ${{ inputs.mode }}
-          RETRY_TAG: ${{ inputs.existing_tag }}
-          CREATED_TAG: ${{ needs.github-release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if [[ "$MODE" == retry-curseforge ]]; then
-            test -n "$RETRY_TAG" || { echo "::error::existing_tag is required for retry mode"; exit 1; }
-            tag="$RETRY_TAG"
-          else
-            tag="$CREATED_TAG"
-          fi
-          [[ "$tag" =~ ^addon-v[0-9]+\\.[0-9]+\\.[0-9]+(-(alpha|beta)\\.[0-9]+)?$ ]] || {
-            echo "::error::Unexpected Artisan Logbook release tag: $tag"; exit 1;
-          }
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft >/dev/null
-          version="${tag#addon-v}"
-          if [[ "$version" == *-alpha.* ]]; then channel=alpha
-          elif [[ "$version" == *-beta.* ]]; then channel=beta
-          else channel=release
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+        uses: Kralizek/github-actions/actions/ensure-github-release@v0.5.0
+        with:
+          tag: ${{ steps.version.outputs.tag }}
+          target: ${{ github.sha }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          release-notes-start-tag: ${{ steps.version.outputs.release-notes-start-tag }}
 
-      - name: Download authoritative bundle and changelog
-        id: notes
+      - name: Ensure release artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts
+          for name in \
+            "ArtisanLogbook_Core-$VERSION.zip" \
+            "ArtisanLogbook-$VERSION.zip" \
+            "ArtisanLogbook-Bundle-$VERSION.zip"; do
+            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
+              echo "Preserving existing release asset $name"
+            else
+              gh release upload "$TAG" "src/addon/dist/$name" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
+
+      - name: Download authoritative GitHub bundle and release notes
+        id: authoritative
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p authoritative
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "ArtisanLogbook-Bundle-$VERSION.zip" --dir artifacts
-          test -s "artifacts/ArtisanLogbook-Bundle-$VERSION.zip"
-          unzip -tq "artifacts/ArtisanLogbook-Bundle-$VERSION.zip"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > release-notes.md
+            --pattern "ArtisanLogbook-Bundle-$VERSION.zip" --dir authoritative
+          bundle="authoritative/ArtisanLogbook-Bundle-$VERSION.zip"
+          test -s "$bundle"
+          unzip -tq "$bundle"
+          for addon in ArtisanLogbook ArtisanLogbook_Core; do
+            unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## X-Release-Tag: $TAG"
+          done
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > authoritative/notes.md
+          digest=$(sha256sum "$bundle" | cut -d' ' -f1)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
-            echo "body<<CURSEFORGE_NOTES_EOF"
-            cat release-notes.md
-            echo "CURSEFORGE_NOTES_EOF"
+            echo 'notes<<ARTISAN_RELEASE_NOTES_EOF'
+            cat authoritative/notes.md
+            echo 'ARTISAN_RELEASE_NOTES_EOF'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Require CurseForge configuration
+      - name: Check CurseForge publication marker
+        id: curseforge
         env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
           GAME_VERSIONS: ${{ vars.CURSEFORGE_GAME_VERSIONS }}
           API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
+        shell: bash
         run: |
-          test -n "$PROJECT_ID" || { echo "::error::CURSEFORGE_PROJECT_ID is missing"; exit 1; }
-          test -n "$API_TOKEN" || { echo "::error::CURSEFORGE_API_TOKEN is missing"; exit 1; }
-          test -n "$GAME_VERSIONS" || {
-            echo "::error::Set CURSEFORGE_GAME_VERSIONS to the CurseForge Retail game version ID(s) or supported names."
-            exit 1
-          }
+          set -euo pipefail
+          test -n "$PROJECT_ID" || { echo "::error::Missing CURSEFORGE_PROJECT_ID variable"; exit 1; }
+          test -n "$API_TOKEN" || { echo "::error::Missing CURSEFORGE_API_TOKEN secret"; exit 1; }
+          test -n "$GAME_VERSIONS" || { echo "::error::Missing CURSEFORGE_GAME_VERSIONS variable (Retail version IDs)"; exit 1; }
+          marker="curseforge-$VERSION.json"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$marker"; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$marker" --dir authoritative
+            jq -e --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
+              '.bundleSha256 == $sha and .projectId == $project' "authoritative/$marker" >/dev/null || {
+                echo "::error::CurseForge marker conflicts with current bundle or project"
+                exit 1
+              }
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "CurseForge publication already recorded for $TAG."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No publication marker. Check CurseForge manually before retrying after an ambiguous upload failure."
+          fi
 
-      - name: Upload combined addon to CurseForge
+      - name: Upload bundle to CurseForge
+        if: steps.curseforge.outputs.skip != 'true'
         uses: itsmeow/curseforge-upload@v3.1.2
         with:
           token: ${{ secrets.CURSEFORGE_API_TOKEN }}
           project_id: ${{ vars.CURSEFORGE_PROJECT_ID }}
           game_endpoint: wow
           game_versions: ${{ vars.CURSEFORGE_GAME_VERSIONS }}
-          file_path: artifacts/ArtisanLogbook-Bundle-${{ steps.release.outputs.version }}.zip
-          release_type: ${{ steps.release.outputs.channel }}
-          display_name: Artisan Logbook ${{ steps.release.outputs.version }}
-          changelog: ${{ steps.notes.outputs.body }}
+          file_path: authoritative/ArtisanLogbook-Bundle-${{ steps.version.outputs.version }}.zip
+          release_type: ${{ inputs.channel == 'stable' && 'release' || inputs.channel }}
+          display_name: Artisan Logbook ${{ steps.version.outputs.version }}
+          changelog: ${{ steps.authoritative.outputs.notes }}
           changelog_type: markdown
+
+      - name: Record CurseForge publication
+        if: steps.curseforge.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
+          PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
+            --arg tag "$TAG" \
+            '{tag:$tag, projectId:$project, bundleSha256:$sha}' > "authoritative/curseforge-$VERSION.json"
+          gh release upload "$TAG" "authoritative/curseforge-$VERSION.json" --repo "$GITHUB_REPOSITORY"
