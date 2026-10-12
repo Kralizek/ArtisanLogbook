@@ -37,9 +37,7 @@ jobs:
     steps:
       - name: Require master branch
         if: github.ref != 'refs/heads/master'
-        run: |
-          echo "::error::Releases must be dispatched from master."
-          exit 1
+        run: bash .github/workflows/scripts/release-addon.sh require-master
 
       - uses: actions/checkout@v7
         with:
@@ -50,12 +48,7 @@ jobs:
         shell: bash
         env:
           CHANNEL: ${{ inputs.channel }}
-        run: |
-          if [[ "$CHANNEL" == "stable" ]]; then
-            echo "channel=" >> "$GITHUB_OUTPUT"
-          else
-            echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          fi
+        run: bash .github/workflows/scripts/release-addon.sh resolve-channel
 
       - name: Calculate version
         id: version
@@ -70,16 +63,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          for toc in \
-            src/addon/src/ArtisanLogbook/ArtisanLogbook.toc \
-            src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc
-          do
-            sed -i "s/^## Version: .*/## Version: $VERSION/" "$toc"
-            sed -i "s/^## X-Release-Tag: .*/## X-Release-Tag: $RELEASE_TAG/" "$toc"
-            grep -Fx "## Version: $VERSION" "$toc"
-            grep -Fx "## X-Release-Tag: $RELEASE_TAG" "$toc"
-          done
+        run: bash .github/workflows/scripts/release-addon.sh stamp
 
       - name: Install Lua and packaging tools
         run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip python3-yaml
@@ -91,11 +75,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          cd src/addon/dist
-          mv ArtisanLogbook_Core.zip "ArtisanLogbook_Core-$VERSION.zip"
-          mv ArtisanLogbook.zip "ArtisanLogbook-$VERSION.zip"
-          mv ArtisanLogbook-Bundle.zip "ArtisanLogbook-Bundle-$VERSION.zip"
+        run: bash .github/workflows/scripts/release-addon.sh rename-artifacts
 
       - name: Ensure GitHub release
         id: release
@@ -112,18 +92,7 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
-        run: |
-          set -euo pipefail
-          for name in \
-            "ArtisanLogbook_Core-$VERSION.zip" \
-            "ArtisanLogbook-$VERSION.zip" \
-            "ArtisanLogbook-Bundle-$VERSION.zip"; do
-            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
-              echo "Preserving existing release asset $name"
-            else
-              gh release upload "$TAG" "src/addon/dist/$name" --repo "$GITHUB_REPOSITORY"
-            fi
-          done
+        run: bash .github/workflows/scripts/release-addon.sh ensure-assets
 
       - name: Resolve CurseForge matrix
         id: game-versions
@@ -154,26 +123,7 @@ jobs:
           ASSET: ${{ matrix.asset }}
           INTERFACE: ${{ matrix.interface }}
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p authoritative
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$ASSET" --dir authoritative
-          bundle="authoritative/$ASSET"
-          test -s "$bundle"
-          unzip -tq "$bundle"
-          for addon in ArtisanLogbook ArtisanLogbook_Core; do
-            unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## X-Release-Tag: $TAG"
-            unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## Interface: $INTERFACE"
-          done
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > authoritative/notes.md
-          digest=$(sha256sum "$bundle" | cut -d' ' -f1)
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          {
-            echo 'notes<<ARTISAN_RELEASE_NOTES_EOF'
-            cat authoritative/notes.md
-            echo 'ARTISAN_RELEASE_NOTES_EOF'
-          } >> "$GITHUB_OUTPUT"
+        run: bash .github/workflows/scripts/release-addon.sh download-bundle
 
       - name: Check CurseForge publication marker
         id: curseforge
@@ -188,25 +138,7 @@ jobs:
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
           API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
         shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$PROJECT_ID" || { echo "::error::Missing CURSEFORGE_PROJECT_ID variable"; exit 1; }
-          test -n "$API_TOKEN" || { echo "::error::Missing CURSEFORGE_API_TOKEN secret"; exit 1; }
-          marker="curseforge-$FLAVOR-$VERSION.json"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$marker"; then
-            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$marker" --dir authoritative
-            jq -e --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
-              --arg flavor "$FLAVOR" --argjson gameVersionId "$GAME_VERSION_ID" --arg asset "$ASSET" \
-              '.bundleSha256 == $sha and .projectId == $project and .flavor == $flavor and .gameVersionId == $gameVersionId and .asset == $asset' "authoritative/$marker" >/dev/null || {
-                echo "::error::CurseForge marker conflicts with current bundle or project"
-                exit 1
-              }
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "CurseForge publication already recorded for $TAG."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No publication marker. Check CurseForge manually before retrying after an ambiguous upload failure."
-          fi
+        run: bash .github/workflows/scripts/release-addon.sh check-curseforge
 
       - name: Upload bundle to CurseForge
         if: steps.curseforge.outputs.skip != 'true'
@@ -234,10 +166,4 @@ jobs:
           BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
         shell: bash
-        run: |
-          set -euo pipefail
-          jq -n --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
-              --arg flavor "$FLAVOR" --argjson gameVersionId "$GAME_VERSION_ID" --arg asset "$ASSET" \
-            --arg tag "$TAG" \
-            '{tag:$tag, projectId:$project, flavor:$flavor, gameVersionId:$gameVersionId, asset:$asset, bundleSha256:$sha}' > "authoritative/curseforge-$FLAVOR-$VERSION.json"
-          gh release upload "$TAG" "authoritative/curseforge-$FLAVOR-$VERSION.json" --repo "$GITHUB_REPOSITORY"
+        run: bash .github/workflows/scripts/release-addon.sh record-curseforge
