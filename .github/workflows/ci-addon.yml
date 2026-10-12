@@ -9,6 +9,7 @@ on:
       - ".github/workflows/ci-addon.yml"
       - ".github/workflows/release-addon.yml"
       - ".curseforge.yml"
+      - ".github/workflows/scripts/**"
   pull_request:
     paths:
       - "src/addon/**"
@@ -26,7 +27,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install Lua and packaging tools
-        run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip
+        run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip python3-yaml
+      - name: Validate CurseForge matrix
+        env:
+          VERSION: 0.1.0
+        run: |
+          set -euo pipefail
+          export GITHUB_OUTPUT="$(mktemp)"
+          trap 'rm -f "$GITHUB_OUTPUT"' EXIT
+          python3 .github/workflows/scripts/resolve-curseforge-matrix.py
+          matrix=$(sed -n 's/^matrix=//p' "$GITHUB_OUTPUT")
+          jq -e '.include | length > 0' <<< "$matrix"
+          jq -e '.include[] | select(.name == "retail" and .id == 16519 and .interface == 120100 and .asset == "ArtisanLogbook-Bundle-0.1.0.zip")' <<< "$matrix"
+
       - name: Test and package
         run: bash src/addon/scripts/package.sh
       - uses: actions/upload-artifact@v7
