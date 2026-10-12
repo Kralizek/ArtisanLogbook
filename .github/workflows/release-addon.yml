@@ -35,13 +35,13 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       matrix: ${{ steps.game-versions.outputs.matrix }}
     steps:
-      - name: Require master branch
-        if: github.ref != 'refs/heads/master'
-        run: bash .github/workflows/scripts/release-addon.sh require-master
-
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Require master branch
+        if: github.ref != 'refs/heads/master'
+        run: bash .github/workflows/scripts/release-addon.sh require-master
 
       - name: Resolve release channel
         id: release-inputs
@@ -99,9 +99,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          python3 .github/workflows/scripts/resolve-curseforge-matrix.py
+        run: python3 .github/workflows/scripts/resolve-curseforge-matrix.py
 
   curseforge:
     needs: release
