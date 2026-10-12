@@ -193,13 +193,7 @@ jobs:
           else
             tag="$CREATED_TAG"
           fi
-          [[ "$tag" =~ ^addon-v[0-9]+\.[0-9]+\.[0-9]+(-\.(alpha|beta)\.[0-9]+|-?(alpha|beta)\.[0-9]+)?$ ]] || {
-            # Calculate-next-version uses SemVer prerelease tags such as addon-v1.2.3-alpha.1.
-            [[ "$tag" =~ ^addon-v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta)\.[0-9]+$ ]] || {
-              echo "::error::Unexpected Artisan Logbook release tag: $tag"; exit 1;
-            }
-          }
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft >/dev/null
+          [[ "$tag" =~ ^addon-v[0-9]+\\.[0-9]+\\.[0-9]+(-(alpha|beta)\\.[0-9]+)?$ ]] || {\n            echo "::error::Unexpected Artisan Logbook release tag: $tag"; exit 1;\n          }\n          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft >/dev/null
           version="${tag#addon-v}"
           if [[ "$version" == *-alpha.* ]]; then channel=alpha
           elif [[ "$version" == *-beta.* ]]; then channel=beta
@@ -221,7 +215,7 @@ jobs:
             --pattern "ArtisanLogbook-Bundle-$VERSION.zip" --dir artifacts
           test -s "artifacts/ArtisanLogbook-Bundle-$VERSION.zip"
           unzip -tq "artifacts/ArtisanLogbook-Bundle-$VERSION.zip"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > release-notes.md
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > release-notes.md\n          {\n            echo "body<<CURSEFORGE_NOTES_EOF"\n            cat release-notes.md\n            echo "CURSEFORGE_NOTES_EOF"\n          } >> "$GITHUB_OUTPUT"
 
       - name: Require CurseForge configuration
         env:
