@@ -2169,7 +2169,10 @@ function Ledger:RecordResult(result, expectedRequirements)
     pending.remaining = pending.remaining - 1
     if pending.remaining == 0 then
       if self.pendingRequest == pending then self.pendingRequest = nil end
-      if self.pendingOrderRequest == pending then self.pendingOrderRequest = nil end
+      if self.pendingOrderRequest == pending then
+        self.pendingOrderRequest = nil
+        self.nonpersonalOperationOutstanding = nil
+      end
     end
   end
   if validPrimary and not seen and (self.operationOwnershipUncertain or contradictoryBegin) and pending then

@@ -3112,4 +3112,85 @@ test("independent ordinary requirements reject ambiguous outputs and known stale
   assert(duplicate.recipeId == nil and duplicate.reagentRequirements == nil)
 end)
 
+test("consecutive completed Patron orders retire only their successful outstanding operation", function()
+  local ledger, clock = newLedger()
+  ledger:BeginCraft(1230854)
+  local first = assert(ledger:SubmitCraft(1230854, 1, false, nil, {}, nil, false))
+  local result = assert(ledger:RecordResult({ operationID = 1542737707, itemID = 268954, quantity = 5,
+    resourcesReturned = { { reagent = { itemID = 236761 }, quantity = 2 } } }))
+  assert(result.requestId == first.id and result.recipeId == first.recipeId)
+  assert(ledger.pendingOrderRequest == nil)
+  assert(ledger.nonpersonalOperationOutstanding == nil, "completed order must retire outstanding state")
+  assert(not ledger.operationOwnershipUncertain)
+  clock.current = clock.current + 17
+  ledger:BeginCraft(1230869)
+  local second = assert(ledger:SubmitCraft(1230869, 1, false, nil, {}, nil, false))
+  assert(not ledger.operationOwnershipUncertain, "next clean order must not enter quarantine")
+  local stale = assert(ledger:RecordResult({ operationID = 1542737707, itemID = 268954, quantity = 5 }))
+  assert(stale.requestId == nil and stale.requestCorrelationReason == "observed-operation")
+  assert(ledger.pendingOrderRequest.id == second.id and ledger.nonpersonalOperationOutstanding == true)
+  local completed = assert(ledger:RecordResult({ operationID = 2613459660, itemID = 241309, quantity = 5 }))
+  assert(completed.requestId == second.id and completed.recipeId == second.recipeId)
+  assert(completed.materialsSavingsEligible == false and completed.outcomeSource == "native")
+  assert(completed.hasResourcefulnessProc == false and completed.resourcefulnessComplete == true)
+  assert(not ledger.pendingOrderRequest and not ledger.nonpersonalOperationOutstanding)
+  assert(not ledger.operationOwnershipUncertain)
+end)
+
+test("unfinished Patron positions and rejected results never retire outstanding ownership safeguards", function()
+  for _, mode in ipairs({ "partial", "bonus", "malformed", "rejected", "conflicting-begin" }) do
+    local ledger = newLedger()
+    ledger:BeginCraft(1230854)
+    local request = assert(ledger:SubmitCraft(1230854, mode == "partial" and 2 or 1,
+      false, nil, {}, nil, false))
+    local payload = { operationID = 1542737707, itemID = 268954, quantity = 5 }
+    if mode == "bonus" then payload.bonusCraft = true
+    elseif mode == "malformed" then payload.quantity = nil
+    elseif mode == "rejected" then ledger.database.nextCraftId = maxInteger
+    elseif mode == "conflicting-begin" then
+      ledger:BeginCraft(1230854)
+      ledger:BeginCraft(1230869)
+    end
+    local result = ledger:RecordResult(payload)
+    if mode == "rejected" then
+      assert(result == nil and ledger.pendingOrderRequest.id == request.id)
+      ledger.database.nextCraftId = 1
+    elseif mode == "partial" then
+      assert(result.requestId == request.id and ledger.pendingOrderRequest.remaining == 1)
+    else assert(result.requestId == nil) end
+    assert(ledger.nonpersonalOperationOutstanding == true)
+    assert(ledger:SubmitCraft(1230869, 1, false, nil, {}, nil, false))
+    assert(ledger.operationOwnershipUncertain == true)
+    local later = assert(ledger:RecordResult({ operationID = 2613459660, itemID = 241309, quantity = 5 }))
+    assert(later.requestId == nil and later.outcomeSource == "unverified")
+    assert(later.requestCorrelationReason == "ownership-quarantine")
+    assert(ledger.nonpersonalOperationOutstanding == true and ledger.operationOwnershipUncertain == true)
+  end
+end)
+
+test("historical quarantined Patron repair restores only evidenced recipe identity", function()
+  local ledger, clock = newLedger()
+  assert(ledger:SubmitCraft(1230854, 1, false, nil, {}, nil, false))
+  local request = assert(ledger:SubmitCraft(1230869, 1, false, nil,
+    { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 240991 } } },
+    inputEvidence({ 240991 }), false))
+  local craft = assert(ledger:RecordResult({ operationID = 2613459660, itemID = 241309, quantity = 5 }))
+  assert(craft.requestId == nil and craft.recipeId == nil and craft.outcomeSource == "unverified")
+  assert(ledger:LearnRecipeOutput(1230869, 241309))
+  assert(ledger:RepairUnknownRecipes({ [241309] = true }).repairedCount == 1)
+  local repaired = ledger.craftById[craft.id]
+  assert(repaired.recipeId == 1230869 and repaired.requestId == nil)
+  assert(repaired.outcomeSource == "unverified" and repaired.requestCorrelationReason == "ownership-quarantine")
+  assert(repaired.hasResourcefulnessProc == nil and repaired.resourcefulnessComplete == nil)
+  assert(repaired.inputComplete == nil and repaired.reagentRequirements == nil)
+  assert(#(ledger.reagentsByCraftId[craft.id] or {}) == 0)
+  assert(ledger.requestById[request.id].allocations[1].allocatedQuantity == 5)
+  local totals = ledger.database.craftSeries[1]
+  assert(totals.recipeId == 1230869 and totals.matchedCraftCount == 0)
+  assert(totals.resourcefulnessAuthoritativeProcCountObservedCount == 0)
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  assert(loaded.craftById[craft.id].requestId == nil)
+  assert(loaded:RepairUnknownRecipes({ [241309] = true }).repairedCount == 0)
+end)
+
 print(string.format("%d ledger tests passed", passed))

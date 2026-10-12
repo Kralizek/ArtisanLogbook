@@ -3652,9 +3652,11 @@ end)()
           elseif boundary == "nonpersonal-replacement" then nonpersonal(kind) end
           local requestId = submit()
           status = environment.ArtisanLogbookManagement.Status()
-          assert(status.operationOwnershipUncertain and status.authoritativeCaptureSuspended)
-          status.operationOwnershipUncertain = false
-          assert(environment.ArtisanLogbookManagement.Status().operationOwnershipUncertain)
+          local completedOrder = kind == "CraftRecipe" and known and boundary ~= "nonpersonal-replacement"
+          assert(status.operationOwnershipUncertain == not completedOrder and
+            status.authoritativeCaptureSuspended == not completedOrder)
+          status.operationOwnershipUncertain = completedOrder
+          assert(environment.ArtisanLogbookManagement.Status().operationOwnershipUncertain == not completedOrder)
           local late = result({ operationID = 700, itemID = 801, quantity = 1, isEnchant = kind == "CraftEnchant",
             resourcesReturned = positive and { { reagent = { itemID = 100 }, quantity = 2 } } or nil })
           unowned(core, api, late)
@@ -3662,14 +3664,18 @@ end)()
             assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
             assert(core.ledger.pendingRecipeId == 456)
           else assert(core.ledger.pendingRequest == nil and core.ledger.requestAmbiguous) end
-          unowned(core, api, result({ operationID = 701, itemID = 900, quantity = 1 }))
+          local actual = result({ operationID = 701, itemID = 900, quantity = 1 })
+          if completedOrder then
+            assert(actual.requestId == requestId and actual.recipeId == 456 and actual.outcomeSource == "native")
+          else unowned(core, api, actual) end
           assert(core.ledger.pendingRequest == nil)
           assert(not (core.ledger.database.recipeOutputs[456] or {})[801])
-          assert(not (core.ledger.database.recipeOutputs[456] or {})[900])
+          assert(((core.ledger.database.recipeOutputs[456] or {})[900] == true) == completedOrder)
           assert(core.ledger:RepairUnknownRecipes().repairedCount == 0)
           assert(core.ledger.craftById[historical.id].recipeId == nil)
-          assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount == 0)
-          assert(#api.GetRecipeReagentStatistics(456).reagents == 0)
+          assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount ==
+            (completedOrder and 1 or 0))
+          assert(#api.GetRecipeReagentStatistics(456).reagents == (completedOrder and 1 or 0))
           if positive then assert(api.GetReagentSummaries({ items = { 100 } }).reagents[1].returnedQuantity == 2) end
           assert(core.ledger.database.nonpersonalOperationOutstanding == nil)
           assert(core.ledger.database.operationOwnershipUncertain == nil)
@@ -3827,4 +3833,118 @@ end)()
   environment.C_TradeSkillUI.GetRecipeQualityItemIDs = savedQualities
   environment.C_TradeSkillUI.GetRecipeInfo = savedInfo
   print("PASS ordinary optional arguments, repeated begins, result-time requirements, UI evidence, pruning and reload")
+end)()
+
+;(function()
+  local savedEnum, savedOrders = environment.Enum, environment.C_CraftingOrders
+  local savedTime, savedServerTime = environment.time, environment.GetServerTime
+  local savedMethods = {}
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs",
+      "GetCraftingOperationInfoForOrder" }) do savedMethods[name] = environment.C_TradeSkillUI[name] end
+  local current = 1791846498
+  environment.time = function() return current end
+  environment.GetServerTime = function() return current end
+  environment.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2 } }
+  local function basic(index, quantity, candidates, fixed)
+    local reagents = {}
+    for _, itemId in ipairs(candidates) do reagents[#reagents + 1] = { itemID = itemId } end
+    return { dataSlotType = fixed and 1 or 2, reagentType = 1, dataSlotIndex = index,
+      quantityRequired = quantity, required = true, reagents = reagents }
+  end
+  local firstSlots = { basic(1, 5, { 240990, 240991 }), basic(2, 3, { 236761, 236767 }) }
+  local secondSlots = { basic(1, 1, { 236949 }, true), basic(1, 5, { 240990, 240991 }),
+    basic(2, 8, { 236761, 236767 }), basic(3, 3, { 236776, 236777 }), basic(4, 3, { 236774, 236775 }),
+    { dataSlotType = 2, reagentType = 2, dataSlotIndex = 5, quantityRequired = 1,
+      required = false, reagents = { { itemID = 247726 } } } }
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, reagentSlotSchematics = recipeId == 1230854 and firstSlots or secondSlots }
+  end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(recipeId)
+    return { recipeID = recipeId, name = recipeId == 1230854 and "Entropic Extract" or "Light's Potential" }
+  end
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function(recipeId)
+    return { recipeId == 1230854 and 268954 or 241309 }
+  end
+  local claimedOrder
+  environment.C_CraftingOrders = { GetClaimedOrder = function() return claimedOrder end }
+  environment.C_TradeSkillUI.GetCraftingOperationInfoForOrder = function(recipeId, _, orderId)
+    assert(claimedOrder.orderID == orderId and claimedOrder.spellID == recipeId)
+    return { baseSkill = 100, baseDifficulty = recipeId == 1230854 and 475 or 530, craftingQuality = 1 }
+  end
+  local function selected(index, itemId, quantity)
+    return { dataSlotIndex = index, quantity = quantity, reagent = { itemID = itemId } }
+  end
+  local core = reload(nil)
+  core.ledger.database.nextCraftId, core.ledger.database.nextRequestId = 889, 238
+  core.Start()
+  local function event(name, ...)
+    core.adapter.frame.scripts.OnEvent(core.adapter.frame, name, ...)
+  end
+  local function replay(recipeId, orderId, selections, zeros, operationId, outputId, resultTime, returns)
+    claimedOrder = { orderID = orderId, spellID = recipeId, orderType = 3,
+      reagents = recipeId == 1230869 and { { source = 0, isBasicReagent = true, slotIndex = 4,
+        reagentInfo = selected(3, 236777, 3) } } or nil }
+    event("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+    for quoteIndex = 1, 5 do
+      hooks.GetCraftingOperationInfoForOrder(recipeId, quoteIndex <= 3 and {} or zeros, orderId, false)
+      assert(not core.ledger.operationOwnershipUncertain and core.ledger.pendingRecipeId == recipeId)
+    end
+    hooks.CraftRecipe(recipeId, 1, selections, nil, orderId, false)
+    assert(not core.ledger.operationOwnershipUncertain and core.ledger.pendingOrderRequest)
+    local cast = "synthetic-" .. recipeId
+    event("UNIT_SPELLCAST_SENT", "player", nil, cast, recipeId)
+    event("UNIT_SPELLCAST_START", "player", cast, recipeId, recipeId == 1230854 and 1 or 2)
+    event("UNIT_SPELLCAST_SUCCEEDED", "player", cast, recipeId, recipeId == 1230854 and 1 or 2)
+    event("UNIT_SPELLCAST_STOP", "player", cast, recipeId, recipeId == 1230854 and 1 or 2)
+    assert(core.ledger.pendingOrderRequest and core.ledger.nonpersonalOperationOutstanding)
+    current = resultTime
+    event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = operationId, itemID = outputId, quantity = 5,
+      bonusCraft = false, firstCraftReward = false, multicraft = 0, concentrationSpent = 0,
+      hasIngenuityProc = false, resourcesReturned = returns })
+    assert(not core.ledger.pendingOrderRequest and not core.ledger.nonpersonalOperationOutstanding)
+    assert(not core.ledger.operationOwnershipUncertain and not core.ledgerCaptureError)
+  end
+  local firstZeros = { selected(1, 240991, 0), selected(1, 240990, 0),
+    selected(2, 236761, 0), selected(2, 236767, 0) }
+  replay(1230854, 1298473129, { selected(1, 240991, 5), selected(2, 236761, 3) }, firstZeros,
+    1542737707, 268954, 1791846499, { { reagent = { itemID = 236761 }, quantity = 2 } })
+  event("TRADE_SKILL_LIST_UPDATE")
+  event("CURRENCY_DISPLAY_UPDATE", 3161)
+  current = 1791846514
+  local secondZeros = {}
+  for _, selection in ipairs(firstZeros) do secondZeros[#secondZeros + 1] = selection end
+  for _, selection in ipairs({ selected(3, 236776, 0), selected(3, 236777, 0),
+      selected(4, 236774, 0), selected(4, 236775, 0) }) do secondZeros[#secondZeros + 1] = selection end
+  replay(1230869, 1298473105, { selected(1, 240991, 5), selected(2, 236761, 8),
+    selected(4, 236774, 3), selected(5, 247726, 1) }, secondZeros, 2613459660, 241309, 1791846516)
+  local api = environment.ArtisanLogbookAPI
+  local first, second = api.GetCraft(889), api.GetCraft(890)
+  assert(first.request.id == 238 and first.recipe.id == 1230854 and first.inputComplete)
+  assert(first.outcomeSource == "native" and first.hasResourcefulnessProc == true)
+  assert(second.request.id == 239 and second.recipe.id == 1230869 and second.requestCorrelationReason == nil)
+  assert(second.timestamp - first.timestamp == 17 and second.outcomeSource == "native")
+  assert(second.hasResourcefulnessProc == false and second.resourcefulnessComplete == true)
+  assert(second.inputComplete == nil and second.grossRequirementsComplete == true)
+  assert(#second.request.allocations == 4 and #second.request.fixedReagents == 1 and #second.reagents == 5)
+  assert(#second.reagentRequirements == 1 and second.reagentRequirements[1].dataSlotIndex == 3)
+  assert(second.reagentRequirements[1].requiredQuantity == 3)
+  for _, reagent in ipairs(second.reagents) do
+    assert(reagent.inputTotalComplete == true and reagent.item.id ~= 236777)
+  end
+  for _, recipeId in ipairs({ 1230854, 1230869 }) do
+    local totals = api.GetRecipeOutcomes(recipeId).totals
+    assert(totals.resourcefulnessAuthoritativeProcCountObservedCount == 1 and totals.matchedCraftCount == 0)
+    for _, reagent in ipairs(api.GetRecipeReagentStatistics(recipeId).reagents) do assert(reagent.matchedCraftCount == 0) end
+  end
+  assert(first.materialsSavingsEligible == false and second.materialsSavingsEligible == false)
+  local loaded = reload(core.ledger.database)
+  assert(environment.ArtisanLogbookAPI.GetCraft(890).request.id == 239)
+  loaded.ledger:Prune(current + 61 * 86400)
+  assert(environment.ArtisanLogbookAPI.GetRecipeOutcomes(1230869).totals.matchedCraftCount == 0)
+  environment.Enum, environment.C_CraftingOrders = savedEnum, savedOrders
+  environment.time, environment.GetServerTime = savedTime, savedServerTime
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs",
+      "GetCraftingOperationInfoForOrder" }) do environment.C_TradeSkillUI[name] = savedMethods[name] end
+  print("PASS consecutive Patron trace ordering, fixed/modified namespaces, customer omission and no personal savings")
 end)()

@@ -73,6 +73,56 @@ Interrupting, closing, cancelling or replacing outstanding work may leave delaye
 
 Uncertainty can last for the remainder of a runtime session. `ArtisanLogbookManagement.Status()` exposes `operationOwnershipUncertain` and `authoritativeCaptureSuspended`; these describe capture state, not a promise that every callback is eligible. Starting another craft, waiting an arbitrary delay, or merely closing a profession window does not establish a reliable server-side drain boundary. Runtime registry entries are not persisted into SavedVariables; game reload with events in flight has not been proven to provide a cross-session correlation guarantee.
 
+### Consecutive Patron orders in PR #31
+
+The private schema-3 dump supplied on 2026-10-12 establishes the failure for
+crafts 889/890 and requests 238/239. Replaying its recorded payloads reproduces
+these transitions in the pre-fix ledger:
+
+- Sequence 40111 begins recipe 1230854; 40122 submits order 1298473129.
+- Sequence 40128 owns request 238 and commits craft 889, but clears only
+  `pendingOrderRequest`, leaving `nonpersonalOperationOutstanding` true.
+- Sequence 40809 begins recipe 1230869. Sequence 40820 submits order
+  1298473105/request 239 while the stale outstanding flag is still true;
+  **this submission sets ownership quarantine**.
+- Sequence 40826 stores craft 890 without recipe/request ownership, with
+  `requestCorrelationReason = "ownership-quarantine"`, 17 seconds after 889.
+
+Both claimed-order probes match their submitted order IDs. The two primary
+operation IDs are distinct. Between the operations, the trace shows a skill-list
+update and a currency update, not an interruption, close, contradictory begin,
+or replacement craft. Begin-before-submission ordering is reproduced through
+the production adapter/Core/API path; quote and spellcast events do not consume
+pending order positions.
+
+An owned, successfully committed **final** order result now retires that order's
+outstanding flag together with its pending handle. This is not a reset of
+ownership uncertainty. Partial batches, malformed/bonus callbacks, rejected
+commits, conflicting begins and interrupted/replaced operations keep their
+safeguards. Known old operation IDs still cannot consume a newer request.
+
+Request 239 retains selections at modified slots 1/2/4/5. Its claimed-order
+probe explicitly supplies three units of item 236777 at slot 3, which is absent
+from the crafter's submitted selections. Its retained schematic expectations
+also include item 236949 at slot 1. A fixed `Reagent` slot and a
+`ModifiedReagent` slot can share a numeric data index: treating them as one
+namespace reproduces a global reconciliation failure and falsely matches the
+modified selection against the fixed requirement. The adapter now separates
+these identities, preserves a supported fixed singleton independently, and
+still rejects duplicate indices **within** a slot type. The full live schematic
+was not saved; this metadata shape is a regression probe, not a claimed verbatim
+schematic export. Missing customer selections remain expectations, not fabricated
+allocations. Patron crafts remain excluded from personal material savings even
+when their crafter selections reconcile.
+
+The dump already contains the validated 1230869-to-241309 output mapping.
+Existing recipe repair can therefore restore craft 890's **recipe identity**.
+An in-memory comparison preserves all 890 crafts, 239 requests, 842 reagent
+facts and global measured totals. Repair does not attach request 239, copy its
+allocations/requirements, or turn the unverified missing return list into an
+authoritative negative. The supplied file is kept outside the repository and
+is not rewritten or imported into committed fixtures.
+
 ## Schema-v1 to schema-v3 migration
 
 Migration stages a validated replacement database rather than destructively modifying schema-v1 data first. Preserve craft/request identifiers, dimensions, sessions, daily series, return sets, returned item quantities, recipe/output knowledge and retained facts. Backfill only quantities justified by surviving input/return facts **before** retention pruning. Never synthesize historical authoritative negatives or complete input evidence. Historical v1 `quoteObserved` is not equivalent to `inputComplete`; old schema-v2 measurements made before strengthened evidence rules are preserved, not retrospectively certified.
@@ -89,6 +139,8 @@ A real in-game migration comparison of a backed-up schema-v1 SavedVariables file
 - A delayed salvage callback after a newer personal submission cannot steal its input facts, request position or recipe-output knowledge.
 - Malformed top-level and bonus callbacks before the valid primary leave its request available; partial return lists preserve known inputs without claiming authoritative return completeness.
 - Interrupted nonpersonal enchants/recrafts/orders can also have in-flight results, even without a personal request.
+- Consecutive completed Patron orders retire outstanding state only on the final owned commit; unfinished or rejected results cannot end quarantine.
+- Fixed/modified index collisions do not poison disjoint submitted inputs; customer-supplied choices and ambiguous slot identities cannot manufacture player savings.
 - Purging resets numeric request IDs but cannot allow nonterminal old operation provenance to alias a new request.
 - Reload, pruning, clear, purge and unknown-recipe repair must preserve the same statistical population rules.
 

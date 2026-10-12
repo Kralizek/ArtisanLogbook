@@ -165,6 +165,13 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
       end
     end
     if not dense(schematic.reagentSlotSchematics) then unknown = true end
+    local modifiedIndices = {}
+    for _, slot in pairs(schematic.reagentSlotSchematics) do
+      if type(slot) == "table" and readable(slot) and slot.dataSlotType == slotTypes.ModifiedReagent and
+          isPositiveInteger(slot.dataSlotIndex) then
+        modifiedIndices[slot.dataSlotIndex] = true
+      end
+    end
     local function preserveBasicRequirement(index, candidates, requiredQuantity, allocationConflict, isFixedReagentSlot)
       local candidateIDs = {}
       for itemId in pairs(candidates) do candidateIDs[#candidateIDs + 1] = itemId end
@@ -200,13 +207,18 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           if next(candidates) == nil then known = false end
         end
         local index = slotType and slot.dataSlotIndex
-        if isPositiveInteger(index) and slots[index] then unknown = true end
-        local supported = known and isPositiveInteger(index) and not slots[index] and
+        local slotIndices = slots[slotType] or {}
+        if slotType then slots[slotType] = slotIndices end
+        if isPositiveInteger(index) and slotIndices[index] then unknown = true end
+        local supported = known and isPositiveInteger(index) and not slotIndices[index] and
           slot.hiddenInCraftingForm ~= true and type(slot.required) == "boolean" and
           isPositiveInteger(slot.quantityRequired) and
           (slot.variableQuantities == nil or (dense(slot.variableQuantities) and #slot.variableQuantities == 0))
+        if supported and slotType == slotTypes.Reagent and modifiedIndices[index] and
+            next(candidates, next(candidates)) ~= nil then supported = false end
         local grossRequirementKnown = false
         local allocations, quantity = selected[index] or {}, 0
+        if slotType == slotTypes.Reagent and modifiedIndices[index] then allocations = {} end
         if (slotType == slotTypes.Reagent or slotType == slotTypes.ModifiedReagent) and supported and
             slot.reagentType == reagentTypes.Basic then
           if #allocations > 0 then
@@ -252,7 +264,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         else
           supported = false
         end
-        if isPositiveInteger(index) then slots[index] = true end
+        if isPositiveInteger(index) then slotIndices[index] = true end
         if not supported then
           inputs.complete = false
           if not grossRequirementKnown then inputs.grossRequirementsComplete = false end
@@ -262,7 +274,10 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         end
       end
     end
-    for index in pairs(selected) do if not slots[index] then unknown = true end end
+    for index in pairs(selected) do
+      if not (slots[slotTypes.ModifiedReagent] or {})[index] and
+          not (slots[slotTypes.Reagent] or {})[index] then unknown = true end
+    end
     if unknown then inputs.complete, inputs.grossRequirementsComplete = false, false end
     inputs.slotIdentityUncertain = unknown
     if not unknown then
