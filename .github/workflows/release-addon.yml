@@ -148,6 +148,35 @@ jobs:
             echo 'ARTISAN_RELEASE_NOTES_EOF'
           } >> "$GITHUB_OUTPUT"
 
+      - name: Resolve supported CurseForge game versions
+        id: game-versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Restrict publication to explicitly supported Retail versions.
+          versions=$(ruby -ryaml -e '
+            config = YAML.safe_load(File.read(".curseforge.yml"))
+            supported = config.fetch("gameVersions").fetch("retail")
+            abort "Retail game versions must be a nonempty list" unless supported.is_a?(Array) && !supported.empty?
+            abort "Game versions must be unique" unless supported.uniq == supported
+            interfaces = supported.map do |version|
+              match = /\A(\d+)\.(\d+)\.(\d+)\z/.match(version)
+              abort "Invalid Retail game version: #{version}" unless match
+              match[1].to_i * 10000 + match[2].to_i * 100 + match[3].to_i
+            end
+            toc_files = %w[
+              src/addon/src/ArtisanLogbook/ArtisanLogbook.toc
+              src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc
+            ]
+            toc_files.each do |path|
+              toc_interface = File.read(path)[/^## Interface: (\d+)$/, 1]
+              abort "Missing Interface in #{path}" unless toc_interface
+              abort "CurseForge game version does not match #{path} interface #{toc_interface}" unless interfaces.include?(toc_interface.to_i)
+            end
+            puts supported.join(",")
+          ')
+          echo "retail=$versions" >> "$GITHUB_OUTPUT"
+
       - name: Check CurseForge publication marker
         id: curseforge
         env:
@@ -156,14 +185,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
-          GAME_VERSIONS: ${{ vars.CURSEFORGE_GAME_VERSIONS }}
           API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "$PROJECT_ID" || { echo "::error::Missing CURSEFORGE_PROJECT_ID variable"; exit 1; }
           test -n "$API_TOKEN" || { echo "::error::Missing CURSEFORGE_API_TOKEN secret"; exit 1; }
-          test -n "$GAME_VERSIONS" || { echo "::error::Missing CURSEFORGE_GAME_VERSIONS variable (Retail version IDs)"; exit 1; }
           marker="curseforge-$VERSION.json"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$marker"; then
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$marker" --dir authoritative
@@ -186,7 +213,7 @@ jobs:
           token: ${{ secrets.CURSEFORGE_API_TOKEN }}
           project_id: ${{ vars.CURSEFORGE_PROJECT_ID }}
           game_endpoint: wow
-          game_versions: ${{ vars.CURSEFORGE_GAME_VERSIONS }}
+          game_versions: ${{ steps.game-versions.outputs.retail }}
           file_path: authoritative/ArtisanLogbook-Bundle-${{ steps.version.outputs.version }}.zip
           release_type: ${{ inputs.channel == 'stable' && 'release' || inputs.channel }}
           display_name: Artisan Logbook ${{ steps.version.outputs.version }}
