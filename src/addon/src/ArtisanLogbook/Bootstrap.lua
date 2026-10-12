@@ -1,6 +1,7 @@
 local addonName, addon = ...
 local lifecycle = CreateFrame("Frame")
 local unknownRecipeRecoveryNotified
+local initialized
 
 function addon.Notify(message)
   DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook: " .. message)
@@ -31,7 +32,7 @@ end
 
 lifecycle:RegisterEvent("ADDON_LOADED")
 lifecycle:SetScript("OnEvent", function(_, _, loadedName)
-  if loadedName ~= addonName then return end
+  if loadedName ~= addonName or initialized then return end
   lifecycle:UnregisterEvent("ADDON_LOADED")
   local api = ArtisanLogbookAPI
   local management = ArtisanLogbookManagement
@@ -42,6 +43,9 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   end
   api.RegisterCallback("CRAFT_COMMITTED", addon.NotifyCraft)
   addon.CreateProductionWindow()
+  initialized = true
+  local addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version")
+  addon.Notify("Loaded (version " .. (addonVersion or "Unknown") .. ").")
 end)
 
 SLASH_ARTISANLOGBOOK1 = "/al"

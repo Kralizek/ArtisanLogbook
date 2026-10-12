@@ -326,7 +326,19 @@ local function loadUI()
   local frameStart = #frames
   local ui = load(uiRoot, "ArtisanLogbook")
   local frame = frames[frameStart + 1]
+  local noticeCount = #notices
+  frame.scripts.OnEvent(frame, "ADDON_LOADED", "AnotherAddon")
+  assert(#notices == noticeCount)
   frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
+  if ui.productionWindow then
+    assert(notices[#notices] == "Artisan Logbook: Loaded (version " ..
+      (environment.C_AddOns.GetAddOnMetadata("ArtisanLogbook", "Version") or "Unknown") .. ").")
+    noticeCount = #notices
+    frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
+    assert(#notices == noticeCount)
+  else
+    assert(notices[#notices] == "Artisan Logbook: Compatible Artisan Logbook Core API v1 is required.")
+  end
   return ui
 end
 
