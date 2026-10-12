@@ -30,6 +30,10 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      matrix: ${{ steps.game-versions.outputs.matrix }}
     steps:
       - name: Require master branch
         if: github.ref != 'refs/heads/master'
@@ -121,23 +125,47 @@ jobs:
             fi
           done
 
+      - name: Resolve CurseForge matrix
+        id: game-versions
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          matrix=$(ruby src/addon/scripts/curseforge-matrix.rb)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  curseforge:
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+
       - name: Download authoritative GitHub bundle and release notes
         id: authoritative
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
+          FLAVOR: ${{ matrix.name }}
+          GAME_VERSION_ID: ${{ matrix.id }}
+          ASSET: ${{ matrix.asset }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p authoritative
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "ArtisanLogbook-Bundle-$VERSION.zip" --dir authoritative
-          bundle="authoritative/ArtisanLogbook-Bundle-$VERSION.zip"
+            --pattern "$ASSET" --dir authoritative
+          bundle="authoritative/$ASSET"
           test -s "$bundle"
           unzip -tq "$bundle"
+          interface=$(ruby -e 'v=ARGV[0].split(".").map(&:to_i); puts v[0]*10000+v[1]*100+v[2]' '${{ matrix.version }}')
           for addon in ArtisanLogbook ArtisanLogbook_Core; do
             unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## X-Release-Tag: $TAG"
+            unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## Interface: $interface"
           done
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > authoritative/notes.md
           digest=$(sha256sum "$bundle" | cut -d' ' -f1)
@@ -148,41 +176,15 @@ jobs:
             echo 'ARTISAN_RELEASE_NOTES_EOF'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Resolve supported CurseForge game versions
-        id: game-versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Restrict publication to explicitly supported Retail versions.
-          versions=$(ruby -ryaml -e '
-            config = YAML.safe_load(File.read(".curseforge.yml"))
-            supported = config.fetch("gameVersions").fetch("retail")
-            abort "Retail game versions must be a nonempty list" unless supported.is_a?(Array) && !supported.empty?
-            abort "Game versions must be unique" unless supported.uniq == supported
-            interfaces = supported.map do |version|
-              match = /\A(\d+)\.(\d+)\.(\d+)\z/.match(version)
-              abort "Invalid Retail game version: #{version}" unless match
-              match[1].to_i * 10000 + match[2].to_i * 100 + match[3].to_i
-            end
-            toc_files = %w[
-              src/addon/src/ArtisanLogbook/ArtisanLogbook.toc
-              src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc
-            ]
-            toc_files.each do |path|
-              toc_interface = File.read(path)[/^## Interface: (\d+)$/, 1]
-              abort "Missing Interface in #{path}" unless toc_interface
-              abort "CurseForge game version does not match #{path} interface #{toc_interface}" unless interfaces.include?(toc_interface.to_i)
-            end
-            puts supported.join(",")
-          ')
-          echo "retail=$versions" >> "$GITHUB_OUTPUT"
-
       - name: Check CurseForge publication marker
         id: curseforge
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
+          FLAVOR: ${{ matrix.name }}
+          GAME_VERSION_ID: ${{ matrix.id }}
+          ASSET: ${{ matrix.asset }}
           BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
           API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
@@ -191,11 +193,12 @@ jobs:
           set -euo pipefail
           test -n "$PROJECT_ID" || { echo "::error::Missing CURSEFORGE_PROJECT_ID variable"; exit 1; }
           test -n "$API_TOKEN" || { echo "::error::Missing CURSEFORGE_API_TOKEN secret"; exit 1; }
-          marker="curseforge-$VERSION.json"
+          marker="curseforge-$FLAVOR-$VERSION.json"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$marker"; then
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$marker" --dir authoritative
             jq -e --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
-              '.bundleSha256 == $sha and .projectId == $project' "authoritative/$marker" >/dev/null || {
+              --arg flavor "$FLAVOR" --argjson gameVersionId "$GAME_VERSION_ID" --arg asset "$ASSET" \
+              '.bundleSha256 == $sha and .projectId == $project and .flavor == $flavor and .gameVersionId == $gameVersionId and .asset == $asset' "authoritative/$marker" >/dev/null || {
                 echo "::error::CurseForge marker conflicts with current bundle or project"
                 exit 1
               }
@@ -213,10 +216,10 @@ jobs:
           token: ${{ secrets.CURSEFORGE_API_TOKEN }}
           project_id: ${{ vars.CURSEFORGE_PROJECT_ID }}
           game_endpoint: wow
-          game_versions: ${{ steps.game-versions.outputs.retail }}
-          file_path: authoritative/ArtisanLogbook-Bundle-${{ steps.version.outputs.version }}.zip
+          game_versions: ${{ matrix.id }}
+          file_path: authoritative/${{ matrix.asset }}
           release_type: ${{ inputs.channel == 'stable' && 'release' || inputs.channel }}
-          display_name: Artisan Logbook ${{ steps.version.outputs.version }}
+          display_name: Artisan Logbook ${{ needs.release.outputs.version }} (${{ matrix.name }})
           changelog: ${{ steps.authoritative.outputs.notes }}
           changelog_type: markdown
 
@@ -224,14 +227,18 @@ jobs:
         if: steps.curseforge.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
+          FLAVOR: ${{ matrix.name }}
+          GAME_VERSION_ID: ${{ matrix.id }}
+          ASSET: ${{ matrix.asset }}
           BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
         shell: bash
         run: |
           set -euo pipefail
           jq -n --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
+              --arg flavor "$FLAVOR" --argjson gameVersionId "$GAME_VERSION_ID" --arg asset "$ASSET" \
             --arg tag "$TAG" \
-            '{tag:$tag, projectId:$project, bundleSha256:$sha}' > "authoritative/curseforge-$VERSION.json"
-          gh release upload "$TAG" "authoritative/curseforge-$VERSION.json" --repo "$GITHUB_REPOSITORY"
+            '{tag:$tag, projectId:$project, flavor:$flavor, gameVersionId:$gameVersionId, asset:$asset, bundleSha256:$sha}' > "authoritative/curseforge-$FLAVOR-$VERSION.json"
+          gh release upload "$TAG" "authoritative/curseforge-$FLAVOR-$VERSION.json" --repo "$GITHUB_REPOSITORY"
