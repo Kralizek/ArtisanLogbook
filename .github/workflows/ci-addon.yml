@@ -8,11 +8,13 @@ on:
       - "src/addon/**"
       - ".github/workflows/ci-addon.yml"
       - ".github/workflows/release-addon.yml"
+      - ".curseforge.yml"
   pull_request:
     paths:
       - "src/addon/**"
       - ".github/workflows/ci-addon.yml"
       - ".github/workflows/release-addon.yml"
+      - ".curseforge.yml"
   workflow_dispatch:
 
 permissions:
