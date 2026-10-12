@@ -104,7 +104,7 @@ local function projectCraft(ledger, craft)
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
     "hasIngenuityProc", "ingenuityRefund", "hasResourcefulnessProc", "resourcefulnessComplete",
     "outcomeSource", "quoteObserved", "inputComplete", "grossRequirementsComplete",
-    "materialsSavingsEligible" })
+    "materialsSavingsEligible", "requirementObservation", "requestCorrelationReason" })
   local rows = related(ledger, craft)
   result.character = character(ledger, rows.characters)
   result.realm = realm(ledger, rows.realms)
@@ -692,6 +692,9 @@ function API.GetRecipeReagentRequirements(recipeId, filter, options)
           local total = totals[key] or { requiredQuantity = 0, craftCount = 0 }
           total.requiredQuantity = total.requiredQuantity + row.requiredQuantity
           total.craftCount = total.craftCount + row.requirementCraftCount
+          if row.resultObservationCount then
+            total.resultObservationCount = (total.resultObservationCount or 0) + row.resultObservationCount
+          end
           if not finite(total.requiredQuantity) or not integer(total.craftCount, 0) then
             return nil, "quantity-overflow"
           end
@@ -710,7 +713,8 @@ function API.GetRecipeReagentRequirements(recipeId, filter, options)
     for text in key:gmatch("[^,]+") do candidateItems[#candidateItems + 1] = item(ledger, tonumber(text)) end
     local total = totals[key]
     result.requirements[#result.requirements + 1] = { candidateItems = candidateItems,
-      requiredQuantity = total.requiredQuantity, craftCount = total.craftCount }
+      requiredQuantity = total.requiredQuantity, craftCount = total.craftCount,
+      resultObservationCount = total.resultObservationCount }
   end
   if #keys > limit then result.nextCursor = prefix .. keys[limit] end
   return result

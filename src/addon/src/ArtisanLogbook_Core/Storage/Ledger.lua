@@ -371,7 +371,7 @@ local function validateDatabase(data, version)
       return nil, "schema 1 craft has schema 2 provenance"
     end
     if not v3 and (craft.reagentRequirements ~= nil or craft.grossRequirementsComplete ~= nil or
-        craft.materialsSavingsEligible ~= nil) then
+        craft.materialsSavingsEligible ~= nil or craft.requirementObservation ~= nil) then
       return nil, "pre-schema-3 craft has schema 3 input evidence"
     end
     if v3 and craft.grossRequirementsComplete ~= nil and type(craft.grossRequirementsComplete) ~= "boolean" then
@@ -382,6 +382,17 @@ local function validateDatabase(data, version)
     end
     if v3 and craft.reagentRequirements ~= nil and not isArray(craft.reagentRequirements) then
       return nil, "invalid craft reagent requirements"
+    end
+    if craft.requirementObservation ~= nil and (craft.requirementObservation ~= "result" or
+        craft.requestId ~= nil or craft.recipeId == nil or #(craft.reagentRequirements or {}) == 0 or
+        craft.inputComplete ~= nil or craft.materialsSavingsEligible ~= nil or craft.grossRequirementsComplete ~= nil) then
+      return nil, "invalid independent schematic observation"
+    end
+    if craft.requestCorrelationReason ~= nil and (not v3 or craft.requestId ~= nil or not ({
+        ["observed-operation"] = true, ["ownership-quarantine"] = true, ["conflicting-begin"] = true,
+        ["ambiguous-context"] = true, ["nonprimary-result"] = true,
+      })[craft.requestCorrelationReason]) then
+      return nil, "invalid request correlation diagnostic"
     end
     if v3 then
       local slots = {}
@@ -782,7 +793,8 @@ local function craftDeltas(craft, items)
   end
   for key, requirement in pairs(requirementGroups) do
     result.requirements[#result.requirements + 1] = { key = key,
-      delta = { requirementCraftCount = 1, requiredQuantity = requirement.requiredQuantity } }
+      delta = { requirementCraftCount = 1, requiredQuantity = requirement.requiredQuantity,
+        resultObservationCount = craft.requirementObservation == "result" and 1 or nil } }
   end
   if craft.hasResourcefulnessProc == true and craft.resourcefulnessComplete == true then
     local quantities = {}
@@ -956,7 +968,9 @@ local function validateOutcomes(data, version)
       if not isFinite(row.bucketStart) or row.bucketStart % 86400 ~= 0 or
           type(row.candidateKey) ~= "string" or row.candidateKey == "" or
           not isInteger(row.requirementCraftCount) or row.requirementCraftCount < 1 or
-          not isInteger(row.requiredQuantity) or row.requiredQuantity < row.requirementCraftCount then
+          not isInteger(row.requiredQuantity) or row.requiredQuantity < row.requirementCraftCount or
+          (row.resultObservationCount ~= nil and (not isCount(row.resultObservationCount) or
+            row.resultObservationCount > row.requirementCraftCount)) then
         return nil, "invalid reagent requirement aggregate"
       end
       local key, previous = {}, nil
@@ -1650,6 +1664,11 @@ function Ledger:BeginCraft(recipeId)
     return
   end
   if self.pendingRecipeId then
+    local request = self.pendingRequest and self.requestById[self.pendingRequest.id]
+    if request and not self.operationOwnershipUncertain and not self.requestAmbiguous and
+        self.pendingRecipeId == recipeId and request.recipeId == recipeId then
+      return
+    end
     self.pendingRecipeId = nil
     self.ambiguousRecipe = true
     if self.pendingOrderRequest then
@@ -1945,7 +1964,7 @@ local function recordReward(ledger, result, timestamp)
     recipeId = parent and parent.recipeId, parentCraftId = parent and parent.id }, "first-craft-reward"
 end
 
-function Ledger:RecordResult(result)
+function Ledger:RecordResult(result, expectedRequirements)
   if type(result) ~= "table" then
     return nil, "craft result must be a table"
   end
@@ -2007,6 +2026,12 @@ function Ledger:RecordResult(result)
     craft.materialsSavingsEligible = request.materialsSavingsEligible ~= false
   else
     request = nil
+    if pendingOwner or self.operationOwnershipUncertain or self.requestAmbiguous or self.ambiguousRecipe then
+      craft.requestCorrelationReason = seen and "observed-operation" or
+        self.operationOwnershipUncertain and "ownership-quarantine" or
+        contradictoryBegin and "conflicting-begin" or
+        (self.requestAmbiguous or self.ambiguousRecipe) and "ambiguous-context" or "nonprimary-result"
+    end
   end
 
   local recipeId = self.pendingRecipeId
@@ -2018,6 +2043,47 @@ function Ledger:RecordResult(result)
       not operationIdSeen(self, craft.gameOperationId) then
     craft.recipeId, reason = stageDimension(stagedDimensions, "recipe", recipeId)
     if not craft.recipeId then return nil, reason end
+  end
+
+  if not request and validPrimary and not seen and self.operationKind == "CraftRecipe" and
+      not self.nonpersonalOperationOutstanding and
+      type(expectedRequirements) == "table" and expectedRequirements.observation == "result" then
+    local candidates = self.recipeIdsByOutputItemId[result.itemID]
+    local onlyRecipe = candidates and next(candidates)
+    if onlyRecipe and next(candidates, onlyRecipe) == nil and not craft.recipeId then
+      craft.recipeId = onlyRecipe
+    end
+    if craft.recipeId == onlyRecipe and type(expectedRequirements) == "table" and
+        expectedRequirements.recipeId == onlyRecipe and expectedRequirements.observation == "result" and
+        isArray(expectedRequirements.requirements) then
+      local copiedEvidence, evidence = pcall(copyValue, expectedRequirements.requirements)
+      local requirements, slots = {}, {}
+      if copiedEvidence then
+        for _, requirement in ipairs(evidence) do
+          local valid = isInteger(requirement.dataSlotIndex) and not slots[requirement.dataSlotIndex] and
+            isInteger(requirement.requiredQuantity) and requirement.source == "schematic" and
+            isDenseList(requirement.candidateItemIDs) and #requirement.candidateItemIDs > 0
+          local previous
+          for _, itemId in ipairs(valid and requirement.candidateItemIDs or {}) do
+            if not isInteger(itemId) or (previous and itemId <= previous) then valid = false; break end
+            previous = itemId
+          end
+          if valid then
+            for _, itemId in ipairs(requirement.candidateItemIDs) do
+              local observedItemId
+              observedItemId, reason = stageDimension(stagedDimensions, "item", itemId)
+              if not observedItemId then return nil, reason end
+            end
+            slots[requirement.dataSlotIndex] = true
+            requirements[#requirements + 1] = requirement
+          end
+        end
+      end
+      if #requirements > 0 then
+        craft.reagentRequirements = requirements
+        craft.requirementObservation = "result"
+      end
+    end
   end
 
   -- Stage everything first. Any handled failure must leave correlation,

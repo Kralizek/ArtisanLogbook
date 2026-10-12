@@ -264,6 +264,9 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
         text = text .. "; submitted allocation not reconciled."
       end
       detail.inputEvidence:SetText(text)
+      if craft.requirementObservation == "result" then
+        detail.inputEvidence:SetText("Expected requirements observed at result; submitted inputs unavailable.")
+      end
     end
     reagents:Reset(); reagents:Append(returned)
   end

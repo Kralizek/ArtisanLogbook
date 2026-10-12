@@ -198,6 +198,18 @@ quarantine nor change factual API version 1; no UI or recovery control is added.
   crafts never enter personal `Materials saved` matched quantities. This flag
   does not change Resourcefulness proc-rate populations.
 
+- `requirementObservation = "result"`: requirements were sampled from a readable
+  schematic when processing an ordinary unowned result whose output uniquely
+  identifies the recipe. They are expectations, not a submitted allocation or a
+  craft-time recipe-level snapshot. No request, exact input completeness, gross
+  completeness or player ownership is implied. Missing this flag keeps the
+  existing submission-capture semantics.
+- `requestCorrelationReason`: an additive diagnostic on results for which a
+  pending or uncertain request could not be owned. Values are
+  `observed-operation`, `ownership-quarantine`, `conflicting-begin`,
+  `ambiguous-context`, and `nonprimary-result`. Recipe recovery does not alter
+  this reason or upgrade the Resourcefulness cohort.
+
 A returned item outside the known inputs never changes the craft's outcome
 (`hasResourcefulnessProc`, `outcomeSource`); it only prevents `inputComplete`.
 Without `inputComplete`, quantities of unlisted inputs are unknown. Fixed
@@ -520,6 +532,9 @@ expectation whose submitted allocation did not reconcile. These rows can include
 requirement evidence, not player-owned savings. Use
 `GetCraft` for the retained per-craft slot index and provenance. The result is
 durable after detail pruning.
+Requirement rows can also carry `resultObservationCount`: the number of selected
+crafts whose schematic was read at result processing rather than submission. The
+UI labels that population explicitly; it is not a saved-material denominator.
 
 Return-page limits default to 50 and have a hard maximum of 200. Pass opaque
 `nextCursor` values unchanged with the same recipe, filter, and query method;

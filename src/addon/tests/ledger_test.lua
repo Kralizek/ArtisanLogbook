@@ -3029,4 +3029,87 @@ test("issue 30 schema-2 migration preserves facts and is idempotent without inve
   assert(schema2.schemaVersion == 2)
 end)
 
+test("ordinary batch repeated begins preserve request inputs and independent operation IDs", function()
+  local ledger = newLedger()
+  local request = assert(ledger:SubmitCraft(1230869, 2, false, nil,
+    { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 240991 } } },
+    inputEvidence({ 240991 })))
+  for operation = 9201, 9202 do
+    ledger:BeginCraft(1230869)
+    ledger:BeginCraft(1230869)
+    local craft = assert(ledger:RecordResult({ operationID = operation, itemID = 241309, quantity = 5,
+      resourcesReturned = { { reagent = { itemID = 240991 }, quantity = 2 } } }))
+    assert(craft.recipeId == 1230869 and craft.requestId == request.id)
+    assert(craft.inputComplete == true and craft.outcomeSource == "native")
+  end
+  assert(ledger.pendingRequest == nil and not ledger.operationOwnershipUncertain)
+  assert(reagentRow(ledger.database, 240991).matchedAllocatedQuantity == 10)
+end)
+
+test("ordinary unowned result independently retains recipe and expected requirements without request facts", function()
+  local ledger, clock = newLedger({ retentionDays = 1 })
+  assert(ledger:AddDimension("recipe", 1230869))
+  assert(ledger:AddDimension("item", 241309))
+  assert(ledger:LearnRecipeOutput(1230869, 241309))
+  assert(ledger:SubmitCraft(1230869, 2, false))
+  ledger:CancelCraft()
+  assert(ledger:SubmitCraft(1230869, 1, false, nil,
+    { { dataSlotIndex = 9, quantity = 1, reagent = { itemID = 247724 } } }))
+  local expected = { recipeId = 1230869, observation = "result", requirements = {
+    { dataSlotIndex = 1, candidateItemIDs = { 240990, 240991 }, requiredQuantity = 5, source = "schematic" },
+    { dataSlotIndex = 2, candidateItemIDs = { 236761, 236767 }, requiredQuantity = 8, source = "schematic" },
+  } }
+  local fact = assert(ledger:RecordResult({ operationID = 9301, itemID = 241309, quantity = 5,
+    resourcesReturned = {
+      { reagent = { itemID = 240991 }, quantity = 2 },
+      { reagent = { itemID = 236761 }, quantity = 2 },
+    } }, expected))
+  assert(fact.recipeId == 1230869 and fact.requestId == nil and fact.inputComplete == nil)
+  assert(fact.materialsSavingsEligible == nil and fact.grossRequirementsComplete == nil)
+  assert(fact.outcomeSource == "unverified" and fact.resourcefulnessComplete == nil)
+  assert(fact.requirementObservation == "result" and fact.requestCorrelationReason == "ownership-quarantine")
+  assert(#fact.reagentRequirements == 2 and #ledger.database.reagentRequirementSeries == 2)
+  assert(reagentRow(ledger.database, 240991).allocatedQuantity == nil)
+  assert(reagentRow(ledger.database, 240991).matchedCraftCount == nil)
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  assert(loaded.craftById[fact.id].requirementObservation == "result")
+  clock.current = clock.current + 2 * 86400
+  loaded:Prune(clock.current)
+  loaded = assert(Ledger.New(loaded.database, clock))
+  assert(#loaded.database.crafts == 0 and #loaded.database.reagentRequirementSeries == 2)
+  assert(reagentRow(loaded.database, 240991).returnedQuantity == 2)
+end)
+
+test("independent ordinary requirements reject ambiguous outputs and known stale operations", function()
+  local ledger = newLedger()
+  assert(ledger:AddDimension("recipe", 101))
+  assert(ledger:AddDimension("recipe", 102))
+  assert(ledger:AddDimension("item", 900))
+  assert(ledger:LearnRecipeOutput(101, 900))
+  assert(ledger:LearnRecipeOutput(102, 900))
+  assert(ledger:SubmitCraft(101, 2, false))
+  ledger:CancelCraft()
+  assert(ledger:SubmitCraft(101, 1, false))
+  local evidence = { recipeId = 101, observation = "result", requirements = {
+    { dataSlotIndex = 1, candidateItemIDs = { 50 }, requiredQuantity = 2, source = "schematic" },
+  } }
+  local fact = assert(ledger:RecordResult({ operationID = 9401, itemID = 900, quantity = 1 }, evidence))
+  assert(fact.recipeId == nil and fact.reagentRequirements == nil)
+  assert(#ledger.database.reagentRequirementSeries == 0)
+  local stale = assert(ledger:RecordResult({ operationID = 9401, itemID = 900, quantity = 1 }, evidence))
+  assert(stale.recipeId == nil and stale.reagentRequirements == nil)
+  local unique = newLedger()
+  assert(unique:AddDimension("recipe", 101))
+  assert(unique:AddDimension("item", 900))
+  assert(unique:LearnRecipeOutput(101, 900))
+  assert(unique:SubmitCraft(101, 2, false))
+  unique:CancelCraft()
+  assert(unique:SubmitCraft(101, 1, false))
+  local missing = assert(unique:RecordResult({ operationID = 9402, itemID = 900, quantity = 1 },
+    { recipeId = 101, observation = "result", requirements = {} }))
+  assert(missing.recipeId == 101 and missing.reagentRequirements == nil and missing.requestId == nil)
+  local duplicate = assert(unique:RecordResult({ operationID = 9402, itemID = 900, quantity = 1 }, evidence))
+  assert(duplicate.recipeId == nil and duplicate.reagentRequirements == nil)
+end)
+
 print(string.format("%d ledger tests passed", passed))

@@ -267,6 +267,42 @@ reconstructed. Enchant, salvage and recraft calls do not receive guessed recipe
 inputs. Order `CraftRecipe` snapshots use their submitted selections and
 schematic, without assigning ownership to either the crafter or customer.
 
+### Ordinary capture and independent expectations
+
+The Retail adapter normalizes omitted `CraftRecipe` count/concentration arguments
+to one cast and no concentration. It does not turn missing reagent selections
+into exact allocations. Identical repeated begin events are idempotent only while
+the same clean personal request is pending. Conflicting begins, replaced unfinished
+batches and interrupted operations still refuse request ownership; a reload resets
+runtime quarantine, not historical outcome provenance.
+
+For an ordinary result with valid primary shape but no owned request, a unique
+existing output-to-recipe relationship can establish recipe identity independently
+of request identity. Core samples a readable schematic at result processing and
+preserves supported required Basic slots as expectations, including singleton
+fixed items, in `reagentRequirements`. These records carry
+`requirementObservation = "result"`; they are not craft-time submission snapshots,
+do not carry exact allocation rows or ownership evidence, and do not set
+`inputComplete` or `grossRequirementsComplete`. The outcome remains unverified
+where ownership was refused. Missing schematics retain only the independently
+known recipe identity; ambiguous output relationships and known stale callbacks
+gain neither identity nor requirements through this path. Orders and salvage
+are outside this new path.
+
+Durable candidate-set rows may carry `resultObservationCount`, counting results
+whose expectations were sampled this way. This count never participates in a
+Resourcefulness rate or material-savings ratio. Reload and pruning preserve these
+expected quantities and positive returns without replaying either contribution.
+`requestCorrelationReason` records why a pending/uncertain request was refused:
+observed operation ID, ownership quarantine, conflicting begin, ambiguous context,
+or nonprimary result. These diagnostics do not authorize a correlation.
+
+Historical recipe recovery transfers identity and existing measured contributions
+only. It cannot reconstruct discarded submitted selections or craft-time
+schematics from return IDs. Previously unknown crafts with no saved schematic
+evidence remain without requirements; current schematics are not retroactively
+asserted as historical input facts.
+
 ### Cohorts and measurement grains
 
 The daily metrics describe three Resourcefulness populations:

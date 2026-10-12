@@ -264,6 +264,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     end
     for index in pairs(selected) do if not slots[index] then unknown = true end end
     if unknown then inputs.complete, inputs.grossRequirementsComplete = false, false end
+    inputs.slotIdentityUncertain = unknown
     if not unknown then
       for itemId in pairs(totals) do
         if not blocked[itemId] then inputs.completeItemIDs[#inputs.completeItemIDs + 1] = { itemID = itemId } end
@@ -272,8 +273,21 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     return inputs
   end
 
+  function adapter.SnapshotExpectedRequirements(recipeId)
+    local inputs = snapshotRecipeInputs(recipeId, nil, {})
+    if not inputs or inputs.slotIdentityUncertain then return nil end
+    local requirements = inputs.requirements
+    for _, fixed in ipairs(inputs.fixed) do
+      requirements[#requirements + 1] = { dataSlotIndex = fixed.dataSlotIndex,
+        candidateItemIDs = { fixed.itemID }, requiredQuantity = fixed.quantity, source = "schematic" }
+    end
+    return { recipeId = recipeId, requirements = requirements, observation = "result" }
+  end
+
   local function submitPersonalCraft(recipeId, count, orderId, concentration, recipeLevel, submitted)
     if type(submitCraft) ~= "function" then return end
+    if count == nil then count = 1 end
+    if concentration == nil then concentration = false end
     local selections = snapshotSelections(submitted)
     local quote
     local tradeSkill = api.C_TradeSkillUI

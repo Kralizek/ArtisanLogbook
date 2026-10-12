@@ -331,6 +331,10 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       GameTooltip:AddLine(UI.Number(family.requiredQuantity) .. " expected units across " ..
         UI.Count(family.craftCount, "craft") .. "; candidate items: " .. table.concat(candidates, " / ") ..
         ". " .. allocationNote, 1, 1, 1, true)
+      if family.resultObservationCount then
+        GameTooltip:AddLine(UI.Count(family.resultObservationCount, "craft") ..
+          ": schematic observed at result, not a submitted input snapshot.", 1, 1, 1, true)
+      end
     end
     if pane.requirementMore then
       GameTooltip:AddLine("Additional schematic alternatives are available in the Core API.", 1, 1, 1, true)

@@ -3729,3 +3729,90 @@ end)()
   print("PASS R1/R2 production ownership gate, stale/unknown IDs, request preservation, output learning, reload and pruning")
   print("PASS N1/N2 nonpersonal boundaries, management purge provenance, lifecycle controls and read-only suspension status")
 end)()
+
+;(function()
+  local savedEnum = environment.Enum
+  local savedSchematic = environment.C_TradeSkillUI.GetRecipeSchematic
+  local savedQualities = environment.C_TradeSkillUI.GetRecipeQualityItemIDs
+  local savedInfo = environment.C_TradeSkillUI.GetRecipeInfo
+  local recipeId, outputId = 1230870, 241310
+  local slots = {
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 5,
+      reagents = { { itemID = 240990 }, { itemID = 240991 } }, variableQuantities = {} },
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 2, quantityRequired = 8,
+      reagents = { { itemID = 236761 }, { itemID = 236767 } }, variableQuantities = {} },
+    { dataSlotType = 2, reagentType = 2, required = false, dataSlotIndex = 3, quantityRequired = 1,
+      reagents = { { itemID = 247724 } }, variableQuantities = {} },
+  }
+  environment.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2 } }
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(id)
+    if id == recipeId then return { recipeID = id, outputItemID = outputId, reagentSlotSchematics = slots } end
+  end
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function(id)
+    if id == recipeId then return { outputId } end
+  end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(id)
+    if id == recipeId then return { recipeID = id, name = "Void-Shrouded Tincture" } end
+  end
+  local core = reload(nil)
+  local api = environment.ArtisanLogbookAPI
+  core.ledger:AddDimension("item", 240991, { name = "Sunglass Vial" })
+  core.ledger:AddDimension("item", 236761, { name = "Tranquility Bloom" })
+
+  hooks.CraftRecipe(recipeId)
+  assert(core.ledger.pendingRequest and not core.ledgerCaptureError)
+  local request = core.ledger.requestById[core.ledger.pendingRequest.id]
+  assert(request.requestedCount == 1 and request.useConcentration == false and request.allocations == nil)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9501, itemID = outputId,
+    quantity = 5, resourcesReturned = {} })
+  local initial = api.GetCraft(1)
+  assert(initial.recipe.id == recipeId and initial.request.id == request.id)
+  assert(initial.outcomeSource == "native" and initial.inputComplete == nil)
+
+  hooks.CraftRecipe(recipeId, 2, {}, nil, nil, false)
+  core.HandleRetailEvent("TRADE_SKILL_CLOSE")
+  hooks.CraftRecipe(recipeId, 1, { { dataSlotIndex = 3, quantity = 1, reagent = { itemID = 247724 } } }, nil, nil, false)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9502, itemID = outputId, quantity = 5,
+    resourcesReturned = { { reagent = { itemID = 240991 }, quantity = 2 },
+      { reagent = { itemID = 236761 }, quantity = 2 } } })
+  local craft = api.GetCraft(2)
+  assert(craft.recipe.id == recipeId and craft.request == nil and craft.outcomeSource == "unverified")
+  assert(craft.requirementObservation == "result" and craft.requestCorrelationReason == "ownership-quarantine")
+  assert(#craft.reagentRequirements == 2 and #craft.reagents == 2 and craft.materialsSavingsEligible == nil)
+  for _, reagent in ipairs(craft.reagents) do assert(reagent.allocatedQuantity == nil) end
+  local ui = loadUI()
+  local activity = ui.UI.Activity(craft, true)
+  assert(#activity == 1 and activity[1].tooltip:find("Returned material units: 4", 1, true))
+  assert(activity[1].tooltip:find("5 expected by recipe schematic", 1, true))
+  assert(activity[1].tooltip:find("8 expected by recipe schematic", 1, true))
+  assert(activity[1].tooltip:find("schematic observed at result", 1, true))
+  ui.productionWindow:OpenCraft(craft.id)
+  assert(ui.productionWindow.craftDetailPage.inputEvidence.text:find("observed at result", 1, true))
+  local requirements = api.GetRecipeReagentRequirements(recipeId).requirements
+  local hasResultObservation = false
+  for _, family in ipairs(requirements) do
+    hasResultObservation = hasResultObservation or family.resultObservationCount == 1
+  end
+  assert(hasResultObservation)
+  local outcome = api.GetRecipeOutcomes(recipeId).totals
+  assert(outcome.resourcefulnessAuthoritativeProcCountObservedCount == 1)
+  assert(outcome.resourcefulnessProcCount == 1)
+  for _, row in ipairs(api.GetRecipeReagentStatistics(recipeId).reagents) do assert(row.matchedCraftCount == 0) end
+
+  local saved = core.ledger.database
+  local loaded = reload(saved)
+  assert(environment.ArtisanLogbookAPI.GetCraft(2).requirementObservation == "result")
+  assert(loaded.ledger:RepairUnknownRecipes().repairedCount == 0)
+  loaded.ledger:Prune(loaded.ledger.wall() + 61 * 86400)
+  assert(#loaded.ledger.database.crafts == 0)
+  assert(#environment.ArtisanLogbookAPI.GetRecipeReagentRequirements(recipeId).requirements == 2)
+  environment.Enum = savedEnum
+  environment.C_TradeSkillUI.GetRecipeSchematic = savedSchematic
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = savedQualities
+  environment.C_TradeSkillUI.GetRecipeInfo = savedInfo
+  print("PASS ordinary optional arguments, repeated begins, result-time requirements, UI evidence, pruning and reload")
+end)()

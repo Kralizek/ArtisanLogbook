@@ -50,6 +50,21 @@ Aggregate data survives detail retention pruning. Recipe repair must transfer al
 
 ## Result ownership and lifecycle
 
+Ordinary-craft acceptance replays exposed two rejection paths: optional
+`CraftRecipe` arguments were required by Core, and duplicate identical begins
+made a clean personal request ambiguous. The adapter now normalizes API defaults;
+duplicate begins for the same clean request are idempotent. Interrupted/replaced
+ownership remains quarantined. The provided screenshots show attribution recovery
+after reload, but no current event trace or current SavedVariables accompanies
+them; they do not prove which path caused a particular live result.
+
+Recipe identity and expected requirements do not require an allocation ownership
+claim. For ordinary unowned results only, unique existing output metadata supports
+identity and a result-time schematic observation supports expected Basic quantities.
+The new provenance remains separate from submitted selections, complete exact
+inputs and player savings; outcomes are never upgraded by this enrichment. No
+prospecting/salvage correlation changes are included (#32).
+
 The latest hook or `TRADE_SKILL_CRAFT_BEGIN` alone does not prove that a later asynchronous result belongs to that hook. Positive game operation IDs retain runtime observation provenance. Previously seen unsupported/stale IDs cannot acquire a newer personal request, consume its count, copy its input proof or teach its output mapping. Primary identity eligibility gates authoritative normalization, personal request association, batch consumption and output learning coherently.
 
 A malformed/nonprimary/bonus callback does not consume a clean pending request, even when another callback for the same operation ID may later complete the same original request. Duplicate primary results must not consume multiple positions. An incomplete return list, unlike a malformed primary result, does not by itself invalidate legitimate input ownership.

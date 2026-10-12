@@ -1405,6 +1405,9 @@ function UI.ReagentDescription(reagent, craft)
     description = description .. "quantity unknown"
   end
   if reagent.quality ~= nil then description = description .. " (quality " .. reagent.quality .. ")" end
+  if craft and craft.requirementObservation == "result" then
+    description = description .. "; schematic observed at result, not submitted inputs"
+  end
   return description
 end
 
