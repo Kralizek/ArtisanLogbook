@@ -82,7 +82,7 @@ jobs:
           done
 
       - name: Install Lua and packaging tools
-        run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip
+        run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip python3-yaml
 
       - name: Test and package
         run: bash src/addon/scripts/package.sh
@@ -132,8 +132,30 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          matrix=$(ruby src/addon/scripts/curseforge-matrix.rb)
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json, os, re, yaml
+
+          rows = yaml.safe_load(open(".curseforge.yml"))["gameVersions"]
+          if not isinstance(rows, list) or not rows:
+              raise ValueError("gameVersions must be a nonempty array")
+          names = set()
+          for row in rows:
+              name, version, game_id = row["name"], row["version"], row["id"]
+              if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", name) or name in names:
+                  raise ValueError("Invalid or duplicate flavor")
+              names.add(name)
+              if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+                  raise ValueError("Invalid game version")
+              if type(game_id) is not int or game_id <= 0:
+                  raise ValueError("Game version ID must be a positive integer")
+              major, minor, patch = map(int, version.split("."))
+              row["interface"] = major * 10000 + minor * 100 + patch
+              # The existing unqualified bundle is Retail only.
+              flavor = "" if name == "retail" else f"-{name}"
+              row["asset"] = f"ArtisanLogbook-Bundle{flavor}-{os.environ['VERSION']}.zip"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("matrix=" + json.dumps({"include": rows}, separators=(",", ":")) + "\n")
+          PY
 
   curseforge:
     needs: release
@@ -153,6 +175,7 @@ jobs:
           FLAVOR: ${{ matrix.name }}
           GAME_VERSION_ID: ${{ matrix.id }}
           ASSET: ${{ matrix.asset }}
+          INTERFACE: ${{ matrix.interface }}
         shell: bash
         run: |
           set -euo pipefail
@@ -162,10 +185,9 @@ jobs:
           bundle="authoritative/$ASSET"
           test -s "$bundle"
           unzip -tq "$bundle"
-          interface=$(ruby -e 'v=ARGV[0].split(".").map(&:to_i); puts v[0]*10000+v[1]*100+v[2]' '${{ matrix.version }}')
           for addon in ArtisanLogbook ArtisanLogbook_Core; do
             unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## X-Release-Tag: $TAG"
-            unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## Interface: $interface"
+            unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## Interface: $INTERFACE"
           done
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > authoritative/notes.md
           digest=$(sha256sum "$bundle" | cut -d' ' -f1)
