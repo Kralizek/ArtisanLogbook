@@ -134,7 +134,19 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     { title = "Known input", width = (width - 60) * .22, value = function(row)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
     end, exact = function(row)
-      if row.allocatedQuantity == nil then return "No submitted or fixed schematic input quantity is available." end
+      if row.allocatedQuantity == nil then
+        if row.schematicRequirement then
+          local candidateCount = (row.schematicRequirement.candidateItems and #row.schematicRequirement.candidateItems) or
+            (row.schematicRequirement.candidateItemIDs and #row.schematicRequirement.candidateItemIDs) or 0
+          if candidateCount > 1 then
+            return "Schematic expects " .. UI.Number(row.schematicRequirement.requiredQuantity) .. " units across " ..
+              UI.Count(candidateCount, "quality option") .. "; exact quality split is not established and not a savings basis."
+          elseif candidateCount == 1 then
+            return "Schematic expects " .. UI.Number(row.schematicRequirement.requiredQuantity) .. " units; submitted allocation not reconciled and not a savings basis."
+          end
+        end
+        return "No submitted or fixed schematic input quantity is available."
+      end
       if row.inputTotalComplete then return UI.Number(row.allocatedQuantity) .. " exact item units reconciled to the recipe." end
       return UI.Number(row.allocatedQuantity) .. " submitted or schematic-fixed units; the exact item total is not reconciled and is not a savings basis."
     end },
@@ -195,6 +207,20 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
         if reagent.returnedQuantity ~= nil then
           row.returnedQuantity = (row.returnedQuantity or 0) + reagent.returnedQuantity
         end
+        if row.allocatedQuantity == nil and craft.reagentRequirements then
+          for _, req in ipairs(craft.reagentRequirements) do
+            if req.candidateItems then
+              for _, cand in ipairs(req.candidateItems) do
+                if cand.id == itemId then row.schematicRequirement = req; break end
+              end
+            elseif req.candidateItemIDs then
+              for _, cid in ipairs(req.candidateItemIDs) do
+                if cid == itemId then row.schematicRequirement = req; break end
+              end
+            end
+            if row.schematicRequirement then break end
+          end
+        end
       end
     end
     local itemIds = {}
@@ -225,10 +251,17 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     end
     if #craft.reagentRequirements > 0 then
       local requirement = craft.reagentRequirements[1]
+      local candidateCount = (requirement.candidateItems and #requirement.candidateItems) or
+        (requirement.candidateItemIDs and #requirement.candidateItemIDs) or 0
       local text = "Schematic expects " .. UI.Number(requirement.requiredQuantity) .. " units across " ..
-        UI.Count(#requirement.candidateItems, "candidate item") .. "; submitted allocation not reconciled."
+        UI.Count(candidateCount, "quality option")
       if #craft.reagentRequirements > 1 then
         text = text .. " + " .. UI.Count(#craft.reagentRequirements - 1, "other slot")
+      end
+      if candidateCount > 1 then
+        text = text .. "; exact split unavailable."
+      else
+        text = text .. "; submitted allocation not reconciled."
       end
       detail.inputEvidence:SetText(text)
     end

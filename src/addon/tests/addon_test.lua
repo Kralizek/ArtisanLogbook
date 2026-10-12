@@ -1153,12 +1153,61 @@ assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 
   "Azeroot: 5 submitted input units; the exact item total is not reconciled, 1 returned")
 assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
   "Azeroot: 4 returned (required quantity unavailable)")
+assert(UI.ReagentDescription({ item = { id = 240990, name = "Sunglass Vial" }, returnedQuantity = 1 }, {
+  reagentRequirements = {
+    { requiredQuantity = 5, candidateItems = { { id = 240990, name = "Sunglass Vial" }, { id = 240991, name = "Sunglass Vial" } } }
+  }
+}) == "Sunglass Vial: 1 returned (5 expected by recipe schematic across 2 quality options; exact split unavailable)")
+assert(UI.ReagentDescription({ item = { id = 236761, name = "Tranquility Bloom" }, returnedQuantity = 1 }, {
+  reagentRequirements = {
+    { requiredQuantity = 8, candidateItemIDs = { 236761, 236762, 236763 } }
+  }
+}) == "Tranquility Bloom: 1 returned (8 expected by recipe schematic across 3 quality options; exact split unavailable)")
+assert(UI.ReagentDescription({ item = { id = 100, name = "Special Herb" }, returnedQuantity = 2 }, {
+  reagentRequirements = {
+    { requiredQuantity = 4, candidateItemIDs = { 100 } }
+  }
+}) == "Special Herb: 2 returned (4 expected by recipe schematic; submitted allocation not reconciled)")
+assert(UI.ReagentDescription({ item = { id = 999, name = "Unknown Herb" }, returnedQuantity = 2 }, {
+  reagentRequirements = {
+    { requiredQuantity = 4, candidateItemIDs = { 100 } }
+  }
+}) == "Unknown Herb: 2 returned (required quantity unavailable)")
 assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) ==
   "#100: 2 submitted input units; the exact item total is not reconciled")
 assert(UI.ReagentDescription({ item = { name = "Flux" }, allocatedQuantity = 2, fixed = true }) ==
   "Flux: 2 expected by the recipe schematic")
 assert(UI.ReagentDescription({ item = { name = "Ore" }, allocatedQuantity = 3,
   inputTotalComplete = true }) == "Ore: 3 submitted and reconciled input units")
+do
+  local craftWithRequirements = {
+    recipe = { name = "Light's Potential", maxQuality = 3 },
+    outputItem = { id = 241308, name = "Light's Potential" },
+    outputQuantity = 20,
+    outputQuality = 2,
+    multicraftBonus = 15,
+    concentrationSpent = 294,
+    hasIngenuityProc = true,
+    ingenuityRefund = 147,
+    reagents = {
+      { item = { id = 247724, name = "Multicraft Matrix" }, allocatedQuantity = 1, returnedQuantity = 0, inputTotalComplete = true },
+      { item = { id = 240990, name = "Sunglass Vial" }, returnedQuantity = 1 },
+      { item = { id = 236761, name = "Tranquility Bloom" }, returnedQuantity = 1 },
+    },
+    reagentRequirements = {
+      { requiredQuantity = 5, candidateItems = { { id = 240990, name = "Sunglass Vial" }, { id = 240991, name = "Sunglass Vial" } } },
+      { requiredQuantity = 8, candidateItems = { { id = 236761, name = "Tranquility Bloom" }, { id = 236762, name = "Tranquility Bloom" }, { id = 236763, name = "Tranquility Bloom" } } },
+    }
+  }
+  local lightsActivity = UI.Activity(craftWithRequirements)
+  local herbTooltip
+  for _, ind in ipairs(lightsActivity) do
+    if ind.icon == "Interface\\Icons\\INV_Misc_Herb_19" then herbTooltip = ind.tooltip end
+  end
+  assert(herbTooltip:find("Returned material units: 2", 1, true))
+  assert(herbTooltip:find("Sunglass Vial: 1 returned (5 expected by recipe schematic across 2 quality options; exact split unavailable)", 1, true))
+  assert(herbTooltip:find("Tranquility Bloom: 1 returned (8 expected by recipe schematic across 3 quality options; exact split unavailable)", 1, true))
+end
 local longName = "Silvermoon Health Potion of the Long Night"
 local sampleTable = UI.ScrollList(environment.CreateFrame("Frame"), 0, 0, 140, 140,
   { { title = "Recipe", width = 116, value = function(row) return row.name end } }, function() end)
@@ -2697,6 +2746,27 @@ do
   assert(#detail.returnedReagents.items == 2)
   assert(detail.fields.Resourcefulness.text == "Return recorded")
   assert(detail.inputEvidence.text == "Input requirements are unavailable.")
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.reagents = {
+      { item = { id = 8, name = "Bloom" }, returnedQuantity = 1 },
+      { item = { id = 9, name = "Petal" }, returnedQuantity = 1 },
+    }
+    craft.reagentRequirements = {
+      { requiredQuantity = 8, candidateItems = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom Q2" } } },
+      { requiredQuantity = 2, candidateItems = { { id = 9, name = "Petal" } } },
+    }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(detail.inputEvidence.text:find("Schematic expects 8 units across 2 quality options + 1 other slot; exact split unavailable", 1, true))
+  local bloomRow = detail.returnedReagents.items[1]
+  local petalRow = detail.returnedReagents.items[2]
+  assert(bloomRow.allocatedQuantity == nil and bloomRow.returnedQuantity == 1)
+  local bloomTooltip = detail.returnedReagents.columns[2].exact(bloomRow)
+  assert(bloomTooltip:find("Schematic expects 8 units across 2 quality options; exact quality split is not established and not a savings basis", 1, true))
+  local petalTooltip = detail.returnedReagents.columns[2].exact(petalRow)
+  assert(petalTooltip:find("Schematic expects 2 units; submitted allocation not reconciled and not a savings basis", 1, true))
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.resourcefulnessComplete = false

@@ -899,7 +899,7 @@ function UI.Activity(craft, extrasOnly)
     local lines = { "Returned material units: " .. returned }
     for _, reagent in ipairs(craft.reagents or {}) do
       if reagent.returnedQuantity and reagent.returnedQuantity > 0 then
-        lines[#lines + 1] = UI.ReagentDescription(reagent)
+        lines[#lines + 1] = UI.ReagentDescription(reagent, craft)
       end
     end
     add("Interface\\Icons\\INV_Misc_Herb_19", UI.Number(returned), table.concat(lines, "\n"))
@@ -913,6 +913,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   frame:SetPoint("TOPLEFT", x, y)
   if dark then UI.Surface(frame, false) end
   frame.rows, frame.items = {}, {}
+  frame.columns = columns
   function frame:SetSelection(itemId)
     self.selectedItemId = itemId
     for _, row in ipairs(self.rows) do
@@ -1352,7 +1353,7 @@ function UI.CraftHighlights(craft)
   return details
 end
 
-function UI.ReagentDescription(reagent)
+function UI.ReagentDescription(reagent, craft)
   local description = UI.Name(reagent.item) .. ": "
   if reagent.allocatedQuantity ~= nil then
     if reagent.fixed then
@@ -1366,7 +1367,40 @@ function UI.ReagentDescription(reagent)
       description = description .. ", " .. reagent.returnedQuantity .. " returned"
     end
   elseif reagent.returnedQuantity ~= nil then
-    description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
+    local matchingRequirement
+    if craft and craft.reagentRequirements then
+      local itemId = reagent.item and reagent.item.id
+      if itemId then
+        for _, req in ipairs(craft.reagentRequirements) do
+          if req.candidateItems then
+            for _, cand in ipairs(req.candidateItems) do
+              if cand.id == itemId then matchingRequirement = req; break end
+            end
+          elseif req.candidateItemIDs then
+            for _, cid in ipairs(req.candidateItemIDs) do
+              if cid == itemId then matchingRequirement = req; break end
+            end
+          end
+          if matchingRequirement then break end
+        end
+      end
+    end
+    if matchingRequirement then
+      local candidateCount = (matchingRequirement.candidateItems and #matchingRequirement.candidateItems) or
+        (matchingRequirement.candidateItemIDs and #matchingRequirement.candidateItemIDs) or 0
+      if candidateCount > 1 then
+        description = description .. reagent.returnedQuantity .. " returned (" ..
+          UI.Number(matchingRequirement.requiredQuantity) .. " expected by recipe schematic across " ..
+          UI.Count(candidateCount, "quality option") .. "; exact split unavailable)"
+      elseif candidateCount == 1 then
+        description = description .. reagent.returnedQuantity .. " returned (" ..
+          UI.Number(matchingRequirement.requiredQuantity) .. " expected by recipe schematic; submitted allocation not reconciled)"
+      else
+        description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
+      end
+    else
+      description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
+    end
   else
     description = description .. "quantity unknown"
   end

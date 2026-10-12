@@ -301,6 +301,41 @@ test("schematic snapshots preserve required basic quality families without assig
   end) == nil)
 end)
 
+test("automatic crafting captures ModifiedReagent basic quality families like Light's Potential", function()
+  local api, _, hooks = environment()
+  api.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Modifying = 0, Basic = 1, Finishing = 2, Automatic = 3 } }
+  local lightsPotentialSlots = {
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 5,
+      reagents = { { itemID = 240990 }, { itemID = 240991 } } },
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 2, quantityRequired = 8,
+      reagents = { { itemID = 236761 }, { itemID = 236762 }, { itemID = 236763 } } },
+    { dataSlotType = 2, reagentType = 2, required = false, dataSlotIndex = 3, quantityRequired = 1,
+      reagents = { { itemID = 247724 } } }
+  }
+  api.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, reagentSlotSchematics = lightsPotentialSlots }
+  end
+  local submitted
+  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    function(_, _, _, _, _, inputs) submitted = inputs end, function() end)
+
+  -- Automatic crafting: only the selected finishing reagent is in selections
+  hooks.CraftRecipe(1230869, 1, { { dataSlotIndex = 3, quantity = 1, reagent = { itemID = 247724 } } }, 1, nil, false)
+  assert(submitted.complete == false and submitted.grossRequirementsComplete == true)
+  assert(#submitted.requirements == 2)
+  assert(submitted.requirements[1].dataSlotIndex == 1 and submitted.requirements[1].requiredQuantity == 5)
+  assert(#submitted.requirements[1].candidateItemIDs == 2 and submitted.requirements[1].candidateItemIDs[1] == 240990)
+  assert(submitted.requirements[2].dataSlotIndex == 2 and submitted.requirements[2].requiredQuantity == 8)
+  assert(#submitted.requirements[2].candidateItemIDs == 3 and submitted.requirements[2].candidateItemIDs[1] == 236761)
+  assert(#submitted.completeItemIDs == 1 and submitted.completeItemIDs[1].itemID == 247724)
+
+  -- Missing schematic: requirements missing and grossRequirementsComplete is false
+  api.C_TradeSkillUI.GetRecipeSchematic = function() return nil end
+  hooks.CraftRecipe(1230869, 1, { { dataSlotIndex = 3, quantity = 1, reagent = { itemID = 247724 } } }, 1, nil, false)
+  assert(submitted == nil)
+end)
+
 test("empty and invalid quotes cannot resurrect removed submitted selections", function()
   local api, _, hooks = environment()
   local submissions = {}

@@ -165,11 +165,11 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
       end
     end
     if not dense(schematic.reagentSlotSchematics) then unknown = true end
-    local function preserveBasicRequirement(index, candidates, requiredQuantity, allocationConflict)
+    local function preserveBasicRequirement(index, candidates, requiredQuantity, allocationConflict, isFixedReagentSlot)
       local candidateIDs = {}
       for itemId in pairs(candidates) do candidateIDs[#candidateIDs + 1] = itemId end
       table.sort(candidateIDs)
-      if #candidateIDs == 1 and not allocationConflict then
+      if #candidateIDs == 1 and isFixedReagentSlot and not allocationConflict then
         local itemId = candidateIDs[1]
         inputs.fixed[#inputs.fixed + 1] = { dataSlotIndex = index, itemID = itemId,
           quantity = requiredQuantity }
@@ -180,7 +180,9 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         dataSlotIndex = index, candidateItemIDs = candidateIDs,
         requiredQuantity = requiredQuantity, source = "schematic",
       }
-      if allocationConflict and #candidateIDs == 1 then blocked[candidateIDs[1]] = true end
+      if (allocationConflict or not isFixedReagentSlot) and #candidateIDs == 1 then
+        blocked[candidateIDs[1]] = true
+      end
       return true
     end
     for _, slot in pairs(schematic.reagentSlotSchematics) do
@@ -205,7 +207,8 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           (slot.variableQuantities == nil or (dense(slot.variableQuantities) and #slot.variableQuantities == 0))
         local grossRequirementKnown = false
         local allocations, quantity = selected[index] or {}, 0
-        if slotType == slotTypes.Reagent and supported and slot.reagentType == reagentTypes.Basic then
+        if (slotType == slotTypes.Reagent or slotType == slotTypes.ModifiedReagent) and supported and
+            slot.reagentType == reagentTypes.Basic then
           if #allocations > 0 then
             local valid, candidateQuantities = dense(selections), {}
             for _, selection in ipairs(allocations) do
@@ -222,19 +225,19 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
             else
               supported = false
               if slot.required then
-                preserveBasicRequirement(index, candidates, slot.quantityRequired, true)
+                preserveBasicRequirement(index, candidates, slot.quantityRequired, true, slotType == slotTypes.Reagent)
                 grossRequirementKnown = true
               end
             end
           elseif not slot.required then
             supported = dense(selections)
           else
-            grossRequirementKnown = preserveBasicRequirement(index, candidates, slot.quantityRequired, false)
+            grossRequirementKnown = preserveBasicRequirement(index, candidates, slot.quantityRequired, false,
+              slotType == slotTypes.Reagent)
             if grossRequirementKnown then supported = false end
           end
         elseif slotType == slotTypes.ModifiedReagent and supported and dense(selections) and
-            (slot.reagentType == reagentTypes.Basic or
-              (reagentTypes.Modifying ~= nil and slot.reagentType == reagentTypes.Modifying) or
+            ((reagentTypes.Modifying ~= nil and slot.reagentType == reagentTypes.Modifying) or
               (reagentTypes.Finishing ~= nil and slot.reagentType == reagentTypes.Finishing)) then
           for _, selection in ipairs(allocations) do
             if not candidates[selection.reagent.itemID] then supported = false end
