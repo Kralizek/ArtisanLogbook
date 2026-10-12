@@ -1,0 +1,5 @@
+# Game versions advertised for each supported World of Warcraft flavor.
+# Add other flavors only after validating compatibility and packaging for them.
+gameVersions:
+  retail:
+    - "12.1.0"
