@@ -16,6 +16,7 @@ on:
       - ".github/workflows/ci-addon.yml"
       - ".github/workflows/release-addon.yml"
       - ".curseforge.yml"
+      - ".github/workflows/scripts/**"
   workflow_dispatch:
 
 permissions:
