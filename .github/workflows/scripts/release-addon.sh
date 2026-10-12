@@ -57,10 +57,15 @@ case "${1:-}" in
     gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > authoritative/notes.md
     digest=$(sha256sum "$bundle" | cut -d' ' -f1)
     echo "digest=$digest" >> "$GITHUB_OUTPUT"
+    # GitHub Actions multiline outputs require a delimiter absent from the content.
+    delimiter="ARTISAN_NOTES_$(cat /proc/sys/kernel/random/uuid)"
+    while grep -Fxq "$delimiter" authoritative/notes.md; do
+      delimiter="ARTISAN_NOTES_$(cat /proc/sys/kernel/random/uuid)"
+    done
     {
-      echo 'notes<<ARTISAN_RELEASE_NOTES_EOF'
+      printf 'notes<<%s\n' "$delimiter"
       cat authoritative/notes.md
-      echo 'ARTISAN_RELEASE_NOTES_EOF'
+      printf '\n%s\n' "$delimiter"
     } >> "$GITHUB_OUTPUT"
     ;;
   check-curseforge)
@@ -70,8 +75,8 @@ case "${1:-}" in
     if asset_present "$marker"; then
       gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$marker" --dir authoritative
       jq -e --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
-        --arg flavor "$FLAVOR" --argjson gameVersionId "$GAME_VERSION_ID" --arg asset "$ASSET" \
-        '.bundleSha256 == $sha and .projectId == $project and .flavor == $flavor and .gameVersionId == $gameVersionId and .asset == $asset' "authoritative/$marker" >/dev/null ||
+        --arg flavor "$FLAVOR" --argjson gameVersionId "$GAME_VERSION_ID" --arg asset "$ASSET" --arg tag "$TAG" \
+        '.tag == $tag and .bundleSha256 == $sha and .projectId == $project and .flavor == $flavor and .gameVersionId == $gameVersionId and .asset == $asset' "authoritative/$marker" >/dev/null ||
         die "CurseForge marker conflicts with current bundle or project"
       echo "skip=true" >> "$GITHUB_OUTPUT"
       echo "CurseForge publication already recorded for $TAG."
