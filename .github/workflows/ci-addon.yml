@@ -46,6 +46,9 @@ jobs:
 
       - name: Test and package
         run: bash src/addon/scripts/package.sh
+      - name: Validate CurseForge bundle layout
+        run: bash .github/workflows/scripts/validate-addon-bundle.sh src/addon/dist/ArtisanLogbook-Bundle.zip
+
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'workflow_dispatch'
         with:
