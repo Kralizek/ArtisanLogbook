@@ -188,13 +188,10 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   qualityTitle:SetText("Output by quality")
   local qualityWidth = inner - 24
   local qualityList = UI.ScrollList(overview, 0, -202, inner, 130, {
-    { title = "Result", width = qualityWidth * .35, value = function(row)
-      return UI.Name(row.item) .. (row.quality and " (Q" .. row.quality .. ")" or " (quality unknown)")
-    end, create = function(owner, left) return UI.ItemCell(owner, left, qualityWidth * .35) end,
+    { title = "Result", width = qualityWidth * .35, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, qualityWidth * .35) end,
       update = function(cell, row)
-        cell:Update(row.item and { id = row.item.id,
-          name = UI.Name(row.item) .. (row.quality and " (Q" .. row.quality .. ")" or " (quality unknown)") } or nil,
-          UI.QualityAtlas(recipeId, row.quality, pane.maxQuality))
+        cell:Update(row.item, UI.QualityAtlas(recipeId, row.quality, pane.maxQuality))
       end },
     { title = "Crafts", width = qualityWidth * .10, value = function(row) return UI.Number(row.craftCount) end,
       exact = function(row) return UI.Count(row.craftCount, "craft") end },

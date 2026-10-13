@@ -2462,6 +2462,11 @@ do
   local craft = assert(environment.RecordFixtureResult(ledger, { operationID = 1, itemID = 5302, quantity = 4, craftingQuality = 2,
     multicraft = 1, concentrationSpent = 100, hasIngenuityProc = true, ingenuityRefund = 20,
     resourcesReturned = { { reagent = { itemID = 5301 }, quantity = 2 } } }))
+  environment.savedRecipeQualityInfo = environment.C_TradeSkillUI.GetRecipeItemQualityInfo
+  environment.C_TradeSkillUI.GetRecipeItemQualityInfo = function(recipeId, quality)
+    if recipeId == 9850 then return { icon = "Quality-" .. quality } end
+    return environment.savedRecipeQualityInfo and environment.savedRecipeQualityInfo(recipeId, quality)
+  end
   environment.ArtisanLogbookUISettings.trivialReagents = {}
   local ui = loadUI()
   local window = ui.productionWindow
@@ -2539,7 +2544,11 @@ do
   assert(recipe.outcomes.qualityList.items[1].quality == 2 and recipe.outcomes.qualityList.items[1].quantity == 4)
   local qualityColumns = recipe.outcomes.qualityList.columns
   assert(#qualityColumns == 6 and qualityColumns[1].title == "Result" and qualityColumns[2].title == "Crafts")
-  assert(qualityColumns[1].value(recipe.outcomes.qualityList.items[1]):find("(Q2)", 1, true))
+  assert(qualityColumns[1].value(recipe.outcomes.qualityList.items[1]) == ui.UI.Name(recipe.outcomes.qualityList.items[1].item))
+  assert(not qualityColumns[1].value(recipe.outcomes.qualityList.items[1]):find("(Q", 1, true),
+    qualityColumns[1].value(recipe.outcomes.qualityList.items[1]))
+  assert(recipe.outcomes.qualityList.rows[1].widgets[1].widget.quality:IsShown())
+  assert(recipe.outcomes.qualityList.rows[1].widgets[1].widget.quality.atlas == "Quality-2")
   assert(recipe.outcomes.qualityList.items[1].craftCount == 1 and
     qualityColumns[3].value(recipe.outcomes.qualityList.items[1]) == "4" and
     qualityColumns[4].value(recipe.outcomes.qualityList.items[1]) == "4")
@@ -2547,6 +2556,8 @@ do
     qualityColumns[6].value(recipe.outcomes.qualityList.items[1]) == "100")
   assert(recipe.outcomes.qualityTitle:IsShown())
   assert(recipe.outcomes.tiles[2].note.text == "items per craft")
+  environment.C_TradeSkillUI.GetRecipeItemQualityInfo = environment.savedRecipeQualityInfo
+  environment.savedRecipeQualityInfo = nil
   local from, to = ui.UI.Range(environment.GetServerTime(), 30)
   assert(recipe.outcomes.chart.start.text == os.date("!%d %b %Y", from),
     tostring(recipe.outcomes.chart.start.text) .. " / " .. os.date("!%d %b %Y", from))
