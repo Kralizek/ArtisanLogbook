@@ -217,6 +217,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
           UI.Count(row.craftCount, "craft")) or "Average unavailable because some costs are missing."
     end },
   }, function(row) UI.ItemTooltip(overview, row.item) end, "No output quantities for this period")
+  qualityList.tooltipKind = "recipe"
+  qualityList.tooltipFilter = function() return pane:Filter() end
   local qualityStatus = UI.Text(overview, 0, -340, inner, 32)
   pane.qualityList, pane.qualityTitle, pane.qualityStatus = qualityList, qualityTitle, qualityStatus
   function pane:QualityBreakdown(filter, totals)
@@ -402,6 +404,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   end
 
   function pane:Refresh(keepMaterialPage)
+    UI.Tooltip.ReleaseTree(self)
     self:SetScript("OnUpdate", nil)
     self.returnWorker:SetScript("OnUpdate", nil)
     self.qualityWorker:SetScript("OnUpdate", nil)
@@ -537,6 +540,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       if state.materials then materialList:Restore(state.materials) end
     end
     recipeId = id
+    qualityList.tooltipRecipe = pane.recipe or { id = id }
     local available = { { label = "All", value = false } }
     for _, entry in ipairs(api.GetCharacters() or {}) do
       available[#available + 1] = { label = UI.Name(entry), value = entry.key, classFile = entry.classFile }

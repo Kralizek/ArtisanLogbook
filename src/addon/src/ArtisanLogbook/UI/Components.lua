@@ -230,12 +230,14 @@ function UI.NavItem(parent, width, action)
   button.label = UI.Text(button, 28, -4, width - 34, 18)
   button.label:SetWordWrap(false)
   button:SetScript("OnClick", function(self) action(self.entry) end)
-  button:SetScript("OnEnter", function(self)
+  UI.Tooltip.Bind(button, function(self)
+    if not self.entry then return end
+    if self.entry.page == "Recipe" then UI.RecipeTooltip(self, self.entry.identity, {}); return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetText(self.entry.label)
+    UI.Tooltip.owner = self
     GameTooltip:Show()
   end)
-  button:SetScript("OnLeave", function() GameTooltip:Hide() end)
   function button:Update(entry, selected)
     self.entry = entry
     self.icon:SetTexture(entry.icon or "Interface\\Icons\\INV_Misc_Book_09")
@@ -367,10 +369,13 @@ function UI.Choices(facet, character)
 end
 
 function UI.ItemTooltip(owner, item)
-  if not item then return end
+  if not item then UI.Tooltip.Hide(owner); return end
   GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-  if item.id and type(GameTooltip.SetItemByID) == "function" then GameTooltip:SetItemByID(item.id)
-  else GameTooltip:SetText(UI.Name(item)) end
+  GameTooltip:ClearLines()
+  UI.Tooltip.owner = owner
+  local shown = item.id and type(GameTooltip.SetItemByID) == "function" and
+    pcall(GameTooltip.SetItemByID, GameTooltip, item.id)
+  if not shown then GameTooltip:SetText(UI.Name(item)) end
   if item.id then GameTooltip:AddLine("Item ID: " .. item.id, 1, 1, 1) end
   if item.note then GameTooltip:AddLine(item.note, 1, 1, 1, true) end
   GameTooltip:Show()
@@ -381,8 +386,10 @@ function UI.ItemCell(parent, left, width)
   cell:SetPoint("TOPLEFT", left, 0); cell:SetSize(width, 28)
   cell:EnableMouse(true)
   cell:SetPropagateMouseClicks(true)
-  cell:SetScript("OnEnter", function(self) UI.ItemTooltip(self, self.item) end)
-  cell:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  UI.Tooltip.Bind(cell, function(self)
+    if self.item then UI.ItemTooltip(self, self.item)
+    elseif parent:GetScript("OnEnter") then parent:GetScript("OnEnter")(parent) end
+  end)
   cell.icon = cell:CreateTexture(nil, "ARTWORK")
   cell.icon:SetSize(22, 22); cell.icon:SetPoint("TOPLEFT", 2, -3)
   cell.quality = cell:CreateTexture(nil, "OVERLAY")
@@ -390,6 +397,7 @@ function UI.ItemCell(parent, left, width)
   cell.label = UI.Text(cell, 30, -5, width - 34, 22)
   cell.label:SetWordWrap(false)
   function cell:Update(item, atlas, icon)
+    UI.Tooltip.ReleaseTree(self)
     self.item = item
     self.icon:SetTexture(icon or (item and type(GetItemIcon) == "function" and GetItemIcon(item.id)) or
       "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -431,6 +439,7 @@ function UI.HistoryColumns(width, context)
     columns[#columns + 1] = { title = "Timestamp", width = 94,
       value = function(row) return UI.DateTime(row.timestamp) end, exact = function(row) return UI.DateTime(row.timestamp, true) end }
   end
+  columns.tooltipKind = "craft"
   return columns
 end
 
@@ -887,6 +896,7 @@ function UI.Activity(craft, extrasOnly)
     local icon = item and item.id and type(GetItemIcon) == "function" and GetItemIcon(item.id)
     add(icon or "Interface\\Icons\\INV_Misc_QuestionMark", "",
       "Output: " .. output .. " (" .. UI.Value(craft.outputQuantity) .. " total)")
+    indicators[#indicators].item = item
   end
   if craft.concentrationSpent and craft.concentrationSpent > 0 then
     add("Interface\\Icons\\Spell_Arcane_Arcane01", UI.Number(craft.concentrationSpent),
@@ -928,6 +938,8 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   if dark then UI.Surface(frame, false) end
   frame.rows, frame.items = {}, {}
   frame.columns = columns
+  frame.tooltipKind = columns.tooltipKind
+  frame:HookScript("OnHide", function(self) UI.Tooltip.ReleaseTree(self) end)
   function frame:SetSelection(itemId)
     self.selectedItemId = itemId
     for _, row in ipairs(self.rows) do
@@ -973,6 +985,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   end
 
   function frame:Reset(message)
+    UI.Tooltip.ReleaseTree(self)
     for _, row in ipairs(self.rows) do row.item = nil; row:Hide() end
     self.items = {}
     self.empty:SetText(message or emptyMessage or "No entries yet")
@@ -1034,8 +1047,17 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
           left = left + column.width
         end
         row:SetScript("OnClick", function(self) onOpen(self.item) end)
-        row:SetScript("OnEnter", function(self)
+        UI.Tooltip.Bind(row, function(self)
+          if not self.item then return end
+          if frame.tooltipKind == "craft" then UI.CraftTooltip(self, self.item); return end
+          if frame.tooltipKind == "recipe" then
+            local recipe = frame.tooltipRecipe or self.item.recipe
+            local filter = type(frame.tooltipFilter) == "function" and frame.tooltipFilter() or frame.tooltipFilter
+            UI.RecipeTooltip(self, recipe, filter)
+            return
+          end
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+          UI.Tooltip.owner = self
           GameTooltip:SetText(self.item.title or UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
           for _, column in ipairs(columns) do
             if column.value and column.title ~= "Recipe" then
@@ -1051,9 +1073,9 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
           if self.item.timestamp then GameTooltip:AddLine("Crafted: " .. UI.DateTime(self.item.timestamp, true), 1, 1, 1) end
           GameTooltip:Show()
         end)
-        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
         self.rows[index] = row
       end
+      UI.Tooltip.ReleaseTree(row)
       row.item = item
       row.selection:SetShown(item.item and item.item.id == self.selectedItemId or false)
       for _, cell in ipairs(row.widgets) do cell.column.update(cell.widget, item) end
@@ -1085,17 +1107,22 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
             button.icon:SetSize(17, 17)
             button.icon:SetPoint("LEFT", 0, 0)
             button.label = UI.Text(button, 18, -4, 34, 18)
-            button:SetScript("OnEnter", function(self)
+            button:EnableMouse(true)
+            button:SetPropagateMouseClicks(true)
+            UI.Tooltip.Bind(button, function(self)
+              if self.item then UI.ItemTooltip(self, self.item); return end
+              if frame.tooltipKind == "craft" then UI.CraftTooltip(self, row.item); return end
               GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+              UI.Tooltip.owner = self
               GameTooltip:SetText(self.tooltip)
               GameTooltip:Show()
             end)
-            button:SetScript("OnLeave", function() GameTooltip:Hide() end)
             row.indicators[indicatorIndex] = button
           end
           button:SetWidth(indicatorWidth)
           button:SetPoint("LEFT", row.activity, "LEFT", left, 0)
           button.tooltip = indicator.tooltip
+          button.item = indicator.item
           if indicator.atlas then button.icon:SetAtlas(indicator.atlas)
           else button.icon:SetTexture(indicator.icon) end
           button.label:SetText("")
@@ -1111,6 +1138,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
     end
   end
   scroll:HookScript("OnVerticalScroll", function(self)
+    UI.Tooltip.ReleaseTree(frame)
     if frame.onNearEnd and self:GetVerticalScroll() + self:GetHeight() >= child:GetHeight() - 100 then
       frame.onNearEnd()
     end
@@ -1303,8 +1331,10 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
   end
   local list = UI.ScrollList(parent, x, y, width, height, columns,
     function(row) if row.recipe then openRecipe(row.recipe) end end, "No recipes in this period")
+  list.tooltipKind = "recipe"
   list.worker = CreateFrame("Frame", nil, list)
   function list:Enrich(filter)
+    self.tooltipFilter = filter
     local index = 1
     self.worker:SetScript("OnUpdate", function(worker)
       local row = list.items[index]

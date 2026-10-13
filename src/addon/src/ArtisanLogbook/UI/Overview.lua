@@ -139,6 +139,7 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     end
   end)
   function summary:Render(series, filter)
+    UI.Tooltip.ReleaseTree(self)
     self.generation = self.generation + 1
     local generation = self.generation
     self.returnedWorker:SetScript("OnUpdate", nil)
@@ -222,18 +223,15 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     self.tiles[6].value:SetTextColor(.30, .22, .06)
     self.tiles[6]:SetScript("OnClick", function() if top and top.recipe and openRecipe then openRecipe(top.recipe) end end)
     self.tiles[6]:EnableMouse(true)
-    self.tiles[6]:SetScript("OnEnter", function(self)
-      local result = top and top.recipe and ArtisanLogbookAPI.GetCrafts({ recipes = { top.recipe.id },
-        time = filter.time, characters = filter.characters }, { limit = 1 })
-      local item = result and result.crafts[1] and result.crafts[1].outputItem
-      if item then UI.ItemTooltip(self, item)
+    UI.Tooltip.Bind(self.tiles[6], function(self)
+      if top and top.recipe then UI.RecipeTooltip(self, top.recipe, filter)
       else
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(top and UI.Name(top.recipe) or emptyRecipeMessage)
+        UI.Tooltip.owner = self
+        GameTooltip:SetText(emptyRecipeMessage)
         GameTooltip:Show()
       end
     end)
-    self.tiles[6]:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.tiles[5].value:SetText("...")
     self.tiles[5].note:SetText("")
     self.tiles[5]:SetScript("OnEnter", nil)

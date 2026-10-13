@@ -292,6 +292,49 @@ their recipe totals on hover.
 There is no classification dropdown or duplicate metadata footer. No full-modal
 scrollbar is required. Multiple output identities are not synthesized.
 
+## Recipe and craft hover previews
+
+The two images on issue #35 inform the grouped native `GameTooltip` layout:
+gold titles and section headings, gray labels, aligned label/value rows, white
+ordinary values, green observed positive outcomes, and amber partial coverage.
+Observed negatives say `No proc`; missing craft measurements say `Not recorded`.
+Unavailable aggregate measurements say `Not available`, never a guessed zero.
+
+Recipe rows, pinned recipe navigation, most-crafted tiles, recipe titles and
+the non-item area of output-quality rows share the recipe preview. Period,
+character and profession scope is displayed and applied to public API queries.
+Character counts use durable daily history; missing identities are marked as
+known-only counts. Last-crafted timestamps are explicitly retained-detail
+timestamps, with a UTC last-craft-day fallback after details are pruned.
+Multicraft and Ingenuity frequencies use their observed populations.
+Resourcefulness uses only the authoritative cohort, with its measured coverage
+shown; legacy positive-only evidence is a separate known-proc note, not a rate.
+Extra output is an absolute measured bonus, not an unsupported base-output
+percentage. Existing informational/statistics controls remain unchanged.
+
+Craft rows, non-item Highlights and craft titles share a compact factual preview.
+It shows the local timestamp, character/profession, output, quality, concentration
+and procs. At most two returned materials are listed, with a remaining-item count
+and an incomplete-return note where appropriate. No full ingredient table is
+duplicated. Each public craft is one recorded result: different output records
+from prospecting/crushing remain separate, never a fabricated combined output.
+
+Concrete output/reagent/returned-item cells and output icons retain Blizzard's
+native item tooltip, with a name fallback if item display fails. Item children
+take precedence over parent summaries and continue propagating row clicks.
+Owner-aware deferred leave handling restores a still-hovered parent; row reuse,
+scrolling, hiding and refreshing clear owned stale content. Names are bounded
+using the shared UTF-8-aware elision helper, and titles/subtitles allow native
+wrapping. Tooltip content contains no nested interactive item targets.
+
+In-game validation remains required: move repeatedly between row text, output
+cells and Highlights, then between sibling items and outside the window. Verify
+no flicker/stale tooltip on filtering, scrolling, modal close and window hide;
+verify item quality/effects and click navigation. Inspect long names at the
+smallest journal/UI scale, missing dimensions, legacy partial data, and multiple
+output result rows. Mocks cannot validate native font metrics, hit-testing,
+asynchronous item loading, screen clamping, strata or taint.
+
 ## Measurements and bounds
 
 - Every period control shares Today, 7/30/60/90/365 days and Custom dates. Recipe,

@@ -49,6 +49,7 @@ function methods:SetText(value) assert(type(value) == "string"); self.text = val
 function methods:SetHeight(value) self.height = value end
 function methods:GetText() return self.text or "" end
 function methods:GetParent() return self.parent end
+function methods:IsMouseOver() return self.mouseOver == true end
 function methods:GetScript(name) return self.scripts[name] end
 function methods:GetWidth() return self.width or 1024 end
 function methods:GetHeight() return self.height or (self.kind == "ScrollFrame" and 300 or 768) end
@@ -60,7 +61,14 @@ function methods:GetStringHeight()
   return math.max(14, (lineCount + 1) * 14)
 end
 function methods:SetScript(name, callback) self.scripts[name] = callback end
-function methods:HookScript(name, callback) self.scripts[name] = callback end
+function methods:HookScript(name, callback)
+  local previous = self.scripts[name]
+  self.scripts[name] = function(...)
+    if previous then previous(...) end
+    callback(...)
+  end
+end
+function methods:SetPropagateMouseClicks(value) self.propagateClicks = value end
 function methods:RegisterEvent(event) self.events[event] = true end
 function methods:UnregisterEvent(event) self.events[event] = nil end
 function methods:RegisterUnitEvent(event, unit) assert(unit == "player"); self:RegisterEvent(event) end
@@ -127,11 +135,22 @@ environment.UIDropDownMenu_SetText = function(frame, text) frame.text = text end
 environment.UIDropDownMenu_Initialize = function(frame, callback) frame.initialize = callback end
 environment.UIDropDownMenu_CreateInfo = function() return {} end
 environment.UIDropDownMenu_AddButton = function() end
-environment.GameTooltip = { SetOwner = function() end,
-  SetText = function(self, text) self.text, self.lines = text, {} end,
-  SetItemByID = function(self, itemId) self.itemId, self.lines = itemId, {} end,
-  AddLine = function(self, text) self.lines[#self.lines + 1] = text end,
-  Show = function() end, Hide = function() end }
+environment.GameTooltip = { SetOwner = function(self, owner) self.owner = owner end,
+  IsOwned = function(self, owner) return self.owner == owner end,
+  ClearLines = function(self) self.lines, self.rows = {}, {} end,
+  SetText = function(self, text, ...) self.text, self.lines, self.itemId, self.titleStyle = text, {}, nil, { ... } end,
+  SetItemByID = function(self, itemId) self.itemId, self.lines, self.text = itemId, {}, nil end,
+  AddLine = function(self, text, ...)
+    self.lines[#self.lines + 1] = text
+    self.lineStyles = self.lineStyles or {}
+    self.lineStyles[text] = { ... }
+  end,
+  AddDoubleLine = function(self, label, value, ...)
+    self.rows = self.rows or {}
+    self.rows[#self.rows + 1] = { label = label, value = value, colors = { ... } }
+    self.lines[#self.lines + 1] = label .. " " .. value
+  end,
+  Show = function(self) self.shown = true end, Hide = function(self) self.shown = false end }
 environment.date = os.date
 environment.DEFAULT_CHAT_FRAME = { AddMessage = function(_, message) notices[#notices + 1] = message end }
 environment.GetServerTime = function() return 1800000000 end
@@ -1885,7 +1904,8 @@ do
         if row.item.recipe.id == 9743 then
           row.scripts.OnEnter(row)
           local tooltip = table.concat(environment.GameTooltip.lines, "\n")
-          assert(tooltip:find("8 procs in 20 crafts (40%)", 1, true))
+          assert(tooltip:find("Resourcefulness: 100.0%", 1, true), tooltip)
+          assert(tooltip:find("8 measured crafts of 20", 1, true), tooltip)
         end
       end
     end
@@ -2526,7 +2546,8 @@ do
   assert(resourcefulnessCell and resourcefulnessCell.label.text == "100% (1)")
   assert(ui.UI.Rate(ranked.totals, "multicraftProcCount") == "100.0%")
   overview.summary.tiles[6].scripts.OnEnter(overview.summary.tiles[6])
-  assert(environment.GameTooltip.itemId == 5302)
+  assert(environment.GameTooltip.text == ui.UI.Name(ranked.recipe) and environment.GameTooltip.itemId == nil,
+    tostring(environment.GameTooltip.text))
   overview.summary.tiles[6].scripts.OnClick()
   assert(window.activeTab == "Recipe" and window.identity.id == 9850)
   local recipe = window.pages.Recipe
@@ -3208,7 +3229,8 @@ do
   assert(recipeResource and recipeResource.label.text == "26.7%")
   recipeRow.scripts.OnEnter(recipeRow)
   local recipeTooltip = table.concat(environment.GameTooltip.lines, "\n")
-  assert(recipeTooltip:find("8 procs in 30 crafts (26.7%)", 1, true), recipeTooltip)
+  assert(recipeTooltip:find("Resourcefulness: Not available", 1, true), recipeTooltip)
+  assert(recipeTooltip:find("8 known return procs; includes unverified history", 1, true), recipeTooltip)
   window:OpenRecipe({ id = 9001 })
   while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
@@ -4226,4 +4248,159 @@ end)()
     environment.C_TradeSkillUI[name] = savedMethods[name]
   end
   print("PASS Thalassian Phoenix Oil detail shows fixed input, quality family expectation and returns without double counting")
+end)()
+
+;(function()
+  local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  local now = environment.GetServerTime()
+  ledger:AddDimension("profession", 171, { name = "Alchemy" })
+  ledger:AddDimension("profession", 333, { name = "Enchanting" })
+  ledger:AddDimension("recipe", 3501, { name = "Tooltip potion", professionId = 171 })
+  ledger:AddDimension("recipe", 3502, { name = "Tooltip enchant", professionId = 333 })
+  ledger:AddDimension("item", 3503, { name = "Potion" })
+  ledger:AddDimension("item", 3504, { name = "Dust" })
+  local function record(recipeId, itemId, quantity, operation)
+    assert(ledger:SubmitCraft(recipeId, 1, false))
+    ledger:BeginCraft(recipeId)
+    return assert(environment.RecordFixtureResult(ledger, { operationID = operation, itemID = itemId,
+      quantity = quantity, multicraft = 0, hasIngenuityProc = false, resourcesReturned = {} }))
+  end
+  ledger.wall = function() return now - 40 * 86400 end
+  record(3501, 3503, 7, 1)
+  ledger.wall = environment.GetServerTime
+  local firstKey = api.GetCharacters()[1].key
+  record(3501, 3503, 2, 2)
+  ledger:CreateSession({ characterName = "Other tooltip crafter", characterGUID = "Player-tooltip-other" })
+  record(3501, 3504, 3, 3)
+  record(3502, 3504, 8, 4)
+  local ui = loadUI().UI
+  local tooltip, owner = environment.GameTooltip, environment.CreateFrame("Frame")
+  local function row(label)
+    for _, entry in ipairs(tooltip.rows) do if entry.label == label .. ":" then return entry end end
+    error("Missing tooltip row: " .. label)
+  end
+  local function color(entry, style)
+    local expected = ui.Tooltip.colors[style]
+    for index = 1, 3 do assert(entry.colors[index + 3] == expected[index], style) end
+    for index = 1, 3 do assert(entry.colors[index] == ui.Tooltip.colors.muted[index]) end
+  end
+  local from, to = ui.Range(now, 30)
+  local filter = { time = { from = from, to = to }, characters = { firstKey }, professions = { 171 } }
+  local recipe = api.GetCraft(2).recipe
+  ui.RecipeTooltip(owner, recipe, filter)
+  assert(tooltip.text == "Tooltip potion" and row("Total crafts").value == "1")
+  assert(row("Characters").value == "1" and row("Total produced").value == "2")
+  assert(row("Resourcefulness").value == "0.0%")
+  color(row("Resourcefulness"), "muted")
+  assert(table.concat(tooltip.lines, "\n"):find("Profession: Alchemy", 1, true))
+  assert(table.concat(tooltip.lines, "\n"):find("Period: " .. os.date("!%Y-%m-%d", from), 1, true))
+  assert(row("Last crafted (retained)").value == ui.DateTime(now, true))
+  ui.RecipeTooltip(owner, recipe, { professions = { 333 } })
+  assert(row("Total crafts").value == "0" and row("Total produced").value == "Not available")
+  ui.RecipeTooltip(owner, recipe, {})
+  assert(row("Total crafts").value == "3" and row("Characters").value == "2")
+  assert(row("Total produced").value == "12")
+  ledger:Prune(now + 61 * 86400)
+  ui.RecipeTooltip(owner, recipe, {})
+  assert(row("Total crafts").value == "3" and row("Characters").value == "2")
+  assert(row("Last craft day (UTC)").value == os.date("!%Y-%m-%d", now))
+  color(row("Last craft day (UTC)"), "partial")
+
+  local originalOutcomes = api.GetRecipeOutcomes
+  api.GetRecipeOutcomes = function(id, scope, options)
+    assert(id == recipe.id and scope.time == nil and scope.characters == nil and scope.professions == nil)
+    assert(options.buckets == 1)
+    return { totals = { craftCount = 3, outputQuantity = 4, outputQuantityObservedCount = 1,
+      multicraftProcCount = 1, multicraftProcCountObservedCount = 2,
+      multicraftBonus = 2, multicraftBonusObservedCount = 1,
+      resourcefulnessProcCount = 2, resourcefulnessProcCountObservedCount = 2,
+      resourcefulnessAuthoritativeProcCount = 0, resourcefulnessAuthoritativeProcCountObservedCount = 1,
+      ingenuityProcCountObservedCount = 0 } }
+  end
+  ui.RecipeTooltip(owner, recipe, {})
+  assert(row("Multicraft procs").value == "50.0%" and row("Extra output").value == "2 known")
+  assert(row("Resourcefulness").value == "0.0%" and row("Ingenuity").value == "Not available")
+  assert(row("Total produced").value == "4 known")
+  color(row("Multicraft procs"), "partial"); color(row("Extra output"), "partial")
+  color(row("Resourcefulness"), "partial"); color(row("Ingenuity"), "muted")
+  assert(table.concat(tooltip.lines, "\n"):find("2 known return procs; includes unverified history", 1, true))
+  api.GetRecipeOutcomes = originalOutcomes
+
+  local craft = { id = 35, timestamp = now, recipe = recipe,
+    character = { name = "Crafter" }, profession = { name = "Alchemy" },
+    outputItem = { id = 3503, name = "Potion" }, outputQuantity = 8, outputQuality = 3,
+    concentrationSpent = 166, multicraftBonus = 3, hasIngenuityProc = false, ingenuityRefund = 99,
+    hasResourcefulnessProc = true, resourcefulnessComplete = true, reagents = {
+      { item = { id = 11, name = "Flux" }, returnedQuantity = 2 },
+      { item = { id = 12, name = "Herb" }, returnedQuantity = 1 },
+      { item = { id = 13, name = "Dust" }, returnedQuantity = 3 },
+    } }
+  ui.CraftTooltip(owner, craft)
+  assert(row("Quality").value == "Rank 3" and row("Concentration").value == "166")
+  assert(row("Produced").value == "8" and row("Multicraft").value == "+3 extra")
+  assert(row("Ingenuity").value == "No proc" and row("Resourcefulness").value == "Triggered")
+  color(row("Multicraft"), "positive"); color(row("Ingenuity"), "muted")
+  assert(table.concat(tooltip.lines, "\n"):find("+1 more materials", 1, true))
+  assert(#tooltip.rows == 10)
+  assert(tooltip.titleStyle[1] == 1 and tooltip.titleStyle[2] == .82 and tooltip.titleStyle[5] == true)
+  craft.resourcefulnessComplete = nil
+  ui.CraftTooltip(owner, craft)
+  assert(tooltip.lineStyles["Partial return record; other returns may be missing"][1] == 1)
+  craft.multicraftBonus = 0
+  ui.CraftTooltip(owner, craft)
+  assert(row("Multicraft").value == "No proc"); color(row("Multicraft"), "muted")
+  ui.CraftTooltip(owner, { recipe = { name = string.rep("Long recipe name ", 25) } })
+  assert(tooltip.text == ui.Elide(string.rep("Long recipe name ", 25), 90) and #tooltip.rows == 8)
+  for _, label in ipairs({ "Date", "Quality", "Concentration", "Produced", "Multicraft", "Resourcefulness", "Ingenuity" }) do
+    assert(row(label).value == "Not recorded", label); color(row(label), "muted")
+  end
+  assert(not table.concat(tooltip.lines, "\n"):find("Materials Returned", 1, true))
+
+  local clicks = 0
+  local list = ui.ScrollList(owner, 0, 0, 600, 120, ui.HistoryColumns(600), function() clicks = clicks + 1 end)
+  local second = { id = 36, timestamp = now, recipe = recipe, outputItem = { id = 3504, name = "Dust" }, outputQuantity = 3 }
+  list:Append({ craft, second })
+  local parent, cell = list.rows[1], list.rows[1].widgets[1].widget
+  parent.mouseOver = true
+  parent.scripts.OnEnter(parent)
+  assert(tooltip.text == "Tooltip potion" and row("Produced").value == "8")
+  cell.scripts.OnEnter(cell)
+  assert(tooltip.itemId == 3503 and cell.propagateClicks)
+  parent.scripts.OnEnter(parent)
+  parent.scripts.OnLeave(parent)
+  assert(tooltip.itemId == 3503 and tooltip.owner == cell and tooltip.shown)
+  cell.scripts.OnLeave(cell)
+  ui.Tooltip.lifecycle.scripts.OnUpdate(ui.Tooltip.lifecycle)
+  assert(tooltip.text == "Tooltip potion" and tooltip.owner == parent and tooltip.shown)
+  local otherCell = ui.ItemCell(parent, 300, 100)
+  otherCell:Update({ id = 3504, name = "Dust" })
+  cell.scripts.OnEnter(cell); cell.scripts.OnLeave(cell); otherCell.scripts.OnEnter(otherCell)
+  assert(not ui.Tooltip.lifecycle.scripts.OnUpdate and tooltip.itemId == 3504)
+  cell.scripts.OnLeave(cell)
+  assert(tooltip.shown and tooltip.owner == otherCell)
+  parent.scripts.OnClick(parent)
+  assert(clicks == 1)
+  otherCell.scripts.OnLeave(otherCell)
+  parent.mouseOver = false
+  ui.Tooltip.lifecycle.scripts.OnUpdate(ui.Tooltip.lifecycle)
+  assert(not tooltip.shown)
+  parent.scripts.OnEnter(parent); list:Repaint(); assert(not tooltip.shown)
+  parent.scripts.OnEnter(parent); list.scroll.scripts.OnVerticalScroll(list.scroll); assert(not tooltip.shown)
+  parent.scripts.OnEnter(parent); list:Hide(); assert(not tooltip.shown)
+  list:Show(); list.rows[2].scripts.OnEnter(list.rows[2])
+  assert(row("Output").value == "Dust" and row("Produced").value == "3")
+  assert(row("Multicraft").value == "Not recorded")
+  list:Reset(); assert(not tooltip.shown)
+  list:Append({ second }); parent.scripts.OnEnter(parent)
+  assert(row("Output").value == "Dust" and not table.concat(tooltip.lines, "\n"):find("Flux", 1, true))
+  local native = tooltip.SetItemByID
+  tooltip.SetItemByID = function() error("Item data unavailable") end
+  cell.scripts.OnEnter(cell)
+  assert(tooltip.text == "Dust" and tooltip.itemId == nil)
+  tooltip.SetItemByID = native
+  list:Reset()
+  parent.scripts.OnEnter(parent)
+  assert(not tooltip.shown)
+  print("PASS structured tooltips: filter scope, pruned/partial measurements, semantic colors, native precedence, lifecycle and multiple outputs")
 end)()

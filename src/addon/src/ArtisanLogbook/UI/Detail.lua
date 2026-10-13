@@ -35,6 +35,11 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
   local history
   local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end, height - 62, openReagent)
   page.outcomes = outcomes
+  local titleHover = CreateFrame("Frame", nil, content)
+  titleHover:SetPoint("TOPLEFT", 0, -4); titleHover:SetSize(width - 244, 52)
+  titleHover:EnableMouse(true)
+  UI.Tooltip.Bind(titleHover, function(self) UI.RecipeTooltip(self, page.recipe, outcomes:Filter()) end)
+  page.titleHover = titleHover
   history = UI.ScrollList(outcomes.views["Craft History"], 0, 0, width - 24, height - 315, UI.RecipeHistoryColumns(width - 24),
     function(craft) openCraft(craft.id) end, "No crafts in this period")
   page.history = history
@@ -67,6 +72,8 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     end
     self.recipe = UI.CopyRecipe(recipe, previous)
     recipe = self.recipe
+    UI.Tooltip.ReleaseTree(titleHover)
+    outcomes.recipe = recipe
     heading:SetText(UI.Name(recipe))
     local details = { "Recipe #" .. recipe.id }
     if recipe.profession then details[#details + 1] = UI.Name(recipe.profession) end
@@ -107,6 +114,18 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local content = CreateFrame("Frame", nil, detail)
   content:SetPoint("TOPLEFT", 18, -72); content:SetSize(width - 36, height - 72)
   detail.content = content
+  local titleHover = CreateFrame("Frame", nil, detail)
+  titleHover:SetPoint("TOPLEFT", 16, -8); titleHover:SetSize(width - 120, 52)
+  titleHover:EnableMouse(true)
+  UI.Tooltip.Bind(titleHover, function(self) if detail.craft then UI.CraftTooltip(self, detail.craft) end end)
+  detail.titleHover = titleHover
+  local iconHover = CreateFrame("Frame", nil, titleHover)
+  iconHover:SetAllPoints(identity); iconHover:EnableMouse(true)
+  UI.Tooltip.Bind(iconHover, function(self)
+    if detail.craft and detail.craft.outputItem then UI.ItemTooltip(self, detail.craft.outputItem)
+    elseif detail.craft then UI.CraftTooltip(self, detail.craft) end
+  end)
+  detail.iconHover = iconHover
   UI.Section(content, "Result", 0, 0, width - 36)
   local resultRow = UI.ItemCell(content, 0, width - 220)
   resultRow:ClearAllPoints(); resultRow:SetPoint("TOPLEFT", 0, -34)
@@ -146,7 +165,9 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   detail.returnedReagents = reagents
 
   function detail:ShowCraft(id)
+    UI.Tooltip.ReleaseTree(self)
     local craft, reason = ArtisanLogbookAPI.GetCraft(id)
+    self.craft = craft
     if not craft then
       heading:SetText("Craft unavailable")
       subtitle:SetText(reason or "Unknown craft")
