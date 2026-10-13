@@ -75,7 +75,8 @@ function UI.CataloguePage(page, width, height, openRecipe)
   UI.LazyList(list, function(cursor)
     local result, reason = ArtisanLogbookAPI.GetRecipeSummaries({ character = character or nil,
       profession = profession or nil, time = period:Time(), sort = sort, search = search, limit = 40, cursor = cursor })
-    list:Enrich({ time = period:Time(), characters = character and { character } or nil })
+    list:Enrich({ time = period:Time(), characters = character and { character } or nil,
+      professions = profession and { profession } or nil })
     return result and result.recipes, result and result.nextCursor or reason
   end)
   function page:Refresh(reset, preserve)
@@ -108,8 +109,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   detail.quality:SetSize(16, 16); detail.quality:SetPoint("TOPLEFT", 18, -18)
   local iconHover = CreateFrame("Frame", nil, content)
   iconHover:SetAllPoints(detail.icon); iconHover:EnableMouse(true)
-  iconHover:SetScript("OnEnter", function(self) UI.ItemTooltip(self, detail.item) end)
-  iconHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  UI.Tooltip.Bind(iconHover, function(self) UI.ItemTooltip(self, detail.item) end)
   detail.iconHover = iconHover
   local heading = UI.Text(content, 40, 0, width - 320, 28, "GameFontNormalLarge")
   local identity = UI.Text(content, 40, -30, width - 40, 18)
@@ -148,6 +148,8 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end },
   }, function(row) if row.recipe then openRecipe(row.recipe) end end, "No crafts with ingredient details")
+  recipes.tooltipKind = "recipe"
+  recipes.tooltipFilter = function() return detail:Filter() end
   detail.recipes = recipes
   function detail:SelectView(name) tabs:Select(name) end
   detail.history = UI.ScrollList(tabs.views["Craft History"], 0, 0, inner, height - 311, UI.HistoryColumns(inner),
