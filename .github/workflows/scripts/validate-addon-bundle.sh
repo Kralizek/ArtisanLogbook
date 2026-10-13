@@ -20,7 +20,7 @@ while IFS= read -r entry; do
 done <<< "$entries"
 
 for addon in ArtisanLogbook ArtisanLogbook_Core; do
-  unzip -Z -1 "$archive" | grep -Fxq "$addon/$addon.toc" || {
+  grep -Fxq "$addon/$addon.toc" <<< "$entries" || {
     echo "::error::Missing $addon/$addon.toc" >&2
     exit 1
   }
