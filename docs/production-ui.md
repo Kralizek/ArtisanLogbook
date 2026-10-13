@@ -268,13 +268,19 @@ cleans up the shade and modal.
 
 The modal is inspection only. A prominent result row combines item, quality,
 quantity and Multicraft contribution. Paired facts show character, timestamp,
-concentration and outcomes. A grouped Inputs and returned materials section shows
-known submitted or schematic-fixed input quantities and returned quantities by
-item ID beside a short input-evidence statement. Alternative schematic
-requirements appear as a compact expected-quantity note; hovering the recipe
-requirement summary lists candidate items without assigning quantities to
-qualities. It does not divide heterogeneous material totals into a misleading
-percentage. Rows open Reagent pages after closing the modal.
+concentration and outcomes. A grouped Inputs and returned materials section lists
+every known ingredient slot: exact submitted or schematic-fixed item rows, and
+schematic requirement slots even when no exact item allocation was captured.
+Separate Exact input, Expected and Returned columns keep these facts distinct;
+an item with both an exact allocation and a single-item expectation shares one
+row without summing them. A quality-alternative slot appears once as a reagent
+family (for example "Eversinging Dust (any of 2 qualities)") with its total
+expected quantity, no quality badge, and returns of its candidate items unless
+that item already has an exact row. The summary line counts exact and schematic
+slots and quality families instead of describing only the first slot. Item rows
+open Reagent pages after closing the modal; family rows do not pick a quality.
+Craft history captured before the fixed/modified slot-index correction may lack
+the family slot entirely; the modal cannot reconstruct it.
 There is no classification dropdown or duplicate metadata footer. No full-modal
 scrollbar is required. Multiple output identities are not synthesized.
 

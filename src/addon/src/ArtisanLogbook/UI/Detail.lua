@@ -127,38 +127,149 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   detail.fields = fields
   detail.inputEvidence = UI.Text(content, 0, -258, width - 36, 18, "GameFontNormalSmall")
   UI.Section(content, "Inputs and returned materials", 0, -286, width - 36)
+  local function candidates(requirement)
+    local items = {}
+    for _, item in ipairs(requirement.candidateItems or {}) do items[#items + 1] = item end
+    for _, itemId in ipairs(#items == 0 and requirement.candidateItemIDs or {}) do items[#items + 1] = { id = itemId } end
+    return items
+  end
+  local function familyLabel(items)
+    local names, seen = {}, {}
+    for _, item in ipairs(items) do
+      local name = UI.Name(item)
+      if not seen[name] then seen[name] = true; names[#names + 1] = name end
+    end
+    if #names == 1 then return names[1] .. " (any of " .. UI.Count(#items, "quality", "qualities") .. ")" end
+    return table.concat(names, " / ")
+  end
+  local columnWidth = (width - 60) * .18
   local reagents = UI.ScrollList(content, 0, -322, width - 36, height - 394, {
-    { title = "Reagent", width = (width - 60) * .56, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .56) end,
-      update = function(cell, row) UI.ReagentCell(cell, row.item) end },
-    { title = "Known input", width = (width - 60) * .22, value = function(row)
+    { title = "Reagent", width = (width - 60) * .46, value = function(row) return row.label or UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .46) end,
+      update = function(cell, row)
+        if row.family then UI.ReagentFamilyCell(cell, row.item, row.label) else UI.ReagentCell(cell, row.item) end
+      end },
+    { title = "Exact input", width = columnWidth, value = function(row)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
     end, exact = function(row)
       if row.allocatedQuantity == nil then
-        if row.schematicRequirement then
-          local candidateCount = (row.schematicRequirement.candidateItems and #row.schematicRequirement.candidateItems) or
-            (row.schematicRequirement.candidateItemIDs and #row.schematicRequirement.candidateItemIDs) or 0
-          if candidateCount > 1 then
-            return "Schematic expects " .. UI.Number(row.schematicRequirement.requiredQuantity) .. " units across " ..
-              UI.Count(candidateCount, "quality option") .. "; exact quality split is not established and not a savings basis."
-          elseif candidateCount == 1 then
-            return "Schematic expects " .. UI.Number(row.schematicRequirement.requiredQuantity) .. " units; submitted allocation not reconciled and not a savings basis."
-          end
-        end
-        return "No submitted or fixed schematic input quantity is available."
+        return row.family and "Quality choice not captured; see the schematic expectation." or
+          "No exact item allocation was captured."
       end
       if row.inputTotalComplete then return UI.Number(row.allocatedQuantity) .. " exact item units reconciled to the recipe." end
       return UI.Number(row.allocatedQuantity) .. " submitted or schematic-fixed units; the exact item total is not reconciled and is not a savings basis."
     end },
-    { title = "Returned", width = (width - 60) * .22, value = function(row)
-      if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
-      return row.returnComplete and row.allocatedQuantity ~= nil and "0" or "-"
+    { title = "Expected", width = columnWidth, value = function(row)
+      return row.expectedQuantity ~= nil and UI.Number(row.expectedQuantity) or "-"
     end, exact = function(row)
-      if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
-      return row.returnComplete and row.allocatedQuantity ~= nil and "0" or "Unavailable"
+      if row.expectedQuantity == nil then return "No separate schematic expectation." end
+      if row.family then
+        return "Schematic expects " .. UI.Number(row.expectedQuantity) .. " units across " ..
+          UI.Count(#row.candidates, "quality option") .. "; exact quality split is not established and not a savings basis."
+      end
+      return "Schematic expects " .. UI.Number(row.expectedQuantity) .. " units; submitted allocation not reconciled and not a savings basis."
     end },
-  }, function(row) if openReagent then goBack(); openReagent(row.item) end end, "No input or return details")
+    { title = "Returned", width = columnWidth, value = function(row)
+      if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
+      return row.returnComplete and "0" or "-"
+    end, exact = function(row)
+      if row.returnedQuantity ~= nil then
+        local text = UI.Count(row.returnedQuantity, "unit") .. " returned"
+        if row.family then
+          local parts = {}
+          for _, returned in ipairs(row.returnedItems) do
+            parts[#parts + 1] = UI.Number(returned.quantity) .. " " .. UI.Name(returned.item) ..
+              (returned.item.id and " (#" .. returned.item.id .. ")" or "")
+          end
+          text = text .. ": " .. table.concat(parts, ", ")
+        end
+        return text .. "."
+      end
+      return row.returnComplete and "0" or "Unavailable"
+    end },
+  }, function(row) if openReagent and not row.family then goBack(); openReagent(row.item) end end, "No input or return details")
   detail.returnedReagents = reagents
+
+  -- Exact allocations, schematic expectations and returns stay in separate columns, so overlap never sums.
+  local function ingredientRows(craft)
+    local byItem, rows, families = {}, {}, {}
+    local exactSlots, expectedSlots, familyCount = {}, 0, 0
+    local function itemRow(item, slot)
+      local row = byItem[item.id]
+      if not row then
+        row = { item = item }
+        byItem[item.id] = row
+        rows[#rows + 1] = row
+      end
+      if slot and (not row.slot or slot < row.slot) then row.slot = slot end
+      return row
+    end
+    for _, reagent in ipairs(craft.reagents or {}) do
+      if reagent.item and reagent.item.id and reagent.allocatedQuantity ~= nil then
+        local row = itemRow(reagent.item, reagent.dataSlotIndex)
+        row.inputTotalComplete = (row.allocatedQuantity == nil or row.inputTotalComplete) and
+          reagent.inputTotalComplete == true
+        row.allocatedQuantity = (row.allocatedQuantity or 0) + reagent.allocatedQuantity
+        exactSlots[reagent.dataSlotIndex or ("item:" .. reagent.item.id)] = true
+      end
+    end
+    for _, requirement in ipairs(craft.reagentRequirements or {}) do
+      local items = candidates(requirement)
+      if #items > 0 and requirement.requiredQuantity ~= nil then
+        expectedSlots = expectedSlots + 1
+        if #items == 1 then
+          local row = itemRow(items[1], requirement.dataSlotIndex)
+          row.expectedQuantity = (row.expectedQuantity or 0) + requirement.requiredQuantity
+        else
+          familyCount = familyCount + 1
+          local row = { family = true, item = items[1], candidates = items, label = familyLabel(items),
+            expectedQuantity = requirement.requiredQuantity, slot = requirement.dataSlotIndex, returnedItems = {} }
+          rows[#rows + 1] = row
+          families[#families + 1] = row
+        end
+      end
+    end
+    for _, reagent in ipairs(craft.reagents or {}) do
+      local quantity, item = reagent.returnedQuantity, reagent.item
+      if quantity ~= nil and item and item.id then
+        local row = byItem[item.id]
+        if not row then
+          for _, family in ipairs(families) do
+            for _, candidate in ipairs(family.candidates) do
+              if candidate.id == item.id then row = family; break end
+            end
+            if row then break end
+          end
+        end
+        row = row or itemRow(item)
+        row.returnedQuantity = (row.returnedQuantity or 0) + quantity
+        if row.family then row.returnedItems[#row.returnedItems + 1] = { item = item, quantity = quantity } end
+      end
+    end
+    table.sort(rows, function(left, right)
+      if (left.slot or math.huge) ~= (right.slot or math.huge) then return (left.slot or math.huge) < (right.slot or math.huge) end
+      if (left.family == true) ~= (right.family == true) then return not left.family end
+      return (left.item.id or 0) < (right.item.id or 0)
+    end)
+    local exactCount = 0
+    for _ in pairs(exactSlots) do exactCount = exactCount + 1 end
+    return rows, exactCount, expectedSlots, familyCount
+  end
+
+  local function ingredientSummary(craft, exactCount, expectedCount, familyCount)
+    if exactCount + expectedCount == 0 then return "Input requirements are unavailable." end
+    local parts = {}
+    if exactCount > 0 then parts[#parts + 1] = UI.Count(exactCount, "exact input slot") end
+    if expectedCount > 0 then
+      parts[#parts + 1] = UI.Count(expectedCount, "schematic slot") ..
+        (familyCount > 0 and " (" .. UI.Count(familyCount, "quality family", "quality families") .. ")" or "")
+    end
+    local prefix = craft.inputComplete == true and "All inputs known: " or
+      craft.grossRequirementsComplete == true and "All slots known: " or "Known so far: "
+    local suffix = craft.requirementObservation == "result" and "; observed at result, submitted inputs unavailable." or
+      familyCount > 0 and "; quality used is not recorded." or "."
+    return prefix .. table.concat(parts, " + ") .. suffix
+  end
 
   function detail:ShowCraft(id)
     local craft, reason = ArtisanLogbookAPI.GetCraft(id)
@@ -189,48 +300,11 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     fields.Ingenuity:SetText(craft.hasIngenuityProc == true and
       (craft.ingenuityRefund and UI.Number(craft.ingenuityRefund) .. " refunded" or "Proc") or
       (craft.hasIngenuityProc == false and "No proc" or "-"))
-    local byItem, returned, total = {}, {}, 0
-    for _, reagent in ipairs(craft.reagents or {}) do
-      local itemId = reagent.item and reagent.item.id
-      if itemId then
-        local row = byItem[itemId]
-        if not row then row = { item = reagent.item }; byItem[itemId] = row end
-        if reagent.allocatedQuantity ~= nil then
-          local hadAllocation = row.allocatedQuantity ~= nil
-          row.allocatedQuantity = (row.allocatedQuantity or 0) + reagent.allocatedQuantity
-          if not hadAllocation then
-            row.inputTotalComplete = reagent.inputTotalComplete == true
-          else
-            row.inputTotalComplete = row.inputTotalComplete == true and reagent.inputTotalComplete == true
-          end
-        end
-        if reagent.returnedQuantity ~= nil then
-          row.returnedQuantity = (row.returnedQuantity or 0) + reagent.returnedQuantity
-        end
-        if row.allocatedQuantity == nil and craft.reagentRequirements then
-          for _, req in ipairs(craft.reagentRequirements) do
-            if req.candidateItems then
-              for _, cand in ipairs(req.candidateItems) do
-                if cand.id == itemId then row.schematicRequirement = req; break end
-              end
-            elseif req.candidateItemIDs then
-              for _, cid in ipairs(req.candidateItemIDs) do
-                if cid == itemId then row.schematicRequirement = req; break end
-              end
-            end
-            if row.schematicRequirement then break end
-          end
-        end
-      end
-    end
-    local itemIds = {}
-    for itemId in pairs(byItem) do itemIds[#itemIds + 1] = itemId end
-    table.sort(itemIds)
+    local rows, exactCount, expectedCount, familyCount = ingredientRows(craft)
     local returnVerified = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
-    for _, itemId in ipairs(itemIds) do
-      local row = byItem[itemId]
+    local total = 0
+    for _, row in ipairs(rows) do
       row.returnComplete = returnVerified
-      returned[#returned + 1] = row
       if row.returnedQuantity and row.returnedQuantity > 0 then total = total + row.returnedQuantity end
     end
     if returnVerified and craft.hasResourcefulnessProc == true then
@@ -242,33 +316,8 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     else
       fields.Resourcefulness:SetText("Outcome unavailable")
     end
-    if craft.inputComplete == true then
-      detail.inputEvidence:SetText("All required inputs are known (gross quantities before returns).")
-    elseif craft.quoteObserved == true or craft.request and craft.request.allocations then
-      detail.inputEvidence:SetText("Some gross inputs are known; the full required amount is unavailable.")
-    else
-      detail.inputEvidence:SetText("Input requirements are unavailable.")
-    end
-    if #craft.reagentRequirements > 0 then
-      local requirement = craft.reagentRequirements[1]
-      local candidateCount = (requirement.candidateItems and #requirement.candidateItems) or
-        (requirement.candidateItemIDs and #requirement.candidateItemIDs) or 0
-      local text = "Schematic expects " .. UI.Number(requirement.requiredQuantity) .. " units across " ..
-        UI.Count(candidateCount, "quality option")
-      if #craft.reagentRequirements > 1 then
-        text = text .. " + " .. UI.Count(#craft.reagentRequirements - 1, "other slot")
-      end
-      if candidateCount > 1 then
-        text = text .. "; exact split unavailable."
-      else
-        text = text .. "; submitted allocation not reconciled."
-      end
-      detail.inputEvidence:SetText(text)
-      if craft.requirementObservation == "result" then
-        detail.inputEvidence:SetText("Expected requirements observed at result; submitted inputs unavailable.")
-      end
-    end
-    reagents:Reset(); reagents:Append(returned)
+    detail.inputEvidence:SetText(ingredientSummary(craft, exactCount, expectedCount, familyCount))
+    reagents:Reset(); reagents:Append(rows)
   end
   detail:Hide()
   return detail

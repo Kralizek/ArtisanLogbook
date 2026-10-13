@@ -41,6 +41,12 @@ function UI.ReagentCell(cell, item)
   UI.ReagentVisual(cell, item.id)
 end
 
+-- Quality families show no tier badge or item tooltip: no particular quality is established.
+function UI.ReagentFamilyCell(cell, item, label)
+  reagentCells[cell] = nil
+  cell:Update({ name = label }, nil, reagentDisplay(item.id).icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+end
+
 function UI.CataloguePage(page, width, height, openRecipe)
   UI.Section(page, "Recipes", 0, -2, width)
   local character, profession, sort, search = false, false, "count", ""

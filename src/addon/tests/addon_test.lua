@@ -2757,7 +2757,7 @@ do
   detail:ShowCraft(second.id)
   assert(#detail.returnedReagents.items == 2)
   assert(detail.fields.Resourcefulness.text == "Return recorded")
-  assert(detail.inputEvidence.text == "Input requirements are unavailable.")
+  assert(detail.inputEvidence.text == "Known so far: 2 exact input slots.", detail.inputEvidence.text)
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.reagents = {
@@ -2765,20 +2765,75 @@ do
       { item = { id = 9, name = "Petal" }, returnedQuantity = 1 },
     }
     craft.reagentRequirements = {
-      { requiredQuantity = 8, candidateItems = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom Q2" } } },
+      { requiredQuantity = 8, candidateItems = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom" } } },
       { requiredQuantity = 2, candidateItems = { { id = 9, name = "Petal" } } },
     }
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(detail.inputEvidence.text:find("Schematic expects 8 units across 2 quality options + 1 other slot; exact split unavailable", 1, true))
-  local bloomRow = detail.returnedReagents.items[1]
-  local petalRow = detail.returnedReagents.items[2]
-  assert(bloomRow.allocatedQuantity == nil and bloomRow.returnedQuantity == 1)
-  local bloomTooltip = detail.returnedReagents.columns[2].exact(bloomRow)
-  assert(bloomTooltip:find("Schematic expects 8 units across 2 quality options; exact quality split is not established and not a savings basis", 1, true))
-  local petalTooltip = detail.returnedReagents.columns[2].exact(petalRow)
-  assert(petalTooltip:find("Schematic expects 2 units; submitted allocation not reconciled and not a savings basis", 1, true))
+  assert(detail.inputEvidence.text ==
+    "Known so far: 2 schematic slots (1 quality family); quality used is not recorded.", detail.inputEvidence.text)
+  local petalRow = detail.returnedReagents.items[1]
+  local bloomRow = detail.returnedReagents.items[2]
+  assert(#detail.returnedReagents.items == 2 and petalRow.item.id == 9 and bloomRow.family)
+  assert(bloomRow.label == "Bloom (any of 2 qualities)" and bloomRow.allocatedQuantity == nil)
+  assert(bloomRow.expectedQuantity == 8 and bloomRow.returnedQuantity == 1)
+  local columns = detail.returnedReagents.columns
+  assert(columns[2].title == "Exact input" and columns[3].title == "Expected" and columns[4].title == "Returned")
+  assert(columns[3].exact(bloomRow):find("Schematic expects 8 units across 2 quality options; exact quality split is not established and not a savings basis", 1, true))
+  assert(columns[3].exact(petalRow):find("Schematic expects 2 units; submitted allocation not reconciled and not a savings basis", 1, true))
+  assert(columns[4].exact(bloomRow) == "1 unit returned: 1 Bloom (#8).")
+  assert(columns[2].value(bloomRow) == "-" and columns[3].value(bloomRow) == "8")
+  local familyCell = detail.returnedReagents.rows[2].widgets[1].widget
+  assert(familyCell.label.text == "Bloom (any of 2 qualities)" and not familyCell.quality:IsShown())
+  ;(function()
+    -- Mixed exact qualities, fixed, family, conflicting partial selections and returns across five slots.
+    api.GetCraft = function()
+      local craft = getCraft(second.id)
+      craft.inputComplete, craft.grossRequirementsComplete = nil, true
+      craft.reagents = {
+        { item = { id = 9, name = "Petal" }, dataSlotIndex = 1, allocatedQuantity = 2, fixed = true, inputTotalComplete = true },
+        { item = { id = 8, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 3, inputTotalComplete = true, returnedQuantity = 1 },
+        { item = { id = 18, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 2, inputTotalComplete = true },
+        { item = { id = 50, name = "Sand" }, dataSlotIndex = 3, allocatedQuantity = 2, inputTotalComplete = false, returnedQuantity = 1 },
+        { item = { id = 40, name = "Ink" }, dataSlotIndex = 5, allocatedQuantity = 1, inputTotalComplete = false },
+        { item = { id = 31, name = "Herb" }, returnedQuantity = 2 },
+        { item = { id = 77, name = "Stray" }, returnedQuantity = 1 },
+      }
+      craft.reagentRequirements = {
+        { dataSlotIndex = 3, requiredQuantity = 4, candidateItems = { { id = 50, name = "Sand" }, { id = 51, name = "Sand" } } },
+        { dataSlotIndex = 4, requiredQuantity = 6, candidateItems = { { id = 30, name = "Herb" }, { id = 31, name = "Herb" }, { id = 32, name = "Herb" } } },
+        { dataSlotIndex = 5, requiredQuantity = 1, candidateItems = { { id = 40, name = "Ink" } } },
+      }
+      return craft
+    end
+    detail:ShowCraft(second.id)
+    local items = detail.returnedReagents.items
+    local expected = { { 9, 2, nil, nil }, { 8, 3, nil, 1 }, { 18, 2, nil, nil }, { 50, 2, nil, 1 },
+      { "family", nil, 4, nil }, { "family", nil, 6, 2 }, { 40, 1, 1, nil }, { 77, nil, nil, 1 } }
+    assert(#items == #expected, #items)
+    for index, shape in ipairs(expected) do
+      local row = items[index]
+      assert(shape[1] == "family" and row.family or row.item.id == shape[1], index)
+      assert(row.allocatedQuantity == shape[2] and row.expectedQuantity == shape[3] and row.returnedQuantity == shape[4], index)
+    end
+    assert(items[5].label == "Sand (any of 2 qualities)" and items[6].label == "Herb (any of 3 qualities)")
+    assert(columns[4].exact(items[6]) == "2 units returned: 2 Herb (#31).")
+    local allocated, returned = 0, 0
+    for _, row in ipairs(items) do
+      allocated = allocated + (row.allocatedQuantity or 0)
+      returned = returned + (row.returnedQuantity or 0)
+    end
+    assert(allocated == 10 and returned == 5)
+    assert(detail.inputEvidence.text ==
+      "All slots known: 4 exact input slots + 3 schematic slots (2 quality families); quality used is not recorded.",
+      detail.inputEvidence.text)
+    assert(columns[2].exact(items[4]):find("not reconciled", 1, true))
+    assert(columns[2].exact(items[5]) == "Quality choice not captured; see the schematic expectation.")
+    local opened = window.activeTab
+    detail.returnedReagents.rows[5].scripts.OnClick(detail.returnedReagents.rows[5])
+    assert(window.craftDetailWindow:IsShown() and window.activeTab == opened)
+  end)()
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.resourcefulnessComplete = false
@@ -3947,4 +4002,69 @@ end)()
   for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs",
       "GetCraftingOperationInfoForOrder" }) do environment.C_TradeSkillUI[name] = savedMethods[name] end
   print("PASS consecutive Patron trace ordering, fixed/modified namespaces, customer omission and no personal savings")
+end)()
+
+;(function()
+  local savedEnum = environment.Enum
+  local savedMethods = {}
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs" }) do
+    savedMethods[name] = environment.C_TradeSkillUI[name]
+  end
+  local recipeId, outputId, mote = 1236491, 243734, 236949
+  environment.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2 } }
+  -- Older captures of this shape stored only Mote of Light: the shared index dropped the family slot.
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(id)
+    if id ~= recipeId then return nil end
+    return { recipeID = id, outputItemID = outputId, reagentSlotSchematics = {
+      { dataSlotType = 1, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 5,
+        reagents = { { itemID = mote } } },
+      { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 3,
+        reagents = { { itemID = 243599 }, { itemID = 243600 } } },
+      { dataSlotType = 2, reagentType = 2, required = false, dataSlotIndex = 3, quantityRequired = 1,
+        reagents = { { itemID = 247788 } } },
+    } }
+  end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(id)
+    if id == recipeId then return { recipeID = id, name = "Thalassian Phoenix Oil" } end
+  end
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function(id)
+    if id == recipeId then return { 243733, outputId } end
+  end
+  local core = reload(nil)
+  core.ledger:AddDimension("item", mote, { name = "Mote of Light" })
+  core.ledger:AddDimension("item", 243599, { name = "Eversinging Dust" })
+  core.ledger:AddDimension("item", 243600, { name = "Eversinging Dust" })
+  hooks.CraftRecipe(recipeId, 1, {}, nil, nil, true)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9601, itemID = outputId, quantity = 5,
+    concentrationSpent = 424, resourcesReturned = { { reagent = { itemID = mote }, quantity = 2 } } })
+  local api = environment.ArtisanLogbookAPI
+  local craft = api.GetCraft(core.ledger.database.crafts[#core.ledger.database.crafts].id)
+  assert(craft.request and craft.recipe.id == recipeId and craft.outcomeSource == "native")
+  assert(#craft.request.fixedReagents == 1 and craft.request.fixedReagents[1].requiredQuantity == 5)
+  assert(craft.grossRequirementsComplete == true and #craft.reagentRequirements == 1)
+  local family = craft.reagentRequirements[1]
+  assert(family.dataSlotIndex == 1 and family.requiredQuantity == 3 and #family.candidateItems == 2)
+
+  local window = loadUI().productionWindow
+  window:OpenCraft(craft.id)
+  local page = window.craftDetailPage
+  local items = page.returnedReagents.items
+  assert(#items == 2, #items)
+  assert(items[1].item.id == mote and items[1].allocatedQuantity == 5 and items[1].returnedQuantity == 2)
+  assert(items[1].expectedQuantity == nil)
+  assert(items[2].family and items[2].label == "Eversinging Dust (any of 2 qualities)")
+  assert(items[2].allocatedQuantity == nil and items[2].expectedQuantity == 3 and items[2].returnedQuantity == nil)
+  local columns = page.returnedReagents.columns
+  assert(columns[2].value(items[2]) == "-" and columns[3].value(items[2]) == "3" and columns[4].value(items[2]) == "0")
+  assert(columns[2].value(items[1]) == "5" and columns[3].value(items[1]) == "-" and columns[4].value(items[1]) == "2")
+  assert(page.inputEvidence.text ==
+    "All slots known: 1 exact input slot + 1 schematic slot (1 quality family); quality used is not recorded.",
+    page.inputEvidence.text)
+  environment.Enum = savedEnum
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs" }) do
+    environment.C_TradeSkillUI[name] = savedMethods[name]
+  end
+  print("PASS Thalassian Phoenix Oil detail shows fixed input, quality family expectation and returns without double counting")
 end)()
