@@ -7,6 +7,7 @@ local lifecycle
 
 Tooltip.colors = {
   heading = { 1, .82, 0 }, value = { 1, 1, 1 }, muted = { .6, .6, .6 },
+  label = { .5, .7, 1 },
   positive = { .2, 1, .4 }, partial = { 1, .65, .2 }, error = { 1, .2, .2 },
 }
 
@@ -20,7 +21,7 @@ end
 
 function Tooltip.Subtitle(text, style)
   if not text or text == "" then return end
-  local color = Tooltip.colors[style or "muted"]
+  local color = Tooltip.colors[style or "value"]
   GameTooltip:AddLine(text, color[1], color[2], color[3], true)
 end
 
@@ -31,7 +32,7 @@ function Tooltip.Section(title)
 end
 
 function Tooltip.Row(label, value, style)
-  local labelColor, valueColor = Tooltip.colors.muted, Tooltip.colors[style or "value"]
+  local labelColor, valueColor = Tooltip.colors.label, Tooltip.colors[style or "value"]
   GameTooltip:AddDoubleLine(label .. ":", UI.Elide(tostring(value), 52),
     labelColor[1], labelColor[2], labelColor[3], valueColor[1], valueColor[2], valueColor[3])
 end
@@ -118,14 +119,19 @@ function Tooltip.Scope(filter)
     if not selection then return "All " .. fallback end
     if #selection == 0 then return "No " .. fallback end
     local selected = {}
-    for _, id in ipairs(selection) do
+    for index, id in ipairs(selection) do
+      if index > 2 then selected[#selected + 1] = "+" .. (#selection - 2) .. " more"; break end
       local name = "Unknown"
       for _, entry in ipairs(entries or {}) do
-        if entry[key] == id then name = UI.Name(entry); break end
+        if entry[key] == id then
+          name = UI.Elide(UI.Name(entry), 40)
+          if key == "key" then name = UI.CharacterName({ name = name, classFile = entry.classFile }) end
+          break
+        end
       end
       selected[#selected + 1] = name
     end
-    return UI.Elide(table.concat(selected, ", "), 60)
+    return table.concat(selected, ", ")
   end
   Tooltip.Subtitle("Period: " .. period)
   Tooltip.Subtitle("Character: " .. names(filter.characters, ArtisanLogbookAPI.GetCharacters(), "key", "characters"))
@@ -210,7 +216,7 @@ end
 
 function UI.CraftTooltip(owner, craft)
   Tooltip.Begin(owner, UI.Name(craft.recipe, "Unattributed craft"))
-  Tooltip.Subtitle(UI.Name(craft.character, "Character not recorded") .. " - " ..
+  Tooltip.Subtitle((craft.character and UI.CharacterName(craft.character) or "Character not recorded") .. " - " ..
     UI.Name(craft.profession, "Profession not recorded"))
   Tooltip.Section("Craft Details")
   Tooltip.Row("Date", craft.timestamp and UI.DateTime(craft.timestamp, true) or "Not recorded",

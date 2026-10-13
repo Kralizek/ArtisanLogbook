@@ -4283,7 +4283,7 @@ end)()
   local function color(entry, style)
     local expected = ui.Tooltip.colors[style]
     for index = 1, 3 do assert(entry.colors[index + 3] == expected[index], style) end
-    for index = 1, 3 do assert(entry.colors[index] == ui.Tooltip.colors.muted[index]) end
+    for index = 1, 3 do assert(entry.colors[index] == ui.Tooltip.colors.label[index]) end
   end
   local from, to = ui.Range(now, 30)
   local filter = { time = { from = from, to = to }, characters = { firstKey }, professions = { 171 } }
@@ -4294,6 +4294,12 @@ end)()
   assert(row("Resourcefulness").value == "0.0%")
   color(row("Resourcefulness"), "muted")
   assert(table.concat(tooltip.lines, "\n"):find("Profession: Alchemy", 1, true))
+  assert(table.concat(tooltip.lines, "\n"):find("Character: |cff3399ffTestCrafter|r", 1, true))
+  for index = 1, 3 do
+    assert(tooltip.lineStyles["Profession: Alchemy"][index] == 1)
+    assert(tooltip.lineStyles["Alchemy"][index] == 1)
+  end
+  color(row("Total produced"), "value")
   assert(table.concat(tooltip.lines, "\n"):find("Period: " .. os.date("!%Y-%m-%d", from), 1, true))
   assert(row("Last crafted (retained)").value == ui.DateTime(now, true))
   ui.RecipeTooltip(owner, recipe, { professions = { 333 } })
@@ -4328,7 +4334,7 @@ end)()
   api.GetRecipeOutcomes = originalOutcomes
 
   local craft = { id = 35, timestamp = now, recipe = recipe,
-    character = { name = "Crafter" }, profession = { name = "Alchemy" },
+    character = { name = "Crafter", classFile = "MAGE" }, profession = { name = "Alchemy" },
     outputItem = { id = 3503, name = "Potion" }, outputQuantity = 8, outputQuality = 3,
     concentrationSpent = 166, multicraftBonus = 3, hasIngenuityProc = false, ingenuityRefund = 99,
     hasResourcefulnessProc = true, resourcefulnessComplete = true, reagents = {
@@ -4337,6 +4343,9 @@ end)()
       { item = { id = 13, name = "Dust" }, returnedQuantity = 3 },
     } }
   ui.CraftTooltip(owner, craft)
+  assert(tooltip.lines[1] == "|cff3399ffCrafter|r - Alchemy")
+  for index = 1, 3 do assert(tooltip.lineStyles[tooltip.lines[1]][index] == 1) end
+  assert(ui.Tooltip.colors.label[1] == .5 and ui.Tooltip.colors.label[2] == .7 and ui.Tooltip.colors.label[3] == 1)
   assert(row("Quality").value == "Rank 3" and row("Concentration").value == "166")
   assert(row("Produced").value == "8" and row("Multicraft").value == "+3 extra")
   assert(row("Ingenuity").value == "No proc" and row("Resourcefulness").value == "Triggered")

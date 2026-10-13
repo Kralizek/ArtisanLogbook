@@ -295,8 +295,10 @@ scrollbar is required. Multiple output identities are not synthesized.
 ## Recipe and craft hover previews
 
 The two images on issue #35 inform the grouped native `GameTooltip` layout:
-gold titles and section headings, gray labels, aligned label/value rows, white
-ordinary values, green observed positive outcomes, and amber partial coverage.
+gold titles and section headings, TSM-like light-blue labels, aligned label/value
+rows, white ordinary values and contextual text, green observed positive outcomes,
+and amber partial coverage. Gray is reserved for muted negatives and unavailable
+data. Character names use their recorded class colors when class data is known.
 Observed negatives say `No proc`; missing craft measurements say `Not recorded`.
 Unavailable aggregate measurements say `Not available`, never a guessed zero.
 
