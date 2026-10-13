@@ -13,6 +13,7 @@ Tooltip.colors = {
 
 function Tooltip.Begin(owner, title)
   GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+  GameTooltip:SetClampedToScreen(true)
   GameTooltip:ClearLines()
   local color = Tooltip.colors.heading
   GameTooltip:SetText(UI.Elide(title, 90), color[1], color[2], color[3], 1, true)
@@ -107,13 +108,17 @@ function Tooltip.Bind(owner, present)
   owner:HookScript("OnHide", function(self) Tooltip.ReleaseTree(self) end)
 end
 
-function Tooltip.Scope(filter)
+function Tooltip.Scope(filter, recipe)
   filter = filter or {}
   local period = "All time"
   if filter.time then
-    local from = filter.time.from and date("!%Y-%m-%d", filter.time.from) or "Start"
-    local to = filter.time.to and date("!%Y-%m-%d", filter.time.to - 1) or "Present"
-    period = from .. " to " .. to .. " (UTC)"
+    local start, finish = filter.time.from, filter.time.to and filter.time.to - 1
+    local sameYear = start and finish and date("!%Y", start) == date("!%Y", finish)
+    local from = start and date(sameYear and "!%d %b" or "!%d %b %Y", start) or "Start"
+    local to = finish and date("!%d %b %Y", finish) or "Present"
+    period = start and finish and date("!%Y-%m-%d", start) == date("!%Y-%m-%d", finish) and to or
+      from .. " - " .. to
+    period = period .. " UTC"
   end
   local function names(selection, entries, key, fallback)
     if not selection then return "All " .. fallback end
@@ -133,9 +138,13 @@ function Tooltip.Scope(filter)
     end
     return table.concat(selected, ", ")
   end
-  Tooltip.Subtitle("Period: " .. period)
-  Tooltip.Subtitle("Character: " .. names(filter.characters, ArtisanLogbookAPI.GetCharacters(), "key", "characters"))
-  Tooltip.Subtitle("Profession: " .. names(filter.professions, ArtisanLogbookAPI.GetProfessions(), "skillLineId", "professions"))
+  Tooltip.Subtitle(period .. " / " .. names(filter.characters, ArtisanLogbookAPI.GetCharacters(), "key", "characters"))
+  local profession = recipe and recipe.profession
+  local repeated = profession and (not filter.professions or
+    #filter.professions == 1 and filter.professions[1] == profession.skillLineId)
+  if not repeated then
+    Tooltip.Subtitle("Profession: " .. names(filter.professions, ArtisanLogbookAPI.GetProfessions(), "skillLineId", "professions"))
+  end
 end
 
 local function measuredTotal(totals, metric, label)
@@ -147,11 +156,13 @@ local function measuredTotal(totals, metric, label)
   if count < crafts then Tooltip.Subtitle(UI.Count(count, "measured craft") .. " of " .. UI.Number(crafts), "partial") end
 end
 
-local function procRate(totals, metric, label)
+local function procRate(totals, metric, label, authoritative)
   local count, observed, crafts = totals[metric], totals[metric .. "ObservedCount"] or 0, totals.craftCount or 0
   if observed == 0 or count == nil then Tooltip.Row(label, "Not available", "muted"); return end
-  Tooltip.Row(label, UI.Percent(count, observed), observed < crafts and "partial" or count > 0 and "positive" or "muted")
-  if observed < crafts then
+  local value = UI.Percent(count, observed)
+  if authoritative then value = value .. " (" .. UI.Number(count, true) .. "/" .. UI.Number(observed, true) .. ")" end
+  Tooltip.Row(label, value, observed < crafts and "partial" or count > 0 and "positive" or "muted")
+  if observed < crafts and not authoritative then
     Tooltip.Subtitle(UI.Count(observed, "measured craft") .. " of " .. UI.Number(crafts), "partial")
   end
 end
@@ -163,7 +174,7 @@ function UI.RecipeTooltip(owner, recipe, filter)
   if recipe and recipe.profession then context[#context + 1] = UI.Name(recipe.profession) end
   if recipe and recipe.expansion then context[#context + 1] = UI.Name(recipe.expansion) end
   Tooltip.Subtitle(table.concat(context, " - "))
-  Tooltip.Scope(filter)
+  Tooltip.Scope(filter, recipe)
   if not recipe or not recipe.id then
     Tooltip.Subtitle("History not available", "muted"); Tooltip.Show(); return
   end
@@ -197,12 +208,18 @@ function UI.RecipeTooltip(owner, recipe, filter)
     Tooltip.Section("Crafting Outcomes")
     procRate(totals, "multicraftProcCount", "Multicraft procs")
     measuredTotal(totals, "multicraftBonus", "Extra output")
-    procRate(totals, "resourcefulnessAuthoritativeProcCount", "Resourcefulness")
+    procRate(totals, "resourcefulnessAuthoritativeProcCount", "Resourcefulness", true)
     local raw = totals.resourcefulnessProcCount
     local authoritative = totals.resourcefulnessAuthoritativeProcCount
+    local observed = totals.resourcefulnessAuthoritativeProcCountObservedCount or 0
+    local coverage = observed > 0 and observed < crafts and
+      UI.Number(observed, true) .. "/" .. UI.Number(crafts, true) .. " authoritative" or nil
     if raw and raw > (authoritative or 0) then
-      Tooltip.Subtitle(UI.Count(raw, "known return proc") .. "; includes unverified history", "partial")
+      local evidence = observed > 0 and "+" .. UI.Number(raw - (authoritative or 0), true) .. " unverified procs" or
+        UI.Count(raw, "known proc") .. "; unverified"
+      coverage = coverage and coverage .. "; " .. evidence or evidence
     end
+    Tooltip.Subtitle(coverage, "partial")
     procRate(totals, "ingenuityProcCount", "Ingenuity")
   end
   Tooltip.Show()
@@ -226,7 +243,10 @@ function UI.CraftTooltip(owner, craft)
   Tooltip.Row("Concentration", craft.concentrationSpent ~= nil and UI.Number(craft.concentrationSpent, true) or "Not recorded",
     craft.concentrationSpent ~= nil and "value" or "muted")
   Tooltip.Section("Results")
-  Tooltip.Row("Output", UI.Name(craft.outputItem, "Item not recorded"), craft.outputItem and "value" or "muted")
+  if not (craft.outputItem and craft.outputItem.name and craft.recipe and craft.recipe.name and
+      craft.outputItem.name == craft.recipe.name) then
+    Tooltip.Row("Output", UI.Name(craft.outputItem, "Item not recorded"), craft.outputItem and "value" or "muted")
+  end
   Tooltip.Row("Produced", craft.outputQuantity ~= nil and UI.Number(craft.outputQuantity, true) or "Not recorded",
     craft.outputQuantity ~= nil and "value" or "muted")
   local multicraft
@@ -251,7 +271,7 @@ function UI.CraftTooltip(owner, craft)
     if #returns > 2 then Tooltip.Subtitle("+" .. (#returns - 2) .. " more materials") end
   end
   if craft.resourcefulnessComplete ~= true and (observed == true or #returns > 0) then
-    Tooltip.Subtitle("Partial return record; other returns may be missing", "partial")
+    Tooltip.Subtitle("Returns partially recorded", "partial")
   end
   Tooltip.Show()
 end

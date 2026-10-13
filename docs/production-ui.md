@@ -304,19 +304,28 @@ Unavailable aggregate measurements say `Not available`, never a guessed zero.
 
 Recipe rows, pinned recipe navigation, most-crafted tiles, recipe titles and
 the non-item area of output-quality rows share the recipe preview. Period,
-character and profession scope is displayed and applied to public API queries.
+character and profession scope is applied to public API queries. A compact
+period/character line describes the selection; profession is omitted from scope
+when the recipe subtitle already identifies it, unless the selection differs.
+Single-day ranges collapse to one date; cross-year ranges keep both years.
 Character counts use durable daily history; missing identities are marked as
 known-only counts. Last-crafted timestamps are explicitly retained-detail
 timestamps, with a UTC last-craft-day fallback after details are pruned.
 Multicraft and Ingenuity frequencies use their observed populations.
-Resourcefulness uses only the authoritative cohort, with its measured coverage
-shown; legacy positive-only evidence is a separate known-proc note, not a rate.
+Resourcefulness uses only the authoritative cohort, with numerator/denominator
+beside its rate (for example `31.8% (7/22)`). At most one short amber note gives
+coverage and additional unverified positives (for example
+`22/98 authoritative; +21 unverified procs`). Without an authoritative population,
+known positives are evidence only, never a rate.
 Extra output is an absolute measured bonus, not an unsupported base-output
 percentage. Existing informational/statistics controls remain unchanged.
 
 Craft rows, non-item Highlights and craft titles share a compact factual preview.
 It shows the local timestamp, character/profession, output, quality, concentration
-and procs. At most two returned materials are listed, with a remaining-item count
+and procs. The output-name row is omitted only when its known name equals the
+recipe title; produced quantity is always shown, and different or unknown output
+identities remain explicit. Multicraft bonuses and applied Ingenuity refund
+amounts remain visible. At most two returned materials are listed, with a remaining-item count
 and an incomplete-return note where appropriate. No full ingredient table is
 duplicated. Each public craft is one recorded result: different output records
 from prospecting/crushing remain separate, never a fabricated combined output.
@@ -327,14 +336,19 @@ take precedence over parent summaries and continue propagating row clicks.
 Owner-aware deferred leave handling restores a still-hovered parent; row reuse,
 scrolling, hiding and refreshing clear owned stale content. Names are bounded
 using the shared UTF-8-aware elision helper, and titles/subtitles allow native
-wrapping. Tooltip content contains no nested interactive item targets.
+wrapping. The presenter keeps normal WoW `ANCHOR_RIGHT` placement and explicitly
+enables screen clamping, without custom positioning or scale overrides. Tooltip
+content contains no nested interactive item targets.
 
 In-game validation remains required: move repeatedly between row text, output
 cells and Highlights, then between sibling items and outside the window. Verify
 no flicker/stale tooltip on filtering, scrolling, modal close and window hide;
 verify item quality/effects and click navigation. Inspect long names at the
 smallest journal/UI scale, missing dimensions, legacy partial data, and multiple
-output result rows. Mocks cannot validate native font metrics, hit-testing,
+output result rows. The four 2026-10-13 in-game screenshots guided the compact
+scope, Resourcefulness note and duplicate-output refinements; validate the new
+layout at each screen edge and at small UI scales. Mocks verify native anchor
+and clamping calls, not actual geometry. They cannot validate font metrics, hit-testing,
 asynchronous item loading, screen clamping, strata or taint.
 
 ## Measurements and bounds

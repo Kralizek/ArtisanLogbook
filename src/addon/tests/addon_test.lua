@@ -135,7 +135,8 @@ environment.UIDropDownMenu_SetText = function(frame, text) frame.text = text end
 environment.UIDropDownMenu_Initialize = function(frame, callback) frame.initialize = callback end
 environment.UIDropDownMenu_CreateInfo = function() return {} end
 environment.UIDropDownMenu_AddButton = function() end
-environment.GameTooltip = { SetOwner = function(self, owner) self.owner = owner end,
+environment.GameTooltip = { SetOwner = function(self, owner, anchor) self.owner, self.anchor = owner, anchor end,
+  SetClampedToScreen = function(self, clamped) self.clamped = clamped end,
   IsOwned = function(self, owner) return self.owner == owner end,
   ClearLines = function(self) self.lines, self.rows = {}, {} end,
   SetText = function(self, text, ...) self.text, self.lines, self.itemId, self.titleStyle = text, {}, nil, { ... } end,
@@ -1905,7 +1906,7 @@ do
           row.scripts.OnEnter(row)
           local tooltip = table.concat(environment.GameTooltip.lines, "\n")
           assert(tooltip:find("Resourcefulness: 100.0%", 1, true), tooltip)
-          assert(tooltip:find("8 measured crafts of 20", 1, true), tooltip)
+          assert(tooltip:find("8/20 authoritative", 1, true), tooltip)
         end
       end
     end
@@ -3230,7 +3231,7 @@ do
   recipeRow.scripts.OnEnter(recipeRow)
   local recipeTooltip = table.concat(environment.GameTooltip.lines, "\n")
   assert(recipeTooltip:find("Resourcefulness: Not available", 1, true), recipeTooltip)
-  assert(recipeTooltip:find("8 known return procs; includes unverified history", 1, true), recipeTooltip)
+  assert(recipeTooltip:find("8 known procs; unverified", 1, true), recipeTooltip)
   window:OpenRecipe({ id = 9001 })
   while ui.productionWindow.recipeOutcomes.scripts.OnUpdate do
     ui.productionWindow.recipeOutcomes.scripts.OnUpdate()
@@ -4291,20 +4292,39 @@ end)()
   ui.RecipeTooltip(owner, recipe, filter)
   assert(tooltip.text == "Tooltip potion" and row("Total crafts").value == "1")
   assert(row("Characters").value == "1" and row("Total produced").value == "2")
-  assert(row("Resourcefulness").value == "0.0%")
+  assert(row("Resourcefulness").value == "0.0% (0/1)")
   color(row("Resourcefulness"), "muted")
-  assert(table.concat(tooltip.lines, "\n"):find("Profession: Alchemy", 1, true))
-  assert(table.concat(tooltip.lines, "\n"):find("Character: |cff3399ffTestCrafter|r", 1, true))
+  local fromFormat = os.date("!%Y", from) == os.date("!%Y", to - 1) and "!%d %b" or "!%d %b %Y"
+  local scope = os.date(fromFormat, from) .. " - " .. os.date("!%d %b %Y", to - 1) ..
+    " UTC / |cff3399ffTestCrafter|r"
+  assert(tooltip.lines[1] == "Alchemy" and tooltip.lines[2] == scope, tostring(tooltip.lines[2]))
+  assert(not table.concat(tooltip.lines, "\n"):find("Profession:", 1, true))
   for index = 1, 3 do
-    assert(tooltip.lineStyles["Profession: Alchemy"][index] == 1)
+    assert(tooltip.lineStyles[scope][index] == 1)
     assert(tooltip.lineStyles["Alchemy"][index] == 1)
   end
   color(row("Total produced"), "value")
-  assert(table.concat(tooltip.lines, "\n"):find("Period: " .. os.date("!%Y-%m-%d", from), 1, true))
+  assert(tooltip.clamped and tooltip.anchor == "ANCHOR_RIGHT" and tooltip.titleStyle[5] == true)
   assert(row("Last crafted (retained)").value == ui.DateTime(now, true))
+  local day = math.floor(now / 86400) * 86400
+  owner:SetPoint("BOTTOMRIGHT", environment.UIParent, "BOTTOMRIGHT", -4, 4)
+  owner:SetScale(.65)
+  ui.Tooltip.Begin(owner, "Small-scale edge scope")
+  ui.Tooltip.Scope({ time = { from = day, to = day + 86400 } }, recipe)
+  assert(#tooltip.lines == 1 and tooltip.lines[1] == os.date("!%d %b %Y", day) .. " UTC / All characters")
+  assert(tooltip.clamped and tooltip.anchor == "ANCHOR_RIGHT" and tooltip.titleStyle[5] == true)
+  ui.Tooltip.Begin(owner, "Same-year scope")
+  ui.Tooltip.Scope({ time = { from = day, to = day + 2 * 86400 } }, recipe)
+  assert(#tooltip.lines == 1 and tooltip.lines[1] == os.date("!%d %b", day) .. " - " ..
+    os.date("!%d %b %Y", day + 86400) .. " UTC / All characters")
+  ui.Tooltip.Begin(owner, "Empty profession selection")
+  ui.Tooltip.Scope({ professions = {} }, recipe)
+  assert(tooltip.lines[2] == "Profession: No professions")
   ui.RecipeTooltip(owner, recipe, { professions = { 333 } })
   assert(row("Total crafts").value == "0" and row("Total produced").value == "Not available")
+  assert(table.concat(tooltip.lines, "\n"):find("Profession: Enchanting", 1, true))
   ui.RecipeTooltip(owner, recipe, {})
+  assert(tooltip.lines[2] == "All time / All characters")
   assert(row("Total crafts").value == "3" and row("Characters").value == "2")
   assert(row("Total produced").value == "12")
   ledger:Prune(now + 61 * 86400)
@@ -4326,11 +4346,19 @@ end)()
   end
   ui.RecipeTooltip(owner, recipe, {})
   assert(row("Multicraft procs").value == "50.0%" and row("Extra output").value == "2 known")
-  assert(row("Resourcefulness").value == "0.0%" and row("Ingenuity").value == "Not available")
+  assert(row("Resourcefulness").value == "0.0% (0/1)" and row("Ingenuity").value == "Not available")
   assert(row("Total produced").value == "4 known")
   color(row("Multicraft procs"), "partial"); color(row("Extra output"), "partial")
   color(row("Resourcefulness"), "partial"); color(row("Ingenuity"), "muted")
-  assert(table.concat(tooltip.lines, "\n"):find("2 known return procs; includes unverified history", 1, true))
+  local resourceCoverage = "1/3 authoritative; +2 unverified procs"
+  assert(table.concat(tooltip.lines, "\n"):find(resourceCoverage, 1, true))
+  assert(tooltip.lineStyles[resourceCoverage][1] == ui.Tooltip.colors.partial[1])
+  assert(not table.concat(tooltip.lines, "\n"):find("known return procs", 1, true))
+  local coverageLines = 0
+  for _, text in ipairs(tooltip.lines) do
+    if text:find("authoritative", 1, true) or text:find("unverified", 1, true) then coverageLines = coverageLines + 1 end
+  end
+  assert(coverageLines == 1)
   api.GetRecipeOutcomes = originalOutcomes
 
   local craft = { id = 35, timestamp = now, recipe = recipe,
@@ -4353,9 +4381,21 @@ end)()
   assert(table.concat(tooltip.lines, "\n"):find("+1 more materials", 1, true))
   assert(#tooltip.rows == 10)
   assert(tooltip.titleStyle[1] == 1 and tooltip.titleStyle[2] == .82 and tooltip.titleStyle[5] == true)
+  craft.outputItem.name = recipe.name
+  craft.outputQuantity, craft.multicraftBonus, craft.hasIngenuityProc, craft.ingenuityRefund = 19, 14, true, 218
+  ui.CraftTooltip(owner, craft)
+  assert(#tooltip.rows == 9 and row("Produced").value == "19")
+  for _, entry in ipairs(tooltip.rows) do assert(entry.label ~= "Output:") end
+  assert(row("Multicraft").value == "+14 extra" and row("Ingenuity").value == "+218 refunded")
+  color(row("Multicraft"), "positive"); color(row("Ingenuity"), "positive")
+  craft.outputItem.name = "Different output"
+  ui.CraftTooltip(owner, craft)
+  assert(row("Output").value == "Different output" and row("Produced").value == "19")
+  craft.outputItem.name = "Potion"
+  craft.outputQuantity, craft.multicraftBonus, craft.hasIngenuityProc, craft.ingenuityRefund = 8, 3, false, 99
   craft.resourcefulnessComplete = nil
   ui.CraftTooltip(owner, craft)
-  assert(tooltip.lineStyles["Partial return record; other returns may be missing"][1] == 1)
+  assert(tooltip.lineStyles["Returns partially recorded"][1] == 1)
   craft.multicraftBonus = 0
   ui.CraftTooltip(owner, craft)
   assert(row("Multicraft").value == "No proc"); color(row("Multicraft"), "muted")
