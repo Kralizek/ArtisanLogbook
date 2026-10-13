@@ -100,8 +100,6 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   UI.Surface(detail, false)
   local identity = detail:CreateTexture(nil, "ARTWORK")
   identity:SetSize(36, 36); identity:SetPoint("TOPLEFT", 16, -8)
-  local quality = detail:CreateTexture(nil, "OVERLAY")
-  quality:SetSize(18, 18); quality:SetPoint("TOPLEFT", 38, -29)
   local heading = UI.Text(detail, 62, -8, width - 166, 26, "GameFontNormalLarge")
   heading:SetWordWrap(false); heading:SetMaxLines(1)
   local subtitle = UI.Text(detail, 62, -35, width - 166, 20)
@@ -117,20 +115,20 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   resultRow.bonus = UI.Text(content, width - 214, -60, 176, 22)
   detail.result = resultRow
   local fields = {}
-  local fieldNames = { "Character", "Timestamp", "Quantity", "Quality", "Concentration", "Multicraft", "Ingenuity", "Resourcefulness" }
+  local fieldNames = { "Character", "Timestamp", "Quality", "Concentration", "Multicraft", "Ingenuity", "Resourcefulness" }
   for index, title in ipairs(fieldNames) do
-    local offset = -104 - math.floor((index - 1) / 2) * 38
+    local offset = -100 - math.floor((index - 1) / 2) * 30
     local left = ((index - 1) % 2) * (width - 36) / 2
     UI.Text(content, left, offset, 110, 22, "GameFontNormalSmall"):SetText(title .. ":")
-    fields[title] = UI.Text(content, left + 112, offset, (width - 36) / 2 - 126, 34)
+    fields[title] = UI.Text(content, left + 112, offset, (width - 36) / 2 - 126, 24)
   end
   detail.fields = fields
-  detail.inputEvidence = UI.Text(content, 0, -258, width - 36, 18, "GameFontNormalSmall")
-  UI.Section(content, "Ingredients", 0, -286, width - 36)
+  detail.inputEvidence = UI.Text(content, 0, -218, width - 36, 18, "GameFontNormalSmall")
+  UI.Section(content, "Ingredients", 0, -244, width - 36)
   local nameWidth, amountWidth = (width - 60) * .6, (width - 60) * .2
   local returnColor = { r = .45, g = .85, b = .45 }
   local shownCraft
-  local reagents = UI.ScrollList(content, 0, -322, width - 36, height - 394, {
+  local reagents = UI.ScrollList(content, 0, -280, width - 36, height - 352, {
     { title = "Reagent", width = nameWidth, value = function(row) return row.name end,
       create = function(owner, left) return UI.ItemCell(owner, left, nameWidth) end,
       update = function(cell, row)
@@ -155,21 +153,17 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       for _, field in pairs(fields) do field:SetText("-") end
       reagents:Reset(); resultRow:Update(nil); resultRow.quantity:SetText("-"); resultRow.bonus:SetText("")
       detail.inputEvidence:SetText("")
-      identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); quality:Hide()
+      identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       return
     end
     heading:SetText(UI.Elide(UI.Name(craft.recipe, "Unattributed craft"), math.floor((width - 166) / 10)))
     subtitle:SetText(UI.Name(craft.profession))
     identity:SetTexture(craft.outputItem and type(GetItemIcon) == "function" and GetItemIcon(craft.outputItem.id) or UI.RecipeIcon(craft.recipe))
-    local atlas = UI.QualityAtlas(craft.recipe and craft.recipe.id, craft.outputQuality, craft.recipe and craft.recipe.maxQuality)
-    quality:SetShown(atlas ~= nil)
-    if atlas then quality:SetAtlas(atlas) end
-    resultRow:Update(craft.outputItem, atlas)
+    resultRow:Update(craft.outputItem)
     resultRow.quantity:SetText(UI.Number(craft.outputQuantity) .. " items")
     resultRow.bonus:SetText(craft.multicraftBonus and craft.multicraftBonus > 0 and "+" .. UI.Number(craft.multicraftBonus) .. " Multicraft" or "")
     fields.Character:SetText(UI.CharacterName(craft.character))
     fields.Timestamp:SetText(UI.DateTime(craft.timestamp))
-    fields.Quantity:SetText(UI.Number(craft.outputQuantity))
     fields.Quality:SetText(UI.Value(craft.outputQuality))
     fields.Concentration:SetText(UI.Number(craft.concentrationSpent))
     fields.Multicraft:SetText(craft.multicraftBonus and (UI.Number(craft.multicraftBonus) .. " additional") or "-")

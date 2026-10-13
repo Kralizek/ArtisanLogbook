@@ -119,7 +119,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   local period = filters:Period(state, function() detail:Refresh() end, true)
   local characters = filters:Select("Character", {}, function(value) state.character = value; detail:Refresh() end)
   local professions = filters:Select("Profession", {}, function(value) state.profession = value; detail:Refresh() end)
-  local entries = { { "Required units", "allocated" }, { "Returned units", "returned" }, { "Crafts in recipes", "crafts" },
+    local entries = { { "Recorded units", "allocated" }, { "Returned units", "returned" }, { "Crafts in recipes", "crafts" },
     { "Recent crafters", "characters" }, { "Saved share", "rate" }, { "Recipes using this", "recipes" } }
   local metrics = {}
   for index, entry in ipairs(entries) do metrics[index] = { entry[1], "INV_Misc_Herb_19" } end
@@ -138,11 +138,11 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     { title = "Recipe", width = (inner - 24) * .46, value = function(row) return UI.Name(row.recipe) end,
       icon = function(row) return UI.RecipeIcon(row.recipe) end },
     { title = "Crafts", width = (inner - 24) * .14, value = function(row) return UI.Number(row.crafts) end },
-    { title = "Required", width = (inner - 24) * .20,
+    { title = "Quantity", width = (inner - 24) * .20,
       value = function(row) return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete") end,
       exact = function(row)
         return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-          " Counts crafts where this item was recorded. Returns aren't subtracted."
+          " Total quantity recorded for this item across the listed crafts. Returns are shown separately."
       end },
     { title = "Returned", width = (inner - 24) * .20, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
@@ -380,13 +380,13 @@ function UI.ReagentsPage(page, width, height, openReagent)
   }, function(value) sort = value; page:Refresh(true) end)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
   local summary = UI.SummaryRow(page, width, -142, { { "Reagents", "INV_Misc_Herb_19" },
-    { "Required units", "INV_Misc_Bag_10" }, { "Returned units", "Trade_Alchemy" } })
+    { "Recorded units", "INV_Misc_Bag_10" }, { "Returned units", "Trade_Alchemy" } })
   summary:SetHeight(60)
   for _, tile in ipairs(summary.tiles) do tile:SetHeight(60); tile.note:Hide() end
   page.summary, page.summaryRow = summary.tiles, summary
   local listWidth = width
   local available = listWidth - 24
-  local nameWidth = available - 498
+  local nameWidth = available - 550
   local list = UI.ScrollList(page, 0, -224, listWidth, height - 258, {
     { title = "Reagent", width = nameWidth, value = function(row)
         return UI.Name(row.item) .. " (#" .. row.item.id .. ")"
@@ -397,25 +397,25 @@ function UI.ReagentsPage(page, width, height, openReagent)
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
-    { title = "Profession", width = 120, value = function(row)
+    { title = "Profession", width = 180, value = function(row)
       local names = {}
       for _, profession in ipairs(row.professions or {}) do names[#names + 1] = UI.Name(profession) end
       return table.concat(names, ", ")
     end },
     { title = "Recipes", width = 54, value = function(row) return UI.Number(row.recipeCount) end },
-    { title = "Required", width = 74, value = function(row)
+    { title = "Quantity", width = 80, value = function(row)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
     end, exact = function(row)
       return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-        " Counts crafts where this item was recorded. Returns aren't subtracted."
+        " Total quantity recorded for this item across crafts. Returns are shown separately; some recipe qualities may not be identified."
     end },
-    { title = "Returned", width = 74, value = function(row)
+      { title = "Returned", width = 80, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
     end, exact = function(row) return UI.AmountTooltip(row.returnedQuantity, row.returnComplete) end },
-    { title = "Materials saved", width = 112, value = function(row)
-      return UI.IsTrivial(row.item.id) and "Ignored" or UI.MatchedSavingsText(row)
+    { title = "Saved share", width = 92, value = function(row)
+      return UI.IsTrivial(row.item.id) and "-" or UI.MatchedSavingsText(row)
     end, exact = function(row)
-      if UI.IsTrivial(row.item.id) then return "Ignored in savings by your preference; recorded quantities remain visible." end
+      if UI.IsTrivial(row.item.id) then return "Excluded from savings by your preference. Recorded quantities are unchanged." end
       if UI.MatchedSavings(row) == "Unavailable" then
         return "No comparable crafts have both required and returned quantities known for this item."
       end

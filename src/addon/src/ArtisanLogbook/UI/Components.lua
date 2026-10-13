@@ -174,7 +174,16 @@ function UI.ProcTooltip(totals, metric)
 end
 
 function UI.DateTime(timestamp, exact)
-  return timestamp and date(exact and "%Y-%m-%d %H:%M:%S" or "%d %b\n%H:%M", timestamp) or "-"
+  return timestamp and date(exact and "%Y-%m-%d %H:%M:%S" or "%d %b %H:%M", timestamp) or "-"
+end
+
+function UI.MulticraftAverage(totals)
+  if not totals or not totals.craftCount or totals.craftCount <= 0 or
+      totals.outputQuantityObservedCount ~= totals.craftCount or
+      totals.multicraftProcCountObservedCount ~= totals.craftCount or
+      not totals.multicraftProcCount or totals.multicraftProcCount <= 0 then return nil end
+  local average = totals.outputQuantity / totals.craftCount
+  return average > 1 and average or nil
 end
 
 function UI.Surface(parent, parchment)
@@ -393,17 +402,17 @@ end
 
 function UI.HistoryColumns(width, context)
   local available, columns = width - 24, {}
-  local fixed = 38 + 88 + (context == "Logbook" and 0 or 72)
-  local textWeight = (context ~= "Recipe" and 1.15 or 0) + 1.25 +
+  local fixed = 38 + 88 + (context == "Logbook" and 0 or 94)
+  local textWeight = (context ~= "Recipe" and 1.15 or 0) + 1.05 +
     (context ~= "Character" and .65 or 0) + (context ~= "Profession" and context ~= "Recipe" and .70 or 0)
   local unit = (available - fixed) / textWeight
   if context ~= "Recipe" then
     columns[#columns + 1] = { title = "Recipe", width = unit * 1.15,
       value = function(row) return UI.Name(row.recipe) end }
   end
-  columns[#columns + 1] = { title = "Result", width = unit * 1.25,
+  columns[#columns + 1] = { title = "Result", width = unit * 1.05,
     value = function(row) return UI.Name(row.outputItem) .. (row.outputQuality and " (quality " .. row.outputQuality .. ")" or "") end,
-    create = function(parent, left) return UI.ItemCell(parent, left, unit * 1.25) end,
+    create = function(parent, left) return UI.ItemCell(parent, left, unit * 1.05) end,
     update = function(cell, row)
       cell:Update(row.outputItem, UI.QualityAtlas(row.recipe and row.recipe.id, row.outputQuality, row.recipe and row.recipe.maxQuality))
     end }
@@ -419,7 +428,7 @@ function UI.HistoryColumns(width, context)
     exact = function(row) return UI.Value(row.outputQuantity) end }
   columns[#columns + 1] = { title = "Highlights", width = 88, activity = true, extrasOnly = true }
   if context ~= "Logbook" then
-    columns[#columns + 1] = { title = "When", width = 72, lines = 2,
+    columns[#columns + 1] = { title = "Timestamp", width = 94,
       value = function(row) return UI.DateTime(row.timestamp) end, exact = function(row) return UI.DateTime(row.timestamp, true) end }
   end
   return columns
@@ -1262,9 +1271,16 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       exact = function(row) return UI.Value(row.craftCount) end },
     { title = "Items", width = available * .10, value = function(row)
       local totals = row.totals
+      local average = UI.MulticraftAverage(totals)
+      if average then return UI.Number(average) .. " / craft" end
       return totals and UI.Amount(totals.outputQuantity, totals.outputQuantityObservedCount == totals.craftCount) or "-"
     end, exact = function(row)
       local totals = row.totals
+      local average = UI.MulticraftAverage(totals)
+      if average then
+        return UI.Number(average) .. " average items per craft; " .. UI.AmountTooltip(totals.outputQuantity,
+          totals.outputQuantityObservedCount == totals.craftCount) .. " across " .. UI.Count(totals.craftCount, "craft") .. "."
+      end
       return UI.AmountTooltip(totals and totals.outputQuantity, totals and totals.outputQuantityObservedCount == totals.craftCount)
     end },
   }

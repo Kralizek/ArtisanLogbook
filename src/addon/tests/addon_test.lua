@@ -1017,6 +1017,14 @@ do
 end
 local logbookColumns = UI.HistoryColumns(732, "Logbook")
 for _, column in ipairs(logbookColumns) do assert(column.title ~= "When") end
+for _, context in ipairs({ "Recipe", "Character" }) do
+  local found
+  for _, column in ipairs(UI.HistoryColumns(900, context)) do
+    if column.title == "Timestamp" then found = column end
+  end
+  assert(found and found.width == 94 and found.lines == nil)
+end
+assert(not UI.DateTime(1800000000):find("\n", 1, true))
 local hasSixtyDays = false
 for _, range in ipairs(UI.ranges) do if range.value == 60 then hasSixtyDays = true end end
 assert(hasSixtyDays)
@@ -1143,6 +1151,12 @@ local whiteInk = UI.ReadableColor({ r = 1, g = 1, b = 1 }, paperProbe)
 assert(whiteInk.r < .26 and whiteInk.r == whiteInk.g and whiteInk.g == whiteInk.b)
 assert(UI.QualityAtlas(42, 2, 3) == "Quality-2" and UI.QualityAtlas(99, 2, 5) == nil)
 assert(UI.QualityAtlas(42, 0, 5) == nil and UI.QualityAtlas(42, 2, nil) == nil)
+assert(UI.MulticraftAverage({ craftCount = 2, outputQuantity = 7, outputQuantityObservedCount = 2,
+  multicraftProcCount = 1, multicraftProcCountObservedCount = 2 }) == 3.5)
+assert(UI.MulticraftAverage({ craftCount = 2, outputQuantity = 7, outputQuantityObservedCount = 1,
+  multicraftProcCount = 1, multicraftProcCountObservedCount = 2 }) == nil)
+assert(UI.MulticraftAverage({ craftCount = 2, outputQuantity = 2, outputQuantityObservedCount = 2,
+  multicraftProcCount = 0, multicraftProcCountObservedCount = 2 }) == nil)
 local activity = UI.Activity({ recipe = { id = 42, name = "Crushing", maxQuality = 3 },
   outputItem = { id = 42, name = "Gemdust" }, outputQuantity = 12, outputQuality = 2,
   concentrationSpent = 397, multicraftBonus = 11, hasIngenuityProc = true,
@@ -1421,7 +1435,9 @@ assert(recentFirst)
 recentFirst.scripts.OnClick(recentFirst)
 assert(uiWindow.openCraftId == 14 and uiWindow.visiblePage ~= logbook)
 local sharedDetail = uiWindow.visiblePage
-assert(visibleText("Quantity:") and not visibleText("Ingenuity proc: Unknown"))
+assert(not visibleText("Quantity:") and visibleText("Quality:") and not visibleText("Ingenuity proc: Unknown"))
+assert(sharedDetail.result.quality and not sharedDetail.result.quality:IsShown())
+assert(not sharedDetail.fields.Timestamp.text:find("\n", 1, true))
 button(sharedDetail, "Close").scripts.OnClick()
 assert(uiWindow.visiblePage == logbook and logbook:IsShown() and not sharedDetail:IsShown())
 recentFirst.scripts.OnClick(recentFirst)
@@ -1463,7 +1479,7 @@ assert(not UI.IsPinned(502))
 assertRecipesSelected()
 assert(recipePage ~= recipes and visibleText("Apple Mix") and visibleText("Enchanting"))
 assert(recipePage.tabs[recipePage.activeView].selected)
-assert(recipePage.history.rows[1].cells[3].column.title == "When")
+assert(recipePage.history.rows[1].cells[3].column.title == "Timestamp")
 assert(recipePage.history.rows[1].cells[3].label.text == UI.DateTime(recipePage.history.items[1].timestamp))
 assert(recipePage.history.rows[1].widgets[1].column.title == "Result")
 assert(recipePage.history.rows[1].activity.extrasOnly)
@@ -1888,7 +1904,8 @@ do
   local function record(recipeId, itemId, quality, quantity, operation)
     ledger:BeginCraft(recipeId)
     return assert(environment.RecordFixtureResult(ledger, { operationID = operation, itemID = itemId, craftingQuality = quality,
-      quantity = quantity, multicraft = 0, hasIngenuityProc = false, resourcesReturned = {} }))
+      quantity = quantity, multicraft = 0, concentrationSpent = quality and quality * 10 or nil,
+      hasIngenuityProc = false, resourcesReturned = {} }))
   end
   ledger.wall = function() return now - 40 * 86400 end
   record(9901, 6001, 1, 7, 1)
@@ -1918,6 +1935,10 @@ do
   assert(pane.qualityRows[1].quality == 1 and pane.qualityRows[1].quantity == 50)
   assert(pane.qualityRows[2].quality == 2 and pane.qualityRows[2].quantity == 50)
   assert(pane.qualityRows[3].quality == 3 and pane.qualityRows[3].quantity == 4)
+  assert(pane.qualityRows[1].craftCount == 50 and pane.qualityRows[1].concentrationSpent == 500)
+  assert(pane.qualityRows[2].concentrationSpent == 1000 and pane.qualityRows[2].concentrationObservedCount == 50)
+  assert(pane.qualityList.columns[1].width < pane.qualityList.columns[2].width * 5)
+  assert(pane.qualityList.columns[2].title == "Crafts" and pane.qualityList.columns[5].title == "Concentration")
   assert(pane.qualityRows[4].quality == nil and pane.qualityRows[4].quantity == 5)
   assert(pane.tiles[2].value.text == "109" and pane.qualityStatus.text:find("101 crafts of 106", 1, true))
   pane.qualityList.rows[1].widgets[1].widget.scripts.OnEnter(pane.qualityList.rows[1].widgets[1].widget)
@@ -2128,6 +2149,8 @@ do
   local ui = loadUI()
   local window, helpers = ui.productionWindow, ui.UI
   local page, list = window.pages.Reagents, window.pages.Reagents.catalogue
+  assert(list.columns[1].width < 600 and list.columns[2].title == "Profession" and list.columns[2].width == 180)
+  assert(list.columns[4].title == "Quantity" and list.columns[6].title == "Saved share")
   window:Show(); window:Activate("Reagents")
   assert(window.navItems[3].entry.page == "Recipes" and window.navItems[4].entry.page == "Reagents")
   assert(window.navItems[4].selection:IsShown() and not window.navItems[3].selection:IsShown())
@@ -2157,7 +2180,7 @@ do
   assert(#list.items[1].professions == 2 and list.items[1].recipeCount == 2)
   local savedCell
   for _, cell in ipairs(list.rows[1].cells) do
-    if cell.column.title == "Materials saved" then savedCell = cell end
+    if cell.column.title == "Saved share" then savedCell = cell end
   end
   assert(savedCell and savedCell.label.text == helpers.MatchedSavingsText(list.items[1]))
   assert(savedCell.label.text == "-")
@@ -2169,9 +2192,10 @@ do
   catalogueCheck:SetChecked(true); catalogueCheck.scripts.OnClick(catalogueCheck)
   assert(helpers.IsTrivial(4008))
   for _, cell in ipairs(list.rows[1].cells) do
-    if cell.column.title == "Materials saved" then savedCell = cell end
+    if cell.column.title == "Saved share" then savedCell = cell end
   end
-  assert(savedCell and savedCell.label.text == "Ignored")
+  assert(savedCell and savedCell.label.text == "-")
+  assert(savedCell.column.exact(list.items[1]) == "Excluded from savings by your preference. Recorded quantities are unchanged.")
   catalogueCheck:SetChecked(false); catalogueCheck.scripts.OnClick(catalogueCheck)
   assert(not helpers.IsTrivial(4008))
   for index = 1, 45 do record(9701, 4100 + index, string.format("Herb %02d", index), index, index, 1) end
@@ -2484,6 +2508,12 @@ do
   assert(not overview.scroll and #overview.topRecipes.items == 1)
   local ranked = overview.topRecipes.items[1]
   assert(ranked.result.outputItem.id == 5302 and ranked.totals.outputQuantity == 4)
+  local itemsCell
+  for _, cell in ipairs(overview.topRecipes.rows[1].cells) do
+    if cell.column.title == "Items" then itemsCell = cell end
+  end
+  assert(itemsCell and itemsCell.label.text == "4 / craft")
+  assert(itemsCell.column.exact(ranked):find("4 average items per craft", 1, true))
   local resourcefulnessCell
   for _, cell in ipairs(overview.topRecipes.rows[1].cells) do
     if cell.column.title == "Resourcefulness" then resourcefulnessCell = cell end
@@ -2499,19 +2529,34 @@ do
   assert(recipe.outcomes.production.averageOutput.text == "4")
   assert(recipe.outcomes.production.averageConcentration.text == "100")
   assert(recipe.outcomes.production.netConcentration.text == "80")
+  assert(recipe.outcomes.tiles[2].title.text == "Avg output" and recipe.outcomes.tiles[2].value.text == "4")
+  assert(recipe.outcomes.tiles[3].title.text == "Avg concentration" and recipe.outcomes.tiles[3].value.text == "100")
   assert(recipe.outcomes.tiles[6].note.text == "100.0% proc rate")
   assert(recipe.outcomes.tiles[4].note.text == "100.0% procs\n25.0% of output")
   assert(recipe.outcomes.tiles[4].note:GetStringHeight() <= recipe.outcomes.tiles[4].note:GetHeight())
   assert(-recipe.outcomes.tiles[4].note.y + recipe.outcomes.tiles[4].note:GetHeight() <= recipe.outcomes.summary:GetHeight())
   recipe.outcomes.qualityWorker.scripts.OnUpdate(recipe.outcomes.qualityWorker)
   assert(recipe.outcomes.qualityList.items[1].quality == 2 and recipe.outcomes.qualityList.items[1].quantity == 4)
+  local qualityColumns = recipe.outcomes.qualityList.columns
+  assert(#qualityColumns == 6 and qualityColumns[1].title == "Result" and qualityColumns[2].title == "Crafts")
+  assert(qualityColumns[1].value(recipe.outcomes.qualityList.items[1]):find("(Q2)", 1, true))
+  assert(recipe.outcomes.qualityList.items[1].craftCount == 1 and
+    qualityColumns[3].value(recipe.outcomes.qualityList.items[1]) == "4" and
+    qualityColumns[4].value(recipe.outcomes.qualityList.items[1]) == "4")
+  assert(qualityColumns[5].value(recipe.outcomes.qualityList.items[1]) == "100" and
+    qualityColumns[6].value(recipe.outcomes.qualityList.items[1]) == "100")
   assert(recipe.outcomes.qualityTitle:IsShown())
-  assert(recipe.outcomes.tiles[2].note.text == "")
+  assert(recipe.outcomes.tiles[2].note.text == "items per craft")
   local from, to = ui.UI.Range(environment.GetServerTime(), 30)
   assert(recipe.outcomes.chart.start.text == os.date("!%d %b %Y", from),
     tostring(recipe.outcomes.chart.start.text) .. " / " .. os.date("!%d %b %Y", from))
   assert(recipe.outcomes.chart.finish.text == os.date("!%d %b %Y", to - 86400))
   recipe:SelectView("Reagents")
+  window:OpenCraft(craft.id)
+  local craftDetail = window.craftDetailPage
+  assert(craftDetail.fields.Quality.text == "2" and not craftDetail.result.quality:IsShown())
+  assert(not craftDetail.fields.Timestamp.text:find("\n", 1, true))
+  button(craftDetail, "Close").scripts.OnClick()
   local reagentRow = recipe.outcomes.materialList.rows[1]
   reagentRow.scripts.OnClick(reagentRow)
   assert(window.activeTab == "Reagent" and window.identity.id == 5301)
@@ -2747,16 +2792,16 @@ do
   local material = materialRows[1].widgets[1].widget
   local recipeSavingsCell, recipeInputCell
   for _, cell in ipairs(materialRows[1].cells) do
-    if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
-    if cell.column.title == "Required" then recipeInputCell = cell end
+    if cell.column.title == "Saved share" then recipeSavingsCell = cell end
+    if cell.column.title == "Quantity" then recipeInputCell = cell end
   end
   assert(recipeSavingsCell and recipeSavingsCell.label.text == helpers.MatchedSavingsText(materialRows[1].item))
   assert(recipeInputCell and recipeInputCell.label.text ==
     (materialRows[1].item.allocatedQuantity and ui.UI.Number(materialRows[1].item.allocatedQuantity) or "-"))
   if materialRows[1].item.allocatedQuantity then
     local inputTooltip = recipeInputCell.column.exact(materialRows[1].item)
-    assert(inputTooltip:find("required in crafts where this item was recorded", 1, true) and
-      inputTooltip:find("Returns aren't subtracted", 1, true))
+    assert(inputTooltip:find("recorded for this item across these crafts", 1, true) and
+      inputTooltip:find("Returns are shown separately", 1, true))
   end
   assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
   assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
@@ -2765,9 +2810,9 @@ do
   reagentCheck:SetChecked(true); reagentCheck.scripts.OnClick(reagentCheck)
   assert(helpers.IsTrivial(8))
   for _, cell in ipairs(pane.materialList.rows[1].cells) do
-    if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
+    if cell.column.title == "Saved share" then recipeSavingsCell = cell end
   end
-  assert(recipeSavingsCell and recipeSavingsCell.label.text == "Ignored")
+  assert(recipeSavingsCell and recipeSavingsCell.label.text == "-")
   reagentCheck:SetChecked(false); reagentCheck.scripts.OnClick(reagentCheck)
   assert(not helpers.IsTrivial(8))
   assert(material.icon.texture and material.quality.atlas == "ReagentQuality-8")
