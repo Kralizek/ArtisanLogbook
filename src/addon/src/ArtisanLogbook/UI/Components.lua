@@ -1412,19 +1412,70 @@ function UI.CraftIngredients(craft)
       end
     end
   end
+  local familyRows = {}
+  for _, row in ipairs(rows) do
+    if row.qualityUnknown then familyRows[#familyRows + 1] = row end
+  end
   for _, reagent in ipairs(craft.reagents or {}) do
     local item = reagent.item
     if item and item.id and reagent.allocatedQuantity ~= nil then
       local covered = false
       for _, covering in ipairs(reagent.dataSlotIndex and bySlot[reagent.dataSlotIndex] or {}) do
-        if covering.candidates and includesItem(covering.candidates, item.id) or
-            not covering.candidates and covering.item.id == item.id then covered = true end
+        if covering.candidates and includesItem(covering.candidates, item.id) then
+          if reagent.allocatedQuantity > 0 then
+            covering.allocations = covering.allocations or {}
+            local selected = covering.allocations[item.id]
+            if not selected then
+              selected = { item = item, quantity = 0, qualities = {} }
+              covering.allocations[item.id] = selected
+            end
+            selected.quantity = selected.quantity + reagent.allocatedQuantity
+            if type(reagent.quality) == "number" then selected.qualities[reagent.quality] = true end
+            covering.allocatedQuantity = (covering.allocatedQuantity or 0) + reagent.allocatedQuantity
+          end
+          covered = true
+        elseif not covering.candidates and covering.item.id == item.id then
+          covered = true
+        end
       end
       if not covered then
         local row = itemRow(item, reagent.dataSlotIndex)
         row.required = (row.required or 0) + reagent.allocatedQuantity
       end
     end
+  end
+  for _, family in ipairs(familyRows) do
+    local allocations, complete = family.allocations or {}, true
+    local total = 0
+    for _, selection in pairs(allocations) do total = total + selection.quantity end
+    if total ~= family.required then complete = false end
+    if complete and total > 0 then
+      for index, row in ipairs(rows) do
+        if row == family then table.remove(rows, index); break end
+      end
+      for _, selection in pairs(allocations) do
+        local row = itemRow(selection.item, family.slot)
+        row.required = (row.required or 0) + selection.quantity
+        row.qualityKnown = true
+        local qualities = {}
+        for value in pairs(selection.qualities) do qualities[#qualities + 1] = value end
+        table.sort(qualities)
+        if #qualities == 1 then
+          row.item = { id = selection.item.id, name = selection.item.name,
+            note = "Recorded quality: " .. UI.Number(qualities[1]) .. "." }
+        elseif #qualities > 1 then
+          local labels = {}
+          for _, value in ipairs(qualities) do labels[#labels + 1] = UI.Number(value) end
+          row.item = { id = selection.item.id, name = selection.item.name,
+            note = "Recorded qualities: " .. table.concat(labels, ", ") .. "." }
+        end
+      end
+    else
+      family.knownAllocations = {}
+      for _, selection in pairs(allocations) do family.knownAllocations[#family.knownAllocations + 1] = selection end
+      table.sort(family.knownAllocations, function(left, right) return left.item.id < right.item.id end)
+    end
+    family.allocations = nil
   end
   for _, reagent in ipairs(craft.reagents or {}) do
     local item = reagent.item
@@ -1454,8 +1505,31 @@ end
 
 function UI.IngredientRequiredText(row)
   if row.required == nil then return "The required quantity couldn't be determined for this craft." end
-  return "This recipe requires " .. UI.Number(row.required) .. " " .. row.name .. "." ..
-    (row.qualityUnknown and " The quality used wasn't recorded." or "")
+  local text = "This recipe requires " .. UI.Number(row.required) .. " " .. row.name .. "."
+  if row.qualityUnknown then
+    if row.knownAllocations and #row.knownAllocations > 0 then
+      local known, allocated = {}, 0
+      for _, selection in ipairs(row.knownAllocations) do
+        allocated = allocated + selection.quantity
+        local qualities = {}
+        for quality in pairs(selection.qualities) do qualities[#qualities + 1] = quality end
+        table.sort(qualities)
+        local name = UI.Name(selection.item)
+        if #qualities == 1 then name = name .. " (quality " .. UI.Number(qualities[1]) .. ")" end
+        known[#known + 1] = name .. " x" .. UI.Number(selection.quantity)
+      end
+      text = text .. " Recorded: " .. table.concat(known, ", ") .. "."
+      local remaining = row.required - allocated
+      if remaining > 0 then
+        text = text .. " The quality used for the remaining " .. UI.Number(remaining) .. " wasn't recorded."
+      else
+        text = text .. " The selected qualities don't account for the full required quantity."
+      end
+    else
+      text = text .. " The quality used wasn't recorded."
+    end
+  end
+  return text
 end
 
 function UI.IngredientReturnedText(row, craft)

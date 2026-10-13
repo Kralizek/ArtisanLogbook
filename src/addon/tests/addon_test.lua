@@ -1198,6 +1198,32 @@ assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Returned
   missive.materialsSavingsEligible = false
   assert(UI.IngredientReturnedText(rows[4], missive) ==
     "1 Sienna Ink was returned by Resourcefulness. Crafting-order materials don't count toward your savings.")
+  local bloomFamily = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom" } }
+  rows = UI.CraftIngredients({ outcomeSource = "native", resourcefulnessComplete = true,
+    reagents = {
+      { item = bloomFamily[1], dataSlotIndex = 1, allocatedQuantity = 3, quality = 1 },
+      { item = bloomFamily[2], dataSlotIndex = 1, allocatedQuantity = 2, quality = 2, returnedQuantity = 1 },
+    }, reagentRequirements = { { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 2 and rows[1].item.id == 8 and rows[2].item.id == 18)
+  assert(rows[1].required == 3 and rows[2].required == 2 and not rows[1].qualityUnknown and not rows[2].qualityUnknown)
+  assert(rows[1].item.note == "Recorded quality: 1." and rows[2].item.note == "Recorded quality: 2.")
+  assert(rows[1].returned == 0 and rows[2].returned == 1)
+  rows = UI.CraftIngredients({ reagents = {
+    { item = bloomFamily[1], dataSlotIndex = 1, allocatedQuantity = 5, quality = 1 },
+    { item = bloomFamily[2], dataSlotIndex = 1, allocatedQuantity = 0, quality = 2 },
+  }, reagentRequirements = { { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 1 and rows[1].item.id == 8 and rows[1].required == 5 and not rows[1].qualityUnknown)
+  assert(rows[1].item.note == "Recorded quality: 1.")
+  rows = UI.CraftIngredients({ reagents = {
+    { item = bloomFamily[1], dataSlotIndex = 1, allocatedQuantity = 3, quality = 1 },
+  }, reagentRequirements = { { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 1 and rows[1].qualityUnknown and rows[1].required == 5)
+  assert(UI.IngredientRequiredText(rows[1]) ==
+    "This recipe requires 5 Bloom. Recorded: Bloom (quality 1) x3. The quality used for the remaining 2 wasn't recorded.")
+  rows = UI.CraftIngredients({ reagentRequirements = {
+    { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 1 and rows[1].qualityUnknown and rows[1].required == 5)
+  assert(UI.IngredientRequiredText(rows[1]) == "This recipe requires 5 Bloom. The quality used wasn't recorded.")
   local missiveTooltip = UI.Activity(missive, true)[1].tooltip
   assert(missiveTooltip == "Resourcefulness returned 1 material\n1 Sienna Ink (2 required)\n" ..
     "Crafting-order materials don't count toward your savings.", missiveTooltip)
@@ -2814,6 +2840,27 @@ do
   local familyCell = detail.returnedReagents.rows[2].widgets[1].widget
   assert(familyCell.label.text == "Bloom" and not familyCell.quality:IsShown())
   assert(familyCell.item.note == "The quality used wasn't recorded.")
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.grossRequirementsComplete = true
+    craft.reagentRequirements = {
+      { dataSlotIndex = 2, requiredQuantity = 5,
+        candidateItems = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom" } } },
+    }
+    craft.reagents = {
+      { item = { id = 8, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 3, quality = 1 },
+      { item = { id = 18, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 2, quality = 2, returnedQuantity = 1 },
+    }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(#detail.returnedReagents.items == 2 and detail.returnedReagents.items[1].item.id == 8 and
+    detail.returnedReagents.items[2].item.id == 18)
+  assert(not detail.returnedReagents.items[1].qualityUnknown and not detail.returnedReagents.items[2].qualityUnknown)
+  assert(detail.returnedReagents.rows[1].widgets[1].widget.item.note == "Recorded quality: 1.")
+  assert(detail.returnedReagents.rows[2].widgets[1].widget.item.note == "Recorded quality: 2.")
+  assert(columns[2].value(detail.returnedReagents.items[1]) == "3" and
+    columns[2].value(detail.returnedReagents.items[2]) == "2")
   local returnedColor = detail.returnedReagents.rows[2].cells[2].label.textColor
   local requiredColor = detail.returnedReagents.rows[2].cells[1].label.textColor
   assert(returnedColor[2] > returnedColor[1] and returnedColor[2] > .8 and requiredColor[1] == 1 and requiredColor[2] == 1)
@@ -2860,7 +2907,7 @@ do
     familyRow.scripts.OnEnter(familyRow)
     local tooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
     assert(environment.GameTooltip.text == "Sand")
-    assert(tooltip:find("\nThis recipe requires 4 Sand. The quality used wasn't recorded.", 1, true), tooltip)
+    assert(tooltip:find("\nThis recipe requires 4 Sand. Recorded: Sand x2. The quality used for the remaining 2 wasn't recorded.", 1, true), tooltip)
     for _, word in ipairs({ "schematic", "slot", "famil", "allocation", "reconcil", "Required:", "Returned:" }) do
       assert(not tooltip:find(word, 1, true), word)
     end
