@@ -49,7 +49,7 @@ case "${1:-}" in
     gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" --dir authoritative
     bundle="authoritative/$ASSET"
     [[ -s "$bundle" ]] || die "Missing bundle $ASSET"
-    unzip -tq "$bundle"
+    bash .github/workflows/scripts/validate-addon-bundle.sh "$bundle"
     for addon in ArtisanLogbook ArtisanLogbook_Core; do
       unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## X-Release-Tag: $TAG"
       unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## Interface: $INTERFACE"
