@@ -278,14 +278,14 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
-    { title = "Known input", width = 86, value = function(row)
+    { title = "Required", width = 86, value = function(row)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
     end, exact = function(row)
-      if row.allocatedQuantity == nil then return "No submitted or fixed schematic input quantity is available for this item." end
+      if row.allocatedQuantity == nil then return "No required quantity was recorded for this item." end
       local text = UI.Number(row.allocatedQuantity) ..
-        " input units from submitted selections or fixed schematic rows before returns. This is not net consumed and may not be a reconciled total."
+        " required in crafts where this item was recorded. Returns aren't subtracted."
       if row.matchedCraftCount and row.matchedCraftCount > 0 then
-        text = text .. " Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. " with both same-item quantities known."
+        text = text .. " Savings compare " .. UI.Count(row.matchedCraftCount, "craft") .. " where both amounts are known."
       end
       return text
     end },
@@ -319,25 +319,19 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   local function showRequirementDetails()
     if #pane.requirementFamilies == 0 then return end
     GameTooltip:SetOwner(requirementNote, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Schematic requirements")
+    GameTooltip:SetText("Recipe requirements")
     for _, family in ipairs(pane.requirementFamilies) do
-      local candidates = {}
+      local names, seen = {}, {}
       for _, candidate in ipairs(family.candidateItems) do
-        candidates[#candidates + 1] = UI.Name(candidate)
+        local name = UI.Name(candidate)
+        if not seen[name] then seen[name] = true; names[#names + 1] = name end
       end
-      local allocationNote = #family.candidateItems > 1 and
-        "Quantity is not apportioned among quality alternatives." or
-        "Submitted/consumed quantity was not reconciled to this expectation."
-      GameTooltip:AddLine(UI.Number(family.requiredQuantity) .. " expected units across " ..
-        UI.Count(family.craftCount, "craft") .. "; candidate items: " .. table.concat(candidates, " / ") ..
-        ". " .. allocationNote, 1, 1, 1, true)
-      if family.resultObservationCount then
-        GameTooltip:AddLine(UI.Count(family.resultObservationCount, "craft") ..
-          ": schematic observed at result, not a submitted input snapshot.", 1, 1, 1, true)
-      end
+      GameTooltip:AddLine(table.concat(names, " or ") .. ": " .. UI.Number(family.requiredQuantity) .. " across " ..
+        UI.Count(family.craftCount, "craft") .. (#family.candidateItems > 1 and " (quality not recorded)" or ""),
+        1, 1, 1, true)
     end
     if pane.requirementMore then
-      GameTooltip:AddLine("Additional schematic alternatives are available in the Core API.", 1, 1, 1, true)
+      GameTooltip:AddLine("More ingredients aren't shown.", 1, 1, 1, true)
     end
     GameTooltip:Show()
   end
@@ -403,8 +397,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     pane.requirementVisible = #pane.requirementFamilies > 0
     requirementNote:SetShown(pane.requirementVisible)
     if pane.requirementVisible then
-      local count = tostring(#pane.requirementFamilies) .. (pane.requirementMore and "+" or "")
-      requirementNote:SetText(count .. " schematic requirement groups; hover for details")
+      requirementNote:SetText("Some ingredients aren't listed by quality. Hover for recipe totals.")
     else
       requirementNote:SetText("")
     end

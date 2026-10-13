@@ -268,19 +268,27 @@ cleans up the shade and modal.
 
 The modal is inspection only. A prominent result row combines item, quality,
 quantity and Multicraft contribution. Paired facts show character, timestamp,
-concentration and outcomes. A grouped Inputs and returned materials section lists
-every known ingredient slot: exact submitted or schematic-fixed item rows, and
-schematic requirement slots even when no exact item allocation was captured.
-Separate Exact input, Expected and Returned columns keep these facts distinct;
-an item with both an exact allocation and a single-item expectation shares one
-row without summing them. A quality-alternative slot appears once as a reagent
-family (for example "Eversinging Dust (any of 2 qualities)") with its total
-expected quantity, no quality badge, and returns of its candidate items unless
-that item already has an exact row. The summary line counts exact and schematic
-slots and quality families instead of describing only the first slot. Item rows
-open Reagent pages after closing the modal; family rows do not pick a quality.
-Craft history captured before the fixed/modified slot-index correction may lack
-the family slot entirely; the modal cannot reconstruct it.
+concentration and outcomes. An Ingredients table shows `Reagent | Required |
+Returned`, one row per ingredient. Required combines the recipe's requirement
+and recorded selections for the same ingredient without adding them twice;
+quantities from different recipe slots for the same item are added. When the
+recipe allows several qualities and the one used wasn't recorded, the row uses
+the plain reagent name (for example "Eversinging Dust") with the recipe total,
+no quality badge, and the tooltip "The quality used wasn't recorded."; returns of
+any of its qualities appear on that row. Quality badges appear only for a
+specific recorded item. A dash means unknown; 0 means Resourcefulness was
+recorded and returned none. Positive returns are lightly highlighted. Tooltips
+are short sentences ("This recipe requires 2 Munsell Ink. The quality used
+wasn't recorded.", "1 Sienna Ink was returned by Resourcefulness."); crafting
+orders add that their materials don't count toward personal savings. A single
+caveat, "Some ingredient details weren't recorded for this craft.", appears only
+when an ingredient or required quantity is genuinely missing (for example older
+crafts captured before the slot-index correction). Item rows open Reagent pages
+after closing the modal; rows with an unrecorded quality do not.
+Logbook Highlights list returns the same way ("1 Sienna Ink (2 required)").
+Recipe and Reagent views use Required for the recorded quantity of that specific
+item; Recipe Reagents notes ingredients that aren't listed by quality and shows
+their recipe totals on hover.
 There is no classification dropdown or duplicate metadata footer. No full-modal
 scrollbar is required. Multiple output identities are not synthesized.
 

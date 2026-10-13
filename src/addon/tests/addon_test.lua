@@ -1146,11 +1146,11 @@ assert(UI.QualityAtlas(42, 0, 5) == nil and UI.QualityAtlas(42, 2, nil) == nil)
 local activity = UI.Activity({ recipe = { id = 42, name = "Crushing", maxQuality = 3 },
   outputItem = { id = 42, name = "Gemdust" }, outputQuantity = 12, outputQuality = 2,
   concentrationSpent = 397, multicraftBonus = 11, hasIngenuityProc = true,
-  ingenuityRefund = 180, reagents = { { item = { name = "Azeroot" }, returnedQuantity = 4 } } })
+  ingenuityRefund = 180, reagents = { { item = { id = 5, name = "Azeroot" }, returnedQuantity = 4 } } })
 assert(#activity == 6 and activity[1].atlas == "Quality-2")
 assert(activity[2].tooltip:find("Gemdust", 1, true) and
   activity[4].tooltip == "Multicraft: produced 11 additional items" and
-  activity[6].tooltip:find("Azeroot: 4 returned (required quantity unavailable)", 1, true))
+  activity[6].tooltip == "Resourcefulness returned 4 materials\n4 Azeroot")
 assert(#UI.Activity({ recipe = { name = "Potion", maxQuality = 5 },
   outputItem = { name = "Potion" }, outputQuality = 0, multicraftBonus = 0,
   concentrationSpent = 0, reagents = {} }) == 0)
@@ -1160,37 +1160,65 @@ local highlights = table.concat(UI.CraftHighlights({ concentrationSpent = 323,
   multicraftBonus = 4, hasIngenuityProc = true, ingenuityRefund = 162,
   reagents = { { returnedQuantity = 4 }, { returnedQuantity = 0 } } }), "; ")
 assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Returned material units: 4")
-assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 5,
-  returnedQuantity = 1 }) ==
-  "Azeroot: 5 submitted input units; the exact item total is not reconciled, 1 returned")
-assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
-  "Azeroot: 4 returned (required quantity unavailable)")
-assert(UI.ReagentDescription({ item = { id = 240990, name = "Sunglass Vial" }, returnedQuantity = 1 }, {
-  reagentRequirements = {
-    { requiredQuantity = 5, candidateItems = { { id = 240990, name = "Sunglass Vial" }, { id = 240991, name = "Sunglass Vial" } } }
-  }
-}) == "Sunglass Vial: 1 returned (5 expected by recipe schematic across 2 quality options; exact split unavailable)")
-assert(UI.ReagentDescription({ item = { id = 236761, name = "Tranquility Bloom" }, returnedQuantity = 1 }, {
-  reagentRequirements = {
-    { requiredQuantity = 8, candidateItemIDs = { 236761, 236762, 236763 } }
-  }
-}) == "Tranquility Bloom: 1 returned (8 expected by recipe schematic across 3 quality options; exact split unavailable)")
-assert(UI.ReagentDescription({ item = { id = 100, name = "Special Herb" }, returnedQuantity = 2 }, {
-  reagentRequirements = {
-    { requiredQuantity = 4, candidateItemIDs = { 100 } }
-  }
-}) == "Special Herb: 2 returned (4 expected by recipe schematic; submitted allocation not reconciled)")
-assert(UI.ReagentDescription({ item = { id = 999, name = "Unknown Herb" }, returnedQuantity = 2 }, {
-  reagentRequirements = {
-    { requiredQuantity = 4, candidateItemIDs = { 100 } }
-  }
-}) == "Unknown Herb: 2 returned (required quantity unavailable)")
-assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) ==
-  "#100: 2 submitted input units; the exact item total is not reconciled")
-assert(UI.ReagentDescription({ item = { name = "Flux" }, allocatedQuantity = 2, fixed = true }) ==
-  "Flux: 2 expected by the recipe schematic")
-assert(UI.ReagentDescription({ item = { name = "Ore" }, allocatedQuantity = 3,
-  inputTotalComplete = true }) == "Ore: 3 submitted and reconciled input units")
+;(function()
+  local function shape(rows)
+    local parts = {}
+    for _, row in ipairs(rows) do
+      parts[#parts + 1] = row.name .. "=" .. tostring(row.required) .. "/" .. tostring(row.returned) ..
+        (row.qualityUnknown and "?" or "")
+    end
+    return table.concat(parts, ";")
+  end
+  local technical = { "schematic", "slot", "famil", "allocation", "reconcil", "observed at result", "expected" }
+  local function plain(text)
+    for _, word in ipairs(technical) do assert(not text:lower():find(word, 1, true), text) end
+    return text
+  end
+  -- Thalassian Missive of the Harmonious: two fixed items and two quality-alternative inks.
+  local vellum, pureVoid = { id = 245001, name = "Lexicologist's Vellum" }, { id = 245002, name = "Mote of Pure Void" }
+  local munsell = { { id = 245011, name = "Munsell Ink" }, { id = 245012, name = "Munsell Ink" } }
+  local sienna = { { id = 245021, name = "Sienna Ink" }, { id = 245022, name = "Sienna Ink" } }
+  local missive = { outcomeSource = "native", resourcefulnessComplete = true, hasResourcefulnessProc = true,
+    grossRequirementsComplete = true,
+    reagents = {
+      { item = vellum, dataSlotIndex = 1, allocatedQuantity = 1, fixed = true, returnedQuantity = 0 },
+      { item = pureVoid, dataSlotIndex = 3, allocatedQuantity = 1, fixed = true, returnedQuantity = 0 },
+      { item = sienna[2], returnedQuantity = 1 },
+    },
+    reagentRequirements = {
+      { dataSlotIndex = 2, requiredQuantity = 2, candidateItems = munsell },
+      { dataSlotIndex = 4, requiredQuantity = 2, candidateItems = sienna },
+    } }
+  local rows = UI.CraftIngredients(missive)
+  assert(shape(rows) == "Lexicologist's Vellum=1/0;Munsell Ink=2/0?;Mote of Pure Void=1/0;Sienna Ink=2/1?", shape(rows))
+  assert(plain(UI.IngredientRequiredText(rows[2])) == "This recipe requires 2 Munsell Ink. The quality used wasn't recorded.")
+  assert(plain(UI.IngredientRequiredText(rows[1])) == "This recipe requires 1 Lexicologist's Vellum.")
+  assert(plain(UI.IngredientReturnedText(rows[4], missive)) == "1 Sienna Ink was returned by Resourcefulness.")
+  assert(plain(UI.IngredientReturnedText(rows[2], missive)) == "Resourcefulness didn't return any Munsell Ink.")
+  missive.materialsSavingsEligible = false
+  assert(UI.IngredientReturnedText(rows[4], missive) ==
+    "1 Sienna Ink was returned by Resourcefulness. Crafting-order materials don't count toward your savings.")
+  local missiveTooltip = UI.Activity(missive, true)[1].tooltip
+  assert(missiveTooltip == "Resourcefulness returned 1 material\n1 Sienna Ink (2 required)\n" ..
+    "Crafting-order materials don't count toward your savings.", missiveTooltip)
+  -- Recorded quality selections inside a requirement's slot are the same ingredient, never added again.
+  rows = UI.CraftIngredients({ reagents = {
+    { item = { id = 8, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 3, returnedQuantity = 1 },
+    { item = { id = 18, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 2 },
+    { item = { id = 50, name = "Sand" }, dataSlotIndex = 3, allocatedQuantity = 2 },
+    { item = { id = 40, name = "Ink" }, dataSlotIndex = 5, allocatedQuantity = 1 },
+    { item = { id = 40, name = "Ink" }, dataSlotIndex = 6, allocatedQuantity = 2 },
+    { item = { id = 51, name = "Sand" }, returnedQuantity = 1 },
+    { item = { id = 77, name = "Stray" }, returnedQuantity = 1 },
+  }, reagentRequirements = {
+    { dataSlotIndex = 3, requiredQuantity = 4, candidateItemIDs = { 50, 51 } },
+    { dataSlotIndex = 5, requiredQuantity = 1, candidateItems = { { id = 40, name = "Ink" } } },
+  } })
+  assert(shape(rows) == "Bloom=3/1;Bloom=2/nil;#50 or #51=4/1?;Ink=3/nil;Stray=nil/1", shape(rows))
+  assert(plain(UI.IngredientRequiredText(rows[5])) == "The required quantity couldn't be determined for this craft.")
+  assert(plain(UI.IngredientReturnedText(rows[2])) == "Returns weren't recorded for this craft.")
+  assert(#UI.CraftIngredients({}) == 0)
+end)()
 do
   local craftWithRequirements = {
     recipe = { name = "Light's Potential", maxQuality = 3 },
@@ -1207,8 +1235,8 @@ do
       { item = { id = 236761, name = "Tranquility Bloom" }, returnedQuantity = 1 },
     },
     reagentRequirements = {
-      { requiredQuantity = 5, candidateItems = { { id = 240990, name = "Sunglass Vial" }, { id = 240991, name = "Sunglass Vial" } } },
-      { requiredQuantity = 8, candidateItems = { { id = 236761, name = "Tranquility Bloom" }, { id = 236762, name = "Tranquility Bloom" }, { id = 236763, name = "Tranquility Bloom" } } },
+      { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = { { id = 240990, name = "Sunglass Vial" }, { id = 240991, name = "Sunglass Vial" } } },
+      { dataSlotIndex = 2, requiredQuantity = 8, candidateItems = { { id = 236761, name = "Tranquility Bloom" }, { id = 236762, name = "Tranquility Bloom" }, { id = 236763, name = "Tranquility Bloom" } } },
     }
   }
   local lightsActivity = UI.Activity(craftWithRequirements)
@@ -1216,9 +1244,8 @@ do
   for _, ind in ipairs(lightsActivity) do
     if ind.icon == "Interface\\Icons\\INV_Misc_Herb_19" then herbTooltip = ind.tooltip end
   end
-  assert(herbTooltip:find("Returned material units: 2", 1, true))
-  assert(herbTooltip:find("Sunglass Vial: 1 returned (5 expected by recipe schematic across 2 quality options; exact split unavailable)", 1, true))
-  assert(herbTooltip:find("Tranquility Bloom: 1 returned (8 expected by recipe schematic across 3 quality options; exact split unavailable)", 1, true))
+  assert(herbTooltip == "Resourcefulness returned 2 materials\n1 Sunglass Vial (5 required)\n" ..
+    "1 Tranquility Bloom (8 required)", herbTooltip)
 end
 local longName = "Silvermoon Health Potion of the Long Night"
 local sampleTable = UI.ScrollList(environment.CreateFrame("Frame"), 0, 0, 140, 140,
@@ -2240,9 +2267,9 @@ do
   assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
   assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
-  assert(detail.chart.bars[1].tooltip:find("Known input: 505", 1, true))
+  assert(detail.chart.bars[1].tooltip:find("Required: 505", 1, true))
   assert(detail.status.text:find("Item details are available for 101 of 102 crafts", 1, true))
-  assert(detail.status.text:find("Saved share compares known input amounts", 1, true))
+  assert(detail.status.text:find("Saved share compares required amounts", 1, true))
   detail:SelectView("Used in Recipes")
   assert(detail.tabs["Used in Recipes"].selected and detail.recipes:IsShown())
   detail.recipes.rows[1].scripts.OnClick(detail.recipes.rows[1])
@@ -2695,15 +2722,15 @@ do
   local recipeSavingsCell, recipeInputCell
   for _, cell in ipairs(materialRows[1].cells) do
     if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
-    if cell.column.title == "Known input" then recipeInputCell = cell end
+    if cell.column.title == "Required" then recipeInputCell = cell end
   end
   assert(recipeSavingsCell and recipeSavingsCell.label.text == helpers.MatchedSavingsText(materialRows[1].item))
   assert(recipeInputCell and recipeInputCell.label.text ==
     (materialRows[1].item.allocatedQuantity and ui.UI.Number(materialRows[1].item.allocatedQuantity) or "-"))
   if materialRows[1].item.allocatedQuantity then
     local inputTooltip = recipeInputCell.column.exact(materialRows[1].item)
-    assert(inputTooltip:find("submitted selections or fixed schematic rows", 1, true) and
-      inputTooltip:find("not net consumed", 1, true))
+    assert(inputTooltip:find("required in crafts where this item was recorded", 1, true) and
+      inputTooltip:find("Returns aren't subtracted", 1, true))
   end
   assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
   assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
@@ -2755,11 +2782,15 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
+  local columns = detail.returnedReagents.columns
+  assert(#columns == 3 and columns[1].title == "Reagent" and columns[2].title == "Required" and columns[3].title == "Returned")
   assert(#detail.returnedReagents.items == 2)
   assert(detail.fields.Resourcefulness.text == "Return recorded")
-  assert(detail.inputEvidence.text == "Known so far: 2 exact input slots.", detail.inputEvidence.text)
+  -- Older crafts without a complete ingredient record get one plain caveat.
+  assert(detail.inputEvidence.text == "Some ingredient details weren't recorded for this craft.", detail.inputEvidence.text)
   api.GetCraft = function()
     local craft = getCraft(second.id)
+    craft.grossRequirementsComplete = true
     craft.reagents = {
       { item = { id = 8, name = "Bloom" }, returnedQuantity = 1 },
       { item = { id = 9, name = "Petal" }, returnedQuantity = 1 },
@@ -2771,26 +2802,26 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(detail.inputEvidence.text ==
-    "Known so far: 2 schematic slots (1 quality family); quality used is not recorded.", detail.inputEvidence.text)
+  assert(detail.inputEvidence.text == "", detail.inputEvidence.text)
   local petalRow = detail.returnedReagents.items[1]
   local bloomRow = detail.returnedReagents.items[2]
-  assert(#detail.returnedReagents.items == 2 and petalRow.item.id == 9 and bloomRow.family)
-  assert(bloomRow.label == "Bloom (any of 2 qualities)" and bloomRow.allocatedQuantity == nil)
-  assert(bloomRow.expectedQuantity == 8 and bloomRow.returnedQuantity == 1)
-  local columns = detail.returnedReagents.columns
-  assert(columns[2].title == "Exact input" and columns[3].title == "Expected" and columns[4].title == "Returned")
-  assert(columns[3].exact(bloomRow):find("Schematic expects 8 units across 2 quality options; exact quality split is not established and not a savings basis", 1, true))
-  assert(columns[3].exact(petalRow):find("Schematic expects 2 units; submitted allocation not reconciled and not a savings basis", 1, true))
-  assert(columns[4].exact(bloomRow) == "1 unit returned: 1 Bloom (#8).")
-  assert(columns[2].value(bloomRow) == "-" and columns[3].value(bloomRow) == "8")
+  assert(#detail.returnedReagents.items == 2 and petalRow.item.id == 9 and bloomRow.qualityUnknown)
+  assert(bloomRow.name == "Bloom" and bloomRow.required == 8 and bloomRow.returned == 1)
+  assert(columns[2].value(bloomRow) == "8" and columns[3].value(bloomRow) == "1")
+  assert(columns[2].exact(bloomRow) == "This recipe requires 8 Bloom. The quality used wasn't recorded.")
+  assert(columns[2].exact(petalRow) == "This recipe requires 2 Petal.")
+  assert(columns[3].exact(bloomRow) == "1 Bloom was returned by Resourcefulness.")
   local familyCell = detail.returnedReagents.rows[2].widgets[1].widget
-  assert(familyCell.label.text == "Bloom (any of 2 qualities)" and not familyCell.quality:IsShown())
+  assert(familyCell.label.text == "Bloom" and not familyCell.quality:IsShown())
+  assert(familyCell.item.note == "The quality used wasn't recorded.")
+  local returnedColor = detail.returnedReagents.rows[2].cells[2].label.textColor
+  local requiredColor = detail.returnedReagents.rows[2].cells[1].label.textColor
+  assert(returnedColor[2] > returnedColor[1] and returnedColor[2] > .8 and requiredColor[1] == 1 and requiredColor[2] == 1)
   ;(function()
-    -- Mixed exact qualities, fixed, family, conflicting partial selections and returns across five slots.
+    -- Fixed, mixed exact qualities, quality-alternative slots, overlapping selections and an unknown requirement.
     api.GetCraft = function()
       local craft = getCraft(second.id)
-      craft.inputComplete, craft.grossRequirementsComplete = nil, true
+      craft.inputComplete, craft.grossRequirementsComplete, craft.materialsSavingsEligible = nil, true, false
       craft.reagents = {
         { item = { id = 9, name = "Petal" }, dataSlotIndex = 1, allocatedQuantity = 2, fixed = true, inputTotalComplete = true },
         { item = { id = 8, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 3, inputTotalComplete = true, returnedQuantity = 1 },
@@ -2809,29 +2840,32 @@ do
     end
     detail:ShowCraft(second.id)
     local items = detail.returnedReagents.items
-    local expected = { { 9, 2, nil, nil }, { 8, 3, nil, 1 }, { 18, 2, nil, nil }, { 50, 2, nil, 1 },
-      { "family", nil, 4, nil }, { "family", nil, 6, 2 }, { 40, 1, 1, nil }, { 77, nil, nil, 1 } }
+    local expected = { { "Petal", 2, 0 }, { "Bloom", 3, 1 }, { "Bloom", 2, 0 }, { "Sand", 4, 1, true },
+      { "Herb", 6, 2, true }, { "Ink", 1, 0 }, { "Stray", nil, 1 } }
     assert(#items == #expected, #items)
+    local required, returned = 0, 0
     for index, shape in ipairs(expected) do
       local row = items[index]
-      assert(shape[1] == "family" and row.family or row.item.id == shape[1], index)
-      assert(row.allocatedQuantity == shape[2] and row.expectedQuantity == shape[3] and row.returnedQuantity == shape[4], index)
+      assert(row.name == shape[1] and row.required == shape[2] and row.returned == shape[3], index)
+      assert((row.qualityUnknown == true) == (shape[4] == true), index)
+      required, returned = required + (row.required or 0), returned + (row.returned or 0)
     end
-    assert(items[5].label == "Sand (any of 2 qualities)" and items[6].label == "Herb (any of 3 qualities)")
-    assert(columns[4].exact(items[6]) == "2 units returned: 2 Herb (#31).")
-    local allocated, returned = 0, 0
-    for _, row in ipairs(items) do
-      allocated = allocated + (row.allocatedQuantity or 0)
-      returned = returned + (row.returnedQuantity or 0)
+    assert(required == 18 and returned == 5)
+    assert(columns[2].value(items[7]) == "-" and columns[3].value(items[3]) == "0")
+    assert(columns[2].exact(items[7]) == "The required quantity couldn't be determined for this craft.")
+    assert(detail.inputEvidence.text == "Some ingredient details weren't recorded for this craft.")
+    assert(columns[3].exact(items[4]) ==
+      "1 Sand was returned by Resourcefulness. Crafting-order materials don't count toward your savings.")
+    local familyRow = detail.returnedReagents.rows[4]
+    familyRow.scripts.OnEnter(familyRow)
+    local tooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
+    assert(environment.GameTooltip.text == "Sand")
+    assert(tooltip:find("\nThis recipe requires 4 Sand. The quality used wasn't recorded.", 1, true), tooltip)
+    for _, word in ipairs({ "schematic", "slot", "famil", "allocation", "reconcil", "Required:", "Returned:" }) do
+      assert(not tooltip:find(word, 1, true), word)
     end
-    assert(allocated == 10 and returned == 5)
-    assert(detail.inputEvidence.text ==
-      "All slots known: 4 exact input slots + 3 schematic slots (2 quality families); quality used is not recorded.",
-      detail.inputEvidence.text)
-    assert(columns[2].exact(items[4]):find("not reconciled", 1, true))
-    assert(columns[2].exact(items[5]) == "Quality choice not captured; see the schematic expectation.")
     local opened = window.activeTab
-    detail.returnedReagents.rows[5].scripts.OnClick(detail.returnedReagents.rows[5])
+    familyRow.scripts.OnClick(familyRow)
     assert(window.craftDetailWindow:IsShown() and window.activeTab == opened)
   end)()
   api.GetCraft = function()
@@ -2852,7 +2886,8 @@ do
   end
   detail:ShowCraft(second.id)
   assert(detail.fields.Resourcefulness.text == "Outcome unavailable")
-  assert(detail.returnedReagents.items[1].returnComplete == false)
+  assert(detail.returnedReagents.items[1].returned == nil and columns[3].value(detail.returnedReagents.items[1]) == "-")
+  assert(columns[3].exact(detail.returnedReagents.items[1]) == "Returns weren't recorded for this craft.")
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.reagents = {}
@@ -2874,6 +2909,8 @@ do
   assert(not detail.reagentSelector and not checkbox)
   assert(detail.returnedReagents.child:GetHeight() == detail.returnedReagents.scroll:GetHeight())
   assert(detail.result.item.id == 4567 and detail.result.label.text == "Flask")
+  assert(#detail.returnedReagents.items == 0 and detail.inputEvidence.text == "")
+  assert(detail.returnedReagents.empty.text == "Ingredients weren't recorded for this craft.")
   api.GetCraft = getCraft
   button(detail, "Close").scripts.OnClick()
   finishCalculation()
@@ -2978,14 +3015,15 @@ do
   pane:Refresh()
   assert(pane.requirementNote:IsShown())
   assert(pane.requirementNote.height == 18 and pane.requirementNote.text ==
-    "2 schematic requirement groups; hover for details")
+    "Some ingredients aren't listed by quality. Hover for recipe totals.")
   assert(pane.materialList.y == -30)
   pane.requirementNote.scripts.OnEnter(pane.requirementNote)
   local requirementTooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
-  assert(requirementTooltip:find("5 expected units across 2 crafts", 1, true))
-  assert(requirementTooltip:find("Azeroot Quality One with a deliberately long localized reagent name", 1, true))
+  assert(requirementTooltip:find("Recipe requirements", 1, true))
+  assert(requirementTooltip:find("Azeroot Quality One with a deliberately long localized reagent name or " ..
+    "Azeroot Quality Two: 5 across 2 crafts (quality not recorded)", 1, true))
   assert(requirementTooltip:find("A second alternative reagent family", 1, true))
-  assert(requirementTooltip:find("Quantity is not apportioned among quality alternatives", 1, true))
+  assert(not requirementTooltip:lower():find("schematic", 1, true))
   api.GetRecipeReagentRequirements = oldRequirementQuery
   pane:Refresh()
   assert(not pane.requirementNote:IsShown() and pane.materialList.y == -4)
@@ -3859,12 +3897,13 @@ end)()
   for _, reagent in ipairs(craft.reagents) do assert(reagent.allocatedQuantity == nil) end
   local ui = loadUI()
   local activity = ui.UI.Activity(craft, true)
-  assert(#activity == 1 and activity[1].tooltip:find("Returned material units: 4", 1, true))
-  assert(activity[1].tooltip:find("5 expected by recipe schematic", 1, true))
-  assert(activity[1].tooltip:find("8 expected by recipe schematic", 1, true))
-  assert(activity[1].tooltip:find("schematic observed at result", 1, true))
+  assert(#activity == 1 and activity[1].tooltip == "Resourcefulness returned 4 materials\n" ..
+    "2 Sunglass Vial (5 required)\n2 Tranquility Bloom (8 required)", activity[1].tooltip)
   ui.productionWindow:OpenCraft(craft.id)
-  assert(ui.productionWindow.craftDetailPage.inputEvidence.text:find("observed at result", 1, true))
+  local resultRows = ui.productionWindow.craftDetailPage.returnedReagents.items
+  assert(#resultRows == 2 and resultRows[1].name == "Sunglass Vial" and resultRows[1].required == 5 and
+    resultRows[1].returned == 2 and resultRows[1].qualityUnknown)
+  assert(not ui.productionWindow.craftDetailPage.inputEvidence.text:find("observed", 1, true))
   local requirements = api.GetRecipeReagentRequirements(recipeId).requirements
   local hasResultObservation = false
   for _, family in ipairs(requirements) do
@@ -3993,6 +4032,23 @@ end)()
     for _, reagent in ipairs(api.GetRecipeReagentStatistics(recipeId).reagents) do assert(reagent.matchedCraftCount == 0) end
   end
   assert(first.materialsSavingsEligible == false and second.materialsSavingsEligible == false)
+  ;(function()
+    local window = loadUI().productionWindow
+    window:OpenCraft(890)
+    local page = window.craftDetailPage
+    local shape = {}
+    for _, row in ipairs(page.returnedReagents.items) do
+      shape[#shape + 1] = (row.qualityUnknown and "?" or row.item.id) .. "=" .. tostring(row.required) .. "/" .. tostring(row.returned)
+    end
+    assert(table.concat(shape, ";") == "236949=1/0;240991=5/0;236761=8/0;?=3/0;236774=3/0;247726=1/0", table.concat(shape, ";"))
+    assert(page.inputEvidence.text == "", page.inputEvidence.text)
+    window:OpenCraft(889)
+    local returnedRow
+    for _, row in ipairs(page.returnedReagents.items) do if row.item.id == 236761 then returnedRow = row end end
+    assert(returnedRow.required == 3 and returnedRow.returned == 2)
+    assert(page.returnedReagents.columns[3].exact(returnedRow):find("Crafting-order materials don't count toward your savings.", 1, true))
+    window:Hide()
+  end)()
   local loaded = reload(core.ledger.database)
   assert(environment.ArtisanLogbookAPI.GetCraft(890).request.id == 239)
   loaded.ledger:Prune(current + 61 * 86400)
@@ -4052,16 +4108,16 @@ end)()
   local page = window.craftDetailPage
   local items = page.returnedReagents.items
   assert(#items == 2, #items)
-  assert(items[1].item.id == mote and items[1].allocatedQuantity == 5 and items[1].returnedQuantity == 2)
-  assert(items[1].expectedQuantity == nil)
-  assert(items[2].family and items[2].label == "Eversinging Dust (any of 2 qualities)")
-  assert(items[2].allocatedQuantity == nil and items[2].expectedQuantity == 3 and items[2].returnedQuantity == nil)
+  assert(items[1].item.id == mote and items[1].name == "Mote of Light" and not items[1].qualityUnknown)
+  assert(items[1].required == 5 and items[1].returned == 2)
+  assert(items[2].qualityUnknown and items[2].name == "Eversinging Dust")
+  assert(items[2].required == 3 and items[2].returned == 0)
   local columns = page.returnedReagents.columns
-  assert(columns[2].value(items[2]) == "-" and columns[3].value(items[2]) == "3" and columns[4].value(items[2]) == "0")
-  assert(columns[2].value(items[1]) == "5" and columns[3].value(items[1]) == "-" and columns[4].value(items[1]) == "2")
-  assert(page.inputEvidence.text ==
-    "All slots known: 1 exact input slot + 1 schematic slot (1 quality family); quality used is not recorded.",
-    page.inputEvidence.text)
+  assert(#columns == 3 and columns[2].value(items[2]) == "3" and columns[3].value(items[2]) == "0")
+  assert(columns[2].value(items[1]) == "5" and columns[3].value(items[1]) == "2")
+  assert(columns[2].exact(items[2]) == "This recipe requires 3 Eversinging Dust. The quality used wasn't recorded.")
+  assert(columns[3].exact(items[1]) == "2 Mote of Light were returned by Resourcefulness.")
+  assert(page.inputEvidence.text == "", page.inputEvidence.text)
   environment.Enum = savedEnum
   for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs" }) do
     environment.C_TradeSkillUI[name] = savedMethods[name]

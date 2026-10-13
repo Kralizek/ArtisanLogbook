@@ -363,6 +363,7 @@ function UI.ItemTooltip(owner, item)
   if item.id and type(GameTooltip.SetItemByID) == "function" then GameTooltip:SetItemByID(item.id)
   else GameTooltip:SetText(UI.Name(item)) end
   if item.id then GameTooltip:AddLine("Item ID: " .. item.id, 1, 1, 1) end
+  if item.note then GameTooltip:AddLine(item.note, 1, 1, 1, true) end
   GameTooltip:Show()
 end
 
@@ -896,11 +897,15 @@ function UI.Activity(craft, extrasOnly)
     returned = returned + math.max(0, reagent.returnedQuantity or 0)
   end
   if returned > 0 then
-    local lines = { "Returned material units: " .. returned }
-    for _, reagent in ipairs(craft.reagents or {}) do
-      if reagent.returnedQuantity and reagent.returnedQuantity > 0 then
-        lines[#lines + 1] = UI.ReagentDescription(reagent, craft)
+    local lines = { "Resourcefulness returned " .. UI.Count(returned, "material") }
+    for _, row in ipairs(UI.CraftIngredients(craft)) do
+      if row.returned and row.returned > 0 then
+        lines[#lines + 1] = UI.Number(row.returned) .. " " .. row.name ..
+          (row.required and " (" .. UI.Number(row.required) .. " required)" or "")
       end
+    end
+    if craft.materialsSavingsEligible == false then
+      lines[#lines + 1] = "Crafting-order materials don't count toward your savings."
     end
     add("Interface\\Icons\\INV_Misc_Herb_19", UI.Number(returned), table.concat(lines, "\n"))
   end
@@ -1022,10 +1027,11 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         row:SetScript("OnClick", function(self) onOpen(self.item) end)
         row:SetScript("OnEnter", function(self)
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-          GameTooltip:SetText(UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
+          GameTooltip:SetText(self.item.title or UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
           for _, column in ipairs(columns) do
             if column.value and column.title ~= "Recipe" then
-              GameTooltip:AddLine(column.title .. ": " .. tostring((column.exact or column.value)(self.item)), 1, 1, 1, true)
+              local text = tostring((column.exact or column.value)(self.item))
+              GameTooltip:AddLine(column.sentence and text or column.title .. ": " .. text, 1, 1, 1, true)
             end
           end
           if self.activity then
@@ -1174,7 +1180,7 @@ function UI.Chart(parent, x, y, width, quantities)
     self.plot:SetShown(days > 1 and total > 0)
     self.empty:SetShown(days == 1 or total == 0)
     if days == 1 and total > 0 then
-      self.empty:SetText(quantities and ("Known input: " .. UI.Number(daily[from]) ..
+      self.empty:SetText(quantities and ("Required: " .. UI.Number(daily[from]) ..
         "   Known returned: " .. UI.Number(returned[from])) or
         UI.Count(total, "craft") .. " on " .. date("!%d %b", from))
     else self.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period") end
@@ -1227,7 +1233,7 @@ function UI.Chart(parent, x, y, width, quantities)
       if quantities then
         local amount = returned[from + day * bucketSeconds]
         bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
-          "\nKnown input: " .. UI.Value(daily[from + day * bucketSeconds]) ..
+          "\nRequired: " .. UI.Value(daily[from + day * bucketSeconds]) ..
           "\nKnown returned: " .. UI.Value(amount)
         bar.returned.tooltip = bar.tooltip
         bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft + visibleWidth + groupGap, 0)
@@ -1353,62 +1359,114 @@ function UI.CraftHighlights(craft)
   return details
 end
 
-function UI.ReagentDescription(reagent, craft)
-  local description = UI.Name(reagent.item) .. ": "
-  if reagent.allocatedQuantity ~= nil then
-    if reagent.fixed then
-      description = description .. reagent.allocatedQuantity .. " expected by the recipe schematic"
-    elseif reagent.inputTotalComplete == true then
-      description = description .. reagent.allocatedQuantity .. " submitted and reconciled input units"
-    else
-      description = description .. reagent.allocatedQuantity .. " submitted input units; the exact item total is not reconciled"
+local function ingredientCandidates(requirement)
+  local items = {}
+  for _, item in ipairs(requirement.candidateItems or {}) do items[#items + 1] = item end
+  if #items == 0 then
+    for _, itemId in ipairs(requirement.candidateItemIDs or {}) do items[#items + 1] = { id = itemId } end
+  end
+  return items
+end
+
+local function includesItem(items, itemId)
+  for _, item in ipairs(items or {}) do if item.id == itemId then return true end end
+  return false
+end
+
+-- One row per ingredient; recipe requirements and recorded selections for the same slot are never summed.
+function UI.CraftIngredients(craft)
+  local rows, byItem, bySlot = {}, {}, {}
+  local function itemRow(item, slot)
+    local row = byItem[item.id]
+    if not row then
+      row = { item = item, name = UI.Name(item) }
+      byItem[item.id] = row
+      rows[#rows + 1] = row
     end
-    if reagent.returnedQuantity ~= nil then
-      description = description .. ", " .. reagent.returnedQuantity .. " returned"
+    if slot and (not row.slot or slot < row.slot) then row.slot = slot end
+    return row
+  end
+  for _, requirement in ipairs(craft.reagentRequirements or {}) do
+    local items = ingredientCandidates(requirement)
+    if #items > 0 and type(requirement.requiredQuantity) == "number" then
+      local row
+      if #items == 1 then
+        row = itemRow(items[1], requirement.dataSlotIndex)
+        row.required = (row.required or 0) + requirement.requiredQuantity
+      else
+        local names, seen = {}, {}
+        for _, item in ipairs(items) do
+          if item.name and not seen[item.name] then seen[item.name] = true; names[#names + 1] = item.name end
+        end
+        if #names == 0 then
+          for _, item in ipairs(items) do names[#names + 1] = UI.Name(item) end
+        end
+        local name = table.concat(names, " or ")
+        row = { item = items[1], candidates = items, qualityUnknown = true, name = name, title = name,
+          required = requirement.requiredQuantity, slot = requirement.dataSlotIndex }
+        rows[#rows + 1] = row
+      end
+      if requirement.dataSlotIndex then
+        bySlot[requirement.dataSlotIndex] = bySlot[requirement.dataSlotIndex] or {}
+        table.insert(bySlot[requirement.dataSlotIndex], row)
+      end
     end
-  elseif reagent.returnedQuantity ~= nil then
-    local matchingRequirement
-    if craft and craft.reagentRequirements then
-      local itemId = reagent.item and reagent.item.id
-      if itemId then
-        for _, req in ipairs(craft.reagentRequirements) do
-          if req.candidateItems then
-            for _, cand in ipairs(req.candidateItems) do
-              if cand.id == itemId then matchingRequirement = req; break end
-            end
-          elseif req.candidateItemIDs then
-            for _, cid in ipairs(req.candidateItemIDs) do
-              if cid == itemId then matchingRequirement = req; break end
-            end
-          end
-          if matchingRequirement then break end
+  end
+  for _, reagent in ipairs(craft.reagents or {}) do
+    local item = reagent.item
+    if item and item.id and reagent.allocatedQuantity ~= nil then
+      local covered = false
+      for _, covering in ipairs(reagent.dataSlotIndex and bySlot[reagent.dataSlotIndex] or {}) do
+        if covering.candidates and includesItem(covering.candidates, item.id) or
+            not covering.candidates and covering.item.id == item.id then covered = true end
+      end
+      if not covered then
+        local row = itemRow(item, reagent.dataSlotIndex)
+        row.required = (row.required or 0) + reagent.allocatedQuantity
+      end
+    end
+  end
+  for _, reagent in ipairs(craft.reagents or {}) do
+    local item = reagent.item
+    if item and item.id and reagent.returnedQuantity ~= nil then
+      local row = byItem[item.id]
+      if not row then
+        for _, candidate in ipairs(rows) do
+          if candidate.candidates and includesItem(candidate.candidates, item.id) then row = candidate; break end
         end
       end
+      row = row or itemRow(item)
+      row.returned = (row.returned or 0) + reagent.returnedQuantity
     end
-    if matchingRequirement then
-      local candidateCount = (matchingRequirement.candidateItems and #matchingRequirement.candidateItems) or
-        (matchingRequirement.candidateItemIDs and #matchingRequirement.candidateItemIDs) or 0
-      if candidateCount > 1 then
-        description = description .. reagent.returnedQuantity .. " returned (" ..
-          UI.Number(matchingRequirement.requiredQuantity) .. " expected by recipe schematic across " ..
-          UI.Count(candidateCount, "quality option") .. "; exact split unavailable)"
-      elseif candidateCount == 1 then
-        description = description .. reagent.returnedQuantity .. " returned (" ..
-          UI.Number(matchingRequirement.requiredQuantity) .. " expected by recipe schematic; submitted allocation not reconciled)"
-      else
-        description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
-      end
-    else
-      description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
-    end
-  else
-    description = description .. "quantity unknown"
   end
-  if reagent.quality ~= nil then description = description .. " (quality " .. reagent.quality .. ")" end
-  if craft and craft.requirementObservation == "result" then
-    description = description .. "; schematic observed at result, not submitted inputs"
+  local returnsKnown = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
+  for _, row in ipairs(rows) do
+    if row.returned == nil and returnsKnown then row.returned = 0 end
   end
-  return description
+  table.sort(rows, function(left, right)
+    local leftSlot, rightSlot = left.slot or math.huge, right.slot or math.huge
+    if leftSlot ~= rightSlot then return leftSlot < rightSlot end
+    if (left.candidates ~= nil) ~= (right.candidates ~= nil) then return right.candidates ~= nil end
+    return (left.item.id or 0) < (right.item.id or 0)
+  end)
+  return rows
+end
+
+function UI.IngredientRequiredText(row)
+  if row.required == nil then return "The required quantity couldn't be determined for this craft." end
+  return "This recipe requires " .. UI.Number(row.required) .. " " .. row.name .. "." ..
+    (row.qualityUnknown and " The quality used wasn't recorded." or "")
+end
+
+function UI.IngredientReturnedText(row, craft)
+  if row.returned == nil then return "Returns weren't recorded for this craft." end
+  if row.returned <= 0 then return "Resourcefulness didn't return any " .. row.name .. "." end
+  local text = UI.Number(row.returned) .. " " .. row.name .. (row.returned == 1 and " was" or " were") ..
+    " returned by Resourcefulness."
+  if craft and craft.materialsSavingsEligible == false then
+    text = text .. " Crafting-order materials don't count toward your savings."
+  end
+  return text
 end
 
 function UI.Range(now, days)

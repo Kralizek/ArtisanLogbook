@@ -41,10 +41,11 @@ function UI.ReagentCell(cell, item)
   UI.ReagentVisual(cell, item.id)
 end
 
--- Quality families show no tier badge or item tooltip: no particular quality is established.
+-- No quality badge: the recipe's total is known, but not which quality was used.
 function UI.ReagentFamilyCell(cell, item, label)
   reagentCells[cell] = nil
-  cell:Update({ name = label }, nil, reagentDisplay(item.id).icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+  cell:Update({ name = label, note = "The quality used wasn't recorded." }, nil,
+    reagentDisplay(item.id).icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 end
 
 function UI.CataloguePage(page, width, height, openRecipe)
@@ -118,7 +119,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   local period = filters:Period(state, function() detail:Refresh() end, true)
   local characters = filters:Select("Character", {}, function(value) state.character = value; detail:Refresh() end)
   local professions = filters:Select("Profession", {}, function(value) state.profession = value; detail:Refresh() end)
-  local entries = { { "Known input units", "allocated" }, { "Returned units", "returned" }, { "Crafts in recipes", "crafts" },
+  local entries = { { "Required units", "allocated" }, { "Returned units", "returned" }, { "Crafts in recipes", "crafts" },
     { "Recent crafters", "characters" }, { "Saved share", "rate" }, { "Recipes using this", "recipes" } }
   local metrics = {}
   for index, entry in ipairs(entries) do metrics[index] = { entry[1], "INV_Misc_Herb_19" } end
@@ -137,11 +138,11 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     { title = "Recipe", width = (inner - 24) * .46, value = function(row) return UI.Name(row.recipe) end,
       icon = function(row) return UI.RecipeIcon(row.recipe) end },
     { title = "Crafts", width = (inner - 24) * .14, value = function(row) return UI.Number(row.crafts) end },
-    { title = "Known input", width = (inner - 24) * .20,
+    { title = "Required", width = (inner - 24) * .20,
       value = function(row) return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete") end,
       exact = function(row)
         return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-          " Known units from submitted selections or fixed schematic rows; not net consumed and not necessarily the full item total."
+          " Counts crafts where this item was recorded. Returns aren't subtracted."
       end },
     { title = "Returned", width = (inner - 24) * .20, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
@@ -162,7 +163,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   end, UI.VisibleCraft)
   detail.chart = UI.Chart(overview, 0, 0, inner, true)
   local legend = UI.Text(overview, 0, -168, inner, 18)
-  legend:SetText("|cff2787c2Known input|r   |cff287040Known returned|r")
+  legend:SetText("|cff2787c2Required|r   |cff287040Returned|r")
   detail.status = UI.Text(overview, 0, -196, inner, 54)
   detail.worker = CreateFrame("Frame", nil, detail)
   function filters.onLayout(filterHeight)
@@ -209,9 +210,9 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     self.tiles.returned:SetNumber(row.returnedQuantity, row.returnComplete)
     self.tiles.allocated:SetScript("OnEnter", function(tile)
       GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
-      GameTooltip:SetText("Known input quantity")
+      GameTooltip:SetText("Required quantity")
       GameTooltip:AddLine(UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete), 1, 1, 1, true)
-      GameTooltip:AddLine("Submitted selections and fixed schematic inputs before returns; some may be unreconciled. Not net consumed.", 1, 1, 1, true)
+      GameTooltip:AddLine("Counts crafts where this item was recorded. Returns aren't subtracted.", 1, 1, 1, true)
       GameTooltip:Show()
     end)
     self.tiles.allocated:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -322,7 +323,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
         "No individual craft details are available in this period. Saved share: " .. savingsCoverage or
         "Recent craft details: " .. UI.Number(retainedCraftCount) .. " crafts, " .. date("!%d %b %Y", series[1].bucketStart) ..
         " to " .. date("!%d %b %Y", series[#series].bucketStart) .. ". " .. detailCoverage ..
-        " Saved share compares known input amounts with recorded returns for the same item: " .. savingsCoverage)
+        " Saved share compares required amounts with recorded returns for the same item: " .. savingsCoverage)
     end)
   end
   function detail:Refresh(preserve)
@@ -379,7 +380,7 @@ function UI.ReagentsPage(page, width, height, openReagent)
   }, function(value) sort = value; page:Refresh(true) end)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
   local summary = UI.SummaryRow(page, width, -142, { { "Reagents", "INV_Misc_Herb_19" },
-    { "Known input units", "INV_Misc_Bag_10" }, { "Returned units", "Trade_Alchemy" } })
+    { "Required units", "INV_Misc_Bag_10" }, { "Returned units", "Trade_Alchemy" } })
   summary:SetHeight(60)
   for _, tile in ipairs(summary.tiles) do tile:SetHeight(60); tile.note:Hide() end
   page.summary, page.summaryRow = summary.tiles, summary
@@ -402,11 +403,11 @@ function UI.ReagentsPage(page, width, height, openReagent)
       return table.concat(names, ", ")
     end },
     { title = "Recipes", width = 54, value = function(row) return UI.Number(row.recipeCount) end },
-    { title = "Known input", width = 74, value = function(row)
+    { title = "Required", width = 74, value = function(row)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
     end, exact = function(row)
       return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-        " Known units from submitted selections or fixed schematic rows; not net consumed and not necessarily the full item total."
+        " Counts crafts where this item was recorded. Returns aren't subtracted."
     end },
     { title = "Returned", width = 74, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
