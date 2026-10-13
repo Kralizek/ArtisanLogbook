@@ -176,7 +176,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       if pane.OnSelect then pane:OnSelect(name) end
     end)
   pane.tabbed, pane.views = tabs, tabs.views
-  function pane:SelectView(name) tabs:Select(name) end
+    function pane:SelectView(name) tabs:Select(name) end
   local overview, statistics, materials = pane.views.Overview, pane.views.Statistics, pane.views.Reagents
   local inner = width - 24
   local statisticsContent, statisticsScroll = UI.PageScroll(statistics, inner, height - 253, 288)
@@ -186,13 +186,36 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   pane.qualityWorker = CreateFrame("Frame", nil, pane)
   local qualityTitle = UI.Text(overview, 0, -170, inner, 24, "GameFontNormal")
   qualityTitle:SetText("Output by quality")
+  local qualityWidth = inner - 24
   local qualityList = UI.ScrollList(overview, 0, -202, inner, 130, {
-    { title = "Result", width = inner - 208, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, inner - 208) end,
-      update = function(cell, row) cell:Update(row.item, UI.QualityAtlas(recipeId, row.quality, pane.maxQuality)) end },
-    { title = "Quality", width = 64, value = function(row) return row.quality and tostring(row.quality) or "-" end },
-    { title = "Items", width = 120, value = function(row) return UI.Number(row.quantity) end,
+    { title = "Result", width = qualityWidth * .35, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, qualityWidth * .35) end,
+      update = function(cell, row)
+        cell:Update(row.item, UI.QualityAtlas(recipeId, row.quality, pane.maxQuality))
+      end },
+    { title = "Crafts", width = qualityWidth * .10, value = function(row) return UI.Number(row.craftCount) end,
+      exact = function(row) return UI.Count(row.craftCount, "craft") end },
+    { title = "Items", width = qualityWidth * .13, value = function(row) return UI.Amount(row.quantity, row.complete) end,
       exact = function(row) return UI.AmountTooltip(row.quantity, row.complete) end },
+    { title = "Items / craft", width = qualityWidth * .14, value = function(row)
+      return row.complete and row.craftCount > 0 and UI.Number(row.quantity / row.craftCount) or "-"
+    end, exact = function(row)
+      return row.complete and row.craftCount > 0 and (UI.Number(row.quantity / row.craftCount) ..
+        " items per craft across " .. UI.Count(row.craftCount, "craft")) or "Average unavailable because some results are missing."
+    end },
+    { title = "Concentration", width = qualityWidth * .14, value = function(row)
+      return UI.Amount(row.concentrationSpent, row.concentrationObservedCount == row.craftCount)
+    end, exact = function(row)
+      return UI.AmountTooltip(row.concentrationSpent, row.concentrationObservedCount == row.craftCount)
+    end },
+    { title = "Concentration / craft", width = qualityWidth * .14, value = function(row)
+      return row.concentrationObservedCount == row.craftCount and row.craftCount > 0 and
+        UI.Number(row.concentrationSpent / row.craftCount) or "-"
+    end, exact = function(row)
+      return row.concentrationObservedCount == row.craftCount and row.craftCount > 0 and
+        (UI.Number(row.concentrationSpent / row.craftCount) .. " concentration per craft across " ..
+          UI.Count(row.craftCount, "craft")) or "Average unavailable because some costs are missing."
+    end },
   }, function(row) UI.ItemTooltip(overview, row.item) end, "No output quantities for this period")
   local qualityStatus = UI.Text(overview, 0, -340, inner, 32)
   pane.qualityList, pane.qualityTitle, pane.qualityStatus = qualityList, qualityTitle, qualityStatus
@@ -210,12 +233,18 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
         crafts = crafts + 1
         local quality = craft.outputQuality
         local key = tostring(quality or "unknown") .. ":" .. tostring(craft.outputItem and craft.outputItem.id or "unknown")
-        local group = groups[key] or { quality = quality, item = craft.outputItem, complete = true }
+        local group = groups[key] or { quality = quality, item = craft.outputItem, complete = true,
+          craftCount = 0, concentrationSpent = 0, concentrationObservedCount = 0 }
         groups[key] = group
+        group.craftCount = group.craftCount + 1
         if quality ~= nil then qualities[quality] = true end
         if quality ~= nil and craft.outputQuantity ~= nil then splitCrafts = splitCrafts + 1 end
         if craft.outputQuantity ~= nil then group.quantity = (group.quantity or 0) + craft.outputQuantity
         else group.complete = false end
+        if craft.concentrationSpent ~= nil then
+          group.concentrationSpent = group.concentrationSpent + craft.concentrationSpent
+          group.concentrationObservedCount = group.concentrationObservedCount + 1
+        end
       end
       cursor = page.nextCursor
       if cursor then return end
@@ -242,7 +271,11 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       end
       self.tiles[2]:SetScript("OnEnter", function(tile)
         GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Total output: " .. UI.AmountTooltip(totals.outputQuantity, totals.outputQuantityObservedCount == totals.craftCount))
+        GameTooltip:SetText("Output: " .. UI.AmountTooltip(totals.outputQuantity,
+          totals.outputQuantityObservedCount == totals.craftCount))
+        local average = UI.MulticraftAverage(totals)
+        if average then GameTooltip:AddLine(UI.Number(average) .. " items per craft across " ..
+          UI.Count(totals.craftCount, "craft") .. ".", 1, 1, 1, true) end
         for _, row in ipairs(rows) do
           GameTooltip:AddLine((row.quality and "Quality " .. row.quality or "Quality unavailable") .. ": " .. UI.AmountTooltip(row.quantity, row.complete), 1, 1, 1, true)
         end
@@ -273,30 +306,31 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     complete = UI.Text(statistics, 0, -232, inner, 40) }
   pane.returnQuantity = UI.Text(statistics, 0, -208, inner / 3 - 14, 22)
   local materialList = UI.ScrollList(materials, 0, 0, inner, height - 253, {
-    { title = "Reagent", width = inner - 358, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, inner - 358) end,
+    { title = "Reagent", width = inner - 454, value = function(row) return UI.Name(row.item) end,
+      create = function(owner, left) return UI.ItemCell(owner, left, inner - 454) end,
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
       end },
-    { title = "Required", width = 70, value = function(row)
+    { title = "Quantity", width = 110, value = function(row)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
     end, exact = function(row)
-      if row.allocatedQuantity == nil then return "No required quantity is recorded for this item." end
-      local text = UI.Number(row.allocatedQuantity) .. " known gross units required before returns; more may be required, and this is not net consumed."
+      if row.allocatedQuantity == nil then return "No quantity was recorded for this item." end
+      local text = UI.Number(row.allocatedQuantity) ..
+        " recorded for this item across these crafts. Returns are shown separately."
       if row.matchedCraftCount and row.matchedCraftCount > 0 then
-        text = text .. " Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. " with both same-item quantities known."
+        text = text .. " Savings compare " .. UI.Count(row.matchedCraftCount, "craft") .. " where both amounts are known."
       end
       return text
     end },
-    { title = "Returned", width = 70, value = UI.RecipeReturnedQuantity,
+    { title = "Returned", width = 90, value = UI.RecipeReturnedQuantity,
       exact = function(row)
       return row.returnedQuantity ~= nil and UI.Number(row.returnedQuantity) or "No per-item returned quantity is available."
     end },
-    { title = "Materials saved", width = 124, value = function(row)
-      if UI.IsTrivial(row.item.id) then return "Ignored" end
+    { title = "Saved share", width = 160, value = function(row)
+      if UI.IsTrivial(row.item.id) then return "-" end
       return UI.MatchedSavingsText(row)
     end, exact = function(row)
-      if UI.IsTrivial(row.item.id) then return "Ignored in savings by your preference; quantities are unchanged." end
+      if UI.IsTrivial(row.item.id) then return "Excluded from savings by your preference; quantities are unchanged." end
       if UI.MatchedSavings(row) == "Unavailable" then
         return "No comparable crafts have both required and returned quantities known for this item."
       end
@@ -309,17 +343,54 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       update = function(check, row) check:SetItem(row.item.id) end },
   }, function(row) if openReagent then openReagent(row.item) end end, "No reagent measurements in this period")
   pane.materialList = materialList
+  local requirementNote = UI.Text(materials, 0, -4, inner, 18, "GameFontNormalSmall")
+  requirementNote:SetJustifyH("LEFT")
+  requirementNote:SetWordWrap(false); requirementNote:SetMaxLines(1); requirementNote:Hide()
+  pane.requirementNote = requirementNote
+  pane.requirementFamilies = {}
+  pane.requirementMore = false
+  local function showRequirementDetails()
+    if #pane.requirementFamilies == 0 then return end
+    GameTooltip:SetOwner(requirementNote, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Recipe requirements")
+    for _, family in ipairs(pane.requirementFamilies) do
+      local names, seen = {}, {}
+      for _, candidate in ipairs(family.candidateItems) do
+        local name = UI.Name(candidate)
+        if not seen[name] then seen[name] = true; names[#names + 1] = name end
+      end
+      GameTooltip:AddLine(table.concat(names, " or ") .. ": " .. UI.Number(family.requiredQuantity) .. " across " ..
+        UI.Count(family.craftCount, "craft") .. (#family.candidateItems > 1 and " (quality not recorded)" or ""),
+        1, 1, 1, true)
+    end
+    if pane.requirementMore then
+      GameTooltip:AddLine("More ingredients aren't shown.", 1, 1, 1, true)
+    end
+    GameTooltip:Show()
+  end
+  requirementNote:SetScript("OnEnter", showRequirementDetails)
+  requirementNote:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  materialList:ClearAllPoints(); materialList:SetPoint("TOPLEFT", 0, -4)
   UI.LazyList(materialList, function(cursor)
     local result, reason = api.GetRecipeReagentStatistics(recipeId, pane:Filter(), { limit = 40, cursor = cursor })
     return result and result.reagents, result and result.nextCursor or reason
   end)
+  local materialViewHeight
+  local function layoutMaterialList()
+    if not materialViewHeight then return end
+    local offset = pane.requirementVisible and 26 or 0
+    materialList:ClearAllPoints()
+    materialList:SetPoint("TOPLEFT", 0, -4 - offset)
+    materialList:SetViewportHeight(math.max(0, materialViewHeight - offset))
+  end
   function filters.onLayout(filterHeight)
     summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -filterHeight - 6)
     local top = filterHeight + summary:GetHeight() + 14
     local viewHeight = height - top - 51
     tabs:ClearAllPoints(); tabs:SetPoint("TOPLEFT", 0, -top)
     tabs:Resize(height - top)
-    materialList:SetViewportHeight(viewHeight)
+    materialViewHeight = viewHeight
+    layoutMaterialList()
     statisticsScroll:SetHeight(viewHeight)
     qualityList:SetViewportHeight(math.max(58, viewHeight - 242))
     qualityStatus:ClearAllPoints(); qualityStatus:SetPoint("TOPLEFT", 0, -viewHeight + 34)
@@ -342,6 +413,10 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     if not result then
       for _, tile in ipairs(self.tiles) do tile.value:SetText("Unavailable"); tile.note:SetText("") end
       self.returnQuantity:SetText("Unavailable")
+      requirementNote:SetText("")
+      requirementNote:Hide()
+      pane.requirementFamilies, pane.requirementMore, pane.requirementVisible = {}, false, false
+      layoutMaterialList()
       for _, label in ipairs(stats) do label:SetText("Unavailable") end
       for _, label in pairs(self.resourcefulness) do label:SetText("Unavailable") end
       materialList:Reset("Reagents unavailable")
@@ -349,10 +424,48 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       return
     end
     local totals = result.totals
+    local requirements = api.GetRecipeReagentRequirements(recipeId, filter, { limit = 200 })
+    pane.requirementFamilies = requirements and requirements.requirements or {}
+    pane.requirementMore = requirements and requirements.nextCursor ~= nil or false
+    pane.requirementVisible = #pane.requirementFamilies > 0
+    requirementNote:SetShown(pane.requirementVisible)
+    if pane.requirementVisible then
+      requirementNote:SetText("Some ingredients aren't listed by quality. Hover for recipe totals.")
+    else
+      requirementNote:SetText("")
+    end
+    layoutMaterialList()
     self:QualityBreakdown(filter, totals)
     self.tiles[1]:SetNumber(totals.craftCount, true)
-    for index, metric in pairs({ [2] = "outputQuantity", [3] = "concentrationSpent",
-        [4] = "multicraftBonus", [6] = "ingenuityRefund" }) do
+    local outputAverage = UI.MulticraftAverage(totals)
+    self.tiles[2].title:SetText(outputAverage and "Avg output" or "Total output")
+    if outputAverage then
+      self.tiles[2]:SetNumber(outputAverage, true, "items per craft")
+    else
+      self.tiles[2]:SetNumber(totals.outputQuantityObservedCount > 0 and totals.outputQuantity or nil,
+        totals.outputQuantityObservedCount == totals.craftCount)
+    end
+    self.tiles[3].title:SetText("Avg concentration")
+    local concentrationCount = totals.concentrationSpentObservedCount or 0
+    if concentrationCount > 0 then
+      local averageConcentration = totals.concentrationSpent / concentrationCount
+      self.tiles[3]:SetNumber(averageConcentration, true,
+        "per craft" .. (concentrationCount < totals.craftCount and " with a recorded cost" or ""))
+      self.tiles[3]:SetScript("OnEnter", function(tile)
+        GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
+        GameTooltip:SetText(UI.Number(averageConcentration) .. " concentration per craft")
+        GameTooltip:AddLine(UI.Number(totals.concentrationSpent) .. " total across " ..
+          UI.Count(concentrationCount, "craft") .. ".", 1, 1, 1, true)
+        if concentrationCount < totals.craftCount then
+          GameTooltip:AddLine(UI.Count(totals.craftCount - concentrationCount, "craft") ..
+            " without a recorded concentration cost.", 1, 1, 1, true)
+        end
+        GameTooltip:Show()
+      end)
+    else
+      self.tiles[3]:SetNumber(nil, false, "No recorded costs")
+    end
+    for index, metric in pairs({ [4] = "multicraftBonus", [6] = "ingenuityRefund" }) do
       local known = totals[metric .. "ObservedCount"]
       self.tiles[index]:SetNumber(known > 0 and totals[metric] or nil, known == totals.craftCount)
     end

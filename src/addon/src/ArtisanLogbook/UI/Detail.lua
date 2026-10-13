@@ -50,7 +50,7 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     filter.recipes = { page.recipe.id }
     local result, reason = ArtisanLogbookAPI.GetCrafts(filter, { limit = 40, cursor = cursor })
     return result and result.crafts, result and result.nextCursor or reason
-  end, UI.VisibleRecipe)
+  end, UI.VisibleCraft)
   function page:Open(recipe)
     local changed = not self.recipe or self.recipe.id ~= recipe.id
     if changed and self.recipe then
@@ -100,8 +100,6 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   UI.Surface(detail, false)
   local identity = detail:CreateTexture(nil, "ARTWORK")
   identity:SetSize(36, 36); identity:SetPoint("TOPLEFT", 16, -8)
-  local quality = detail:CreateTexture(nil, "OVERLAY")
-  quality:SetSize(18, 18); quality:SetPoint("TOPLEFT", 38, -29)
   local heading = UI.Text(detail, 62, -8, width - 166, 26, "GameFontNormalLarge")
   heading:SetWordWrap(false); heading:SetMaxLines(1)
   local subtitle = UI.Text(detail, 62, -35, width - 166, 20)
@@ -117,31 +115,34 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   resultRow.bonus = UI.Text(content, width - 214, -60, 176, 22)
   detail.result = resultRow
   local fields = {}
-  local fieldNames = { "Character", "Timestamp", "Quantity", "Quality", "Concentration", "Multicraft", "Ingenuity", "Resourcefulness" }
+  local fieldNames = { "Character", "Timestamp", "Quality", "Concentration", "Multicraft", "Ingenuity", "Resourcefulness" }
   for index, title in ipairs(fieldNames) do
-    local offset = -104 - math.floor((index - 1) / 2) * 38
+    local offset = -100 - math.floor((index - 1) / 2) * 30
     local left = ((index - 1) % 2) * (width - 36) / 2
     UI.Text(content, left, offset, 110, 22, "GameFontNormalSmall"):SetText(title .. ":")
-    fields[title] = UI.Text(content, left + 112, offset, (width - 36) / 2 - 126, 34)
+    fields[title] = UI.Text(content, left + 112, offset, (width - 36) / 2 - 126, 24)
   end
   detail.fields = fields
-  detail.inputEvidence = UI.Text(content, 0, -258, width - 36, 18, "GameFontNormalSmall")
-  UI.Section(content, "Inputs and returned materials", 0, -286, width - 36)
-  local reagents = UI.ScrollList(content, 0, -322, width - 36, height - 394, {
-    { title = "Reagent", width = (width - 60) * .56, value = function(row) return UI.Name(row.item) end,
-      create = function(owner, left) return UI.ItemCell(owner, left, (width - 60) * .56) end,
-      update = function(cell, row) UI.ReagentCell(cell, row.item) end },
-    { title = "Required", width = (width - 60) * .22, value = function(row)
-      return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
-    end, exact = function(row) return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "Unavailable" end },
-    { title = "Returned", width = (width - 60) * .22, value = function(row)
-      if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
-      return row.returnComplete and row.allocatedQuantity ~= nil and "0" or "-"
-    end, exact = function(row)
-      if row.returnedQuantity ~= nil then return UI.Number(row.returnedQuantity) end
-      return row.returnComplete and row.allocatedQuantity ~= nil and "0" or "Unavailable"
-    end },
-  }, function(row) if openReagent then goBack(); openReagent(row.item) end end, "No input or return details")
+  detail.inputEvidence = UI.Text(content, 0, -218, width - 36, 18, "GameFontNormalSmall")
+  UI.Section(content, "Ingredients", 0, -244, width - 36)
+  local nameWidth, amountWidth = (width - 60) * .6, (width - 60) * .2
+  local returnColor = { r = .45, g = .85, b = .45 }
+  local shownCraft
+  local reagents = UI.ScrollList(content, 0, -280, width - 36, height - 352, {
+    { title = "Reagent", width = nameWidth, value = function(row) return row.name end,
+      create = function(owner, left) return UI.ItemCell(owner, left, nameWidth) end,
+      update = function(cell, row)
+        if row.qualityUnknown then UI.ReagentFamilyCell(cell, row.item, row.name) else UI.ReagentCell(cell, row.item) end
+      end },
+    { title = "Required", width = amountWidth, sentence = true, value = function(row)
+      return row.required ~= nil and UI.Number(row.required) or "-"
+    end, exact = UI.IngredientRequiredText },
+    { title = "Returned", width = amountWidth, sentence = true, value = function(row)
+      return row.returned ~= nil and UI.Number(row.returned) or "-"
+    end, exact = function(row) return UI.IngredientReturnedText(row, shownCraft) end,
+      color = function(row) return row.returned and row.returned > 0 and returnColor or nil end },
+  }, function(row) if openReagent and not row.qualityUnknown then goBack(); openReagent(row.item) end end,
+    "Ingredients weren't recorded for this craft.")
   detail.returnedReagents = reagents
 
   function detail:ShowCraft(id)
@@ -152,50 +153,30 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       for _, field in pairs(fields) do field:SetText("-") end
       reagents:Reset(); resultRow:Update(nil); resultRow.quantity:SetText("-"); resultRow.bonus:SetText("")
       detail.inputEvidence:SetText("")
-      identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark"); quality:Hide()
+      identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       return
     end
     heading:SetText(UI.Elide(UI.Name(craft.recipe, "Unattributed craft"), math.floor((width - 166) / 10)))
     subtitle:SetText(UI.Name(craft.profession))
     identity:SetTexture(craft.outputItem and type(GetItemIcon) == "function" and GetItemIcon(craft.outputItem.id) or UI.RecipeIcon(craft.recipe))
-    local atlas = UI.QualityAtlas(craft.recipe and craft.recipe.id, craft.outputQuality, craft.recipe and craft.recipe.maxQuality)
-    quality:SetShown(atlas ~= nil)
-    if atlas then quality:SetAtlas(atlas) end
-    resultRow:Update(craft.outputItem, atlas)
+    resultRow:Update(craft.outputItem)
     resultRow.quantity:SetText(UI.Number(craft.outputQuantity) .. " items")
     resultRow.bonus:SetText(craft.multicraftBonus and craft.multicraftBonus > 0 and "+" .. UI.Number(craft.multicraftBonus) .. " Multicraft" or "")
     fields.Character:SetText(UI.CharacterName(craft.character))
     fields.Timestamp:SetText(UI.DateTime(craft.timestamp))
-    fields.Quantity:SetText(UI.Number(craft.outputQuantity))
     fields.Quality:SetText(UI.Value(craft.outputQuality))
     fields.Concentration:SetText(UI.Number(craft.concentrationSpent))
     fields.Multicraft:SetText(craft.multicraftBonus and (UI.Number(craft.multicraftBonus) .. " additional") or "-")
     fields.Ingenuity:SetText(craft.hasIngenuityProc == true and
       (craft.ingenuityRefund and UI.Number(craft.ingenuityRefund) .. " refunded" or "Proc") or
       (craft.hasIngenuityProc == false and "No proc" or "-"))
-    local byItem, returned, total = {}, {}, 0
-    for _, reagent in ipairs(craft.reagents or {}) do
-      local itemId = reagent.item and reagent.item.id
-      if itemId then
-        local row = byItem[itemId]
-        if not row then row = { item = reagent.item }; byItem[itemId] = row end
-        if reagent.allocatedQuantity ~= nil then
-          row.allocatedQuantity = (row.allocatedQuantity or 0) + reagent.allocatedQuantity
-        end
-        if reagent.returnedQuantity ~= nil then
-          row.returnedQuantity = (row.returnedQuantity or 0) + reagent.returnedQuantity
-        end
-      end
-    end
-    local itemIds = {}
-    for itemId in pairs(byItem) do itemIds[#itemIds + 1] = itemId end
-    table.sort(itemIds)
+    local rows = UI.CraftIngredients(craft)
+    shownCraft = craft
     local returnVerified = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
-    for _, itemId in ipairs(itemIds) do
-      local row = byItem[itemId]
-      row.returnComplete = returnVerified
-      returned[#returned + 1] = row
-      if row.returnedQuantity and row.returnedQuantity > 0 then total = total + row.returnedQuantity end
+    local total, unknownRequired = 0, false
+    for _, row in ipairs(rows) do
+      if row.returned and row.returned > 0 then total = total + row.returned end
+      if row.required == nil then unknownRequired = true end
     end
     if returnVerified and craft.hasResourcefulnessProc == true then
       fields.Resourcefulness:SetText("Return recorded")
@@ -206,14 +187,10 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     else
       fields.Resourcefulness:SetText("Outcome unavailable")
     end
-    if craft.inputComplete == true then
-      detail.inputEvidence:SetText("All required inputs are known (gross quantities before returns).")
-    elseif craft.quoteObserved == true or craft.request and craft.request.allocations then
-      detail.inputEvidence:SetText("Some gross inputs are known; the full required amount is unavailable.")
-    else
-      detail.inputEvidence:SetText("Input requirements are unavailable.")
-    end
-    reagents:Reset(); reagents:Append(returned)
+    local allListed = craft.inputComplete == true or craft.grossRequirementsComplete == true
+    detail.inputEvidence:SetText(#rows > 0 and (unknownRequired or not allListed) and
+      "Some ingredient details weren't recorded for this craft." or "")
+    reagents:Reset(); reagents:Append(rows)
   end
   detail:Hide()
   return detail

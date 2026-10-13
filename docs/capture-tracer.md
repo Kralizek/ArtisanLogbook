@@ -15,6 +15,12 @@ From the repository root, with Lua 5.1, ZIP, and unzip available:
 bash src/addon/scripts/package.sh
 ```
 
+Addon CI stamps both TOC versions as `0.0.0-dev-<short commit SHA>` before
+packaging. The local deployment script copies these artifacts unchanged; release
+packaging retains its separately calculated release version. On successful UI
+initialization, chat announces that Artisan Logbook loaded and displays its TOC
+version.
+
 This runs the addon tests and produces Core-only `ArtisanLogbook_Core.zip`,
 UI-only `ArtisanLogbook.zip`, and `ArtisanLogbook-Bundle.zip` in `src/addon/dist/`.
 Extract the bundle's sibling `ArtisanLogbook_Core` and `ArtisanLogbook` folders

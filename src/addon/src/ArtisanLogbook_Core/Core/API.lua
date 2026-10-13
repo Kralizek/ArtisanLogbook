@@ -94,7 +94,7 @@ end
 
 local function allocation(ledger, row)
   local result = fields(row, { "dataSlotIndex", "quality", "allocatedQuantity", "returnedQuantity", "source",
-    "fixed" })
+    "fixed", "inputTotalComplete" })
   result.item = item(ledger, row.itemId)
   return result
 end
@@ -103,7 +103,8 @@ local function projectCraft(ledger, craft)
   local result = fields(craft, { "id", "timestamp", "gameOperationId", "outputQuality", "outputItemLevel",
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
     "hasIngenuityProc", "ingenuityRefund", "hasResourcefulnessProc", "resourcefulnessComplete",
-    "outcomeSource", "quoteObserved", "inputComplete" })
+    "outcomeSource", "quoteObserved", "inputComplete", "grossRequirementsComplete",
+    "materialsSavingsEligible", "requirementObservation", "requestCorrelationReason" })
   local rows = related(ledger, craft)
   result.character = character(ledger, rows.characters)
   result.realm = realm(ledger, rows.realms)
@@ -115,10 +116,20 @@ local function projectCraft(ledger, craft)
   for _, row in ipairs(ledger.reagentsByCraftId[craft.id] or {}) do
     result.reagents[#result.reagents + 1] = allocation(ledger, row)
   end
+  result.reagentRequirements = {}
+  for _, requirement in ipairs(craft.reagentRequirements or {}) do
+    local projected = fields(requirement, { "dataSlotIndex", "requiredQuantity", "source" })
+    projected.candidateItems = {}
+    for _, itemId in ipairs(requirement.candidateItemIDs) do
+      projected.candidateItems[#projected.candidateItems + 1] = item(ledger, itemId)
+    end
+    result.reagentRequirements[#result.reagentRequirements + 1] = projected
+  end
   local request = ledger.requestById[craft.requestId]
   if request then
     result.request = fields(request, { "id", "timestamp", "requestedCount", "useConcentration",
-      "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality", "inputComplete" })
+      "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality", "inputComplete",
+      "grossRequirementsComplete" })
     result.request.recipe = recipe(ledger, dimension(ledger, "recipe", request.recipeId))
     if request.allocations then
       result.request.allocations = {}
@@ -131,9 +142,23 @@ local function projectCraft(ledger, craft)
       for _, row in ipairs(request.fixedReagents) do
         local fixed = fields(row, { "dataSlotIndex", "requiredQuantity" })
         fixed.item = item(ledger, row.itemId)
+        fixed.source = "schematic"
+        fixed.inputTotalComplete = row.inputTotalComplete == true
         result.request.fixedReagents[#result.request.fixedReagents + 1] = fixed
       end
     end
+    if request.requirements then
+      result.request.requirements = {}
+      for _, requirement in ipairs(request.requirements) do
+        local projected = fields(requirement, { "dataSlotIndex", "requiredQuantity", "source" })
+        projected.candidateItems = {}
+        for _, itemId in ipairs(requirement.candidateItemIDs) do
+          projected.candidateItems[#projected.candidateItems + 1] = item(ledger, itemId)
+        end
+        result.request.requirements[#result.request.requirements + 1] = projected
+      end
+    end
+    result.request.materialsSavingsEligible = request.materialsSavingsEligible ~= false
   end
   return result
 end
@@ -423,7 +448,7 @@ function API.GetCraftSeries(filter, options)
       "ingenuityRefund", "ingenuityRefundObservedCount", "resourcefulnessProcCount",
       "resourcefulnessProcCountObservedCount", "resourcefulnessAuthoritativeProcCount",
       "resourcefulnessAuthoritativeProcCountObservedCount", "quoteObservedCount", "inputCompleteCount",
-      "matchedCraftCount" })
+      "matchedCraftCount", "grossRequirementsCompleteCount" })
     local rows = seriesRelated(ledger, row)
     projected.character = character(ledger, rows.characters)
     projected.realm = realm(ledger, rows.realms)
@@ -438,7 +463,8 @@ end
 local outcomeMetrics = { "outputQuantity", "multicraftBonus", "multicraftProcCount",
   "concentrationSpent", "ingenuityProcCount", "ingenuityRefund", "resourcefulnessProcCount",
   "resourcefulnessCompleteProcCount", "resourcefulnessAuthoritativeProcCount" }
-local coverageCounts = { "quoteObservedCount", "inputCompleteCount", "matchedCraftCount" }
+local coverageCounts = { "quoteObservedCount", "inputCompleteCount", "matchedCraftCount",
+  "grossRequirementsCompleteCount" }
 
 local function outcomeQuery(recipeId, filter)
   if not integer(recipeId, 0) then return nil, "invalid-id" end
@@ -625,6 +651,73 @@ end
 
 function API.GetRecipeReagentStatistics(recipeId, filter, options)
   return returnedPage(recipeId, filter, options, "reagents")
+end
+
+function API.GetRecipeReagentRequirements(recipeId, filter, options)
+  local query, reason = outcomeQuery(recipeId, filter)
+  if not query then return nil, reason end
+  options = options or {}
+  if not keysAllowed(options, { limit = true, cursor = true }) then return nil, "invalid-options" end
+  local limit = options.limit or 50
+  if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
+  local prefix = "requirements:" .. query.signature .. "\n"
+  local after = options.cursor
+  if after ~= nil and (type(after) ~= "string" or after:sub(1, #prefix) ~= prefix) then
+    return nil, "invalid-cursor"
+  end
+  after = after and after:sub(#prefix + 1) or nil
+  if after then
+    local previous, count
+    count = 0
+    for text in after:gmatch("[^,]+") do
+      if not text:match("^[1-9]%d*$") then return nil, "invalid-cursor" end
+      local itemId = tonumber(text)
+      if not integer(itemId, 1) or (previous and itemId <= previous) then return nil, "invalid-cursor" end
+      previous, count = itemId, count + 1
+    end
+    if count < 1 then return nil, "invalid-cursor" end
+  end
+  local totals = {}
+  local ledger, selection = query.ledger, query.filter
+  for position = query.first, #ledger.seriesDays do
+    local day = ledger.seriesDays[position]
+    if selection.time and selection.time.to and day >= selection.time.to then break end
+    local requirementDay = ledger.requirementIndex[day]
+    for characterId, recipes in pairs(ledger.seriesByKey[day]) do
+      local characterRow = ledger.dimensionRows.character[characterId]
+      if recipes[recipeId] and (not selection.characters or
+          (characterRow and selection.characters[characterRow.key])) then
+        local families = requirementDay and requirementDay[characterId] and requirementDay[characterId][recipeId]
+        for key, row in pairs(families or {}) do
+          local total = totals[key] or { requiredQuantity = 0, craftCount = 0 }
+          total.requiredQuantity = total.requiredQuantity + row.requiredQuantity
+          total.craftCount = total.craftCount + row.requirementCraftCount
+          if row.resultObservationCount then
+            total.resultObservationCount = (total.resultObservationCount or 0) + row.resultObservationCount
+          end
+          if not finite(total.requiredQuantity) or not integer(total.craftCount, 0) then
+            return nil, "quantity-overflow"
+          end
+          totals[key] = total
+        end
+      end
+    end
+  end
+  local keys = {}
+  for key in pairs(totals) do if not after or key > after then keys[#keys + 1] = key end end
+  table.sort(keys)
+  local result = { requirements = {} }
+  for index = 1, math.min(limit, #keys) do
+    local key = keys[index]
+    local candidateItems = {}
+    for text in key:gmatch("[^,]+") do candidateItems[#candidateItems + 1] = item(ledger, tonumber(text)) end
+    local total = totals[key]
+    result.requirements[#result.requirements + 1] = { candidateItems = candidateItems,
+      requiredQuantity = total.requiredQuantity, craftCount = total.craftCount,
+      resultObservationCount = total.resultObservationCount }
+  end
+  if #keys > limit then result.nextCursor = prefix .. keys[limit] end
+  return result
 end
 
 function API.GetReagentSummaries(options)

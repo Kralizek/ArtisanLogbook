@@ -148,7 +148,8 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         type(schematic.reagentSlotSchematics) ~= "table" or not readable(schematic.reagentSlotSchematics) then
       return nil
     end
-    local inputs = { fixed = {}, complete = true, evidenceVersion = 1, completeItemIDs = {} }
+    local inputs = { fixed = {}, requirements = {}, complete = true, grossRequirementsComplete = true,
+      evidenceVersion = 1, completeItemIDs = {} }
     local totals, blocked, slots, unknown = {}, {}, {}, false
     local selected = {}
     if not dense(selections) then unknown = true end
@@ -164,6 +165,33 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
       end
     end
     if not dense(schematic.reagentSlotSchematics) then unknown = true end
+    local modifiedIndices = {}
+    for _, slot in pairs(schematic.reagentSlotSchematics) do
+      if type(slot) == "table" and readable(slot) and slot.dataSlotType == slotTypes.ModifiedReagent and
+          isPositiveInteger(slot.dataSlotIndex) then
+        modifiedIndices[slot.dataSlotIndex] = true
+      end
+    end
+    local function preserveBasicRequirement(index, candidates, requiredQuantity, allocationConflict, isFixedReagentSlot)
+      local candidateIDs = {}
+      for itemId in pairs(candidates) do candidateIDs[#candidateIDs + 1] = itemId end
+      table.sort(candidateIDs)
+      if #candidateIDs == 1 and isFixedReagentSlot and not allocationConflict then
+        local itemId = candidateIDs[1]
+        inputs.fixed[#inputs.fixed + 1] = { dataSlotIndex = index, itemID = itemId,
+          quantity = requiredQuantity }
+        totals[itemId] = true
+        return false
+      end
+      inputs.requirements[#inputs.requirements + 1] = {
+        dataSlotIndex = index, candidateItemIDs = candidateIDs,
+        requiredQuantity = requiredQuantity, source = "schematic",
+      }
+      if (allocationConflict or not isFixedReagentSlot) and #candidateIDs == 1 then
+        blocked[candidateIDs[1]] = true
+      end
+      return true
+    end
     for _, slot in pairs(schematic.reagentSlotSchematics) do
       local slotType = type(slot) == "table" and readable(slot) and slot.dataSlotType
       if slotType ~= slotTypes.Currency then
@@ -179,15 +207,49 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           if next(candidates) == nil then known = false end
         end
         local index = slotType and slot.dataSlotIndex
-        if isPositiveInteger(index) and slots[index] then unknown = true end
-        local supported = known and isPositiveInteger(index) and not slots[index] and
+        local slotIndices = slots[slotType] or {}
+        if slotType then slots[slotType] = slotIndices end
+        if isPositiveInteger(index) and slotIndices[index] then unknown = true end
+        local supported = known and isPositiveInteger(index) and not slotIndices[index] and
           slot.hiddenInCraftingForm ~= true and type(slot.required) == "boolean" and
           isPositiveInteger(slot.quantityRequired) and
           (slot.variableQuantities == nil or (dense(slot.variableQuantities) and #slot.variableQuantities == 0))
+        if supported and slotType == slotTypes.Reagent and modifiedIndices[index] and
+            next(candidates, next(candidates)) ~= nil then supported = false end
+        local grossRequirementKnown = false
         local allocations, quantity = selected[index] or {}, 0
-        if slotType == slotTypes.ModifiedReagent and supported and dense(selections) and
-            (slot.reagentType == reagentTypes.Basic or
-              (reagentTypes.Modifying ~= nil and slot.reagentType == reagentTypes.Modifying) or
+        if slotType == slotTypes.Reagent and modifiedIndices[index] then allocations = {} end
+        if (slotType == slotTypes.Reagent or slotType == slotTypes.ModifiedReagent) and supported and
+            slot.reagentType == reagentTypes.Basic then
+          if #allocations > 0 then
+            local valid, candidateQuantities = dense(selections), {}
+            for _, selection in ipairs(allocations) do
+              if not candidates[selection.reagent.itemID] or selection.quantity <= 0 then valid = false end
+              quantity = quantity + selection.quantity
+              candidateQuantities[selection.reagent.itemID] =
+                (candidateQuantities[selection.reagent.itemID] or 0) + selection.quantity
+            end
+            if quantity ~= slot.quantityRequired then valid = false end
+            if valid then
+              for itemId, allocated in pairs(candidateQuantities) do
+                if allocated > 0 then totals[itemId] = true end
+              end
+            else
+              supported = false
+              if slot.required then
+                preserveBasicRequirement(index, candidates, slot.quantityRequired, true, slotType == slotTypes.Reagent)
+                grossRequirementKnown = true
+              end
+            end
+          elseif not slot.required then
+            supported = dense(selections)
+          else
+            grossRequirementKnown = preserveBasicRequirement(index, candidates, slot.quantityRequired, false,
+              slotType == slotTypes.Reagent)
+            if grossRequirementKnown then supported = false end
+          end
+        elseif slotType == slotTypes.ModifiedReagent and supported and dense(selections) and
+            ((reagentTypes.Modifying ~= nil and slot.reagentType == reagentTypes.Modifying) or
               (reagentTypes.Finishing ~= nil and slot.reagentType == reagentTypes.Finishing)) then
           for _, selection in ipairs(allocations) do
             if not candidates[selection.reagent.itemID] then supported = false end
@@ -199,26 +261,25 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
               if selection.quantity > 0 then totals[selection.reagent.itemID] = true end
             end
           end
-        elseif slotType == slotTypes.Reagent and supported and slot.reagentType == reagentTypes.Basic and
-            slot.required and #slot.reagents == 1 and #allocations == 0 then
-          local only = slot.reagents[1]
-          inputs.fixed[#inputs.fixed + 1] = { dataSlotIndex = slot.dataSlotIndex, itemID = only.itemID,
-            quantity = slot.quantityRequired }
-          totals[only.itemID] = true
         else
           supported = false
         end
-        if isPositiveInteger(index) then slots[index] = true end
+        if isPositiveInteger(index) then slotIndices[index] = true end
         if not supported then
           inputs.complete = false
-          if not known then unknown = true end
+          if not grossRequirementKnown then inputs.grossRequirementsComplete = false end
+          if not known then unknown = true; inputs.grossRequirementsComplete = false end
           for itemId in pairs(candidates) do blocked[itemId] = true end
           for _, selection in ipairs(allocations) do blocked[selection.reagent.itemID] = true end
         end
       end
     end
-    for index in pairs(selected) do if not slots[index] then unknown = true end end
-    if unknown then inputs.complete = false end
+    for index in pairs(selected) do
+      if not (slots[slotTypes.ModifiedReagent] or {})[index] and
+          not (slots[slotTypes.Reagent] or {})[index] then unknown = true end
+    end
+    if unknown then inputs.complete, inputs.grossRequirementsComplete = false, false end
+    inputs.slotIdentityUncertain = unknown
     if not unknown then
       for itemId in pairs(totals) do
         if not blocked[itemId] then inputs.completeItemIDs[#inputs.completeItemIDs + 1] = { itemID = itemId } end
@@ -227,14 +288,33 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     return inputs
   end
 
+  function adapter.SnapshotExpectedRequirements(recipeId)
+    local inputs = snapshotRecipeInputs(recipeId, nil, {})
+    if not inputs or inputs.slotIdentityUncertain then return nil end
+    local requirements = inputs.requirements
+    for _, fixed in ipairs(inputs.fixed) do
+      requirements[#requirements + 1] = { dataSlotIndex = fixed.dataSlotIndex,
+        candidateItemIDs = { fixed.itemID }, requiredQuantity = fixed.quantity, source = "schematic" }
+    end
+    return { recipeId = recipeId, requirements = requirements, observation = "result" }
+  end
+
   local function submitPersonalCraft(recipeId, count, orderId, concentration, recipeLevel, submitted)
-    if orderId ~= nil or type(submitCraft) ~= "function" then return end
+    if type(submitCraft) ~= "function" then return end
+    if count == nil then count = 1 end
+    if concentration == nil then concentration = false end
     local selections = snapshotSelections(submitted)
     local quote
     local tradeSkill = api.C_TradeSkillUI
-    if selections and type(tradeSkill.GetCraftingOperationInfo) == "function" then
+    local quoteMethod = orderId ~= nil and "GetCraftingOperationInfoForOrder" or "GetCraftingOperationInfo"
+    if selections and type(tradeSkill[quoteMethod]) == "function" then
       probingQuote = true
-      local ok, info = pcall(tradeSkill.GetCraftingOperationInfo, recipeId, selections, nil, concentration)
+      local ok, info
+      if orderId ~= nil then
+        ok, info = pcall(tradeSkill[quoteMethod], recipeId, selections, orderId, concentration)
+      else
+        ok, info = pcall(tradeSkill[quoteMethod], recipeId, selections, nil, concentration)
+      end
       probingQuote = false
       if ok and type(info) == "table" then quote = info end
     end
@@ -247,7 +327,8 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         end
       end
     end
-    submitCraft(recipeId, count, concentration, quote, selections, snapshotRecipeInputs(recipeId, recipeLevel, selections))
+    submitCraft(recipeId, count, concentration, quote, selections,
+      snapshotRecipeInputs(recipeId, recipeLevel, selections), orderId == nil)
   end
   local function observeClaimedOrder(orderID, observation)
     local orders = api.C_CraftingOrders
@@ -338,7 +419,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     if type(api.hooksecurefunc) == "function" and type(api.C_TradeSkillUI) == "table" and
         type(api.C_TradeSkillUI[name]) == "function" then
       capabilities.hooks[name] = pcall(api.hooksecurefunc, api.C_TradeSkillUI, name, function(...)
-        if hookedName == "CraftRecipe" and select(5, ...) == nil then
+        if hookedName == "CraftRecipe" then
           local ok = pcall(submitPersonalCraft, select(1, ...), select(2, ...),
             select(5, ...), select(6, ...), select(4, ...), select(3, ...))
           if not ok then

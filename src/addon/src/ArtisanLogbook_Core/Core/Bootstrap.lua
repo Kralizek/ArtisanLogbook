@@ -332,11 +332,26 @@ function addon.HandleRetailEvent(event, ...)
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
       local result = select(1, ...)
       if type(result) == "table" then tryEnrich(addon.EnrichItem, result.itemID) end
-      local pending = addon.ledger.pendingRequest
+      local pending = addon.ledger.pendingRequest or addon.ledger.pendingOrderRequest
       local request = pending and addon.ledger.requestById[pending.id]
       local recipe = request and addon.ledger.dimensionRows.recipe[request.recipeId]
       tryEnrich(addon.EnrichRecipe, recipe and recipe.id or addon.ledger.pendingRecipeId)
-      local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, select(1, ...))
+      local expected
+      if type(result) == "table" and validId(result.itemID) and
+          addon.ledger.operationKind == "CraftRecipe" and
+          not addon.ledger.nonpersonalOperationOutstanding and
+          (not request or addon.ledger.operationOwnershipUncertain or addon.ledger.requestAmbiguous or
+            addon.ledger.ambiguousRecipe or (addon.ledger.pendingRecipeId and
+              addon.ledger.pendingRecipeId ~= request.recipeId)) and
+          type(addon.adapter.SnapshotExpectedRequirements) == "function" then
+        local candidates = addon.ledger.recipeIdsByOutputItemId[result.itemID]
+        local onlyRecipe = candidates and next(candidates)
+        if onlyRecipe and next(candidates, onlyRecipe) == nil then
+          expected = query(addon.adapter.SnapshotExpectedRequirements, onlyRecipe) or
+            { recipeId = onlyRecipe, requirements = {}, observation = "result" }
+        end
+      end
+      local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, result, expected)
       if not ok or not fact then addon.ledgerCaptureError = true end
       if fact and fact.firstCraftReward then
         tryEnrich(addon.EnrichItem, fact.itemId)
@@ -364,10 +379,10 @@ function addon.HandleRetailEvent(event, ...)
   addon.Emit(event, ...)
 end
 
-function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs)
+function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible)
   if addon.ledger then
     local ok, request = pcall(addon.ledger.SubmitCraft, addon.ledger,
-      recipeId, count, concentration, quote, selections, inputs)
+      recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible)
     if not ok or not request then
       addon.ledgerCaptureError = true
       addon.ledger:InvalidateCraft()

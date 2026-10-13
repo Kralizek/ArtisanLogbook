@@ -4,6 +4,42 @@ addon.UI = UI
 
 UI.ink = { .20, .16, .10 }
 local hiddenRecipeCallbacks = {}
+local craftVisibilityCallbacks = {}
+
+local function craftVisibilitySettings()
+  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
+  if type(ArtisanLogbookUISettings.showUnknownCrafts) ~= "boolean" then
+    local legacyHide = ArtisanLogbookUISettings.hideUnknownCrafts
+    ArtisanLogbookUISettings.showUnknownCrafts = type(legacyHide) == "boolean" and not legacyHide or false
+  end
+  ArtisanLogbookUISettings.hideUnknownCrafts = nil
+  if type(ArtisanLogbookUISettings.showHiddenRecipesInLogbook) ~= "boolean" then
+    ArtisanLogbookUISettings.showHiddenRecipesInLogbook = false
+  end
+  return ArtisanLogbookUISettings
+end
+
+function UI.CraftVisibilityOptions()
+  local settings = craftVisibilitySettings()
+  return { showUnknownRecipes = settings.showUnknownCrafts,
+    showHiddenRecipes = settings.showHiddenRecipesInLogbook }
+end
+
+function UI.SetCraftVisibilityOptions(options)
+  local settings = craftVisibilitySettings()
+  local showUnknown = options.showUnknownRecipes == true
+  local showHidden = options.showHiddenRecipes == true
+  local changed = settings.showUnknownCrafts ~= showUnknown or
+    settings.showHiddenRecipesInLogbook ~= showHidden
+  settings.showUnknownCrafts, settings.showHiddenRecipesInLogbook = showUnknown, showHidden
+  if changed then
+    for _, callback in ipairs(craftVisibilityCallbacks) do callback() end
+  end
+end
+
+function UI.RegisterCraftVisibilityCallback(callback)
+  craftVisibilityCallbacks[#craftVisibilityCallbacks + 1] = callback
+end
 
 function UI.IsRecipeHidden(recipeId)
   local settings = ArtisanLogbookUISettings
@@ -27,7 +63,13 @@ function UI.RegisterHiddenRecipeCallback(callback)
 end
 
 function UI.VisibleRecipe(row)
-  return not row.recipe or not UI.IsRecipeHidden(row.recipe.id)
+  if not row.recipe then return craftVisibilitySettings().showUnknownCrafts end
+  return not UI.IsRecipeHidden(row.recipe.id)
+end
+
+function UI.VisibleCraft(row, showHiddenRecipes)
+  if not row.recipe then return craftVisibilitySettings().showUnknownCrafts end
+  return showHiddenRecipes == true or not UI.IsRecipeHidden(row.recipe.id)
 end
 
 function UI.HiddenRecipeCheckbox(parent, x, y, compact)
@@ -132,7 +174,16 @@ function UI.ProcTooltip(totals, metric)
 end
 
 function UI.DateTime(timestamp, exact)
-  return timestamp and date(exact and "%Y-%m-%d %H:%M:%S" or "%d %b\n%H:%M", timestamp) or "-"
+  return timestamp and date(exact and "%Y-%m-%d %H:%M:%S" or "%d %b %H:%M", timestamp) or "-"
+end
+
+function UI.MulticraftAverage(totals)
+  if not totals or not totals.craftCount or totals.craftCount <= 0 or
+      totals.outputQuantityObservedCount ~= totals.craftCount or
+      totals.multicraftProcCountObservedCount ~= totals.craftCount or
+      not totals.multicraftProcCount or totals.multicraftProcCount <= 0 then return nil end
+  local average = totals.outputQuantity / totals.craftCount
+  return average > 1 and average or nil
 end
 
 function UI.Surface(parent, parchment)
@@ -321,6 +372,7 @@ function UI.ItemTooltip(owner, item)
   if item.id and type(GameTooltip.SetItemByID) == "function" then GameTooltip:SetItemByID(item.id)
   else GameTooltip:SetText(UI.Name(item)) end
   if item.id then GameTooltip:AddLine("Item ID: " .. item.id, 1, 1, 1) end
+  if item.note then GameTooltip:AddLine(item.note, 1, 1, 1, true) end
   GameTooltip:Show()
 end
 
@@ -350,17 +402,17 @@ end
 
 function UI.HistoryColumns(width, context)
   local available, columns = width - 24, {}
-  local fixed = 38 + 88 + (context == "Logbook" and 0 or 72)
-  local textWeight = (context ~= "Recipe" and 1.15 or 0) + 1.25 +
+  local fixed = 38 + 88 + (context == "Logbook" and 0 or 94)
+  local textWeight = (context ~= "Recipe" and 1.15 or 0) + 1.05 +
     (context ~= "Character" and .65 or 0) + (context ~= "Profession" and context ~= "Recipe" and .70 or 0)
   local unit = (available - fixed) / textWeight
   if context ~= "Recipe" then
     columns[#columns + 1] = { title = "Recipe", width = unit * 1.15,
       value = function(row) return UI.Name(row.recipe) end }
   end
-  columns[#columns + 1] = { title = "Result", width = unit * 1.25,
+  columns[#columns + 1] = { title = "Result", width = unit * 1.05,
     value = function(row) return UI.Name(row.outputItem) .. (row.outputQuality and " (quality " .. row.outputQuality .. ")" or "") end,
-    create = function(parent, left) return UI.ItemCell(parent, left, unit * 1.25) end,
+    create = function(parent, left) return UI.ItemCell(parent, left, unit * 1.05) end,
     update = function(cell, row)
       cell:Update(row.outputItem, UI.QualityAtlas(row.recipe and row.recipe.id, row.outputQuality, row.recipe and row.recipe.maxQuality))
     end }
@@ -376,7 +428,7 @@ function UI.HistoryColumns(width, context)
     exact = function(row) return UI.Value(row.outputQuantity) end }
   columns[#columns + 1] = { title = "Highlights", width = 88, activity = true, extrasOnly = true }
   if context ~= "Logbook" then
-    columns[#columns + 1] = { title = "When", width = 72, lines = 2,
+    columns[#columns + 1] = { title = "Timestamp", width = 94,
       value = function(row) return UI.DateTime(row.timestamp) end, exact = function(row) return UI.DateTime(row.timestamp, true) end }
   end
   return columns
@@ -517,6 +569,13 @@ function UI.FilterBar(parent, width, y)
     size = math.min(size or 156, 176)
     local left, top = self:Slot(size)
     local control = UI.Selector(self, left, top, size, choices, onChoose, title)
+    self.controls[#self.controls + 1] = control
+    return control
+  end
+  function bar:Checks(title, choices, selected, onChange, size)
+    size = math.min(size or 176, 176)
+    local left, top = self:Slot(size)
+    local control = UI.MultiSelector(self, left, top, size, choices, selected, onChange, title)
     self.controls[#self.controls + 1] = control
     return control
   end
@@ -707,6 +766,60 @@ function UI.Selector(parent, x, y, width, choices, onChoose, title)
   return dropdown
 end
 
+function UI.MultiSelector(parent, x, y, width, choices, selected, onChange, title)
+  local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
+  if title then
+    dropdown.caption = UI.Text(dropdown, 15, 13, width, 16, "GameFontNormalSmall")
+    dropdown.caption:SetText(title)
+  end
+  dropdown:SetPoint("TOPLEFT", x - 15, y + (title and -13 or 2))
+  UIDropDownMenu_SetWidth(dropdown, width - 35)
+  UIDropDownMenu_JustifyText(dropdown, "LEFT")
+  dropdown.choices = choices
+  dropdown.selected = {}
+  for key, value in pairs(selected or {}) do dropdown.selected[key] = value == true end
+  local function refreshText(self)
+    local count = 0
+    for _, choice in ipairs(self.choices) do
+      if self.selected[choice.value] then count = count + 1 end
+    end
+    UIDropDownMenu_SetText(self, count == 0 and "No craft filters" or
+      (count == 1 and "1 craft filter" or UI.Number(count) .. " craft filters"))
+  end
+  function dropdown:SetSelected(key, value)
+    self.selected[key] = value == true
+    refreshText(self)
+    onChange(self:GetSelection())
+  end
+  function dropdown:GetSelection()
+    local result = {}
+    for key, value in pairs(self.selected) do result[key] = value end
+    return result
+  end
+  dropdown:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(title or "Craft list")
+    for _, choice in ipairs(self.choices) do
+      if self.selected[choice.value] then GameTooltip:AddLine(choice.label, 1, 1, 1, true) end
+    end
+    GameTooltip:Show()
+  end)
+  dropdown:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  UIDropDownMenu_Initialize(dropdown, function(self)
+    for _, choice in ipairs(self.choices) do
+      local info = UIDropDownMenu_CreateInfo()
+      info.text = choice.label
+      info.checked = self.selected[choice.value] == true
+      info.isNotRadio = true
+      info.keepShownOnClick = true
+      info.func = function() self:SetSelected(choice.value, not self.selected[choice.value]) end
+      UIDropDownMenu_AddButton(info)
+    end
+  end)
+  refreshText(dropdown)
+  return dropdown
+end
+
 function UI.HasChoice(choices, selected)
   for _, choice in ipairs(choices) do
     if choice.value == selected then return true end
@@ -793,11 +906,15 @@ function UI.Activity(craft, extrasOnly)
     returned = returned + math.max(0, reagent.returnedQuantity or 0)
   end
   if returned > 0 then
-    local lines = { "Returned material units: " .. returned }
-    for _, reagent in ipairs(craft.reagents or {}) do
-      if reagent.returnedQuantity and reagent.returnedQuantity > 0 then
-        lines[#lines + 1] = UI.ReagentDescription(reagent)
+    local lines = { "Resourcefulness returned " .. UI.Count(returned, "material") }
+    for _, row in ipairs(UI.CraftIngredients(craft)) do
+      if row.returned and row.returned > 0 then
+        lines[#lines + 1] = UI.Number(row.returned) .. " " .. row.name ..
+          (row.required and " (" .. UI.Number(row.required) .. " required)" or "")
       end
+    end
+    if craft.materialsSavingsEligible == false then
+      lines[#lines + 1] = "Crafting-order materials don't count toward your savings."
     end
     add("Interface\\Icons\\INV_Misc_Herb_19", UI.Number(returned), table.concat(lines, "\n"))
   end
@@ -810,6 +927,7 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
   frame:SetPoint("TOPLEFT", x, y)
   if dark then UI.Surface(frame, false) end
   frame.rows, frame.items = {}, {}
+  frame.columns = columns
   function frame:SetSelection(itemId)
     self.selectedItemId = itemId
     for _, row in ipairs(self.rows) do
@@ -918,10 +1036,11 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         row:SetScript("OnClick", function(self) onOpen(self.item) end)
         row:SetScript("OnEnter", function(self)
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-          GameTooltip:SetText(UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
+          GameTooltip:SetText(self.item.title or UI.Name(self.item.recipe or self.item.item, "Artisan Logbook"))
           for _, column in ipairs(columns) do
             if column.value and column.title ~= "Recipe" then
-              GameTooltip:AddLine(column.title .. ": " .. tostring((column.exact or column.value)(self.item)), 1, 1, 1, true)
+              local text = tostring((column.exact or column.value)(self.item))
+              GameTooltip:AddLine(column.sentence and text or column.title .. ": " .. text, 1, 1, 1, true)
             end
           end
           if self.activity then
@@ -1070,7 +1189,7 @@ function UI.Chart(parent, x, y, width, quantities)
     self.plot:SetShown(days > 1 and total > 0)
     self.empty:SetShown(days == 1 or total == 0)
     if days == 1 and total > 0 then
-      self.empty:SetText(quantities and ("Known required: " .. UI.Number(daily[from]) ..
+      self.empty:SetText(quantities and ("Required: " .. UI.Number(daily[from]) ..
         "   Known returned: " .. UI.Number(returned[from])) or
         UI.Count(total, "craft") .. " on " .. date("!%d %b", from))
     else self.empty:SetText(quantities and "No reagent quantities for this period" or "No crafts in this period") end
@@ -1123,7 +1242,7 @@ function UI.Chart(parent, x, y, width, quantities)
       if quantities then
         local amount = returned[from + day * bucketSeconds]
         bar.tooltip = date("!%d %b %Y", from + day * bucketSeconds) ..
-          "\nKnown required: " .. UI.Value(daily[from + day * bucketSeconds]) ..
+          "\nRequired: " .. UI.Value(daily[from + day * bucketSeconds]) ..
           "\nKnown returned: " .. UI.Value(amount)
         bar.returned.tooltip = bar.tooltip
         bar.returned:SetPoint("BOTTOMLEFT", self.plot, "BOTTOMLEFT", groupLeft + visibleWidth + groupGap, 0)
@@ -1152,9 +1271,16 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       exact = function(row) return UI.Value(row.craftCount) end },
     { title = "Items", width = available * .10, value = function(row)
       local totals = row.totals
+      local average = UI.MulticraftAverage(totals)
+      if average then return UI.Number(average) .. " / craft" end
       return totals and UI.Amount(totals.outputQuantity, totals.outputQuantityObservedCount == totals.craftCount) or "-"
     end, exact = function(row)
       local totals = row.totals
+      local average = UI.MulticraftAverage(totals)
+      if average then
+        return UI.Number(average) .. " average items per craft; " .. UI.AmountTooltip(totals.outputQuantity,
+          totals.outputQuantityObservedCount == totals.craftCount) .. " across " .. UI.Count(totals.craftCount, "craft") .. "."
+      end
       return UI.AmountTooltip(totals and totals.outputQuantity, totals and totals.outputQuantityObservedCount == totals.craftCount)
     end },
   }
@@ -1200,8 +1326,13 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
     self.hiddenCount = 0
     if not hideToggle then
       local filtered = {}
-      for _, row in ipairs(rows) do if UI.VisibleRecipe(row) then filtered[#filtered + 1] = row end end
-      self.hiddenCount = #rows - #filtered
+      for _, row in ipairs(rows) do
+        if UI.VisibleRecipe(row) then
+          filtered[#filtered + 1] = row
+        elseif row.recipe and UI.IsRecipeHidden(row.recipe.id) then
+          self.hiddenCount = self.hiddenCount + 1
+        end
+      end
       rows = filtered
     end
     UI.LazyList(self, function(cursor)
@@ -1244,20 +1375,188 @@ function UI.CraftHighlights(craft)
   return details
 end
 
-function UI.ReagentDescription(reagent)
-  local description = UI.Name(reagent.item) .. ": "
-  if reagent.allocatedQuantity ~= nil then
-    description = description .. reagent.allocatedQuantity .. " required before returns"
-    if reagent.returnedQuantity ~= nil then
-      description = description .. ", " .. reagent.returnedQuantity .. " returned"
-    end
-  elseif reagent.returnedQuantity ~= nil then
-    description = description .. reagent.returnedQuantity .. " returned (required quantity unavailable)"
-  else
-    description = description .. "quantity unknown"
+local function ingredientCandidates(requirement)
+  local items = {}
+  for _, item in ipairs(requirement.candidateItems or {}) do items[#items + 1] = item end
+  if #items == 0 then
+    for _, itemId in ipairs(requirement.candidateItemIDs or {}) do items[#items + 1] = { id = itemId } end
   end
-  if reagent.quality ~= nil then description = description .. " (quality " .. reagent.quality .. ")" end
-  return description
+  return items
+end
+
+local function includesItem(items, itemId)
+  for _, item in ipairs(items or {}) do if item.id == itemId then return true end end
+  return false
+end
+
+-- One row per ingredient; recipe requirements and recorded selections for the same slot are never summed.
+function UI.CraftIngredients(craft)
+  local rows, byItem, bySlot = {}, {}, {}
+  local function itemRow(item, slot)
+    local row = byItem[item.id]
+    if not row then
+      row = { item = item, name = UI.Name(item) }
+      byItem[item.id] = row
+      rows[#rows + 1] = row
+    end
+    if slot and (not row.slot or slot < row.slot) then row.slot = slot end
+    return row
+  end
+  for _, requirement in ipairs(craft.reagentRequirements or {}) do
+    local items = ingredientCandidates(requirement)
+    if #items > 0 and type(requirement.requiredQuantity) == "number" then
+      local row
+      if #items == 1 then
+        row = itemRow(items[1], requirement.dataSlotIndex)
+        row.required = (row.required or 0) + requirement.requiredQuantity
+      else
+        local names, seen = {}, {}
+        for _, item in ipairs(items) do
+          if item.name and not seen[item.name] then seen[item.name] = true; names[#names + 1] = item.name end
+        end
+        if #names == 0 then
+          for _, item in ipairs(items) do names[#names + 1] = UI.Name(item) end
+        end
+        local name = table.concat(names, " or ")
+        row = { item = items[1], candidates = items, qualityUnknown = true, name = name, title = name,
+          required = requirement.requiredQuantity, slot = requirement.dataSlotIndex }
+        rows[#rows + 1] = row
+      end
+      if requirement.dataSlotIndex then
+        bySlot[requirement.dataSlotIndex] = bySlot[requirement.dataSlotIndex] or {}
+        table.insert(bySlot[requirement.dataSlotIndex], row)
+      end
+    end
+  end
+  local familyRows = {}
+  for _, row in ipairs(rows) do
+    if row.qualityUnknown then familyRows[#familyRows + 1] = row end
+  end
+  for _, reagent in ipairs(craft.reagents or {}) do
+    local item = reagent.item
+    if item and item.id and reagent.allocatedQuantity ~= nil then
+      local covered = false
+      for _, covering in ipairs(reagent.dataSlotIndex and bySlot[reagent.dataSlotIndex] or {}) do
+        if covering.candidates and includesItem(covering.candidates, item.id) then
+          if reagent.allocatedQuantity > 0 then
+            covering.allocations = covering.allocations or {}
+            local selected = covering.allocations[item.id]
+            if not selected then
+              selected = { item = item, quantity = 0, qualities = {} }
+              covering.allocations[item.id] = selected
+            end
+            selected.quantity = selected.quantity + reagent.allocatedQuantity
+            if type(reagent.quality) == "number" then selected.qualities[reagent.quality] = true end
+            covering.allocatedQuantity = (covering.allocatedQuantity or 0) + reagent.allocatedQuantity
+          end
+          covered = true
+        elseif not covering.candidates and covering.item.id == item.id then
+          covered = true
+        end
+      end
+      if not covered then
+        local row = itemRow(item, reagent.dataSlotIndex)
+        row.required = (row.required or 0) + reagent.allocatedQuantity
+      end
+    end
+  end
+  for _, family in ipairs(familyRows) do
+    local allocations, complete = family.allocations or {}, true
+    local total = 0
+    for _, selection in pairs(allocations) do total = total + selection.quantity end
+    if total ~= family.required then complete = false end
+    if complete and total > 0 then
+      for index, row in ipairs(rows) do
+        if row == family then table.remove(rows, index); break end
+      end
+      for _, selection in pairs(allocations) do
+        local row = itemRow(selection.item, family.slot)
+        row.required = (row.required or 0) + selection.quantity
+        row.qualityKnown = true
+        local qualities = {}
+        for value in pairs(selection.qualities) do qualities[#qualities + 1] = value end
+        table.sort(qualities)
+        if #qualities == 1 then
+          row.item = { id = selection.item.id, name = selection.item.name,
+            note = "Recorded quality: " .. UI.Number(qualities[1]) .. "." }
+        elseif #qualities > 1 then
+          local labels = {}
+          for _, value in ipairs(qualities) do labels[#labels + 1] = UI.Number(value) end
+          row.item = { id = selection.item.id, name = selection.item.name,
+            note = "Recorded qualities: " .. table.concat(labels, ", ") .. "." }
+        end
+      end
+    else
+      family.knownAllocations = {}
+      for _, selection in pairs(allocations) do family.knownAllocations[#family.knownAllocations + 1] = selection end
+      table.sort(family.knownAllocations, function(left, right) return left.item.id < right.item.id end)
+    end
+    family.allocations = nil
+  end
+  for _, reagent in ipairs(craft.reagents or {}) do
+    local item = reagent.item
+    if item and item.id and reagent.returnedQuantity ~= nil then
+      local row = byItem[item.id]
+      if not row then
+        for _, candidate in ipairs(rows) do
+          if candidate.candidates and includesItem(candidate.candidates, item.id) then row = candidate; break end
+        end
+      end
+      row = row or itemRow(item)
+      row.returned = (row.returned or 0) + reagent.returnedQuantity
+    end
+  end
+  local returnsKnown = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
+  for _, row in ipairs(rows) do
+    if row.returned == nil and returnsKnown then row.returned = 0 end
+  end
+  table.sort(rows, function(left, right)
+    local leftSlot, rightSlot = left.slot or math.huge, right.slot or math.huge
+    if leftSlot ~= rightSlot then return leftSlot < rightSlot end
+    if (left.candidates ~= nil) ~= (right.candidates ~= nil) then return right.candidates ~= nil end
+    return (left.item.id or 0) < (right.item.id or 0)
+  end)
+  return rows
+end
+
+function UI.IngredientRequiredText(row)
+  if row.required == nil then return "The required quantity couldn't be determined for this craft." end
+  local text = "This recipe requires " .. UI.Number(row.required) .. " " .. row.name .. "."
+  if row.qualityUnknown then
+    if row.knownAllocations and #row.knownAllocations > 0 then
+      local known, allocated = {}, 0
+      for _, selection in ipairs(row.knownAllocations) do
+        allocated = allocated + selection.quantity
+        local qualities = {}
+        for quality in pairs(selection.qualities) do qualities[#qualities + 1] = quality end
+        table.sort(qualities)
+        local name = UI.Name(selection.item)
+        if #qualities == 1 then name = name .. " (quality " .. UI.Number(qualities[1]) .. ")" end
+        known[#known + 1] = name .. " x" .. UI.Number(selection.quantity)
+      end
+      text = text .. " Recorded: " .. table.concat(known, ", ") .. "."
+      local remaining = row.required - allocated
+      if remaining > 0 then
+        text = text .. " The quality used for the remaining " .. UI.Number(remaining) .. " wasn't recorded."
+      else
+        text = text .. " The selected qualities don't account for the full required quantity."
+      end
+    else
+      text = text .. " The quality used wasn't recorded."
+    end
+  end
+  return text
+end
+
+function UI.IngredientReturnedText(row, craft)
+  if row.returned == nil then return "Returns weren't recorded for this craft." end
+  if row.returned <= 0 then return "Resourcefulness didn't return any " .. row.name .. "." end
+  local text = UI.Number(row.returned) .. " " .. row.name .. (row.returned == 1 and " was" or " were") ..
+    " returned by Resourcefulness."
+  if craft and craft.materialsSavingsEligible == false then
+    text = text .. " Crafting-order materials don't count toward your savings."
+  end
+  return text
 end
 
 function UI.Range(now, days)

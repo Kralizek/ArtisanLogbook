@@ -42,7 +42,7 @@ existing current-entry highlight without replacing the primary selection.
 | Destination | Presentation and behavior |
 | --- | --- |
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, recorded Resourcefulness proc rate over all selected crafts, known returned material units, and most-crafted recipe. No factual craft list. |
-| Logbook | Fixed period/character/profession filters above a newest-first craft ledger. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
+| Logbook | Period/character/profession filters plus a multi-checkbox craft-visibility menu above a newest-first ledger. Show crafts from unknown recipes is disabled by default and applies to craft-history lists; enabling it includes unattributed crafts. Show hidden recipes includes hidden recipes in Logbook only. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
 | Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required units/Returned units/Materials saved columns and editable Ignore checkboxes. Materials saved shows a matched share or a dash; its tooltip gives the comparable-craft count. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
@@ -268,10 +268,27 @@ cleans up the shade and modal.
 
 The modal is inspection only. A prominent result row combines item, quality,
 quantity and Multicraft contribution. Paired facts show character, timestamp,
-concentration and outcomes. A grouped Inputs and returned materials section shows
-known required and returned quantities by item ID beside a short input-evidence
-statement. It does not divide heterogeneous material totals into a misleading
-percentage. Rows open Reagent pages after closing the modal.
+concentration and outcomes. An Ingredients table shows `Reagent | Required |
+Returned`, one row per ingredient. Required combines the recipe's requirement
+and recorded selections for the same ingredient without adding them twice;
+quantities from different recipe slots for the same item are added. When the
+recipe allows several qualities and the one used wasn't recorded, the row uses
+the plain reagent name (for example "Eversinging Dust") with the recipe total,
+no quality badge, and the tooltip "The quality used wasn't recorded."; returns of
+any of its qualities appear on that row. Quality badges appear only for a
+specific recorded item. A dash means unknown; 0 means Resourcefulness was
+recorded and returned none. Positive returns are lightly highlighted. Tooltips
+are short sentences ("This recipe requires 2 Munsell Ink. The quality used
+wasn't recorded.", "1 Sienna Ink was returned by Resourcefulness."); crafting
+orders add that their materials don't count toward personal savings. A single
+caveat, "Some ingredient details weren't recorded for this craft.", appears only
+when an ingredient or required quantity is genuinely missing (for example older
+crafts captured before the slot-index correction). Item rows open Reagent pages
+after closing the modal; rows with an unrecorded quality do not.
+Logbook Highlights list returns the same way ("1 Sienna Ink (2 required)").
+Recipe and Reagent views use Required for the recorded quantity of that specific
+item; Recipe Reagents notes ingredients that aren't listed by quality and shows
+their recipe totals on hover.
 There is no classification dropdown or duplicate metadata footer. No full-modal
 scrollbar is required. Multiple output identities are not synthesized.
 

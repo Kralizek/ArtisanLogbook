@@ -168,7 +168,7 @@ test("UI quote arguments are observed separately before batch request and result
   assert(received[8][1].operationID == 10)
 end)
 
-test("personal submission freezes submitted allocations while diagnostic tracing is paused", function()
+test("personal and order submissions freeze selections with separate savings eligibility", function()
   local api, _, hooks = environment()
   local submissions, invalidations, kinds = {}, 0, {}
   api.C_TradeSkillUI.GetCraftingOperationInfo = function(recipe, reagents, order, concentration)
@@ -177,8 +177,8 @@ test("personal submission freezes submitted allocations while diagnostic tracing
     return { concentrationCost = 81, baseSkill = 120 }
   end
   addon.CreateFlavorAdapter(api, function() end, function() return false end,
-    function(recipe, count, concentration, quote, selections)
-      submissions[#submissions + 1] = { recipe, count, concentration, quote, selections }
+    function(recipe, count, concentration, quote, selections, inputs, savingsEligible)
+      submissions[#submissions + 1] = { recipe, count, concentration, quote, selections, inputs, savingsEligible }
     end, function(kind) invalidations = invalidations + 1; kinds[invalidations] = kind end)
   local selected = { { dataSlotIndex = 2, quantity = 3, reagent = { itemID = 101 } },
     { dataSlotIndex = 2, quantity = 0, reagent = { itemID = 102 } } }
@@ -187,21 +187,22 @@ test("personal submission freezes submitted allocations while diagnostic tracing
   selected[1].quantity = 99
   assert(#submissions == 1 and submissions[1][2] == 3)
   assert(submissions[1][4].concentrationCost == 81)
+  assert(submissions[1][7] == true)
   assert(submissions[1][5][1].quantity == 3 and submissions[1][5][2].quantity == 0)
   hooks.CraftRecipe(456, 1, {}, nil, 77, true)
-  assert(#submissions == 1 and invalidations == 1)
+  assert(#submissions == 2 and submissions[2][7] == false and invalidations == 0)
   hooks.CraftEnchant(456, 1, {}, nil, true)
-  assert(invalidations == 2 and kinds[1] == "CraftRecipe" and kinds[2] == "CraftEnchant")
+  assert(invalidations == 1 and kinds[1] == "CraftEnchant")
 end)
 
-test("schematic snapshots trust only single-item fixed basic slots beside quote slots", function()
+test("schematic snapshots preserve required basic quality families without assigning a tier", function()
   local function slot(fields)
     local row = { dataSlotType = 1, reagentType = 1, required = true, hiddenInCraftingForm = false,
       quantityRequired = 2, dataSlotIndex = 4, reagents = { { itemID = 243060 } }, variableQuantities = {} }
     for key, value in pairs(fields or {}) do row[key] = value end
     return row
   end
-  local function capture(slots, configure)
+  local function capture(slots, configure, selections)
     local api, _, hooks = environment()
     api.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
       CraftingReagentType = { Modifying = 0, Basic = 1, Finishing = 2, Automatic = 3 } }
@@ -214,17 +215,71 @@ test("schematic snapshots trust only single-item fixed basic slots beside quote 
     local submitted
     addon.CreateFlavorAdapter(api, function() end, function() return false end,
       function(_, _, _, _, _, inputs) submitted = inputs end, function() end)
-    hooks.CraftRecipe(456, 1, {}, 3, nil, false)
+    hooks.CraftRecipe(456, 1, selections or {}, 3, nil, false)
     return submitted, levels
   end
   local modified = slot({ dataSlotType = 2, reagents = { { itemID = 101 }, { itemID = 102 } } })
   local currency = slot({ dataSlotType = 3, reagents = { { currencyID = 9 } } })
   local inputs, levels = capture({ modified, slot(), currency })
   assert(levels[1][1] == 456 and levels[1][2] == false and levels[1][3] == 3)
-  assert(inputs.complete == false and #inputs.fixed == 0)
+  assert(inputs.complete == false and #inputs.fixed == 1 and inputs.grossRequirementsComplete == true)
   inputs = capture({ slot(), currency })
   assert(inputs.complete == true and #inputs.fixed == 1)
   assert(inputs.fixed[1].itemID == 243060 and inputs.fixed[1].quantity == 2 and inputs.fixed[1].dataSlotIndex == 4)
+  local qualityFamily = slot({ dataSlotIndex = 7, quantityRequired = 5,
+    reagents = { { itemID = 243060 }, { itemID = 243061 }, { itemID = 243062 } } })
+  inputs = capture({ qualityFamily })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  assert(inputs.requirements[1].dataSlotIndex == 7 and inputs.requirements[1].requiredQuantity == 5)
+  assert(inputs.requirements[1].source == "schematic")
+  assert(inputs.requirements[1].candidateItemIDs[1] == 243060 and
+    inputs.requirements[1].candidateItemIDs[2] == 243061 and inputs.requirements[1].candidateItemIDs[3] == 243062)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 3, reagent = { itemID = 243060 } },
+    { dataSlotIndex = 7, quantity = 2, reagent = { itemID = 243061 } },
+  })
+  assert(inputs.complete == true and #inputs.requirements == 0 and inputs.grossRequirementsComplete == true)
+  assert(inputs.completeItemIDs[1].itemID == 243060 and inputs.completeItemIDs[2].itemID == 243061)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 2, reagent = { itemID = 243060 } },
+    { dataSlotIndex = 7, quantity = 3, reagent = { itemID = 243060 } },
+  })
+  assert(inputs.complete == true and #inputs.requirements == 0 and #inputs.completeItemIDs == 1)
+  assert(inputs.completeItemIDs[1].itemID == 243060)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 4, reagent = { itemID = 243060 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  assert(inputs.requirements[1].requiredQuantity == 5 and #inputs.completeItemIDs == 0)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 6, reagent = { itemID = 243060 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  local singleBasic = slot({ dataSlotIndex = 9, quantityRequired = 2, reagents = { { itemID = 243080 } } })
+  inputs = capture({ singleBasic }, nil, {
+    { dataSlotIndex = 9, quantity = 1, reagent = { itemID = 243080 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.fixed == 0)
+  assert(#inputs.requirements == 1 and inputs.requirements[1].candidateItemIDs[1] == 243080)
+  assert(inputs.requirements[1].requiredQuantity == 2 and #inputs.completeItemIDs == 0)
+  inputs = capture({ qualityFamily }, nil, {
+    { dataSlotIndex = 7, quantity = 2, reagent = { itemID = 243060 } },
+    { dataSlotIndex = 7, quantity = 3, reagent = { itemID = 249999 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  assert(#inputs.completeItemIDs == 0 and inputs.requirements[1].candidateItemIDs[3] == 243062)
+  local duplicateAlternatives = slot({ dataSlotIndex = 8, quantityRequired = 4,
+    reagents = { { itemID = 243060 }, { itemID = 243060 }, { itemID = 243061 } } })
+  inputs = capture({ duplicateAlternatives })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true and #inputs.requirements == 1)
+  assert(#inputs.requirements[1].candidateItemIDs == 2 and inputs.requirements[1].candidateItemIDs[1] == 243060)
+  inputs = capture({ qualityFamily, slot({ dataSlotIndex = 7, quantityRequired = 2, reagents = { { itemID = 243099 } } }) })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == false)
+  inputs = capture({ qualityFamily }, nil, {
+    [1] = { dataSlotIndex = 7, quantity = 5, reagent = { itemID = 243060 } },
+    [3] = { dataSlotIndex = 7, quantity = 1, reagent = { itemID = 243061 } },
+  })
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == false and #inputs.requirements == 1)
   for _, partial in ipairs({
     slot({ reagents = { { itemID = 1 }, { itemID = 2 } } }),
     slot({ variableQuantities = { { reagent = { itemID = 243060 }, quantity = 3 } } }),
@@ -244,6 +299,80 @@ test("schematic snapshots trust only single-item fixed basic slots beside quote 
   assert(capture({ slot() }, function(api)
     api.issecretvalue = function(value) return type(value) == "table" and value.recipeID ~= nil end
   end) == nil)
+end)
+
+test("fixed and modified slot indices are separate while customer-provided choices stay unknown", function()
+  local api, _, hooks = environment()
+  api.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2 } }
+  local fixed = { dataSlotType = 1, reagentType = 1, required = true, dataSlotIndex = 1,
+    quantityRequired = 1, reagents = { { itemID = 236949 } } }
+  local modified = { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 1,
+    quantityRequired = 5, reagents = { { itemID = 240990 }, { itemID = 240991 } } }
+  local customer = { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 3,
+    quantityRequired = 3, reagents = { { itemID = 236776 }, { itemID = 236777 } } }
+  local slots, inputs
+  api.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, reagentSlotSchematics = slots }
+  end
+  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    function(_, _, _, _, _, snapshot) inputs = snapshot end, function() end)
+  local selections = { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 240991 } } }
+  for _, ordered in ipairs({ { fixed, modified }, { modified, fixed } }) do
+    slots = ordered
+    hooks.CraftRecipe(1230869, 1, selections, nil, 1298473105, false)
+    assert(inputs.complete == true and inputs.grossRequirementsComplete == true)
+    assert(inputs.slotIdentityUncertain == false and #inputs.fixed == 1 and #inputs.requirements == 0)
+    assert(inputs.fixed[1].itemID == 236949 and inputs.fixed[1].quantity == 1)
+    local complete = {}
+    for _, item in ipairs(inputs.completeItemIDs) do complete[item.itemID] = true end
+    assert(complete[236949] and complete[240991])
+  end
+  slots = { fixed, modified, customer }
+  hooks.CraftRecipe(1230869, 1, selections, nil, 1298473105, false)
+  assert(inputs.complete == false and inputs.grossRequirementsComplete == true)
+  assert(inputs.slotIdentityUncertain == false and #inputs.requirements == 1)
+  assert(inputs.requirements[1].dataSlotIndex == 3 and inputs.requirements[1].requiredQuantity == 3)
+  assert(#inputs.completeItemIDs == 2)
+  slots = { fixed, modified, modified }
+  hooks.CraftRecipe(1230869, 1, selections, nil, 1298473105, false)
+  assert(inputs.slotIdentityUncertain == true and inputs.complete == false)
+  assert(inputs.grossRequirementsComplete == false and #inputs.completeItemIDs == 0)
+end)
+
+test("automatic crafting captures ModifiedReagent basic quality families like Light's Potential", function()
+  local api, _, hooks = environment()
+  api.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Modifying = 0, Basic = 1, Finishing = 2, Automatic = 3 } }
+  local lightsPotentialSlots = {
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 5,
+      reagents = { { itemID = 240990 }, { itemID = 240991 } } },
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 2, quantityRequired = 8,
+      reagents = { { itemID = 236761 }, { itemID = 236762 }, { itemID = 236763 } } },
+    { dataSlotType = 2, reagentType = 2, required = false, dataSlotIndex = 3, quantityRequired = 1,
+      reagents = { { itemID = 247724 } } }
+  }
+  api.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, reagentSlotSchematics = lightsPotentialSlots }
+  end
+  local submitted
+  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    function(_, _, _, _, _, inputs) submitted = inputs end, function() end)
+
+  -- Automatic crafting: only the selected finishing reagent is in selections
+  hooks.CraftRecipe(1230869, 1, { { dataSlotIndex = 3, quantity = 1, reagent = { itemID = 247724 } } }, 1, nil, false)
+  assert(submitted.complete == false and submitted.grossRequirementsComplete == true)
+  assert(#submitted.requirements == 2)
+  assert(submitted.requirements[1].dataSlotIndex == 1 and submitted.requirements[1].requiredQuantity == 5)
+  assert(#submitted.requirements[1].candidateItemIDs == 2 and submitted.requirements[1].candidateItemIDs[1] == 240990)
+  assert(submitted.requirements[2].dataSlotIndex == 2 and submitted.requirements[2].requiredQuantity == 8)
+  assert(#submitted.requirements[2].candidateItemIDs == 3 and submitted.requirements[2].candidateItemIDs[1] == 236761)
+  assert(#submitted.completeItemIDs == 1 and submitted.completeItemIDs[1].itemID == 247724)
+
+  -- Missing schematic: requirements missing and grossRequirementsComplete is false
+  api.C_TradeSkillUI.GetRecipeSchematic = function() return nil end
+  hooks.CraftRecipe(1230869, 1, { { dataSlotIndex = 3, quantity = 1, reagent = { itemID = 247724 } } }, 1, nil, false)
+  assert(submitted == nil)
 end)
 
 test("empty and invalid quotes cannot resurrect removed submitted selections", function()

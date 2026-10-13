@@ -201,7 +201,7 @@ assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
-assert(addon.ledger.database.schemaVersion == 2)
+assert(addon.ledger.database.schemaVersion == 3)
 assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
@@ -326,7 +326,19 @@ local function loadUI()
   local frameStart = #frames
   local ui = load(uiRoot, "ArtisanLogbook")
   local frame = frames[frameStart + 1]
+  local noticeCount = #notices
+  frame.scripts.OnEvent(frame, "ADDON_LOADED", "AnotherAddon")
+  assert(#notices == noticeCount)
   frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
+  if ui.productionWindow then
+    assert(notices[#notices] == "Artisan Logbook: Loaded (version " ..
+      (environment.C_AddOns.GetAddOnMetadata("ArtisanLogbook", "Version") or "Unknown") .. ").")
+    noticeCount = #notices
+    frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
+    assert(#notices == noticeCount)
+  else
+    assert(notices[#notices] == "Artisan Logbook: Compatible Artisan Logbook Core API v1 is required.")
+  end
   return ui
 end
 
@@ -363,6 +375,10 @@ assert(maintenance.ledger:AddDimension("recipe", 9903, { name = "Recovered recip
 assert(maintenance.ledger:AddDimension("item", 9903, { name = "Recovered recipe" }))
 assert(maintenance.ledger:LearnRecipeOutput(9903, 9903))
 do
+  local previousSettings = environment.ArtisanLogbookUISettings
+  if type(environment.ArtisanLogbookUISettings) ~= "table" then environment.ArtisanLogbookUISettings = {} end
+  local previousShowUnknown = environment.ArtisanLogbookUISettings.showUnknownCrafts
+  environment.ArtisanLogbookUISettings.showUnknownCrafts = true
   local maintenanceUI = loadUI()
   local productionWindow = maintenanceUI.productionWindow
   productionWindow:Show()
@@ -378,6 +394,8 @@ do
   assert(liveRepair.repairedCount == 1)
   assert(recoveredRow() and recoveredRow().recipe.id == 9903,
     "visible Logbook did not refresh after recipe repair")
+  if previousSettings then environment.ArtisanLogbookUISettings.showUnknownCrafts = previousShowUnknown
+  else environment.ArtisanLogbookUISettings = nil end
 end
 print("PASS confirmed offline recipe repair preview and no-evidence no-write flow")
 
@@ -542,7 +560,7 @@ do
   assert(confirmed.ledger.database.recipeOutputs[1236472][243807])
   assert(confirmed.ledger.craftById[1].recipeId == 1236472)
   assert(confirmed.ledger.craftById[1].requestId == nil)
-  assert(confirmed.ledger.database.schemaVersion == 2)
+  assert(confirmed.ledger.database.schemaVersion == 3)
   local reloadedKnowledge = reload(confirmed.ledger.database)
   assert(queries == 2 and reloadedKnowledge.ledger.database.recipeOutputs[1236472][243807])
   print("PASS candidate confirmation, silence, schema v1 and durable reload")
@@ -750,7 +768,7 @@ do
   assert(candidateQueries == 9 and enumerationQueries == 0 and infoQueries == 0)
   assert(bounded.lastRecoverySummary.candidateCount == 9 and bounded.lastRecoverySummary.verifiedCount == 3)
   assert(bounded.ledger.unknownRecipeCount == 11 and bounded.ledger.recipeOutputCount == 4)
-  assert(bounded.ledger.database.schemaVersion == 2 and #notices == noticeCount)
+  assert(bounded.ledger.database.schemaVersion == 3 and #notices == noticeCount)
   print(string.format("PASS bounded startup: 2010 recipe dimensions, 2000 good crafts, 14 Unknowns, 9 queries (%.3fs mocked full load)", os.clock() - started))
   environment.C_TradeSkillUI.GetRecipeSchematic = previousSchematic
   environment.C_TradeSkillUI.GetAllRecipeIDs = previousIds
@@ -894,6 +912,9 @@ assert(not uiAddon.ledger and not uiAddon.recorder and not uiAddon.Ledger and no
 local uiWindow = uiAddon.productionWindow
 local UI = uiAddon.UI
 local paperProbe = environment.CreateFrame("Frame", nil, environment.UIParent)
+environment.ArtisanLogbookUISettings.hideUnknownCrafts = nil
+environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
+environment.ArtisanLogbookUISettings.showHiddenRecipesInLogbook = nil
 local paperSurface = UI.Surface(paperProbe, true)
 assert(paperSurface.color[4] == 1 and paperSurface.allPoints == paperProbe)
 assert(paperSurface.grain.allPoints == paperProbe)
@@ -907,13 +928,32 @@ assert(UI.Amount(260, false) == "260" and UI.Amount(0, false) == "-" and UI.Amou
 assert(UI.AmountTooltip(260, false):find("total may be higher", 1, true))
 assert(UI.AmountTooltip(260, true) == "260")
 assert(not UI.IsRecipeHidden(501))
+assert(UI.CraftVisibilityOptions().showUnknownRecipes == false and
+  UI.CraftVisibilityOptions().showHiddenRecipes == false)
+assert(not UI.VisibleCraft({}))
+assert(UI.VisibleCraft({ recipe = { id = 501 } }))
+environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
+environment.ArtisanLogbookUISettings.hideUnknownCrafts = false
+assert(UI.CraftVisibilityOptions().showUnknownRecipes == true and
+  environment.ArtisanLogbookUISettings.hideUnknownCrafts == nil)
+environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
+environment.ArtisanLogbookUISettings.hideUnknownCrafts = true
+assert(UI.CraftVisibilityOptions().showUnknownRecipes == false and
+  environment.ArtisanLogbookUISettings.hideUnknownCrafts == nil)
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = false, showHiddenRecipes = false })
 assert(not UI.SetRecipeHidden(0, true) and not UI.SetRecipeHidden(0 / 0, true))
 assert(not UI.SetRecipeHidden(math.huge, true) and not UI.SetRecipeHidden(501, "true"))
 local hiddenProbe = UI.HiddenRecipeCheckbox(paperProbe, 0, 0, true)
 hiddenProbe:SetRecipe(501)
 assert(UI.SetRecipeHidden(501, true) and hiddenProbe:GetChecked())
 assert(environment.ArtisanLogbookUISettings.hiddenRecipes[501])
-assert(not UI.VisibleRecipe({ recipe = { id = 501 } }) and UI.VisibleRecipe({}))
+assert(not UI.VisibleRecipe({ recipe = { id = 501 } }) and not UI.VisibleRecipe({}))
+assert(not UI.VisibleCraft({ recipe = { id = 501 } }) and not UI.VisibleCraft({}))
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = true, showHiddenRecipes = false })
+assert(UI.VisibleCraft({}) and not UI.VisibleCraft({ recipe = { id = 501 } }))
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = false, showHiddenRecipes = true })
+assert(not UI.VisibleCraft({}) and UI.VisibleCraft({ recipe = { id = 501 } }, true))
+UI.SetCraftVisibilityOptions({ showUnknownRecipes = false, showHiddenRecipes = false })
 hiddenProbe:SetChecked(false); hiddenProbe.scripts.OnClick(hiddenProbe)
 assert(not UI.IsRecipeHidden(501) and environment.ArtisanLogbookUISettings.hiddenRecipes[501] == nil)
 local professionSummary = UI.ProductionSummary(paperProbe, 732, 0, function() end, true)
@@ -977,6 +1017,14 @@ do
 end
 local logbookColumns = UI.HistoryColumns(732, "Logbook")
 for _, column in ipairs(logbookColumns) do assert(column.title ~= "When") end
+for _, context in ipairs({ "Recipe", "Character" }) do
+  local found
+  for _, column in ipairs(UI.HistoryColumns(900, context)) do
+    if column.title == "Timestamp" then found = column end
+  end
+  assert(found and found.width == 94 and found.lines == nil)
+end
+assert(not UI.DateTime(1800000000):find("\n", 1, true))
 local hasSixtyDays = false
 for _, range in ipairs(UI.ranges) do if range.value == 60 then hasSixtyDays = true end end
 assert(hasSixtyDays)
@@ -1103,14 +1151,20 @@ local whiteInk = UI.ReadableColor({ r = 1, g = 1, b = 1 }, paperProbe)
 assert(whiteInk.r < .26 and whiteInk.r == whiteInk.g and whiteInk.g == whiteInk.b)
 assert(UI.QualityAtlas(42, 2, 3) == "Quality-2" and UI.QualityAtlas(99, 2, 5) == nil)
 assert(UI.QualityAtlas(42, 0, 5) == nil and UI.QualityAtlas(42, 2, nil) == nil)
+assert(UI.MulticraftAverage({ craftCount = 2, outputQuantity = 7, outputQuantityObservedCount = 2,
+  multicraftProcCount = 1, multicraftProcCountObservedCount = 2 }) == 3.5)
+assert(UI.MulticraftAverage({ craftCount = 2, outputQuantity = 7, outputQuantityObservedCount = 1,
+  multicraftProcCount = 1, multicraftProcCountObservedCount = 2 }) == nil)
+assert(UI.MulticraftAverage({ craftCount = 2, outputQuantity = 2, outputQuantityObservedCount = 2,
+  multicraftProcCount = 0, multicraftProcCountObservedCount = 2 }) == nil)
 local activity = UI.Activity({ recipe = { id = 42, name = "Crushing", maxQuality = 3 },
   outputItem = { id = 42, name = "Gemdust" }, outputQuantity = 12, outputQuality = 2,
   concentrationSpent = 397, multicraftBonus = 11, hasIngenuityProc = true,
-  ingenuityRefund = 180, reagents = { { item = { name = "Azeroot" }, returnedQuantity = 4 } } })
+  ingenuityRefund = 180, reagents = { { item = { id = 5, name = "Azeroot" }, returnedQuantity = 4 } } })
 assert(#activity == 6 and activity[1].atlas == "Quality-2")
 assert(activity[2].tooltip:find("Gemdust", 1, true) and
   activity[4].tooltip == "Multicraft: produced 11 additional items" and
-  activity[6].tooltip:find("Azeroot: 4 returned (required quantity unavailable)", 1, true))
+  activity[6].tooltip == "Resourcefulness returned 4 materials\n4 Azeroot")
 assert(#UI.Activity({ recipe = { name = "Potion", maxQuality = 5 },
   outputItem = { name = "Potion" }, outputQuality = 0, multicraftBonus = 0,
   concentrationSpent = 0, reagents = {} }) == 0)
@@ -1120,11 +1174,119 @@ local highlights = table.concat(UI.CraftHighlights({ concentrationSpent = 323,
   multicraftBonus = 4, hasIngenuityProc = true, ingenuityRefund = 162,
   reagents = { { returnedQuantity = 4 }, { returnedQuantity = 0 } } }), "; ")
 assert(highlights == "Concentration 323; Multicraft +4; Ingenuity +162; Returned material units: 4")
-assert(UI.ReagentDescription({ item = { name = "Azeroot" }, allocatedQuantity = 5,
-  returnedQuantity = 1 }) == "Azeroot: 5 required before returns, 1 returned")
-assert(UI.ReagentDescription({ item = { name = "Azeroot" }, returnedQuantity = 4 }) ==
-  "Azeroot: 4 returned (required quantity unavailable)")
-assert(UI.ReagentDescription({ item = { id = 100 }, allocatedQuantity = 2 }) == "#100: 2 required before returns")
+;(function()
+  local function shape(rows)
+    local parts = {}
+    for _, row in ipairs(rows) do
+      parts[#parts + 1] = row.name .. "=" .. tostring(row.required) .. "/" .. tostring(row.returned) ..
+        (row.qualityUnknown and "?" or "")
+    end
+    return table.concat(parts, ";")
+  end
+  local technical = { "schematic", "slot", "famil", "allocation", "reconcil", "observed at result", "expected" }
+  local function plain(text)
+    for _, word in ipairs(technical) do assert(not text:lower():find(word, 1, true), text) end
+    return text
+  end
+  -- Thalassian Missive of the Harmonious: two fixed items and two quality-alternative inks.
+  local vellum, pureVoid = { id = 245001, name = "Lexicologist's Vellum" }, { id = 245002, name = "Mote of Pure Void" }
+  local munsell = { { id = 245011, name = "Munsell Ink" }, { id = 245012, name = "Munsell Ink" } }
+  local sienna = { { id = 245021, name = "Sienna Ink" }, { id = 245022, name = "Sienna Ink" } }
+  local missive = { outcomeSource = "native", resourcefulnessComplete = true, hasResourcefulnessProc = true,
+    grossRequirementsComplete = true,
+    reagents = {
+      { item = vellum, dataSlotIndex = 1, allocatedQuantity = 1, fixed = true, returnedQuantity = 0 },
+      { item = pureVoid, dataSlotIndex = 3, allocatedQuantity = 1, fixed = true, returnedQuantity = 0 },
+      { item = sienna[2], returnedQuantity = 1 },
+    },
+    reagentRequirements = {
+      { dataSlotIndex = 2, requiredQuantity = 2, candidateItems = munsell },
+      { dataSlotIndex = 4, requiredQuantity = 2, candidateItems = sienna },
+    } }
+  local rows = UI.CraftIngredients(missive)
+  assert(shape(rows) == "Lexicologist's Vellum=1/0;Munsell Ink=2/0?;Mote of Pure Void=1/0;Sienna Ink=2/1?", shape(rows))
+  assert(plain(UI.IngredientRequiredText(rows[2])) == "This recipe requires 2 Munsell Ink. The quality used wasn't recorded.")
+  assert(plain(UI.IngredientRequiredText(rows[1])) == "This recipe requires 1 Lexicologist's Vellum.")
+  assert(plain(UI.IngredientReturnedText(rows[4], missive)) == "1 Sienna Ink was returned by Resourcefulness.")
+  assert(plain(UI.IngredientReturnedText(rows[2], missive)) == "Resourcefulness didn't return any Munsell Ink.")
+  missive.materialsSavingsEligible = false
+  assert(UI.IngredientReturnedText(rows[4], missive) ==
+    "1 Sienna Ink was returned by Resourcefulness. Crafting-order materials don't count toward your savings.")
+  local bloomFamily = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom" } }
+  rows = UI.CraftIngredients({ outcomeSource = "native", resourcefulnessComplete = true,
+    reagents = {
+      { item = bloomFamily[1], dataSlotIndex = 1, allocatedQuantity = 3, quality = 1 },
+      { item = bloomFamily[2], dataSlotIndex = 1, allocatedQuantity = 2, quality = 2, returnedQuantity = 1 },
+    }, reagentRequirements = { { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 2 and rows[1].item.id == 8 and rows[2].item.id == 18)
+  assert(rows[1].required == 3 and rows[2].required == 2 and not rows[1].qualityUnknown and not rows[2].qualityUnknown)
+  assert(rows[1].item.note == "Recorded quality: 1." and rows[2].item.note == "Recorded quality: 2.")
+  assert(rows[1].returned == 0 and rows[2].returned == 1)
+  rows = UI.CraftIngredients({ reagents = {
+    { item = bloomFamily[1], dataSlotIndex = 1, allocatedQuantity = 5, quality = 1 },
+    { item = bloomFamily[2], dataSlotIndex = 1, allocatedQuantity = 0, quality = 2 },
+  }, reagentRequirements = { { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 1 and rows[1].item.id == 8 and rows[1].required == 5 and not rows[1].qualityUnknown)
+  assert(rows[1].item.note == "Recorded quality: 1.")
+  rows = UI.CraftIngredients({ reagents = {
+    { item = bloomFamily[1], dataSlotIndex = 1, allocatedQuantity = 3, quality = 1 },
+  }, reagentRequirements = { { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 1 and rows[1].qualityUnknown and rows[1].required == 5)
+  assert(UI.IngredientRequiredText(rows[1]) ==
+    "This recipe requires 5 Bloom. Recorded: Bloom (quality 1) x3. The quality used for the remaining 2 wasn't recorded.")
+  rows = UI.CraftIngredients({ reagentRequirements = {
+    { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = bloomFamily } } })
+  assert(#rows == 1 and rows[1].qualityUnknown and rows[1].required == 5)
+  assert(UI.IngredientRequiredText(rows[1]) == "This recipe requires 5 Bloom. The quality used wasn't recorded.")
+  local missiveTooltip = UI.Activity(missive, true)[1].tooltip
+  assert(missiveTooltip == "Resourcefulness returned 1 material\n1 Sienna Ink (2 required)\n" ..
+    "Crafting-order materials don't count toward your savings.", missiveTooltip)
+  -- Recorded quality selections inside a requirement's slot are the same ingredient, never added again.
+  rows = UI.CraftIngredients({ reagents = {
+    { item = { id = 8, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 3, returnedQuantity = 1 },
+    { item = { id = 18, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 2 },
+    { item = { id = 50, name = "Sand" }, dataSlotIndex = 3, allocatedQuantity = 2 },
+    { item = { id = 40, name = "Ink" }, dataSlotIndex = 5, allocatedQuantity = 1 },
+    { item = { id = 40, name = "Ink" }, dataSlotIndex = 6, allocatedQuantity = 2 },
+    { item = { id = 51, name = "Sand" }, returnedQuantity = 1 },
+    { item = { id = 77, name = "Stray" }, returnedQuantity = 1 },
+  }, reagentRequirements = {
+    { dataSlotIndex = 3, requiredQuantity = 4, candidateItemIDs = { 50, 51 } },
+    { dataSlotIndex = 5, requiredQuantity = 1, candidateItems = { { id = 40, name = "Ink" } } },
+  } })
+  assert(shape(rows) == "Bloom=3/1;Bloom=2/nil;#50 or #51=4/1?;Ink=3/nil;Stray=nil/1", shape(rows))
+  assert(plain(UI.IngredientRequiredText(rows[5])) == "The required quantity couldn't be determined for this craft.")
+  assert(plain(UI.IngredientReturnedText(rows[2])) == "Returns weren't recorded for this craft.")
+  assert(#UI.CraftIngredients({}) == 0)
+end)()
+do
+  local craftWithRequirements = {
+    recipe = { name = "Light's Potential", maxQuality = 3 },
+    outputItem = { id = 241308, name = "Light's Potential" },
+    outputQuantity = 20,
+    outputQuality = 2,
+    multicraftBonus = 15,
+    concentrationSpent = 294,
+    hasIngenuityProc = true,
+    ingenuityRefund = 147,
+    reagents = {
+      { item = { id = 247724, name = "Multicraft Matrix" }, allocatedQuantity = 1, returnedQuantity = 0, inputTotalComplete = true },
+      { item = { id = 240990, name = "Sunglass Vial" }, returnedQuantity = 1 },
+      { item = { id = 236761, name = "Tranquility Bloom" }, returnedQuantity = 1 },
+    },
+    reagentRequirements = {
+      { dataSlotIndex = 1, requiredQuantity = 5, candidateItems = { { id = 240990, name = "Sunglass Vial" }, { id = 240991, name = "Sunglass Vial" } } },
+      { dataSlotIndex = 2, requiredQuantity = 8, candidateItems = { { id = 236761, name = "Tranquility Bloom" }, { id = 236762, name = "Tranquility Bloom" }, { id = 236763, name = "Tranquility Bloom" } } },
+    }
+  }
+  local lightsActivity = UI.Activity(craftWithRequirements)
+  local herbTooltip
+  for _, ind in ipairs(lightsActivity) do
+    if ind.icon == "Interface\\Icons\\INV_Misc_Herb_19" then herbTooltip = ind.tooltip end
+  end
+  assert(herbTooltip == "Resourcefulness returned 2 materials\n1 Sunglass Vial (5 required)\n" ..
+    "1 Tranquility Bloom (8 required)", herbTooltip)
+end
 local longName = "Silvermoon Health Potion of the Long Night"
 local sampleTable = UI.ScrollList(environment.CreateFrame("Frame"), 0, 0, 140, 140,
   { { title = "Recipe", width = 116, value = function(row) return row.name end } }, function() end)
@@ -1273,7 +1435,9 @@ assert(recentFirst)
 recentFirst.scripts.OnClick(recentFirst)
 assert(uiWindow.openCraftId == 14 and uiWindow.visiblePage ~= logbook)
 local sharedDetail = uiWindow.visiblePage
-assert(visibleText("Quantity:") and not visibleText("Ingenuity proc: Unknown"))
+assert(not visibleText("Quantity:") and visibleText("Quality:") and not visibleText("Ingenuity proc: Unknown"))
+assert(sharedDetail.result.quality and not sharedDetail.result.quality:IsShown())
+assert(not sharedDetail.fields.Timestamp.text:find("\n", 1, true))
 button(sharedDetail, "Close").scripts.OnClick()
 assert(uiWindow.visiblePage == logbook and logbook:IsShown() and not sharedDetail:IsShown())
 recentFirst.scripts.OnClick(recentFirst)
@@ -1315,7 +1479,7 @@ assert(not UI.IsPinned(502))
 assertRecipesSelected()
 assert(recipePage ~= recipes and visibleText("Apple Mix") and visibleText("Enchanting"))
 assert(recipePage.tabs[recipePage.activeView].selected)
-assert(recipePage.history.rows[1].cells[3].column.title == "When")
+assert(recipePage.history.rows[1].cells[3].column.title == "Timestamp")
 assert(recipePage.history.rows[1].cells[3].label.text == UI.DateTime(recipePage.history.items[1].timestamp))
 assert(recipePage.history.rows[1].widgets[1].column.title == "Result")
 assert(recipePage.history.rows[1].activity.extrasOnly)
@@ -1740,7 +1904,8 @@ do
   local function record(recipeId, itemId, quality, quantity, operation)
     ledger:BeginCraft(recipeId)
     return assert(environment.RecordFixtureResult(ledger, { operationID = operation, itemID = itemId, craftingQuality = quality,
-      quantity = quantity, multicraft = 0, hasIngenuityProc = false, resourcesReturned = {} }))
+      quantity = quantity, multicraft = 0, concentrationSpent = quality and quality * 10 or nil,
+      hasIngenuityProc = false, resourcesReturned = {} }))
   end
   ledger.wall = function() return now - 40 * 86400 end
   record(9901, 6001, 1, 7, 1)
@@ -1770,6 +1935,10 @@ do
   assert(pane.qualityRows[1].quality == 1 and pane.qualityRows[1].quantity == 50)
   assert(pane.qualityRows[2].quality == 2 and pane.qualityRows[2].quantity == 50)
   assert(pane.qualityRows[3].quality == 3 and pane.qualityRows[3].quantity == 4)
+  assert(pane.qualityRows[1].craftCount == 50 and pane.qualityRows[1].concentrationSpent == 500)
+  assert(pane.qualityRows[2].concentrationSpent == 1000 and pane.qualityRows[2].concentrationObservedCount == 50)
+  assert(pane.qualityList.columns[1].width < pane.qualityList.columns[2].width * 5)
+  assert(pane.qualityList.columns[2].title == "Crafts" and pane.qualityList.columns[5].title == "Concentration")
   assert(pane.qualityRows[4].quality == nil and pane.qualityRows[4].quantity == 5)
   assert(pane.tiles[2].value.text == "109" and pane.qualityStatus.text:find("101 crafts of 106", 1, true))
   pane.qualityList.rows[1].widgets[1].widget.scripts.OnEnter(pane.qualityList.rows[1].widgets[1].widget)
@@ -1804,6 +1973,9 @@ do
   local ledger, api = core.ledger, environment.ArtisanLogbookAPI
   environment.ArtisanLogbookUISettings.hiddenRecipes = {}
   environment.ArtisanLogbookUISettings.pinnedRecipes = {}
+  environment.ArtisanLogbookUISettings.hideUnknownCrafts = nil
+  environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
+  environment.ArtisanLogbookUISettings.showHiddenRecipesInLogbook = nil
   ledger:AddDimension("profession", 171, { name = "Alchemy" })
   ledger:AddDimension("item", 6401, { name = "Shared herb" })
   for _, entry in ipairs({ { 10051, "Midnight Prospecting" }, { 10052, "Potion" }, { 10053, "Mulching" } }) do
@@ -1839,6 +2011,15 @@ do
       if list.scripts.OnUpdate then list.scripts.OnUpdate(list) end
     end
   end
+  local function finishAllPages(list)
+    local framesRun = 0
+    while not list.finish:IsShown() do
+      framesRun = framesRun + 1
+      assert(framesRun < 30, "Craft page continuation did not finish")
+      if list.pageLoader.scripts.OnUpdate then list.pageLoader.scripts.OnUpdate(list.pageLoader)
+      else list:LoadNext() end
+    end
+  end
   toggleCatalogue(10051, true); toggleCatalogue(10053, true)
   assert(#catalogue.items == 3 and helpers.IsRecipeHidden(10051) and helpers.IsPinned(10051))
   assert(recipeRow(10051).widgets[2].widget:GetChecked())
@@ -1846,6 +2027,9 @@ do
   local overview = window.pages.Overview
   assert(#overview.topRecipes.items == 1 and overview.topRecipes.items[1].recipe.id == 10052)
   assert(overview.summary.tiles[6].value.text == "Potion" and overview.summary.totals.craftCount == 110)
+  local unknownCraft = assert(environment.RecordFixtureResult(ledger, { itemID = 900100, quantity = 1,
+    resourcesReturned = {} }))
+  assert(unknownCraft.recipeId == nil)
   local originalCrafts, pageQueries = api.GetCrafts, 0
   api.GetCrafts = function(filter, options)
     assert(filter.hiddenRecipes == nil and options.hiddenRecipes == nil)
@@ -1854,6 +2038,14 @@ do
   end
   window:Activate("Logbook")
   local logbook = window.pages.Logbook.history
+  local visibility = window.pages.Logbook.craftVisibility
+  assert(visibility.selected.showUnknownRecipes == false and visibility.selected.showHiddenRecipes == false)
+  local menuItems, addMenuButton = {}, environment.UIDropDownMenu_AddButton
+  environment.UIDropDownMenu_AddButton = function(info) menuItems[#menuItems + 1] = info end
+  visibility.initialize(visibility)
+  environment.UIDropDownMenu_AddButton = addMenuButton
+  assert(#menuItems == 2 and menuItems[1].isNotRadio and menuItems[1].keepShownOnClick and not menuItems[1].checked)
+  assert(menuItems[2].isNotRadio and menuItems[2].keepShownOnClick and not menuItems[2].checked)
   assert(pageQueries == 1 and #logbook.items == 0 and logbook.pageLoader.scripts.OnUpdate)
   logbook.pageLoader.scripts.OnUpdate(logbook.pageLoader)
   assert(pageQueries == 2 and #logbook.items == 0 and logbook.pageLoader.scripts.OnUpdate)
@@ -1861,12 +2053,33 @@ do
   finishList(logbook)
   assert(pageQueries == 3 and #logbook.items == 5 and logbook.finish:IsShown())
   for _, row in ipairs(logbook.items) do assert(row.recipe.id == 10052) end
+  visibility:SetSelected("showHiddenRecipes", true)
+  finishAllPages(logbook)
+  assert(#logbook.items == 110, #logbook.items .. " / " .. tostring(visibility.selected.showHiddenRecipes) ..
+    " / " .. tostring(helpers.CraftVisibilityOptions().showHiddenRecipes))
+  local sawHidden, sawUnknown = false, false
+  for _, row in ipairs(logbook.items) do
+    sawHidden = sawHidden or row.recipe.id == 10051
+    sawUnknown = sawUnknown or row.recipe == nil
+  end
+  assert(sawHidden and not sawUnknown)
+  visibility:SetSelected("showHiddenRecipes", false)
+  visibility:SetSelected("showUnknownRecipes", true)
+  finishAllPages(logbook)
+  assert(#logbook.items == 6)
+  sawUnknown = false
+  for _, row in ipairs(logbook.items) do sawUnknown = sawUnknown or row.recipe == nil end
+  assert(sawUnknown)
+  visibility:SetSelected("showUnknownRecipes", false)
+  finishAllPages(logbook)
+  assert(#logbook.items == 5)
   local character = api.GetCharacters()[1]
   for _, destination in ipairs({ { "Character", character }, { "Profession", { skillLineId = 171, name = "Alchemy" } } }) do
     window:Activate(destination[1], destination[2])
     local page = window.pages[destination[1]]
     finishList(page.history)
-    assert(#page.history.items == 5 and #page.topRecipes.items == 1)
+      assert(#page.history.items == 5 and #page.topRecipes.items == 1,
+        #page.history.items .. " / " .. #page.topRecipes.items .. " / " .. tostring(helpers.CraftVisibilityOptions().showUnknownRecipes))
     assert(page.topRecipes.items[1].recipe.id == 10052)
   end
   window:Activate("Reagent", { id = 6401, name = "Shared herb" })
@@ -1917,7 +2130,7 @@ do
   for recipeId = 11001, 11007 do assert(helpers.SetRecipeHidden(recipeId, true)) end
   assert(helpers.IsRecipeHidden(11007), "Hiding must not inherit the five-pin limit")
   assert(core.Trace.Serialize(ledger.database) == databaseBefore, "Hiding changed Core data")
-  assert(#api.GetCrafts(nil, { limit = 200 }).crafts == 110)
+  assert(#api.GetCrafts(nil, { limit = 200 }).crafts == 111)
   assert(#api.GetRecipeSummaries().recipes == 3)
   window:Hide()
   local reloaded = loadUI()
@@ -1936,6 +2149,8 @@ do
   local ui = loadUI()
   local window, helpers = ui.productionWindow, ui.UI
   local page, list = window.pages.Reagents, window.pages.Reagents.catalogue
+  assert(list.columns[1].width < 600 and list.columns[2].title == "Profession" and list.columns[2].width == 180)
+  assert(list.columns[4].title == "Quantity" and list.columns[6].title == "Saved share")
   window:Show(); window:Activate("Reagents")
   assert(window.navItems[3].entry.page == "Recipes" and window.navItems[4].entry.page == "Reagents")
   assert(window.navItems[4].selection:IsShown() and not window.navItems[3].selection:IsShown())
@@ -1965,7 +2180,7 @@ do
   assert(#list.items[1].professions == 2 and list.items[1].recipeCount == 2)
   local savedCell
   for _, cell in ipairs(list.rows[1].cells) do
-    if cell.column.title == "Materials saved" then savedCell = cell end
+    if cell.column.title == "Saved share" then savedCell = cell end
   end
   assert(savedCell and savedCell.label.text == helpers.MatchedSavingsText(list.items[1]))
   assert(savedCell.label.text == "-")
@@ -1977,9 +2192,10 @@ do
   catalogueCheck:SetChecked(true); catalogueCheck.scripts.OnClick(catalogueCheck)
   assert(helpers.IsTrivial(4008))
   for _, cell in ipairs(list.rows[1].cells) do
-    if cell.column.title == "Materials saved" then savedCell = cell end
+    if cell.column.title == "Saved share" then savedCell = cell end
   end
-  assert(savedCell and savedCell.label.text == "Ignored")
+  assert(savedCell and savedCell.label.text == "-")
+  assert(savedCell.column.exact(list.items[1]) == "Excluded from savings by your preference. Recorded quantities are unchanged.")
   catalogueCheck:SetChecked(false); catalogueCheck.scripts.OnClick(catalogueCheck)
   assert(not helpers.IsTrivial(4008))
   for index = 1, 45 do record(9701, 4100 + index, string.format("Herb %02d", index), index, index, 1) end
@@ -2101,9 +2317,9 @@ do
   assert(detail.fields.characters.text == "1" and #detail.recipes.items == 1)
   assert(detail.recipes.items[1].crafts == 101 and detail.recipes.items[1].returnedQuantity == 202)
   assert(#detail.chart.bars <= 60 and detail.chart.bars[1].returned:IsShown())
-  assert(detail.chart.bars[1].tooltip:find("Known required: 505", 1, true))
+  assert(detail.chart.bars[1].tooltip:find("Required: 505", 1, true))
   assert(detail.status.text:find("Item details are available for 101 of 102 crafts", 1, true))
-  assert(detail.status.text:find("Saved share compares known input amounts", 1, true))
+  assert(detail.status.text:find("Saved share compares required amounts", 1, true))
   detail:SelectView("Used in Recipes")
   assert(detail.tabs["Used in Recipes"].selected and detail.recipes:IsShown())
   detail.recipes.rows[1].scripts.OnClick(detail.recipes.rows[1])
@@ -2246,6 +2462,11 @@ do
   local craft = assert(environment.RecordFixtureResult(ledger, { operationID = 1, itemID = 5302, quantity = 4, craftingQuality = 2,
     multicraft = 1, concentrationSpent = 100, hasIngenuityProc = true, ingenuityRefund = 20,
     resourcesReturned = { { reagent = { itemID = 5301 }, quantity = 2 } } }))
+  environment.savedRecipeQualityInfo = environment.C_TradeSkillUI.GetRecipeItemQualityInfo
+  environment.C_TradeSkillUI.GetRecipeItemQualityInfo = function(recipeId, quality)
+    if recipeId == 9850 then return { icon = "Quality-" .. quality } end
+    return environment.savedRecipeQualityInfo and environment.savedRecipeQualityInfo(recipeId, quality)
+  end
   environment.ArtisanLogbookUISettings.trivialReagents = {}
   local ui = loadUI()
   local window = ui.productionWindow
@@ -2292,6 +2513,12 @@ do
   assert(not overview.scroll and #overview.topRecipes.items == 1)
   local ranked = overview.topRecipes.items[1]
   assert(ranked.result.outputItem.id == 5302 and ranked.totals.outputQuantity == 4)
+  local itemsCell
+  for _, cell in ipairs(overview.topRecipes.rows[1].cells) do
+    if cell.column.title == "Items" then itemsCell = cell end
+  end
+  assert(itemsCell and itemsCell.label.text == "4 / craft")
+  assert(itemsCell.column.exact(ranked):find("4 average items per craft", 1, true))
   local resourcefulnessCell
   for _, cell in ipairs(overview.topRecipes.rows[1].cells) do
     if cell.column.title == "Resourcefulness" then resourcefulnessCell = cell end
@@ -2307,19 +2534,40 @@ do
   assert(recipe.outcomes.production.averageOutput.text == "4")
   assert(recipe.outcomes.production.averageConcentration.text == "100")
   assert(recipe.outcomes.production.netConcentration.text == "80")
+  assert(recipe.outcomes.tiles[2].title.text == "Avg output" and recipe.outcomes.tiles[2].value.text == "4")
+  assert(recipe.outcomes.tiles[3].title.text == "Avg concentration" and recipe.outcomes.tiles[3].value.text == "100")
   assert(recipe.outcomes.tiles[6].note.text == "100.0% proc rate")
   assert(recipe.outcomes.tiles[4].note.text == "100.0% procs\n25.0% of output")
   assert(recipe.outcomes.tiles[4].note:GetStringHeight() <= recipe.outcomes.tiles[4].note:GetHeight())
   assert(-recipe.outcomes.tiles[4].note.y + recipe.outcomes.tiles[4].note:GetHeight() <= recipe.outcomes.summary:GetHeight())
   recipe.outcomes.qualityWorker.scripts.OnUpdate(recipe.outcomes.qualityWorker)
   assert(recipe.outcomes.qualityList.items[1].quality == 2 and recipe.outcomes.qualityList.items[1].quantity == 4)
+  local qualityColumns = recipe.outcomes.qualityList.columns
+  assert(#qualityColumns == 6 and qualityColumns[1].title == "Result" and qualityColumns[2].title == "Crafts")
+  assert(qualityColumns[1].value(recipe.outcomes.qualityList.items[1]) == ui.UI.Name(recipe.outcomes.qualityList.items[1].item))
+  assert(not qualityColumns[1].value(recipe.outcomes.qualityList.items[1]):find("(Q", 1, true),
+    qualityColumns[1].value(recipe.outcomes.qualityList.items[1]))
+  assert(recipe.outcomes.qualityList.rows[1].widgets[1].widget.quality:IsShown())
+  assert(recipe.outcomes.qualityList.rows[1].widgets[1].widget.quality.atlas == "Quality-2")
+  assert(recipe.outcomes.qualityList.items[1].craftCount == 1 and
+    qualityColumns[3].value(recipe.outcomes.qualityList.items[1]) == "4" and
+    qualityColumns[4].value(recipe.outcomes.qualityList.items[1]) == "4")
+  assert(qualityColumns[5].value(recipe.outcomes.qualityList.items[1]) == "100" and
+    qualityColumns[6].value(recipe.outcomes.qualityList.items[1]) == "100")
   assert(recipe.outcomes.qualityTitle:IsShown())
-  assert(recipe.outcomes.tiles[2].note.text == "")
+  assert(recipe.outcomes.tiles[2].note.text == "items per craft")
+  environment.C_TradeSkillUI.GetRecipeItemQualityInfo = environment.savedRecipeQualityInfo
+  environment.savedRecipeQualityInfo = nil
   local from, to = ui.UI.Range(environment.GetServerTime(), 30)
   assert(recipe.outcomes.chart.start.text == os.date("!%d %b %Y", from),
     tostring(recipe.outcomes.chart.start.text) .. " / " .. os.date("!%d %b %Y", from))
   assert(recipe.outcomes.chart.finish.text == os.date("!%d %b %Y", to - 86400))
   recipe:SelectView("Reagents")
+  window:OpenCraft(craft.id)
+  local craftDetail = window.craftDetailPage
+  assert(craftDetail.fields.Quality.text == "2" and not craftDetail.result.quality:IsShown())
+  assert(not craftDetail.fields.Timestamp.text:find("\n", 1, true))
+  button(craftDetail, "Close").scripts.OnClick()
   local reagentRow = recipe.outcomes.materialList.rows[1]
   reagentRow.scripts.OnClick(reagentRow)
   assert(window.activeTab == "Reagent" and window.identity.id == 5301)
@@ -2553,18 +2801,18 @@ do
   end
   local materialRows = pane.materialList.rows
   local material = materialRows[1].widgets[1].widget
-  local recipeSavingsCell, recipeRequiredCell
+  local recipeSavingsCell, recipeInputCell
   for _, cell in ipairs(materialRows[1].cells) do
-    if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
-    if cell.column.title == "Required" then recipeRequiredCell = cell end
+    if cell.column.title == "Saved share" then recipeSavingsCell = cell end
+    if cell.column.title == "Quantity" then recipeInputCell = cell end
   end
   assert(recipeSavingsCell and recipeSavingsCell.label.text == helpers.MatchedSavingsText(materialRows[1].item))
-  assert(recipeRequiredCell and recipeRequiredCell.label.text ==
+  assert(recipeInputCell and recipeInputCell.label.text ==
     (materialRows[1].item.allocatedQuantity and ui.UI.Number(materialRows[1].item.allocatedQuantity) or "-"))
   if materialRows[1].item.allocatedQuantity then
-    local requiredTooltip = recipeRequiredCell.column.exact(materialRows[1].item)
-    assert(requiredTooltip:find("gross units required before returns", 1, true) and
-      requiredTooltip:find("not net consumed", 1, true))
+    local inputTooltip = recipeInputCell.column.exact(materialRows[1].item)
+    assert(inputTooltip:find("recorded for this item across these crafts", 1, true) and
+      inputTooltip:find("Returns are shown separately", 1, true))
   end
   assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
   assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
@@ -2573,9 +2821,9 @@ do
   reagentCheck:SetChecked(true); reagentCheck.scripts.OnClick(reagentCheck)
   assert(helpers.IsTrivial(8))
   for _, cell in ipairs(pane.materialList.rows[1].cells) do
-    if cell.column.title == "Materials saved" then recipeSavingsCell = cell end
+    if cell.column.title == "Saved share" then recipeSavingsCell = cell end
   end
-  assert(recipeSavingsCell and recipeSavingsCell.label.text == "Ignored")
+  assert(recipeSavingsCell and recipeSavingsCell.label.text == "-")
   reagentCheck:SetChecked(false); reagentCheck.scripts.OnClick(reagentCheck)
   assert(not helpers.IsTrivial(8))
   assert(material.icon.texture and material.quality.atlas == "ReagentQuality-8")
@@ -2616,9 +2864,113 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
+  local columns = detail.returnedReagents.columns
+  assert(#columns == 3 and columns[1].title == "Reagent" and columns[2].title == "Required" and columns[3].title == "Returned")
   assert(#detail.returnedReagents.items == 2)
   assert(detail.fields.Resourcefulness.text == "Return recorded")
-  assert(detail.inputEvidence.text == "Input requirements are unavailable.")
+  -- Older crafts without a complete ingredient record get one plain caveat.
+  assert(detail.inputEvidence.text == "Some ingredient details weren't recorded for this craft.", detail.inputEvidence.text)
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.grossRequirementsComplete = true
+    craft.reagents = {
+      { item = { id = 8, name = "Bloom" }, returnedQuantity = 1 },
+      { item = { id = 9, name = "Petal" }, returnedQuantity = 1 },
+    }
+    craft.reagentRequirements = {
+      { requiredQuantity = 8, candidateItems = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom" } } },
+      { requiredQuantity = 2, candidateItems = { { id = 9, name = "Petal" } } },
+    }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(detail.inputEvidence.text == "", detail.inputEvidence.text)
+  local petalRow = detail.returnedReagents.items[1]
+  local bloomRow = detail.returnedReagents.items[2]
+  assert(#detail.returnedReagents.items == 2 and petalRow.item.id == 9 and bloomRow.qualityUnknown)
+  assert(bloomRow.name == "Bloom" and bloomRow.required == 8 and bloomRow.returned == 1)
+  assert(columns[2].value(bloomRow) == "8" and columns[3].value(bloomRow) == "1")
+  assert(columns[2].exact(bloomRow) == "This recipe requires 8 Bloom. The quality used wasn't recorded.")
+  assert(columns[2].exact(petalRow) == "This recipe requires 2 Petal.")
+  assert(columns[3].exact(bloomRow) == "1 Bloom was returned by Resourcefulness.")
+  local familyCell = detail.returnedReagents.rows[2].widgets[1].widget
+  assert(familyCell.label.text == "Bloom" and not familyCell.quality:IsShown())
+  assert(familyCell.item.note == "The quality used wasn't recorded.")
+  api.GetCraft = function()
+    local craft = getCraft(second.id)
+    craft.grossRequirementsComplete = true
+    craft.reagentRequirements = {
+      { dataSlotIndex = 2, requiredQuantity = 5,
+        candidateItems = { { id = 8, name = "Bloom" }, { id = 18, name = "Bloom" } } },
+    }
+    craft.reagents = {
+      { item = { id = 8, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 3, quality = 1 },
+      { item = { id = 18, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 2, quality = 2, returnedQuantity = 1 },
+    }
+    return craft
+  end
+  detail:ShowCraft(second.id)
+  assert(#detail.returnedReagents.items == 2 and detail.returnedReagents.items[1].item.id == 8 and
+    detail.returnedReagents.items[2].item.id == 18)
+  assert(not detail.returnedReagents.items[1].qualityUnknown and not detail.returnedReagents.items[2].qualityUnknown)
+  assert(detail.returnedReagents.rows[1].widgets[1].widget.item.note == "Recorded quality: 1.")
+  assert(detail.returnedReagents.rows[2].widgets[1].widget.item.note == "Recorded quality: 2.")
+  assert(columns[2].value(detail.returnedReagents.items[1]) == "3" and
+    columns[2].value(detail.returnedReagents.items[2]) == "2")
+  local returnedColor = detail.returnedReagents.rows[2].cells[2].label.textColor
+  local requiredColor = detail.returnedReagents.rows[2].cells[1].label.textColor
+  assert(returnedColor[2] > returnedColor[1] and returnedColor[2] > .8 and requiredColor[1] == 1 and requiredColor[2] == 1)
+  ;(function()
+    -- Fixed, mixed exact qualities, quality-alternative slots, overlapping selections and an unknown requirement.
+    api.GetCraft = function()
+      local craft = getCraft(second.id)
+      craft.inputComplete, craft.grossRequirementsComplete, craft.materialsSavingsEligible = nil, true, false
+      craft.reagents = {
+        { item = { id = 9, name = "Petal" }, dataSlotIndex = 1, allocatedQuantity = 2, fixed = true, inputTotalComplete = true },
+        { item = { id = 8, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 3, inputTotalComplete = true, returnedQuantity = 1 },
+        { item = { id = 18, name = "Bloom" }, dataSlotIndex = 2, allocatedQuantity = 2, inputTotalComplete = true },
+        { item = { id = 50, name = "Sand" }, dataSlotIndex = 3, allocatedQuantity = 2, inputTotalComplete = false, returnedQuantity = 1 },
+        { item = { id = 40, name = "Ink" }, dataSlotIndex = 5, allocatedQuantity = 1, inputTotalComplete = false },
+        { item = { id = 31, name = "Herb" }, returnedQuantity = 2 },
+        { item = { id = 77, name = "Stray" }, returnedQuantity = 1 },
+      }
+      craft.reagentRequirements = {
+        { dataSlotIndex = 3, requiredQuantity = 4, candidateItems = { { id = 50, name = "Sand" }, { id = 51, name = "Sand" } } },
+        { dataSlotIndex = 4, requiredQuantity = 6, candidateItems = { { id = 30, name = "Herb" }, { id = 31, name = "Herb" }, { id = 32, name = "Herb" } } },
+        { dataSlotIndex = 5, requiredQuantity = 1, candidateItems = { { id = 40, name = "Ink" } } },
+      }
+      return craft
+    end
+    detail:ShowCraft(second.id)
+    local items = detail.returnedReagents.items
+    local expected = { { "Petal", 2, 0 }, { "Bloom", 3, 1 }, { "Bloom", 2, 0 }, { "Sand", 4, 1, true },
+      { "Herb", 6, 2, true }, { "Ink", 1, 0 }, { "Stray", nil, 1 } }
+    assert(#items == #expected, #items)
+    local required, returned = 0, 0
+    for index, shape in ipairs(expected) do
+      local row = items[index]
+      assert(row.name == shape[1] and row.required == shape[2] and row.returned == shape[3], index)
+      assert((row.qualityUnknown == true) == (shape[4] == true), index)
+      required, returned = required + (row.required or 0), returned + (row.returned or 0)
+    end
+    assert(required == 18 and returned == 5)
+    assert(columns[2].value(items[7]) == "-" and columns[3].value(items[3]) == "0")
+    assert(columns[2].exact(items[7]) == "The required quantity couldn't be determined for this craft.")
+    assert(detail.inputEvidence.text == "Some ingredient details weren't recorded for this craft.")
+    assert(columns[3].exact(items[4]) ==
+      "1 Sand was returned by Resourcefulness. Crafting-order materials don't count toward your savings.")
+    local familyRow = detail.returnedReagents.rows[4]
+    familyRow.scripts.OnEnter(familyRow)
+    local tooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
+    assert(environment.GameTooltip.text == "Sand")
+    assert(tooltip:find("\nThis recipe requires 4 Sand. Recorded: Sand x2. The quality used for the remaining 2 wasn't recorded.", 1, true), tooltip)
+    for _, word in ipairs({ "schematic", "slot", "famil", "allocation", "reconcil", "Required:", "Returned:" }) do
+      assert(not tooltip:find(word, 1, true), word)
+    end
+    local opened = window.activeTab
+    familyRow.scripts.OnClick(familyRow)
+    assert(window.craftDetailWindow:IsShown() and window.activeTab == opened)
+  end)()
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.resourcefulnessComplete = false
@@ -2637,7 +2989,8 @@ do
   end
   detail:ShowCraft(second.id)
   assert(detail.fields.Resourcefulness.text == "Outcome unavailable")
-  assert(detail.returnedReagents.items[1].returnComplete == false)
+  assert(detail.returnedReagents.items[1].returned == nil and columns[3].value(detail.returnedReagents.items[1]) == "-")
+  assert(columns[3].exact(detail.returnedReagents.items[1]) == "Returns weren't recorded for this craft.")
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.reagents = {}
@@ -2659,6 +3012,8 @@ do
   assert(not detail.reagentSelector and not checkbox)
   assert(detail.returnedReagents.child:GetHeight() == detail.returnedReagents.scroll:GetHeight())
   assert(detail.result.item.id == 4567 and detail.result.label.text == "Flask")
+  assert(#detail.returnedReagents.items == 0 and detail.inputEvidence.text == "")
+  assert(detail.returnedReagents.empty.text == "Ingredients weren't recorded for this craft.")
   api.GetCraft = getCraft
   button(detail, "Close").scripts.OnClick()
   finishCalculation()
@@ -2746,6 +3101,35 @@ do
   window.craftDetailWindow:Hide()
   assert(window.pages.Recipe.activeView == "Craft History")
   assert(window.pages.Recipe.history.scroll:GetVerticalScroll() == 60)
+  local oldRequirementQuery = api.GetRecipeReagentRequirements
+  api.GetRecipeReagentRequirements = function(recipeId, filter, options)
+    assert(recipeId == 9001 and options.limit == 200)
+    return { requirements = {
+      { requiredQuantity = 5, craftCount = 2, candidateItems = {
+        { id = 243060, name = "Azeroot Quality One with a deliberately long localized reagent name" },
+        { id = 243061, name = "Azeroot Quality Two" },
+      } },
+      { requiredQuantity = 3, craftCount = 1, candidateItems = {
+        { id = 243070, name = "A second alternative reagent family" },
+        { id = 243071, name = "A second quality" },
+      } },
+    } }
+  end
+  pane:Refresh()
+  assert(pane.requirementNote:IsShown())
+  assert(pane.requirementNote.height == 18 and pane.requirementNote.text ==
+    "Some ingredients aren't listed by quality. Hover for recipe totals.")
+  assert(pane.materialList.y == -30)
+  pane.requirementNote.scripts.OnEnter(pane.requirementNote)
+  local requirementTooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
+  assert(requirementTooltip:find("Recipe requirements", 1, true))
+  assert(requirementTooltip:find("Azeroot Quality One with a deliberately long localized reagent name or " ..
+    "Azeroot Quality Two: 5 across 2 crafts (quality not recorded)", 1, true))
+  assert(requirementTooltip:find("A second alternative reagent family", 1, true))
+  assert(not requirementTooltip:lower():find("schematic", 1, true))
+  api.GetRecipeReagentRequirements = oldRequirementQuery
+  pane:Refresh()
+  assert(not pane.requirementNote:IsShown() and pane.materialList.y == -4)
   print("PASS recipe-local views and filters, per-recipe state, durable returned quantities and guarded allocation ratios")
   assert(environment.ArtisanLogbookManagement.Clear())
   assert(helpers.IsTrivial(8) and helpers.IsTrivial(10))
@@ -2775,15 +3159,22 @@ do
   end
   local data = ledger.database
   -- Rewrite as a pre-#21 schema-1 database (no outcome or schema-2 measurements).
-  data.schemaVersion, data.reagentSeries, data.firstCraftRewards = 1, nil, nil
+  data.schemaVersion, data.reagentSeries, data.reagentRequirementSeries, data.firstCraftRewards = 1, nil, nil, nil
   data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
   for _, craft in ipairs(data.crafts) do
     craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil
     craft.outcomeSource, craft.quoteObserved, craft.inputComplete = nil, nil, nil
+    craft.reagentRequirements, craft.grossRequirementsComplete, craft.materialsSavingsEligible = nil, nil, nil
+  end
+  for _, request in ipairs(data.requests) do
+    request.requirements, request.grossRequirementsComplete, request.materialsSavingsEligible = nil, nil, nil
+    for _, allocation in ipairs(request.allocations or {}) do allocation.inputTotalComplete = nil end
+    for _, fixed in ipairs(request.fixedReagents or {}) do fixed.inputTotalComplete = nil end
   end
   for _, reagent in ipairs(data.reagents) do reagent.inputTotalComplete = nil end
   for _, row in ipairs(data.craftSeries) do
     row.quoteObservedCount, row.inputCompleteCount, row.matchedCraftCount = nil, nil, nil
+    row.grossRequirementsCompleteCount = nil
     for _, metric in ipairs({ "multicraftProcCount", "resourcefulnessProcCount", "resourcefulnessCompleteProcCount",
         "resourcefulnessAuthoritativeProcCount" }) do
       row[metric], row[metric .. "ObservedCount"] = nil, nil
@@ -3193,7 +3584,7 @@ assert(#refusedRuntime.ledger.database.dimensions.sessions == 1 and
   #refusedRuntime.ledger.database.dimensions.characters == 1 and
   #refusedRuntime.ledger.database.dimensions.realms == 1)
 assert(refusedRuntime.ledger.database.dimensions.sessions[1].startedAt == 1800000123)
-assert(refusedRuntime.ledger.database.schemaVersion == 2 and refusedData.dimensions.recipes[1].key ==
+assert(refusedRuntime.ledger.database.schemaVersion == 3 and refusedData.dimensions.recipes[1].key ==
   "old-layout")
 assert(#refusedApi.GetCrafts().crafts == 0 and environment.ArtisanLogbookManagement.Status().retainedCrafts == 0)
 refusedRuntime.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
@@ -3208,7 +3599,7 @@ oldData.dimensions.recipes[1230869].maxQuality = nil
 environment.UnitClass = function() return nil, nil end
 environment.C_TradeSkillUI.GetRecipeInfo = function() return nil end
 local oldCore = reload(oldData)
-assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 2)
+assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 3)
 assert(oldCore.ledger.database.dimensions.characters[1].classFile == nil)
 assert(oldCore.ledger.database.dimensions.recipes[1230869].maxQuality == nil)
 environment.UnitClass = function() return "Mage", "MAGE", 8 end
@@ -3220,7 +3611,7 @@ local savedRecipeRow = upgraded.ledger.database.dimensions.recipes[1230869]
 assert(upgraded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 upgraded.HandleRetailEvent("TRADE_SKILL_SHOW")
 assert(upgraded.ledger.database.dimensions.recipes[1230869] == savedRecipeRow)
-assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 2)
+assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 3)
 local reloaded = reload(upgraded.ledger.database)
 assert(reloaded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 assert(reloaded.ledger.database.dimensions.recipes[1230869].maxQuality == 3)
@@ -3244,7 +3635,7 @@ print("PASS optional schema-v1 class and quality enrichment reuses historical di
   assert(core.ledger and environment.ArtisanLogbookDB == core.ledger.database)
   assert(sameTable(legacy, dofile(fixturePath)), "migration rewrote the supplied SavedVariables")
   local status = environment.ArtisanLogbookManagement.Status()
-  assert(status.schemaVersion == 2 and status.migratedFromSchemaVersion == 1 and status.migratedQuoteCrafts == 7)
+  assert(status.schemaVersion == 3 and status.migratedFromSchemaVersion == 1 and status.migratedQuoteCrafts == 7)
   local crafts = core.ledger.database.crafts
   local count = #crafts
   core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 434018)
@@ -3457,9 +3848,11 @@ end)()
           elseif boundary == "nonpersonal-replacement" then nonpersonal(kind) end
           local requestId = submit()
           status = environment.ArtisanLogbookManagement.Status()
-          assert(status.operationOwnershipUncertain and status.authoritativeCaptureSuspended)
-          status.operationOwnershipUncertain = false
-          assert(environment.ArtisanLogbookManagement.Status().operationOwnershipUncertain)
+          local completedOrder = kind == "CraftRecipe" and known and boundary ~= "nonpersonal-replacement"
+          assert(status.operationOwnershipUncertain == not completedOrder and
+            status.authoritativeCaptureSuspended == not completedOrder)
+          status.operationOwnershipUncertain = completedOrder
+          assert(environment.ArtisanLogbookManagement.Status().operationOwnershipUncertain == not completedOrder)
           local late = result({ operationID = 700, itemID = 801, quantity = 1, isEnchant = kind == "CraftEnchant",
             resourcesReturned = positive and { { reagent = { itemID = 100 }, quantity = 2 } } or nil })
           unowned(core, api, late)
@@ -3467,14 +3860,18 @@ end)()
             assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
             assert(core.ledger.pendingRecipeId == 456)
           else assert(core.ledger.pendingRequest == nil and core.ledger.requestAmbiguous) end
-          unowned(core, api, result({ operationID = 701, itemID = 900, quantity = 1 }))
+          local actual = result({ operationID = 701, itemID = 900, quantity = 1 })
+          if completedOrder then
+            assert(actual.requestId == requestId and actual.recipeId == 456 and actual.outcomeSource == "native")
+          else unowned(core, api, actual) end
           assert(core.ledger.pendingRequest == nil)
           assert(not (core.ledger.database.recipeOutputs[456] or {})[801])
-          assert(not (core.ledger.database.recipeOutputs[456] or {})[900])
+          assert(((core.ledger.database.recipeOutputs[456] or {})[900] == true) == completedOrder)
           assert(core.ledger:RepairUnknownRecipes().repairedCount == 0)
           assert(core.ledger.craftById[historical.id].recipeId == nil)
-          assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount == 0)
-          assert(#api.GetRecipeReagentStatistics(456).reagents == 0)
+          assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount ==
+            (completedOrder and 1 or 0))
+          assert(#api.GetRecipeReagentStatistics(456).reagents == (completedOrder and 1 or 0))
           if positive then assert(api.GetReagentSummaries({ items = { 100 } }).reagents[1].returnedQuantity == 2) end
           assert(core.ledger.database.nonpersonalOperationOutstanding == nil)
           assert(core.ledger.database.operationOwnershipUncertain == nil)
@@ -3545,4 +3942,288 @@ end)()
   end
   print("PASS R1/R2 production ownership gate, stale/unknown IDs, request preservation, output learning, reload and pruning")
   print("PASS N1/N2 nonpersonal boundaries, management purge provenance, lifecycle controls and read-only suspension status")
+end)()
+
+;(function()
+  local savedEnum = environment.Enum
+  local savedSchematic = environment.C_TradeSkillUI.GetRecipeSchematic
+  local savedQualities = environment.C_TradeSkillUI.GetRecipeQualityItemIDs
+  local savedInfo = environment.C_TradeSkillUI.GetRecipeInfo
+  local recipeId, outputId = 1230870, 241310
+  local slots = {
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 5,
+      reagents = { { itemID = 240990 }, { itemID = 240991 } }, variableQuantities = {} },
+    { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 2, quantityRequired = 8,
+      reagents = { { itemID = 236761 }, { itemID = 236767 } }, variableQuantities = {} },
+    { dataSlotType = 2, reagentType = 2, required = false, dataSlotIndex = 3, quantityRequired = 1,
+      reagents = { { itemID = 247724 } }, variableQuantities = {} },
+  }
+  environment.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2 } }
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(id)
+    if id == recipeId then return { recipeID = id, outputItemID = outputId, reagentSlotSchematics = slots } end
+  end
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function(id)
+    if id == recipeId then return { outputId } end
+  end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(id)
+    if id == recipeId then return { recipeID = id, name = "Void-Shrouded Tincture" } end
+  end
+  local core = reload(nil)
+  local api = environment.ArtisanLogbookAPI
+  core.ledger:AddDimension("item", 240991, { name = "Sunglass Vial" })
+  core.ledger:AddDimension("item", 236761, { name = "Tranquility Bloom" })
+
+  hooks.CraftRecipe(recipeId)
+  assert(core.ledger.pendingRequest and not core.ledgerCaptureError)
+  local request = core.ledger.requestById[core.ledger.pendingRequest.id]
+  assert(request.requestedCount == 1 and request.useConcentration == false and request.allocations == nil)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9501, itemID = outputId,
+    quantity = 5, resourcesReturned = {} })
+  local initial = api.GetCraft(1)
+  assert(initial.recipe.id == recipeId and initial.request.id == request.id)
+  assert(initial.outcomeSource == "native" and initial.inputComplete == nil)
+
+  hooks.CraftRecipe(recipeId, 2, {}, nil, nil, false)
+  core.HandleRetailEvent("TRADE_SKILL_CLOSE")
+  hooks.CraftRecipe(recipeId, 1, { { dataSlotIndex = 3, quantity = 1, reagent = { itemID = 247724 } } }, nil, nil, false)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9502, itemID = outputId, quantity = 5,
+    resourcesReturned = { { reagent = { itemID = 240991 }, quantity = 2 },
+      { reagent = { itemID = 236761 }, quantity = 2 } } })
+  local craft = api.GetCraft(2)
+  assert(craft.recipe.id == recipeId and craft.request == nil and craft.outcomeSource == "unverified")
+  assert(craft.requirementObservation == "result" and craft.requestCorrelationReason == "ownership-quarantine")
+  assert(#craft.reagentRequirements == 2 and #craft.reagents == 2 and craft.materialsSavingsEligible == nil)
+  for _, reagent in ipairs(craft.reagents) do assert(reagent.allocatedQuantity == nil) end
+  local ui = loadUI()
+  local activity = ui.UI.Activity(craft, true)
+  assert(#activity == 1 and activity[1].tooltip == "Resourcefulness returned 4 materials\n" ..
+    "2 Sunglass Vial (5 required)\n2 Tranquility Bloom (8 required)", activity[1].tooltip)
+  ui.productionWindow:OpenCraft(craft.id)
+  local resultRows = ui.productionWindow.craftDetailPage.returnedReagents.items
+  assert(#resultRows == 2 and resultRows[1].name == "Sunglass Vial" and resultRows[1].required == 5 and
+    resultRows[1].returned == 2 and resultRows[1].qualityUnknown)
+  assert(not ui.productionWindow.craftDetailPage.inputEvidence.text:find("observed", 1, true))
+  local requirements = api.GetRecipeReagentRequirements(recipeId).requirements
+  local hasResultObservation = false
+  for _, family in ipairs(requirements) do
+    hasResultObservation = hasResultObservation or family.resultObservationCount == 1
+  end
+  assert(hasResultObservation)
+  local outcome = api.GetRecipeOutcomes(recipeId).totals
+  assert(outcome.resourcefulnessAuthoritativeProcCountObservedCount == 1)
+  assert(outcome.resourcefulnessProcCount == 1)
+  for _, row in ipairs(api.GetRecipeReagentStatistics(recipeId).reagents) do assert(row.matchedCraftCount == 0) end
+
+  local saved = core.ledger.database
+  local loaded = reload(saved)
+  assert(environment.ArtisanLogbookAPI.GetCraft(2).requirementObservation == "result")
+  assert(loaded.ledger:RepairUnknownRecipes().repairedCount == 0)
+  loaded.ledger:Prune(loaded.ledger.wall() + 61 * 86400)
+  assert(#loaded.ledger.database.crafts == 0)
+  assert(#environment.ArtisanLogbookAPI.GetRecipeReagentRequirements(recipeId).requirements == 2)
+  environment.Enum = savedEnum
+  environment.C_TradeSkillUI.GetRecipeSchematic = savedSchematic
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = savedQualities
+  environment.C_TradeSkillUI.GetRecipeInfo = savedInfo
+  print("PASS ordinary optional arguments, repeated begins, result-time requirements, UI evidence, pruning and reload")
+end)()
+
+;(function()
+  local savedEnum, savedOrders = environment.Enum, environment.C_CraftingOrders
+  local savedTime, savedServerTime = environment.time, environment.GetServerTime
+  local savedMethods = {}
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs",
+      "GetCraftingOperationInfoForOrder" }) do savedMethods[name] = environment.C_TradeSkillUI[name] end
+  local current = 1791846498
+  environment.time = function() return current end
+  environment.GetServerTime = function() return current end
+  environment.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2 } }
+  local function basic(index, quantity, candidates, fixed)
+    local reagents = {}
+    for _, itemId in ipairs(candidates) do reagents[#reagents + 1] = { itemID = itemId } end
+    return { dataSlotType = fixed and 1 or 2, reagentType = 1, dataSlotIndex = index,
+      quantityRequired = quantity, required = true, reagents = reagents }
+  end
+  local firstSlots = { basic(1, 5, { 240990, 240991 }), basic(2, 3, { 236761, 236767 }) }
+  local secondSlots = { basic(1, 1, { 236949 }, true), basic(1, 5, { 240990, 240991 }),
+    basic(2, 8, { 236761, 236767 }), basic(3, 3, { 236776, 236777 }), basic(4, 3, { 236774, 236775 }),
+    { dataSlotType = 2, reagentType = 2, dataSlotIndex = 5, quantityRequired = 1,
+      required = false, reagents = { { itemID = 247726 } } } }
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, reagentSlotSchematics = recipeId == 1230854 and firstSlots or secondSlots }
+  end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(recipeId)
+    return { recipeID = recipeId, name = recipeId == 1230854 and "Entropic Extract" or "Light's Potential" }
+  end
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function(recipeId)
+    return { recipeId == 1230854 and 268954 or 241309 }
+  end
+  local claimedOrder
+  environment.C_CraftingOrders = { GetClaimedOrder = function() return claimedOrder end }
+  environment.C_TradeSkillUI.GetCraftingOperationInfoForOrder = function(recipeId, _, orderId)
+    assert(claimedOrder.orderID == orderId and claimedOrder.spellID == recipeId)
+    return { baseSkill = 100, baseDifficulty = recipeId == 1230854 and 475 or 530, craftingQuality = 1 }
+  end
+  local function selected(index, itemId, quantity)
+    return { dataSlotIndex = index, quantity = quantity, reagent = { itemID = itemId } }
+  end
+  local core = reload(nil)
+  core.ledger.database.nextCraftId, core.ledger.database.nextRequestId = 889, 238
+  core.Start()
+  local function event(name, ...)
+    core.adapter.frame.scripts.OnEvent(core.adapter.frame, name, ...)
+  end
+  local function replay(recipeId, orderId, selections, zeros, operationId, outputId, resultTime, returns)
+    claimedOrder = { orderID = orderId, spellID = recipeId, orderType = 3,
+      reagents = recipeId == 1230869 and { { source = 0, isBasicReagent = true, slotIndex = 4,
+        reagentInfo = selected(3, 236777, 3) } } or nil }
+    event("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+    for quoteIndex = 1, 5 do
+      hooks.GetCraftingOperationInfoForOrder(recipeId, quoteIndex <= 3 and {} or zeros, orderId, false)
+      assert(not core.ledger.operationOwnershipUncertain and core.ledger.pendingRecipeId == recipeId)
+    end
+    hooks.CraftRecipe(recipeId, 1, selections, nil, orderId, false)
+    assert(not core.ledger.operationOwnershipUncertain and core.ledger.pendingOrderRequest)
+    local cast = "synthetic-" .. recipeId
+    event("UNIT_SPELLCAST_SENT", "player", nil, cast, recipeId)
+    event("UNIT_SPELLCAST_START", "player", cast, recipeId, recipeId == 1230854 and 1 or 2)
+    event("UNIT_SPELLCAST_SUCCEEDED", "player", cast, recipeId, recipeId == 1230854 and 1 or 2)
+    event("UNIT_SPELLCAST_STOP", "player", cast, recipeId, recipeId == 1230854 and 1 or 2)
+    assert(core.ledger.pendingOrderRequest and core.ledger.nonpersonalOperationOutstanding)
+    current = resultTime
+    event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = operationId, itemID = outputId, quantity = 5,
+      bonusCraft = false, firstCraftReward = false, multicraft = 0, concentrationSpent = 0,
+      hasIngenuityProc = false, resourcesReturned = returns })
+    assert(not core.ledger.pendingOrderRequest and not core.ledger.nonpersonalOperationOutstanding)
+    assert(not core.ledger.operationOwnershipUncertain and not core.ledgerCaptureError)
+  end
+  local firstZeros = { selected(1, 240991, 0), selected(1, 240990, 0),
+    selected(2, 236761, 0), selected(2, 236767, 0) }
+  replay(1230854, 1298473129, { selected(1, 240991, 5), selected(2, 236761, 3) }, firstZeros,
+    1542737707, 268954, 1791846499, { { reagent = { itemID = 236761 }, quantity = 2 } })
+  event("TRADE_SKILL_LIST_UPDATE")
+  event("CURRENCY_DISPLAY_UPDATE", 3161)
+  current = 1791846514
+  local secondZeros = {}
+  for _, selection in ipairs(firstZeros) do secondZeros[#secondZeros + 1] = selection end
+  for _, selection in ipairs({ selected(3, 236776, 0), selected(3, 236777, 0),
+      selected(4, 236774, 0), selected(4, 236775, 0) }) do secondZeros[#secondZeros + 1] = selection end
+  replay(1230869, 1298473105, { selected(1, 240991, 5), selected(2, 236761, 8),
+    selected(4, 236774, 3), selected(5, 247726, 1) }, secondZeros, 2613459660, 241309, 1791846516)
+  local api = environment.ArtisanLogbookAPI
+  local first, second = api.GetCraft(889), api.GetCraft(890)
+  assert(first.request.id == 238 and first.recipe.id == 1230854 and first.inputComplete)
+  assert(first.outcomeSource == "native" and first.hasResourcefulnessProc == true)
+  assert(second.request.id == 239 and second.recipe.id == 1230869 and second.requestCorrelationReason == nil)
+  assert(second.timestamp - first.timestamp == 17 and second.outcomeSource == "native")
+  assert(second.hasResourcefulnessProc == false and second.resourcefulnessComplete == true)
+  assert(second.inputComplete == nil and second.grossRequirementsComplete == true)
+  assert(#second.request.allocations == 4 and #second.request.fixedReagents == 1 and #second.reagents == 5)
+  assert(#second.reagentRequirements == 1 and second.reagentRequirements[1].dataSlotIndex == 3)
+  assert(second.reagentRequirements[1].requiredQuantity == 3)
+  for _, reagent in ipairs(second.reagents) do
+    assert(reagent.inputTotalComplete == true and reagent.item.id ~= 236777)
+  end
+  for _, recipeId in ipairs({ 1230854, 1230869 }) do
+    local totals = api.GetRecipeOutcomes(recipeId).totals
+    assert(totals.resourcefulnessAuthoritativeProcCountObservedCount == 1 and totals.matchedCraftCount == 0)
+    for _, reagent in ipairs(api.GetRecipeReagentStatistics(recipeId).reagents) do assert(reagent.matchedCraftCount == 0) end
+  end
+  assert(first.materialsSavingsEligible == false and second.materialsSavingsEligible == false)
+  ;(function()
+    local window = loadUI().productionWindow
+    window:OpenCraft(890)
+    local page = window.craftDetailPage
+    local shape = {}
+    for _, row in ipairs(page.returnedReagents.items) do
+      shape[#shape + 1] = (row.qualityUnknown and "?" or row.item.id) .. "=" .. tostring(row.required) .. "/" .. tostring(row.returned)
+    end
+    assert(table.concat(shape, ";") == "236949=1/0;240991=5/0;236761=8/0;?=3/0;236774=3/0;247726=1/0", table.concat(shape, ";"))
+    assert(page.inputEvidence.text == "", page.inputEvidence.text)
+    window:OpenCraft(889)
+    local returnedRow
+    for _, row in ipairs(page.returnedReagents.items) do if row.item.id == 236761 then returnedRow = row end end
+    assert(returnedRow.required == 3 and returnedRow.returned == 2)
+    assert(page.returnedReagents.columns[3].exact(returnedRow):find("Crafting-order materials don't count toward your savings.", 1, true))
+    window:Hide()
+  end)()
+  local loaded = reload(core.ledger.database)
+  assert(environment.ArtisanLogbookAPI.GetCraft(890).request.id == 239)
+  loaded.ledger:Prune(current + 61 * 86400)
+  assert(environment.ArtisanLogbookAPI.GetRecipeOutcomes(1230869).totals.matchedCraftCount == 0)
+  environment.Enum, environment.C_CraftingOrders = savedEnum, savedOrders
+  environment.time, environment.GetServerTime = savedTime, savedServerTime
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs",
+      "GetCraftingOperationInfoForOrder" }) do environment.C_TradeSkillUI[name] = savedMethods[name] end
+  print("PASS consecutive Patron trace ordering, fixed/modified namespaces, customer omission and no personal savings")
+end)()
+
+;(function()
+  local savedEnum = environment.Enum
+  local savedMethods = {}
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs" }) do
+    savedMethods[name] = environment.C_TradeSkillUI[name]
+  end
+  local recipeId, outputId, mote = 1236491, 243734, 236949
+  environment.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Modifying = 0, Finishing = 2 } }
+  -- Older captures of this shape stored only Mote of Light: the shared index dropped the family slot.
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(id)
+    if id ~= recipeId then return nil end
+    return { recipeID = id, outputItemID = outputId, reagentSlotSchematics = {
+      { dataSlotType = 1, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 5,
+        reagents = { { itemID = mote } } },
+      { dataSlotType = 2, reagentType = 1, required = true, dataSlotIndex = 1, quantityRequired = 3,
+        reagents = { { itemID = 243599 }, { itemID = 243600 } } },
+      { dataSlotType = 2, reagentType = 2, required = false, dataSlotIndex = 3, quantityRequired = 1,
+        reagents = { { itemID = 247788 } } },
+    } }
+  end
+  environment.C_TradeSkillUI.GetRecipeInfo = function(id)
+    if id == recipeId then return { recipeID = id, name = "Thalassian Phoenix Oil" } end
+  end
+  environment.C_TradeSkillUI.GetRecipeQualityItemIDs = function(id)
+    if id == recipeId then return { 243733, outputId } end
+  end
+  local core = reload(nil)
+  core.ledger:AddDimension("item", mote, { name = "Mote of Light" })
+  core.ledger:AddDimension("item", 243599, { name = "Eversinging Dust" })
+  core.ledger:AddDimension("item", 243600, { name = "Eversinging Dust" })
+  hooks.CraftRecipe(recipeId, 1, {}, nil, nil, true)
+  core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", recipeId)
+  core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9601, itemID = outputId, quantity = 5,
+    concentrationSpent = 424, resourcesReturned = { { reagent = { itemID = mote }, quantity = 2 } } })
+  local api = environment.ArtisanLogbookAPI
+  local craft = api.GetCraft(core.ledger.database.crafts[#core.ledger.database.crafts].id)
+  assert(craft.request and craft.recipe.id == recipeId and craft.outcomeSource == "native")
+  assert(#craft.request.fixedReagents == 1 and craft.request.fixedReagents[1].requiredQuantity == 5)
+  assert(craft.grossRequirementsComplete == true and #craft.reagentRequirements == 1)
+  local family = craft.reagentRequirements[1]
+  assert(family.dataSlotIndex == 1 and family.requiredQuantity == 3 and #family.candidateItems == 2)
+
+  local window = loadUI().productionWindow
+  window:OpenCraft(craft.id)
+  local page = window.craftDetailPage
+  local items = page.returnedReagents.items
+  assert(#items == 2, #items)
+  assert(items[1].item.id == mote and items[1].name == "Mote of Light" and not items[1].qualityUnknown)
+  assert(items[1].required == 5 and items[1].returned == 2)
+  assert(items[2].qualityUnknown and items[2].name == "Eversinging Dust")
+  assert(items[2].required == 3 and items[2].returned == 0)
+  local columns = page.returnedReagents.columns
+  assert(#columns == 3 and columns[2].value(items[2]) == "3" and columns[3].value(items[2]) == "0")
+  assert(columns[2].value(items[1]) == "5" and columns[3].value(items[1]) == "2")
+  assert(columns[2].exact(items[2]) == "This recipe requires 3 Eversinging Dust. The quality used wasn't recorded.")
+  assert(columns[3].exact(items[1]) == "2 Mote of Light were returned by Resourcefulness.")
+  assert(page.inputEvidence.text == "", page.inputEvidence.text)
+  environment.Enum = savedEnum
+  for _, name in ipairs({ "GetRecipeSchematic", "GetRecipeInfo", "GetRecipeQualityItemIDs" }) do
+    environment.C_TradeSkillUI[name] = savedMethods[name]
+  end
+  print("PASS Thalassian Phoenix Oil detail shows fixed input, quality family expectation and returns without double counting")
 end)()
