@@ -4508,19 +4508,71 @@ end)()
   assert(window.recipeOutcomes:Filter().craftType == "personal")
   local detail = ui.CraftDetail(environment.CreateFrame("Frame"), 800, 640, function() end)
   detail:ShowCraft(1)
-  assert(#detail.configurationList.items > 8)
+  assert(#detail.configurationPanel.rows.stats == 6)
+  assert(detail.configurationPanel.rows.stats[3].value == "12.5%")
+  assert(detail.configurationPanel.rows.buffsStatus == "No supported profession phial detected; other buffs aren't checked.")
   detail.configurationTab.scripts.OnClick(detail.configurationTab)
-  assert(detail.configurationList:IsShown() and not detail.returnedReagents:IsShown())
-  assert(detail.configurationList.items[1].value == "Personal crafting")
+  assert(detail.configurationPanel:IsShown() and not detail.returnedReagents:IsShown())
   local inspected = api.GetCraft(1)
   assert(inspected.configuration.scope == nil and inspected.configurationObservation.scope == "request")
   inspected.configurationObservation.scope = "attempt-start"
-  assert(ui.ConfigurationRows(inspected)[3].value == "Observed at craft start")
+  assert(ui.ConfigurationRows(inspected).provenance:find("Observed at craft start", 1, true))
+  local partial = ui.ConfigurationRows({
+    configuration = { stats = { baseSkill = 100, multicraft = { rating = 80, ratingPct = 23.799999237061 } } },
+    configurationObservation = { equipmentCoverage = "partial", buffsCoverage = "partial",
+      finishingCoverage = "partial", scope = "request" },
+  })
+  assert(partial.stats[1].value == "Base 100" and partial.stats[1].detail:find("Total unavailable", 1, true))
+  assert(partial.stats[3].value == "23.8%" and partial.equipment[1] == nil)
+  assert(partial.buffsStatus:find("couldn't be checked", 1, true))
+  assert(partial.finishingStatus:find("weren't identified", 1, true))
+  assert(partial.provenance:find("Observed at submission", 1, true))
+  local absent = ui.ConfigurationRows({ context = { kind = "unknown" } })
+  assert(absent.stats[1].value == "Not recorded" and absent.buffsStatus == "Buff information wasn't recorded.")
+  assert(absent.finishingStatus == "Finishing reagents weren't recorded.")
+  assert(ui.ConfigurationRows({ configuration = { equipment = {}, buffs = {}, finishingReagents = {} },
+    configurationObservation = { equipmentCoverage = "observed", buffsCoverage = "supported-list",
+      finishingCoverage = "submitted" } }).finishingStatus == "None selected")
+  local savedItemApi, savedItemIcon, savedSpellApi = environment.C_Item, environment.GetItemInfo, environment.C_Spell
+  environment.C_Item = environment.C_Item or {}
+  local savedItemInfo = environment.C_Item.GetItemInfo
+  local itemReady = false
+  environment.C_Item.GetItemInfo = function(itemId)
+    if itemReady and itemId == 88001 then return "Profession Tool" end
+    if itemReady and itemId == 88002 then return "Finishing Salt" end
+  end
+  environment.C_Item.RequestLoadItemDataByID = function() end
+  environment.C_Spell = { GetSpellName = function() return "Ingenuity phial" end,
+    GetSpellTexture = function() return "Spell-Ingenuity" end }
+  environment.GetItemInfo = nil
+  local equipmentPanel = detail.configurationPanel
+  local equipmentCraft = { configuration = { equipment = { { slot = 20, itemID = 88001, guid = "private-guid" } },
+      stats = {}, buffs = { { spellID = 432306, applications = 2 } },
+      finishingReagents = { { itemID = 88002, quantity = 3 } } },
+    configurationObservation = { scope = "attempt-start", equipmentCoverage = "observed",
+      buffsCoverage = "supported-list", finishingCoverage = "submitted" } }
+  detail.craft = equipmentCraft
+  equipmentPanel:ShowCraft(equipmentCraft)
+  assert(equipmentPanel.itemCells[1].cell.item.name == "Item information loading")
+  assert(equipmentPanel.rows.equipment[1].role == "Profession tool" and equipmentPanel.itemCells[1].cell.item.guid == nil)
+  assert(equipmentPanel.buffRows[1].label.text == "Ingenuity phial" and
+    equipmentPanel.buffRows[1].stacks.text == "x2" and equipmentPanel.buffRows[1].icon.texture == "Spell-Ingenuity")
+  assert(equipmentPanel.reagentCells[1].item.name == "Item information loading")
+  itemReady = true
+  detail.scripts.OnEvent(detail, "GET_ITEM_INFO_RECEIVED", 88001, true)
+  assert(equipmentPanel.itemCells[1].cell.item.name == "Profession Tool")
+  detail.scripts.OnEvent(detail, "GET_ITEM_INFO_RECEIVED", 88002, true)
+  assert(equipmentPanel.reagentCells[1].item.name == "Finishing Salt")
+  local narrowPanel = ui.ConfigurationPanel(environment.CreateFrame("Frame"), 0, 0, 500, 180)
+  assert(narrowPanel.statColumns == 2)
+  environment.C_Item.GetItemInfo, environment.C_Item, environment.GetItemInfo, environment.C_Spell =
+    savedItemInfo, savedItemApi, savedItemIcon, savedSpellApi
   ui.SetCraftType("patron")
   window:Activate("Overview")
   assert(window.pages.Overview.summary.totals.craftCount == 1 and window.pages.Overview.summary.totals.outputQuantity == 3)
   assert(ui.ContextText({ context = { kind = "personal-order", isRecraft = true } }) == "Personal order (recraft)")
-  assert(ui.ConfigurationRows({ context = { kind = "unknown" } })[3].value == "Not recorded")
+  assert(ui.ConfigurationRows({ context = { kind = "unknown" } }).provenance ==
+    "Configuration wasn't recorded - Not verified at completion")
   window:Hide()
   local reloaded = loadUI()
   assert(reloaded.UI.CraftType() == "patron")

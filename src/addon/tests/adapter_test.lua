@@ -222,11 +222,16 @@ end)
 
 test("configuration keeps exact localized quote stats and equipment instances with independent coverage", function()
   local api, _, hooks = environment()
-  api.CRAFTING_DETAILS_MULTICRAFT = "Mehrfachherstellung"
+  api.ITEM_MOD_MULTICRAFT_SHORT = "Mehrfachherstellung"
+  api.ITEM_MOD_RESOURCEFULNESS_SHORT = "Findigkeit"
+  api.ITEM_MOD_INGENUITY_SHORT = "Einfallsreichtum"
+  api.ITEM_MOD_CRAFTING_SPEED_SHORT = "Fertigungsgeschwindigkeit"
   api.C_TradeSkillUI.GetCraftingOperationInfo = function()
     return { recipeID = 456, baseSkill = 100, bonusSkill = 27, bonusStats = {
       { bonusStatName = "Mehrfachherstellung", bonusStatValue = 180, ratingPct = 12.5, bonusRatingPct = 2.25 },
-      { bonusStatName = "Unrecognized", bonusStatValue = 7 } } }
+      { bonusStatName = "Findigkeit", bonusStatValue = 80, ratingPct = 8.5, bonusRatingPct = 1.25 },
+      { bonusStatName = "Einfallsreichtum", bonusStatValue = 50, ratingPct = 5.5, bonusRatingPct = 0.25 },
+      { bonusStatName = "Fertigungsgeschwindigkeit", bonusStatValue = 70, ratingPct = 23.8, bonusRatingPct = 0 } } }
   end
   api.C_TradeSkillUI.GetProfessionInfoByRecipeID = function() return { profession = 4 } end
   api.C_TradeSkillUI.GetProfessionSlots = function(profession) assert(profession == 4); return { 22, 20, 21 } end
@@ -246,7 +251,9 @@ test("configuration keeps exact localized quote stats and equipment instances wi
   hooks.CraftRecipe(456, 2, {}, nil, nil, true)
   assert(observed.scope == "request" and observed.useConcentration == true)
   assert(observed.stats.multicraft.rating == 180 and observed.stats.multicraft.ratingPct == 12.5)
-  assert(observed.stats.resourcefulness == nil and observed.statsCoverage == "partial")
+  assert(observed.stats.resourcefulness.rating == 80 and observed.stats.resourcefulness.ratingPct == 8.5)
+  assert(observed.stats.ingenuity.rating == 50 and observed.stats.craftingSpeed.ratingPct == 23.8)
+  assert(observed.statsCoverage == "reported")
   assert(observed.equipmentCoverage == "observed" and observed.equipment[1].guid == guid)
   assert(observed.equipment[1].itemString == "item:1001:123:0:0" and observed.equipment[2].empty == true)
   assert(observed.buffsCoverage == "supported-list" and #observed.buffs == 1 and not queried[123])

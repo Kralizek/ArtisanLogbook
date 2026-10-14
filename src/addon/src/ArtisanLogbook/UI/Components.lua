@@ -422,6 +422,20 @@ function UI.ItemIcon(itemId)
   end
 end
 
+function UI.ItemName(itemId)
+  if itemId == nil then return "Item information unavailable" end
+  local itemApi = C_Item
+  local getItemInfo = type(itemApi) == "table" and itemApi.GetItemInfo or GetItemInfo
+  if type(getItemInfo) == "function" then
+    local ok, name = pcall(getItemInfo, itemId)
+    if ok and type(name) == "string" and name ~= "" then return name end
+  end
+  if type(itemApi) == "table" and type(itemApi.RequestLoadItemDataByID) == "function" then
+    pcall(itemApi.RequestLoadItemDataByID, itemId)
+  end
+  return "Item information loading"
+end
+
 function UI.ItemCell(parent, left, width)
   local cell = CreateFrame("Frame", nil, parent)
   cell:SetPoint("TOPLEFT", left, 0); cell:SetSize(width, 28)

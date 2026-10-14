@@ -348,14 +348,20 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           "concentrationCost", "ingenuityRefund", "lowerSkillThreshold", "upperSkillTreshold" }) do
         configuration.stats[field] = number(quote[field])
       end
-      local labels = { multicraft = "CRAFTING_DETAILS_MULTICRAFT", resourcefulness = "CRAFTING_DETAILS_RESOURCEFULNESS",
-        ingenuity = "CRAFTING_DETAILS_INGENUITY", craftingSpeed = "ITEM_MOD_CRAFTING_SPEED_SHORT" }
+      local labels = {
+        multicraft = { "ITEM_MOD_MULTICRAFT_SHORT" },
+        resourcefulness = { "ITEM_MOD_RESOURCEFULNESS_SHORT" },
+        ingenuity = { "ITEM_MOD_INGENUITY_SHORT" },
+        craftingSpeed = { "ITEM_MOD_CRAFTING_SPEED_SHORT" },
+      }
       local complete = dense(quote.bonusStats)
       for _, stat in pairs(readable(quote.bonusStats) and type(quote.bonusStats) == "table" and quote.bonusStats or {}) do
         local name
         if type(stat) == "table" and readable(stat) and readable(stat.bonusStatName) then
-          for key, label in pairs(labels) do
-            if type(api[label]) == "string" and api[label] == stat.bonusStatName then name = key end
+          for key, candidates in pairs(labels) do
+            for _, candidate in ipairs(candidates) do
+              if type(api[candidate]) == "string" and api[candidate] == stat.bonusStatName then name = key end
+            end
           end
         end
         if name and configuration.stats[name] == nil then
