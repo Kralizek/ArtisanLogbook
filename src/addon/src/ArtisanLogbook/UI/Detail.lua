@@ -443,7 +443,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   end)
   detail.iconHover = iconHover
   local tabbed = UI.TabbedContent(detail, width - 24, math.max(240, height - 66), -64,
-    { "Result", "Ingredients", "Configuration" })
+    { "Result", "Ingredients", "Configuration" }, nil, "dark")
   if type(tabbed.body.SetClipsChildren) == "function" then tabbed.body:SetClipsChildren(true) end
   for _, view in pairs(tabbed.views) do
     if type(view.SetClipsChildren) == "function" then view:SetClipsChildren(true) end

@@ -286,6 +286,9 @@ exact page without rebuilding its list. A single Escape registration closes the
 modal first; a second Escape closes the journal. Closing the main window also
 cleans up the shade and modal.
 
+A consistent dark inset surface is used by all three Craft Detail tabs; other
+TabbedContent views retain their existing parchment treatment.
+
 A compact identity header keeps the crafted item, profession, class-colored
 character, timestamp, and known craft type visible. Below it, **Result**,
 **Ingredients**, and **Configuration** are peer tabs. Each owns a fixed viewport;

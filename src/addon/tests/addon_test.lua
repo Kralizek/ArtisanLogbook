@@ -30,6 +30,8 @@ function methods:SetTexture(texture) self.texture = texture end
 function methods:SetAtlas(atlas) self.atlas = atlas end
 function methods:SetAllPoints(relative) self.allPoints = relative or self.parent end
 function methods:SetColorTexture(...) self.color = { ... } end
+function methods:SetBackdropColor(...) self.backdropColor = { ... } end
+function methods:SetBackdropBorderColor(...) self.backdropBorderColor = { ... } end
 function methods:SetAlpha(alpha) self.alpha = alpha end
 function methods:SetTextColor(...) self.textColor = { ... } end
 function methods:SetPoint(point, relative, relativePoint, x, y)
@@ -1109,9 +1111,16 @@ assert(filterProbe.search == "Potion")
 searchProbe.clearButton.scripts.OnClick()
 assert(filterProbe.search == "")
 assert(searchProbe.searchButton.template == "UIPanelButtonTemplate" and searchProbe.clearButton.template == "UIPanelButtonTemplate")
-local tabsProbe = UI.TabbedContent(paperProbe, 700, 400, -100, { "Overview", "Craft History" })
-tabsProbe:Select("Craft History")
-assert(tabsProbe.views["Craft History"]:IsShown() and not tabsProbe.views.Overview:IsShown())
+do
+  local tabsProbe = UI.TabbedContent(paperProbe, 700, 400, -100, { "Overview", "Craft History" })
+  assert(tabsProbe.body.contentStyle == "parchment" and tabsProbe.body.backdropColor[1] == .86)
+  local darkTabsProbe = UI.TabbedContent(paperProbe, 700, 400, -100,
+    { "Result", "Ingredients", "Configuration" }, nil, "dark")
+  assert(darkTabsProbe.body.contentStyle == "dark" and darkTabsProbe.body.backdropColor[1] == .075)
+  assert(tabsProbe.body.backdropColor[1] == .86, "dark styling must not affect other tabbed pages")
+  tabsProbe:Select("Craft History")
+  assert(tabsProbe.views["Craft History"]:IsShown() and not tabsProbe.views.Overview:IsShown())
+end
 local chartProbe = UI.Chart(paperProbe, 0, 0, 600)
 chartProbe:Render({ { bucketStart = 0, craftCount = 34766 } }, 0, 86400)
 assert(not chartProbe.plot:IsShown() and chartProbe.empty.text == "34.8k crafts on 01 Jan")
@@ -4555,6 +4564,8 @@ end)()
     "active page filters must not write SavedVariables")
   local detail = ui.CraftDetail(environment.CreateFrame("Frame"), 800, 640, function() end)
   detail:ShowCraft(1)
+  assert(detail.tabs.body.contentStyle == "dark" and detail.tabViews.Result.parent == detail.tabs.body and
+    detail.tabViews.Ingredients.parent == detail.tabs.body and detail.tabViews.Configuration.parent == detail.tabs.body)
   assert(#detail.configurationPanel.rows.stats == 6)
   assert(detail.configurationPanel.rows.stats[3].value == "12.5%")
   assert(detail.configurationPanel.rows.buffsStatus == "No supported profession phial detected; other buffs aren't checked.")

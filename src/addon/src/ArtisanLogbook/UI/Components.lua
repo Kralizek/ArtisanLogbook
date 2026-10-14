@@ -748,7 +748,7 @@ function UI.FilterBar(parent, width, y)
   return bar
 end
 
-function UI.TabbedContent(parent, width, height, y, names, onSelect)
+function UI.TabbedContent(parent, width, height, y, names, onSelect, style)
   local tabs = CreateFrame("Frame", nil, parent)
   tabs:SetPoint("TOPLEFT", 0, y); tabs:SetSize(width, height)
   tabs.buttons, tabs.views = {}, {}
@@ -758,8 +758,14 @@ function UI.TabbedContent(parent, width, height, y, names, onSelect)
   tabs.body:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
     insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-  tabs.body:SetBackdropColor(.86, .76, .56, .6)
-  tabs.body:SetBackdropBorderColor(.45, .36, .20, .8)
+  if style == "dark" then
+    tabs.body:SetBackdropColor(.075, .075, .07, 1)
+    tabs.body:SetBackdropBorderColor(.30, .24, .14, .9)
+  else
+    tabs.body:SetBackdropColor(.86, .76, .56, .6)
+    tabs.body:SetBackdropBorderColor(.45, .36, .20, .8)
+  end
+  tabs.body.contentStyle = style == "dark" and "dark" or "parchment"
   function tabs:Select(name)
     self.activeView = name
     for title, view in pairs(self.views) do view:SetShown(title == name) end
