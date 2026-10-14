@@ -1,8 +1,21 @@
 # Craft Context and Configuration
 
 Issues #25 and #29 share one capture and persistence extension. Core records
-observations, not prices, inventory, profitability or causal estimates. Schema 5
-preserves exact configurations without admission quotas; public API v1 remains additive.
+observations, not prices, inventory, profitability or causal estimates. Configuration
+identity contains observed conditions only; context and capture evidence are separate.
+
+## Versioning Baseline
+
+The PR target, `master` at `7a1838770db176688f1f5b823116ae3ca0152278`, defines
+ledger schema 3 and public API v1. This PR makes one logical schema change to
+**schema 4**, with a direct 3-to-4 migration. Existing released schema-1/2 migration
+support remains. Unreleased coupled layouts from earlier PR revisions are refused,
+not migrated, even if they used version numbers 4 or 5. Restore a backup from
+master or explicitly reset a backed-up review database before testing this layout.
+Saved data is never silently reset. Additive domain API changes retain API v1.
+
+Schema/API version decisions are relative to the PR target, not previous commits
+within the PR. Intermediate review revisions do not create supported migrations.
 
 ## Evidence Sources
 
@@ -34,7 +47,7 @@ New API mocks follow these definitions; they are not claimed to be live traces.
 1. The secure `CraftRecipe` post-hook copies submitted selections. Context comes
    from the call, with order subtype only when `GetClaimedOrder().orderID` matches
    the submitted ID. Customer identity, notes, prices and order IDs are not saved
-   in the observation dimension. Material ownership remains a separate fact.
+  in configuration identities. Material ownership remains a separate fact.
 2. A request configuration queries the operation using those selections and the
    submitted concentration choice. Equipment comes from the recipe profession's
    equipped slots, not bags or the currently displayed profession alone. Supported
@@ -81,7 +94,7 @@ This leaves #32 free to separate attempts from outputs using the same dimension.
 | `context.kind` | `personal`, generic `order`, `patron`, `public`, `guild`, `personal-order`, or `unknown`. Personal order is never ordinary personal crafting. |
 | `context.source` | `submitted-call` or `claimed-order`; absent for unknown history. This is correlated client evidence, not an order ID on the result. |
 | `context.isRecraft` | Independent boolean when the call or matched metadata establishes it; otherwise absent. |
-| `configuration.scope` | `request` or `attempt-start`, never an authoritative completion snapshot. |
+| `configurationObservation.scope` | `request` or `attempt-start`, never an authoritative completion snapshot; independent of configuration identity. |
 | `stats` | Exact reported base/bonus skill and difficulty, quality, thresholds, quoted concentration/refund, and identified bonus stats. No assumed sums from equipment. |
 | bonus stats | `rating`, `ratingPct`, `bonusRatingPct` remain separate; percentages use Blizzard's reported percentage units. Missing fields stay absent. |
 | stat identity | Exact comparison against localized Blizzard `CRAFTING_DETAILS_*` globals, with `ITEM_MOD_CRAFTING_SPEED_SHORT` for speed. The API has no numeric stat ID. Unidentified labels reduce coverage; no English parsing or positional guesses. |
@@ -90,22 +103,37 @@ This leaves #32 free to separate attempts from outputs using the same dimension.
 | finishing reagents | Sorted item/quantity totals from submitted selections matching supported finishing slots. Duplicate items add across slots. Hidden, variable, malformed and unmatched selections cannot prove a complete set. |
 | choices | Explicit concentration and supplied recipe level. Omitted Retail concentration uses the documented call default; other unavailable choices remain absent. |
 
-Independent `statsCoverage`, `equipmentCoverage`, `buffsCoverage`, and
-`finishingCoverage` distinguish reported/observed/submitted/supported-list,
+Independent `configurationObservation.statsCoverage`, `equipmentCoverage`,
+`buffsCoverage`, and `finishingCoverage` distinguish reported/observed/submitted/supported-list,
 partial and unavailable. An absent array does not mean an empty set. An empty
 supported buff list does not mean no other crafting buffs. No all-configuration
 "complete" flag is provided.
 
 ## Durable Model and Retention
 
-`observations` interns canonical context/configuration snapshots. Retained
-requests/crafts and all five existing durable collections use an optional
-`observationKey`. Their effective grain is the existing day/character/recipe
-grain plus this single key, not separate equipment x buff x rating x reagent
-dimensions. Return sets, item measurements, expected requirements and rewards
-use the same partition as their parent craft. Existing #24/#31 coverage rules and
-item-level matched savings are unchanged. Unknown-recipe repair transfers the
-same observation partition, not a reconstructed configuration.
+`configurations` interns only `stats`, `equipment`, `buffs`, `finishingReagents`,
+`useConcentration` and `recipeLevel`, preserving field absence and exact values.
+Craft type, recraft, context source, observation scope, coverage and buff-list
+version do not enter this identity. They are scalar fields on request/craft facts:
+`craftType`, `isRecraft`, `contextSource`, `configurationScope`, the four coverage
+fields, `buffListVersion` and `configurationUnavailableReason`. An optional
+`configurationKey` references the observed conditions.
+
+Existing durable rows carry the same context/evidence fields and configuration
+key. The grain is the existing day/character/recipe plus the observed combination
+of configuration and context/evidence. Return sets, item measurements, expected
+requirements and rewards use the parent's same combination. No second snapshot,
+context dictionary, provenance dimension or independent cross-product aggregate
+is introduced. Only combinations actually observed create rows. Existing #24/#31
+coverage and matched-savings semantics are unchanged; recipe repair transfers
+the same facts and aggregate contributions without reconstructing conditions.
+
+**A key means equality of observed fields, not proof of equal full configurations.**
+The same known partial payload can reuse storage with different evidence, but
+those populations remain separate. An absent field differs from an explicitly
+observed zero, false or empty list. A wholly unavailable payload has no key.
+The API labels identity as `observed-fields` and exposes evidence independently;
+it never offers a complete-configuration or causal-equivalence assertion.
 
 - Every valid observed configuration is retained at its reported precision. There
   is no account-wide quota, per-grain quota, overflow partition, rounding or lossy
@@ -116,7 +144,7 @@ same observation partition, not a reconstructed configuration.
   iteration order. Distinct ratings, tool instances, buffs and selected inputs do
   not collapse into one configuration. Canonical numeric signatures use 17-digit
   round-trip precision; persisted measurement values are not converted or rounded.
-- `observations` is a sparse numeric-keyed map. `nextObservationKey` is a validated
+- `configurations` is a sparse numeric-keyed map. `nextConfigurationKey` is a validated
   monotonic allocator, independent of the number of live snapshots. Deleting a
   snapshot never renumbers another or makes its old key identify a different one.
 - After the existing craft/request/reagent pruning pass, mark keys referenced by
@@ -125,8 +153,10 @@ same observation partition, not a reconstructed configuration.
   unmarked snapshots. Runtime canonical indexes rebuild after collection. This
   also runs on load, after complete migration/validation, not on every capture.
 - An abandoned request keeps its snapshot until that request expires. A separate
-  request-time snapshot can be collected once its request expires if only the
-  craft-start snapshot remains referenced. Durable aggregate references protect
+  request-time conditions payload can be collected once its request expires if
+  different craft-start conditions remain referenced. Equal request/start conditions
+  share one key. A key shared by several contexts is collectible only after its
+  last reference disappears. Durable aggregate references protect
   their snapshots indefinitely, even after all detailed crafts are gone.
 - No per-craft membership archive or persisted reference counts are added. The
   mark pass uses the existing records, avoiding counter drift during migration,
@@ -155,11 +185,31 @@ and reload; reported cardinalities are observations, not limits.
 
 | Configurations | Capture | Retained estimated Lua bytes | Runtime delta | Pruned bytes | Prune | Reload |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 2.41 s | 10,453,309 | 29,718 KiB | 4,157 | 0.015 s | <0.001 s |
-| 16 | 2.40 s | 11,923,258 | 33,050 KiB | 45,355 | 0.012 s | 0.003 s |
-| 256 | 2.37 s | 12,597,900 | 34,491 KiB | 699,927 | 0.027 s | 0.055 s |
-| 1,024 | 2.58 s | 14,698,862 | 39,116 KiB | 2,794,132 | 0.095 s | 0.207 s |
-| 10,000 | 2.96 s | 37,117,426 | 90,188 KiB | 25,191,036 | 1.166 s | 2.803 s |
+| 1 | 2.89 s | 16,893,886 | 39,095 KiB | 4,734 | 0.018 s | <0.001 s |
+| 16 | 3.33 s | 18,374,942 | 42,454 KiB | 57,039 | 0.021 s | 0.005 s |
+| 256 | 3.49 s | 19,224,784 | 44,336 KiB | 886,811 | 0.039 s | 0.073 s |
+| 1,024 | 3.29 s | 21,886,386 | 50,374 KiB | 3,541,656 | 0.094 s | 0.299 s |
+| 10,000 | 3.39 s | 48,281,430 | 110,451 KiB | 29,915,040 | 1.049 s | 3.519 s |
+
+A separate benchmark holds conditions identical for 12,000 crafts and varies only
+context/evidence. Six populations cover all captured craft types; 48 additionally
+vary recraft, request/start scope and reported/partial stat coverage. Every case
+stores **one** configuration. The coupled reference estimates only the old-style
+snapshot dictionary for the same observed combinations, not an entire old database.
+
+| Populations | Conditions dictionary | Coupled dictionary reference | Retained bytes | Durable bytes | Capture | Prune / reload |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 571 | 948 | 20,289,360 | 4,608 | 3.11 s | 0.018 / 0.002 s |
+| 6 | 571 | 5,665 | 20,689,368 | 16,616 | 3.15 s | 0.016 / 0.008 s |
+| 48 | 571 | 45,434 | 20,801,913 | 117,161 | 3.34 s | 0.020 / 0.010 s |
+
+Fact-local evidence increases retained detail cost compared with a single combined
+snapshot reference. It avoids duplicating the larger conditions payload and keeps
+domain identities independent without another dictionary. Aggregate population
+rows still grow where their context/coverage differs; coalescing them would erase
+filtering evidence. These results do not claim an overall byte reduction for every
+workload. Conditions are validated once per dictionary entry on load; each fact's
+evidence is then validated separately without recopying the shared payload.
 
 Storage grows with actual configuration cardinality and its observed aggregate
 grains. Deduplication is effective for repeated states; durable configuration
@@ -170,62 +220,77 @@ duplicate-input item totals, migration and queries.
 
 ## Migration
 
-The original SavedVariables are cloned and validated. Schemas 1 and 2 pass through
-their existing migrations; validated schema 3 gains an empty observation
-dictionary at schema 4, then all validated schema-4 data migrates to schema 5
-before final validation and pruning. The original
-object is installed/replaced only through the existing successful-load path.
-IDs, observations, historical aggregates and #24/#31 provenance are preserved.
-Reload does not replay contributions. Relabeled or malformed schemas are refused.
+The original SavedVariables are cloned and validated. Schemas 1 and 2 use the
+migrations already present on master. Validated schema 3 directly gains an empty
+`configurations` dictionary and `nextConfigurationKey = 1` at final schema 4,
+before final validation and normal pruning. Only a successful load installs the
+new object. IDs, facts, all five aggregate collections and #24/#31 coverage remain
+unchanged. Reload does not replay contributions. Malformed source data and the
+unreleased coupled review layouts are refused without rewriting SavedVariables.
 
-Schema 4 to 5 keeps every existing observation key and initializes the allocator
-above the highest old key. Old `capacity` markers become generic `unavailable`
-observations, retaining context, reference identities and every aggregate total.
-They do not gain a fabricated configuration or an authoritative negative. Exact
-request snapshots already saved remain independently inspectable. Lost values
-cannot be recovered from the old quota records. Only the schema-4 migration reads
-the retired marker; new capture and the public API have no capacity semantics.
+`tests/fixtures/legacy/ledger-schema3.lua` was generated using master's ledger at
+`7a1838770db176688f1f5b823116ae3ca0152278` and independently accepted by it. Deep
+equality tests cover retained craft/request/reagent facts, already-pruned history,
+all aggregate collections, direct migration, reload and subsequent pruning.
 
-Legacy observation keys remain absent. Old request quotes and savings flags stay
+Legacy configuration keys and context/evidence fields remain absent. Old request quotes and savings flags stay
 available in their original API fields, but cannot classify whole already-pruned
 populations or establish operation equipment/buffs. No speculative backfill is
 performed; recipe repair cannot restore absent context/configuration. Back up
-SavedVariables with WoW closed before upgrading. Older Core versions refuse v5.
+SavedVariables with WoW closed before upgrading. Older Core versions refuse the final schema 4.
 
 ## Public API
 
 All existing craft, facet, daily-series, recipe outcome/return/requirement and
-catalogue queries accept additive `craftType`, `isRecraft`, `configuration`
+catalogue queries accept additive `craftType`, `isRecraft`, `contextSource`,
+`configuration` and `configurationObservation`
 filters (on catalogue options where other filters already live).
 
 `craftType`: `personal`, `orders` (all order subtypes including generic order),
 `patron`, `public`, `guild`, `personal-order`, `order` (generic only), `unknown`.
 Absent selects all. `isRecraft=false` excludes unknown, not just true recrafts.
+`contextSource` selects `submitted-call` or `claimed-order`; missing provenance
+does not match either.
 
-`configuration` accepts `key`, `scope`, `stat` with `minimumRating`/`maximumRating`,
+`configuration` accepts `key`, `stat` with `minimumRating`/`maximumRating`,
 `equipmentItemID`, `equipmentGUID`, `buffSpellID`, `finishingItemID`, and
 `useConcentration`. Conditions are ANDed; absent observations never match a
 requested property. A stat range requires an identified stat. Unknown options
 fail explicitly. Key values are opaque, store-local strings, not persistence
 indexes for consumers to dereference.
 
-`GetCraft` adds detached `context`, `configuration`, `configurationCoverage`;
+`configurationObservation` selects `scope`, `statsCoverage`, `equipmentCoverage`,
+`buffsCoverage`, `finishingCoverage` and/or `buffListVersion` independently from
+condition identity. Scope is selected here, not inside `configuration`.
+Conditions and evidence filters are ANDed.
+
+`GetCraft` adds detached `context`, `configuration`, `configurationObservation`
+and `configurationCoverage`;
 its `request` has its own separately scoped projection. Unknown configurations
 have no snapshot and coverage `unavailable`, `changed` or `batch-unobserved`.
 Existing facts keep their original semantics. Known configurations are never
 made unavailable to meet a storage budget.
+`configuration` contains conditions, its opaque `key`, and
+`identityBasis = "observed-fields"`. Scope and coverage are exclusively in
+`configurationObservation`, not this identity. The legacy-style short
+`configurationCoverage` summary still indicates request/start scope or why no
+conditions were attributable.
 
 `GetRecipeConfigurations(recipeId, filter, {limit, cursor})` returns
 `configurations`, selection-wide `coverage`, and optional `nextCursor`. Each
-group exposes domain context/configuration, coverage and `totals` using existing
-outcome and input coverage names. The unknown group is retained. Use its
+group exposes domain context/configuration, independent observation evidence and
+`totals` using existing outcome/input coverage names. Groups are **populations**:
+the same configuration key can appear in several groups (and pages) with different
+context, scope or coverage. Unknown groups remain explicit. Use its
 configuration key with existing outcome, return-set and reagent queries for
-the same recipe/time/character selection. Pages/cursors are filter-scoped.
+the same recipe/time/character/context/evidence selection. Key-only queries
+intentionally pool all matching observed populations; the key is not a claim that
+their completeness is equal. Pages/cursors are filter-scoped and preserve every
+population even when several share one conditions identity.
 
 Outcome totals and configuration-query coverage add `contextObservedCount`,
 `configurationObservedCount`, `requestConfigurationCount`,
-`attemptStartConfigurationCount`. The former `configurationCapacityLimitedCount`
-field is removed; it is not emitted as a zero.
+`attemptStartConfigurationCount`. There is no capacity-loss counter or partition.
 These describe selected observations, not authoritative effective-stat coverage.
 
 **Comparison rule:** filtering aligns the selected craft population, not every
@@ -240,7 +305,7 @@ bare effectiveness percentage, confidence interval, causal claim or optimizer.
 
 ## In-Game Verification
 
-- Back up SavedVariables while logged out; load v1/v2/v3/v4 copies and confirm all
+- Back up SavedVariables while logged out; load supported v1/v2/v3 copies and confirm all
   totals/IDs survive, legacy context stays unknown, and second reload is stable.
 - Craft one ordinary item with manual quality selections and concentration on/off;
   compare request/start quote fields against Blizzard. Repeat automatic selection.
@@ -268,7 +333,10 @@ bare effectiveness percentage, confidence interval, causal claim or optimizer.
 - Exceed 256 distinct configurations and eight states within one day's recipe;
   verify exact filtering still works. Abandon requests, expire their detail in a
   backed-up copy, and verify only truly unreferenced snapshots disappear without
-  renumbering live keys. Check old quota records stay unavailable after upgrade.
+  renumbering live keys.
+- Observe the same conditions in personal/order/recraft contexts and request/start
+  scopes. Check shared configuration keys but independent evidence and filtered
+  totals. Different buff-list coverage must never imply equal unobserved buffs.
 
 The container cannot validate native rendering, taint, secret values, event timing
 or actual item consumption. Do not commit personal SavedVariables or raw traces.

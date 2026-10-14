@@ -26,6 +26,9 @@ with explicit missing information. This does not add a configuration comparison 
 Known configurations are never hidden or downgraded to satisfy a storage quota.
 Missing configuration labels describe capture gaps or historically unavailable
 data; aggregate-backed configurations remain available after detail pruning.
+Craft Detail reads scope and coverage from the separate observation evidence,
+not from configuration identity. Identical conditions can share a key across craft
+types while keeping their context and capture limitations distinct.
 See [the in-game checklist](crafting-observations.md#in-game-verification).
 
 The persistent dark sidebar contains Overview, Logbook, Recipes, Reagents, pinned recipes,
