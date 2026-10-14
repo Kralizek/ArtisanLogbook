@@ -289,10 +289,11 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     identityIcon:SetSize(30, 30)
     heading:ClearAllPoints(); heading:SetPoint("TOPLEFT", 40, -5); heading:SetWidth(width - 136)
   end
-  local state = { days = 30, character = false, profession = false }
+  local state = { days = 30, character = false, profession = false, craftType = UI.DefaultCraftType() }
   local filters = UI.FilterBar(content, width, -42)
   page.filters = filters
   local period = filters:Period(state, function() page:Refresh(true) end)
+  filters:CraftType(state, function() page:Refresh(true) end)
   local characters, professions
   if kind ~= "Character" then
     characters = filters:Select("Character", {}, function(value)
@@ -313,7 +314,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   local status = UI.Text(content, 520, -58, width - 520, 24)
   function page:Filter()
     local filter = UI.Population(kind == "Character" and self.identity.key or state.character,
-      kind == "Profession" and self.identity.skillLineId or state.profession)
+      kind == "Profession" and self.identity.skillLineId or state.profession, state.craftType)
     filter.time = period:Time()
     return filter
   end

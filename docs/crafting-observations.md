@@ -326,14 +326,18 @@ bare effectiveness percentage, confidence interval, causal claim or optimizer.
 - Craft enchants and ordinary/order recrafts; configuration can remain unavailable.
   Replay prospecting/crushing/milling and child rewards: no new attribution or
   negative proc assertions from unsupported multiple-result callbacks (#32).
-- Switch Craft type on Overview, Logbook, Recipes, Recipe Detail, Character,
-  Profession and Reagents. Check charts, rankings, quality rows, quantities,
-  useful Resourcefulness preferences, tooltips and lazy-page continuation.
+- Set different Craft type and Period filters on Overview and Reagents, then
+  navigate away and back. Verify each page retains its own totals, lists, charts,
+  rankings and tooltips. Repeat for Recipe Detail and Reagent Detail filters.
+- Close/reopen the window and confirm each page keeps its in-session selections;
+  `/reload` should initialize Craft type to All crafts and Period to each page's
+  existing default, not its previous active selection. Changing active filters
+  must not alter SavedVariables or another page's defaults/selections.
 - Inspect the three Craft Detail tabs at 1280x720, 1920x1080 and a smaller
   viewport with UI scales 0.64, 0.8 and 1.0. Check switching, wrapping, scroll
   boundaries, tooltips, craft replacement and modal navigation.
-- Reload with Craft type selected; prune a backed-up copy and confirm aggregate
-  filters still agree and every referenced configuration remains inspectable.
+- Prune a backed-up copy and confirm aggregate filters still agree and every
+  referenced configuration remains inspectable.
 - Exceed 256 distinct configurations and eight states within one day's recipe;
   verify exact filtering still works. Abandon requests, expire their detail in a
   backed-up copy, and verify only truly unreferenced snapshots disappear without

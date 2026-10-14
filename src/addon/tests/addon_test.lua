@@ -2148,7 +2148,7 @@ do
   local professionRecipes = window.pages.Profession.topRecipes
   assert(professionRecipes.empty:IsShown() and professionRecipes.empty.text == "No recipes in this period (3 hidden)")
   dropdown(window.pages.Profession, "Custom dates"):Choose("custom")
-  local professionPeriod = window.pages.Profession.filters.controls[2]
+  local professionPeriod = window.pages.Profession.filters.period
   professionPeriod.state.customFrom, professionPeriod.state.customTo = 0, 86400
   window.pages.Profession:Refresh(true)
   assert(professionRecipes.hiddenCount == 0 and professionRecipes.empty.text == "No recipes in this period")
@@ -2638,7 +2638,7 @@ do
     dropdown(page, "Custom dates"):Choose("custom")
     assert(page:Filter().time and page.filters:GetHeight() == 92)
   end
-  local bar = reagent.filters.controls[2]
+  local bar = reagent.filters.period
   local previousTime = environment.time
   environment.time = os.time
   window:Activate("Reagent", { id = 5301, name = "Bloom" })
@@ -4501,21 +4501,54 @@ end)()
   end
   local consumer = loadUI()
   local ui, window = consumer.UI, consumer.productionWindow
-  ui.SetCraftType(false)
+  local settingsBeforeFilters = core.Trace.Serialize(environment.ArtisanLogbookUISettings)
+  assert(ui.DefaultCraftType() == false)
   window:Show(); window:Activate("Overview")
+  local overview = window.pages.Overview
+  assert(overview.filters.craftType.value == false and overview.filters.period.state.days == 30)
   assert(window.pages.Overview.summary.totals.craftCount == 2)
-  window.pages.Overview.filters.craftType:Choose("personal")
+  overview.filters.craftType:Choose("personal")
+  overview.filters.period:Choose(7)
+  assert(overview:Filter().craftType == "personal" and
+    overview:Filter().time.to - overview:Filter().time.from == 7 * 86400)
   assert(window.pages.Overview.summary.totals.craftCount == 1)
+  window:Activate("Reagents")
+  local reagentCatalogue = window.pages.Reagents
+  assert(reagentCatalogue.filters.craftType.value == false and reagentCatalogue.filters.period.state.days == false)
+  reagentCatalogue.filters.craftType:Choose("patron")
+  reagentCatalogue.filters.period:Choose(30)
+  assert(reagentCatalogue:Filter().craftType == "patron" and
+    reagentCatalogue:Filter().time.to - reagentCatalogue:Filter().time.from == 30 * 86400)
+  window:Activate("Overview")
+  assert(overview.filters.craftType.value == "personal" and overview.filters.period.state.days == 7)
+  assert(overview:Filter().craftType == "personal")
   local character = api.GetCharacters()[1]
   for _, destination in ipairs({ { "Logbook" }, { "Recipes" }, { "Character", character },
       { "Profession", { skillLineId = 171, name = "Alchemy" } }, { "Reagents" },
       { "Recipe", { id = 16001, name = "Configuration potion", profession = { skillLineId = 171 } } } }) do
     window:Activate(destination[1], destination[2])
     local page = window.pages[destination[1]]
-    if page.Filter then assert(page:Filter().craftType == "personal") end
-    if page.filters then assert(page.filters.craftType.value == "personal") end
+    if page.filters and page.filters.craftType then assert(page.filters.craftType.value ~= "personal") end
   end
-  assert(window.recipeOutcomes:Filter().craftType == "personal")
+  local recipePage = window.pages.Recipe
+  assert(recipePage.outcomes:Filter().craftType == nil)
+  recipePage.outcomes.filters.craftType:Choose("orders")
+  assert(recipePage.outcomes:Filter().craftType == "orders")
+  window:Activate("Overview")
+  assert(overview.filters.craftType.value == "personal")
+  window:Activate("Recipe", { id = 16001, name = "Configuration potion", profession = { skillLineId = 171 } })
+  assert(recipePage.outcomes:Filter().craftType == "orders")
+  window:Activate("Reagent", { id = 8, name = "Bloom" })
+  local reagentDetail = window.pages.Reagent
+  assert(reagentDetail:Filter().craftType == nil)
+  reagentDetail.filters.craftType:Choose("personal")
+  assert(reagentDetail:Filter().craftType == "personal")
+  assert(reagentCatalogue.filters.craftType.value == "patron")
+  window:Activate("Overview")
+  window:Activate("Reagent", { id = 8, name = "Bloom" })
+  assert(reagentDetail.filters.craftType.value == "personal" and reagentDetail:Filter().craftType == "personal")
+  assert(core.Trace.Serialize(environment.ArtisanLogbookUISettings) == settingsBeforeFilters,
+    "active page filters must not write SavedVariables")
   local detail = ui.CraftDetail(environment.CreateFrame("Frame"), 800, 640, function() end)
   detail:ShowCraft(1)
   assert(#detail.configurationPanel.rows.stats == 6)
@@ -4664,19 +4697,50 @@ end)()
   window.craftDetailWindow:Hide()
   environment.C_Item.GetItemInfo, environment.C_Item, environment.GetItemInfo, environment.C_Spell =
     savedItemInfo, savedItemApi, savedItemIcon, savedSpellApi
-  ui.SetCraftType("patron")
   window:Activate("Overview")
-  assert(window.pages.Overview.summary.totals.craftCount == 1 and window.pages.Overview.summary.totals.outputQuantity == 3)
+  assert(overview.filters.craftType.value == "personal" and overview.filters.period.state.days == 7)
+  assert(overview.summary.totals.craftCount == 1 and overview.summary.totals.outputQuantity == 2)
+  window:Activate("Reagents")
+  assert(reagentCatalogue.filters.craftType.value == "patron" and reagentCatalogue.filters.period.state.days == 30)
+  window:Activate("Recipe", { id = 16001, name = "Configuration potion", profession = { skillLineId = 171 } })
+  assert(recipePage.outcomes:Filter().craftType == "orders")
+  window:Activate("Reagent", { id = 8, name = "Bloom" })
+  assert(reagentDetail.filters.craftType.value == "personal")
+  window:Hide()
+  window:Show()
+  window:Activate("Overview")
+  assert(overview.filters.craftType.value == "personal" and overview.filters.period.state.days == 7)
+  assert(environment.ArtisanLogbookUISettings.craftType == nil and
+    core.Trace.Serialize(environment.ArtisanLogbookUISettings) == settingsBeforeFilters)
+  window:Hide()
+
   assert(ui.ContextText({ context = { kind = "personal-order", isRecraft = true } }) == "Personal order (recraft)")
   assert(ui.ConfigurationRows({ context = { kind = "unknown" } }).emptyMessage ==
     "Equipment, stats and buffs aren't available for this craft.")
-  window:Hide()
   local reloaded = loadUI()
-  assert(reloaded.UI.CraftType() == "patron")
-  reloaded.UI.SetCraftType(false)
+  assert(reloaded.UI.DefaultCraftType() == false)
+  assert(reloaded.productionWindow.pages.Overview.filters.craftType.value == false and
+    reloaded.productionWindow.pages.Overview.filters.period.state.days == 30)
+  assert(reloaded.productionWindow.pages.Reagents.filters.craftType.value == false and
+    reloaded.productionWindow.pages.Reagents.filters.period.state.days == false)
+  local settings = environment.ArtisanLogbookUISettings
+  local oldDefault = settings.defaultCraftType
+  settings.defaultCraftType = "patron"
+  assert(reloaded.productionWindow.pages.Overview.filters.craftType.value == false,
+    "changing defaults must not rewrite an initialized page")
+  local configured = loadUI()
+  assert(configured.UI.DefaultCraftType() == "patron")
+  assert(configured.productionWindow.pages.Overview.filters.craftType.value == "patron" and
+    configured.productionWindow.pages.Reagents.filters.craftType.value == "patron")
+  assert(configured.productionWindow.pages.Overview.filters.period.state.days == 30 and
+    configured.productionWindow.pages.Reagents.filters.period.state.days == false)
+  settings.defaultCraftType = oldDefault
+  local afterReload = loadUI()
+  assert(afterReload.productionWindow.pages.Overview.filters.craftType.value == false and
+    afterReload.productionWindow.pages.Reagents.filters.craftType.value == false)
   assert(ledger:SubmitCraft(16001, 2, false))
   core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", "Craft-Test-GUID", 16001)
   core.HandleRetailEvent("UNIT_SPELLCAST_INTERRUPTED", "player", "Craft-Test-GUID", 16001)
   assert(ledger.pendingRequest == nil and ledger.operationOwnershipUncertain)
-  print("PASS shared craft type selection, cross-page population, configuration inspection, preference reload and matched interruption")
+  print("PASS page-local craft and period filters, defaults, embedded filter state, configuration inspection, and matched interruption")
 end)()

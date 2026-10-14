@@ -245,10 +245,6 @@ function addon.CreateProductionWindow()
     window:Invalidate()
     if window:IsShown() then window:Refresh() end
   end)
-  UI.RegisterCraftTypeCallback(function()
-    window:Invalidate()
-    if window:IsShown() then window:Refresh() end
-  end)
   local escape = CreateFrame("Frame", "ArtisanLogbookEscapeFrame", UIParent)
   escape:Hide()
   tinsert(UISpecialFrames, "ArtisanLogbookEscapeFrame")

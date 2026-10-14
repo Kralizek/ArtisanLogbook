@@ -50,10 +50,12 @@ end
 function UI.CataloguePage(page, width, height, openRecipe)
   UI.Section(page, "Recipes", 0, -2, width)
   local character, profession, sort, search = false, false, "count", ""
+  local state = { craftType = UI.DefaultCraftType() }
   local filters = UI.FilterBar(page, width, -42)
   page.filters = filters
   local controlWidth = math.min(156, (width - 246) / 4)
   local period = filters:Period({ days = false }, function() page:Refresh(true) end, true, controlWidth)
+  filters:CraftType(state, function() page:Refresh(true) end, controlWidth)
   local characters = filters:Select("Character", {}, function(value)
     character, profession = value, false; page:Refresh(true)
   end, controlWidth)
@@ -73,9 +75,9 @@ function UI.CataloguePage(page, width, height, openRecipe)
   end
   UI.LazyList(list, function(cursor)
     local result, reason = ArtisanLogbookAPI.GetRecipeSummaries({ character = character or nil,
-      profession = profession or nil, time = period:Time(), craftType = UI.CraftType(), sort = sort, search = search, limit = 40, cursor = cursor })
+      profession = profession or nil, time = period:Time(), craftType = UI.CraftTypeFilter(state), sort = sort, search = search, limit = 40, cursor = cursor })
     list:Enrich({ time = period:Time(), characters = character and { character } or nil,
-      professions = profession and { profession } or nil, craftType = UI.CraftType() })
+      professions = profession and { profession } or nil, craftType = UI.CraftTypeFilter(state) })
     return result and result.recipes, result and result.nextCursor or reason
   end)
   function page:Refresh(reset, preserve)
@@ -100,7 +102,7 @@ end
 
 function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   local content, inner = detail, width - 24
-  local state = { days = false, character = false, profession = false }
+  local state = { days = false, character = false, profession = false, craftType = UI.DefaultCraftType() }
   detail.states = {}
   detail.icon = content:CreateTexture(nil, "ARTWORK")
   detail.icon:SetSize(32, 32); detail.icon:SetPoint("TOPLEFT", 0, 0)
@@ -116,6 +118,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   local filters = UI.FilterBar(content, width, -58)
   detail.filters = filters
   local period = filters:Period(state, function() detail:Refresh() end, true)
+  filters:CraftType(state, function() detail:Refresh() end)
   local characters = filters:Select("Character", {}, function(value) state.character = value; detail:Refresh() end)
   local professions = filters:Select("Profession", {}, function(value) state.profession = value; detail:Refresh() end)
     local entries = { { "Recorded units", "allocated" }, { "Returned units", "returned" }, { "Crafts in recipes", "crafts" },
@@ -182,7 +185,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   end
   function detail:Filter()
     return { time = period:Time(), characters = state.character and { state.character } or nil,
-      professions = state.profession and { state.profession } or nil, craftType = UI.CraftType() }
+      professions = state.profession and { state.profession } or nil, craftType = UI.CraftTypeFilter(state) }
   end
   local function accumulate(target, allocated, returned, returnKnown)
     target.crafts = (target.crafts or 0) + 1
@@ -330,10 +333,12 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   function detail:Refresh(preserve)
     if not self.item then return end
     period:UpdateState(state)
+    filters.craftType:UpdateState(state)
     characters:Update(UI.Choices("characters"), state.character)
     professions:Update(UI.Choices("professions", state.character), state.profession)
     local result = ArtisanLogbookAPI.GetReagentSummaries({ items = { self.item.id }, limit = 40,
-      time = period:Time(), character = state.character or nil, profession = state.profession or nil, craftType = UI.CraftType() })
+      time = period:Time(), character = state.character or nil, profession = state.profession or nil,
+      craftType = UI.CraftTypeFilter(state) })
     self:Render(result and result.reagents[1] or { item = self.item, professions = {} }, self:Filter(), preserve)
     self.classification:SetItem(self.item.id)
     self.loaded, self.dirty = true, false
@@ -359,9 +364,11 @@ end
 function UI.ReagentsPage(page, width, height, openReagent)
   UI.Section(page, "Reagents", 0, -2, width)
   local profession, trivial, sort, search, character = false, "all", "name", "", false
+  local state = { craftType = UI.DefaultCraftType() }
   local filters = UI.FilterBar(page, width, -42)
   page.filters = filters
   local period = filters:Period({ days = false }, function() page:Refresh(true) end, true)
+  filters:CraftType(state, function() page:Refresh(true) end)
   local characters = filters:Select("Character", {}, function(value)
     character, profession = value, false; page:Refresh(true)
   end)
@@ -436,7 +443,7 @@ function UI.ReagentsPage(page, width, height, openReagent)
     list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -listTop); list:SetViewportHeight(height - listTop)
   end
   function page:Filter()
-    local filter = UI.Population(character, profession)
+    local filter = UI.Population(character, profession, state.craftType)
     filter.time = period:Time()
     return filter
   end
@@ -464,7 +471,7 @@ function UI.ReagentsPage(page, width, height, openReagent)
   local selectedItems, excludedItems
   UI.LazyList(list, function(cursor)
     local result, reason = ArtisanLogbookAPI.GetReagentSummaries({ profession = profession or nil,
-      character = character or nil, time = page:Filter().time, craftType = UI.CraftType(),
+      character = character or nil, time = page:Filter().time, craftType = UI.CraftTypeFilter(state),
       search = search, sort = sort, items = selectedItems, excludeItems = excludedItems, limit = 40, cursor = cursor })
     page.summary[1]:SetNumber(result and result.totalCount, true)
     for index, metric in ipairs({ "allocatedQuantity", "returnedQuantity" }) do

@@ -157,14 +157,15 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   pane:SetPoint("TOPLEFT", 0, -62)
   pane.calculationGeneration = 0
   local api = ArtisanLogbookAPI
-  local state, recipeId = { days = 30, character = false }, nil
+  local state, recipeId = { days = 30, character = false, craftType = UI.DefaultCraftType() }, nil
   local function refresh()
     if recipeId then pane:Refresh(); onFilterChanged() end
   end
   local filters = UI.FilterBar(pane, width)
   local period = filters:Period(state, refresh, true)
+  local craftType = filters:CraftType(state, refresh)
   local characters = filters:Select("Character", {}, function(value) state.character = value; refresh() end)
-  pane.filters, pane.period = filters, period
+  pane.filters, pane.period, pane.craftType = filters, period, craftType
   local status = UI.Text(pane, 370, -16, width - 370, 24)
   local summary = UI.SummaryRow(pane, width, -52, { { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
       { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
@@ -401,7 +402,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   end
 
   function pane:Filter()
-    return { characters = state.character and { state.character } or nil, time = period:Time(), craftType = UI.CraftType() }
+    return { characters = state.character and { state.character } or nil, time = period:Time(),
+      craftType = UI.CraftTypeFilter(state) }
   end
 
   function pane:Refresh(keepMaterialPage)
@@ -537,9 +539,10 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
 
   function pane:Open(id, saved)
     if id ~= recipeId then
-      state = saved or { days = 30, character = false }
+      state = saved or { days = 30, character = false, craftType = UI.DefaultCraftType() }
       if state.materials then materialList:Restore(state.materials) end
     end
+    craftType:UpdateState(state)
     recipeId = id
     qualityList.tooltipRecipe = pane.recipe or { id = id }
     local available = { { label = "All", value = false } }

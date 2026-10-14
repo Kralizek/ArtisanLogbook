@@ -5,24 +5,20 @@ addon.UI = UI
 UI.ink = { .20, .16, .10 }
 local hiddenRecipeCallbacks = {}
 local craftVisibilityCallbacks = {}
-local craftTypeCallbacks = {}
 local craftTypeChoices = { { label = "All crafts", value = false }, { label = "Personal crafting", value = "personal" },
   { label = "Crafting orders", value = "orders" }, { label = "Patron orders", value = "patron" } }
+local craftTypeValues = { personal = true, orders = true, patron = true }
 
-function UI.CraftType()
-  local value = type(ArtisanLogbookUISettings) == "table" and ArtisanLogbookUISettings.craftType
-  if value == "personal" or value == "orders" or value == "patron" then return value end
+if type(ArtisanLogbookUISettings) == "table" then ArtisanLogbookUISettings.craftType = nil end
+
+function UI.DefaultCraftType()
+  local value = type(ArtisanLogbookUISettings) == "table" and ArtisanLogbookUISettings.defaultCraftType
+  return craftTypeValues[value] and value or false
 end
 
-function UI.SetCraftType(value)
-  if value ~= false and value ~= nil and value ~= "personal" and value ~= "orders" and value ~= "patron" then return end
-  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
-  ArtisanLogbookUISettings.craftType = value or nil
-  for _, callback in ipairs(craftTypeCallbacks) do callback() end
-end
-
-function UI.RegisterCraftTypeCallback(callback)
-  craftTypeCallbacks[#craftTypeCallbacks + 1] = callback
+function UI.CraftTypeFilter(state)
+  local value = state and state.craftType
+  return craftTypeValues[value] and value or nil
 end
 
 function UI.ContextText(craft)
@@ -373,9 +369,9 @@ function UI.ProfessionIcon(id)
   return "Interface\\Icons\\" .. (UI.professionIcons[id] or "INV_Misc_Book_09")
 end
 
-function UI.Population(character, profession)
+function UI.Population(character, profession, craftType)
   return { characters = character and { character } or nil, professions = profession and { profession } or nil,
-    craftType = UI.CraftType() }
+    craftType = craftTypeValues[craftType] and craftType or nil }
 end
 
 function UI.Choices(facet, character)
@@ -727,12 +723,30 @@ function UI.FilterBar(parent, width, y)
     end
     control.state, control.inputs = state, inputs
     control:UpdateState()
+    self.period = control
     return control
   end
-  bar.craftType = bar:Select("Craft type", craftTypeChoices, UI.SetCraftType, 172)
-  local function updateCraftType() bar.craftType:Update(craftTypeChoices, UI.CraftType() or false) end
-  UI.RegisterCraftTypeCallback(updateCraftType)
-  updateCraftType()
+  function bar:CraftType(state, onChange, size)
+    local activeState = state
+    local control
+    local function updateState(replacement)
+      if replacement then activeState = replacement end
+      if not craftTypeValues[activeState.craftType] and activeState.craftType ~= false then
+        activeState.craftType = UI.DefaultCraftType()
+      elseif activeState.craftType == nil then
+        activeState.craftType = UI.DefaultCraftType()
+      end
+      control:Update(craftTypeChoices, activeState.craftType)
+    end
+    control = self:Select("Craft type", craftTypeChoices, function(value)
+      activeState.craftType = value
+      onChange()
+    end, size or 172)
+    function control:UpdateState(replacement) updateState(replacement) end
+    updateState()
+    self.craftType = control
+    return control
+  end
   return bar
 end
 

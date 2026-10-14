@@ -16,9 +16,14 @@ These remain read-only API v1 catalogue queries; capture and storage are unchang
 
 ## Pages and navigation
 
-The shared **Craft type** selection defaults to All crafts, with Personal crafting,
-Crafting orders and Patron orders. It persists across pages/reloads and applies to
-craft activity, outcomes, rankings, ingredients and tooltip populations. Craft
+Each page owns its active **Craft type** and **Period** filters. Craft type defaults
+to All crafts; Period retains that page's existing default. Personal crafting,
+Crafting orders and Patron orders use the same shared choices and query semantics,
+but changing one page never changes another. Selections survive navigation and
+closing/reopening the window during the session; `/reload` initializes pages from
+defaults again. Optional global defaults may initialize new pages but never
+replace active page selections. Craft type applies to that page's craft activity,
+outcomes, rankings, ingredients and tooltip populations. Craft
 tooltips and Craft Detail distinguish ordinary personal crafting from personal
 orders; recrafting is independent. Craft Detail's Result/Ingredients/Configuration tabs
 inspect outcomes, inputs, observed stats, equipment, supported buffs and finishing selections
