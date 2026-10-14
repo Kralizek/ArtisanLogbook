@@ -4499,6 +4499,10 @@ end)()
     assert(ledger:RecordResult({ operationID = index, itemID = 16002, quantity = index + 1, multicraft = index,
       resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } }))
   end
+  if type(environment.ArtisanLogbookUISettings) ~= "table" then environment.ArtisanLogbookUISettings = {} end
+  local initialSettings = environment.ArtisanLogbookUISettings
+  local previousLegacyCraftType = initialSettings.craftType
+  initialSettings.craftType = "orders"
   local consumer = loadUI()
   local ui, window = consumer.UI, consumer.productionWindow
   local settingsBeforeFilters = core.Trace.Serialize(environment.ArtisanLogbookUISettings)
@@ -4710,7 +4714,7 @@ end)()
   window:Show()
   window:Activate("Overview")
   assert(overview.filters.craftType.value == "personal" and overview.filters.period.state.days == 7)
-  assert(environment.ArtisanLogbookUISettings.craftType == nil and
+  assert(environment.ArtisanLogbookUISettings.craftType == "orders" and
     core.Trace.Serialize(environment.ArtisanLogbookUISettings) == settingsBeforeFilters)
   window:Hide()
 
@@ -4738,6 +4742,7 @@ end)()
   local afterReload = loadUI()
   assert(afterReload.productionWindow.pages.Overview.filters.craftType.value == false and
     afterReload.productionWindow.pages.Reagents.filters.craftType.value == false)
+  initialSettings.craftType = previousLegacyCraftType
   assert(ledger:SubmitCraft(16001, 2, false))
   core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", "Craft-Test-GUID", 16001)
   core.HandleRetailEvent("UNIT_SPELLCAST_INTERRUPTED", "player", "Craft-Test-GUID", 16001)

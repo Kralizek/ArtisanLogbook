@@ -9,8 +9,6 @@ local craftTypeChoices = { { label = "All crafts", value = false }, { label = "P
   { label = "Crafting orders", value = "orders" }, { label = "Patron orders", value = "patron" } }
 local craftTypeValues = { personal = true, orders = true, patron = true }
 
-if type(ArtisanLogbookUISettings) == "table" then ArtisanLogbookUISettings.craftType = nil end
-
 function UI.DefaultCraftType()
   local value = type(ArtisanLogbookUISettings) == "table" and ArtisanLogbookUISettings.defaultCraftType
   return craftTypeValues[value] and value or false
