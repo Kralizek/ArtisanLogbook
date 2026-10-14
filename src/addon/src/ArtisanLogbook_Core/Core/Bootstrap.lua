@@ -331,9 +331,10 @@ function addon.HandleRetailEvent(event, ...)
       tryEnrich(addon.EnrichRecipe, select(1, ...))
     elseif event == "CRAFT_ATTEMPT_OBSERVATION" then
       addon.ledger:ObserveAttempt(...)
-    elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "CRAFTING_DETAILS_UPDATE" or event == "UNIT_AURA" then
-      addon.ledger:ConfigurationChanged()
-      if event == "CRAFTING_DETAILS_UPDATE" then tryEnrich(addon.EnrichRecipe, addon.ledger.pendingRecipeId) end
+    elseif event == "CRAFT_CONFIGURATION_CHECK" then
+      addon.ledger:ConfigurationChanged(select(1, ...))
+    elseif event == "CRAFTING_DETAILS_UPDATE" then
+      tryEnrich(addon.EnrichRecipe, addon.ledger.pendingRecipeId)
     elseif event == "UNIT_SPELLCAST_START" then
       local unit, castGUID, spellId = ...
       local pending = addon.ledger.pendingRequest or addon.ledger.pendingOrderRequest

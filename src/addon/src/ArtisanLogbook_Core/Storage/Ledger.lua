@@ -1937,8 +1937,24 @@ function Ledger:ObserveAttempt(recipeId, observation)
   self.configurationChanged = nil
 end
 
-function Ledger:ConfigurationChanged()
-  if self.pendingRequest or self.pendingOrderRequest then self.configurationChanged = true end
+function Ledger:ConfigurationChanged(observation)
+  local pending = self.pendingRequest or self.pendingOrderRequest
+  local request = pending and self.requestById[pending.id]
+  local attempt = self.attemptObservation
+  if not request or not attempt or attempt.requestId ~= request.id or attempt.remaining ~= pending.remaining then return end
+  if not validateObservation(observation) then
+    self.configurationChanged = true
+    return
+  end
+  local previousConfiguration = attempt.observation.configuration
+  if not previousConfiguration then return end
+  if not observation.configuration then
+    self.configurationChanged = true
+    return
+  end
+  local previous = encodeObservation(previousConfiguration)
+  local current = encodeObservation(observation.configuration)
+  if previous ~= current then self.configurationChanged = true end
 end
 
 local function observedNumber(value)

@@ -298,16 +298,33 @@ end)
 test("begin observations refresh equipment and buffs but never sample unrelated recipes", function()
   local api, frame, hooks = environment()
   local active, observations = true, {}
+  local checks = {}
+  local baseSkill = 120
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function()
+    return { recipeID = 456, baseSkill = baseSkill }
+  end
   api.C_UnitAuras = { GetPlayerAuraBySpellID = function(spellId)
     if active and spellId == 1239755 then return { spellId = spellId, applications = 1 } end
   end }
   addon.CreateFlavorAdapter(api, function(event, recipeId, observation)
     if event == "CRAFT_ATTEMPT_OBSERVATION" then observations[#observations + 1] = observation end
+    if event == "CRAFT_CONFIGURATION_CHECK" then checks[#checks + 1] = recipeId end
   end, nil, function() end)
   hooks.CraftRecipe(456, 3, {}, nil, nil, false)
   frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
-  assert(#observations == 1 and #observations[1].configuration.buffs == 1)
+  assert(#observations == 1 and #observations[1].configuration.buffs == 1 and
+    observations[1].configuration.stats.baseSkill == baseSkill)
+  for _, event in ipairs({ "UNIT_AURA", "CRAFTING_DETAILS_UPDATE", "PLAYER_EQUIPMENT_CHANGED" }) do
+    frame.onEvent(frame, event, "player")
+    assert(#checks == 1 and checks[1].configuration.buffs[1].spellID == 1239755 and
+      checks[1].configuration.stats.baseSkill == baseSkill)
+    checks = {}
+  end
   active = false
+  baseSkill = 121
+  frame.onEvent(frame, "UNIT_AURA", "player")
+  assert(#checks == 1 and #checks[1].configuration.buffs == 0 and
+    checks[1].configuration.stats.baseSkill == baseSkill)
   frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
   assert(#observations == 2 and #observations[2].configuration.buffs == 0)
   assert(observations[2].configuration.scope == "attempt-start")

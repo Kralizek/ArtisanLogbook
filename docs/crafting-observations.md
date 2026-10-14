@@ -60,12 +60,13 @@ New API mocks follow these definitions; they are not claimed to be live traces.
    craft. The first attempt can carry `request` evidence. Subsequent attempts need
    their own begin snapshot; otherwise configuration is `batch-unobserved` while
    the request snapshot remains inspectable separately.
-5. Equipment changes, crafting-detail changes or player aura updates invalidate
-   configuration for the pending attempt, without erasing its context or outcomes.
-   This is deliberately conservative, including unrelated aura/equipment changes.
-   A new batch position can establish fresh start evidence. Expiration times are
-   not canonical identities; buff state is refreshed at begin and aura updates
-   invalidate it during an attempt.
+5. Equipment, crafting-detail or player-aura events trigger a fresh configuration
+  check during the accepted attempt. An unchanged observed condition set is a UI
+  refresh, not an invalidation. A changed or unavailable recheck invalidates the
+  attempt's configuration without erasing its context or outcome; invalidation
+  remains sticky through that result. A new batch position can establish fresh
+  start evidence. Expiration times are not canonical identities; supported buff
+  state is refreshed at begin and checked again after aura events.
 6. A spell failure/interruption cancels the pending operation only when its GUID
    matches a player craft cast observed at `UNIT_SPELLCAST_START`. Unrelated or
    queued failures are not proof of interruption. Closing and replacing unfinished
@@ -311,8 +312,10 @@ bare effectiveness percentage, confidence interval, causal claim or optimizer.
   compare request/start quote fields against Blizzard. Repeat automatic selection.
 - Switch tools, including two same-base-item instances; inspect GUID/item-string
   distinction and accessory/empty-slot coverage with professions open and closed.
-- Apply/expire supported phials before, between and during batch attempts. Apply
-  an unrelated aura; confirm conservative missing coverage, never a stale claim.
+- Apply/expire supported phials before, between and during batch attempts. Verify
+  an unchanged `CRAFTING_DETAILS_UPDATE`, unrelated aura update, or equipment event
+  does not invalidate identical observed conditions. A supported phial, tool or
+  quote-stat change during an attempt must invalidate that attempt's configuration.
 - Select/remove finishing reagents, including multiple slots and quantities;
   distinguish a recorded empty selection from unavailable slots.
 - Run ordinary batches with begin-before-hook, repeated begin and missing-begin

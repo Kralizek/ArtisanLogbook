@@ -2397,12 +2397,14 @@ do
   local ui = loadUI()
   local window = ui.productionWindow
   local page, list = window.pages.Reagents, window.pages.Reagents.catalogue
-  local savedIcon, savedQuality = environment.GetItemIcon, environment.C_TradeSkillUI.GetItemReagentQualityInfo
+  local savedIcon, savedQuality, savedItemApi = environment.GetItemIcon,
+    environment.C_TradeSkillUI.GetItemReagentQualityInfo, environment.C_Item
   local iconCalls, qualityCalls, ready = {}, {}, {}
-  environment.GetItemIcon = function(itemId)
+  environment.GetItemIcon = nil
+  environment.C_Item = { GetItemIconByID = function(itemId)
     iconCalls[itemId] = (iconCalls[itemId] or 0) + 1
     if itemId ~= 5102 or ready.icon then return "Icon-" .. itemId end
-  end
+  end }
   environment.C_TradeSkillUI.GetItemReagentQualityInfo = function(itemId)
     qualityCalls[itemId] = (qualityCalls[itemId] or 0) + 1
     if itemId == 5103 and not ready.profession then error("Quality metadata unavailable") end
@@ -2426,6 +2428,10 @@ do
   end
   assert(cell(5101).icon.texture == "Icon-5101" and cell(5101).quality.atlas == "Quality-5101")
   assert(cell(5102).icon.texture == "Interface\\Icons\\INV_Misc_QuestionMark" and not cell(5102).quality:IsShown())
+  local itemCell = ui.UI.ItemCell(environment.CreateFrame("Frame"), 0, 100)
+  itemCell:Update({ id = 5199, name = "Cached herb 5199" })
+  assert(itemCell.icon.texture == "Icon-5199")
+  assert(ui.UI.Activity({ outputItem = { id = 5199, name = "Cached herb 5199" }, outputQuantity = 1 })[1].icon == "Icon-5199")
   page:Refresh(true)
   dropdown(page, "Most returned"):Choose("returned")
   window:Activate("Recipes"); window:Activate("Reagents")
@@ -2476,7 +2482,8 @@ do
   assert(cell(5103).quality.atlas == "Quality-5103" and qualityCalls[5103] == 2)
   assert(core.Trace.Serialize(environment.ArtisanLogbookUISettings) == savedSettings)
   assert(core.Trace.Serialize(ledger.database) == savedFacts)
-  environment.GetItemIcon, environment.C_TradeSkillUI.GetItemReagentQualityInfo = savedIcon, savedQuality
+  environment.GetItemIcon, environment.C_TradeSkillUI.GetItemReagentQualityInfo, environment.C_Item =
+    savedIcon, savedQuality, savedItemApi
   api.GetReagentSummaries = savedSummaries
   window:Hide()
   print("PASS session reagent metadata reuse, delayed item/quality events, targeted row updates and no persistence")

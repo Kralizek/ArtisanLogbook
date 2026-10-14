@@ -252,7 +252,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     end
     heading:SetText(UI.Elide(UI.Name(craft.recipe, "Unattributed craft"), math.floor((width - 166) / 10)))
     subtitle:SetText(UI.Name(craft.profession) .. " - " .. UI.ContextText(craft))
-    identity:SetTexture(craft.outputItem and type(GetItemIcon) == "function" and GetItemIcon(craft.outputItem.id) or UI.RecipeIcon(craft.recipe))
+    identity:SetTexture(craft.outputItem and UI.ItemIcon(craft.outputItem.id) or UI.RecipeIcon(craft.recipe))
     resultRow:Update(craft.outputItem)
     resultRow.quantity:SetText(UI.Number(craft.outputQuantity) .. " items")
     resultRow.bonus:SetText(craft.multicraftBonus and craft.multicraftBonus > 0 and "+" .. UI.Number(craft.multicraftBonus) .. " Multicraft" or "")

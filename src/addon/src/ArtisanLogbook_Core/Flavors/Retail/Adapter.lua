@@ -107,6 +107,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
 
   local probingQuote = false
   local activeConfiguration
+  local activeAttemptRecipeId
   local function isPositiveInteger(value)
     return type(value) == "number" and value > 0 and value < math.huge and value % 1 == 0
   end
@@ -465,6 +466,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
 
   local function submitPersonalCraft(recipeId, count, orderId, concentration, recipeLevel, submitted)
     if type(submitCraft) ~= "function" then return end
+    activeAttemptRecipeId = nil
     if count == nil then count = 1 end
     if concentration == nil then concentration = false end
     local selections = snapshotSelections(submitted)
@@ -595,10 +597,19 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     forward(event, ...)
     if event == "TRADE_SKILL_CRAFT_BEGIN" and activeConfiguration then
       local recipeId = ...
+      activeAttemptRecipeId = nil
       local ok, observation = pcall(activeConfiguration, recipeId)
-      if ok and observation then forward("CRAFT_ATTEMPT_OBSERVATION", recipeId, observation) end
+      if ok and observation then
+        activeAttemptRecipeId = recipeId
+        forward("CRAFT_ATTEMPT_OBSERVATION", recipeId, observation)
+      end
+    elseif (event == "CRAFTING_DETAILS_UPDATE" or event == "PLAYER_EQUIPMENT_CHANGED" or event == "UNIT_AURA") and
+        activeConfiguration and activeAttemptRecipeId then
+      local ok, observation = pcall(activeConfiguration, activeAttemptRecipeId)
+      forward("CRAFT_CONFIGURATION_CHECK", ok and observation or nil)
     elseif event == "TRADE_SKILL_CLOSE" then
       activeConfiguration = nil
+      activeAttemptRecipeId = nil
     end
   end)
 
@@ -616,6 +627,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           end
         elseif type(invalidateCraft) == "function" then
           activeConfiguration = nil
+          activeAttemptRecipeId = nil
           local orderId = hookedName == "RecraftRecipeForOrder" and select(1, ...) or nil
           local isRecraft = hookedName == "RecraftRecipe" or hookedName == "RecraftRecipeForOrder"
           local observation = hookedName ~= "CraftSalvage" and { context = snapshotContext(orderId, isRecraft) } or nil

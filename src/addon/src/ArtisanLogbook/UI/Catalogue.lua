@@ -4,9 +4,8 @@ local reagentMetadata = {}
 local reagentCells = setmetatable({}, { __mode = "k" })
 
 local function resolveReagentMetadata(itemId, entry, qualityOnly)
-  if not qualityOnly and entry.icon == nil and type(GetItemIcon) == "function" then
-    local ok, icon = pcall(GetItemIcon, itemId)
-    if ok and (type(icon) == "number" or type(icon) == "string") then entry.icon = icon end
+  if not qualityOnly and entry.icon == nil then
+    entry.icon = UI.ItemIcon(itemId)
   end
   if entry.qualityAtlas == nil and C_TradeSkillUI and type(C_TradeSkillUI.GetItemReagentQualityInfo) == "function" then
     local ok, info = pcall(C_TradeSkillUI.GetItemReagentQualityInfo, itemId)

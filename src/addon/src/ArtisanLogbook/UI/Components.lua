@@ -408,6 +408,20 @@ function UI.ItemTooltip(owner, item)
   GameTooltip:Show()
 end
 
+function UI.ItemIcon(itemId)
+  if itemId == nil then return nil end
+  local itemApi = C_Item
+  local getItemIcon = type(itemApi) == "table" and (itemApi.GetItemIconByID or itemApi.GetItemIcon)
+  if type(getItemIcon) == "function" then
+    local ok, icon = pcall(getItemIcon, itemId)
+    if ok and (type(icon) == "number" or type(icon) == "string") then return icon end
+  end
+  if type(GetItemIcon) == "function" then
+    local ok, icon = pcall(GetItemIcon, itemId)
+    if ok and (type(icon) == "number" or type(icon) == "string") then return icon end
+  end
+end
+
 function UI.ItemCell(parent, left, width)
   local cell = CreateFrame("Frame", nil, parent)
   cell:SetPoint("TOPLEFT", left, 0); cell:SetSize(width, 28)
@@ -426,8 +440,7 @@ function UI.ItemCell(parent, left, width)
   function cell:Update(item, atlas, icon)
     UI.Tooltip.ReleaseTree(self)
     self.item = item
-    self.icon:SetTexture(icon or (item and type(GetItemIcon) == "function" and GetItemIcon(item.id)) or
-      "Interface\\Icons\\INV_Misc_QuestionMark")
+    self.icon:SetTexture(icon or (item and UI.ItemIcon(item.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
     self.quality:SetShown(atlas ~= nil)
     if atlas then self.quality:SetAtlas(atlas) end
     self.label:SetText(UI.Elide(UI.Name(item), math.max(4, math.floor((width - 34) / 6))))
@@ -924,7 +937,7 @@ function UI.Activity(craft, extrasOnly)
   local output = UI.CraftOutput(craft)
   if output ~= "" and not extrasOnly then
     local item = craft.outputItem
-    local icon = item and item.id and type(GetItemIcon) == "function" and GetItemIcon(item.id)
+    local icon = item and UI.ItemIcon(item.id)
     add(icon or "Interface\\Icons\\INV_Misc_QuestionMark", "",
       "Output: " .. output .. " (" .. UI.Value(craft.outputQuantity) .. " total)")
     indicators[#indicators].item = item
