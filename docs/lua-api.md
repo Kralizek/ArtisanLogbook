@@ -7,6 +7,12 @@ separate from the SavedVariables persistence schema documented in
 
 ## API v1
 
+The additive context/configuration filters, detached craft projections and
+`GetRecipeConfigurations` query are specified in
+[Crafting observations: Public API](crafting-observations.md#public-api).
+Every measurement retains independent coverage; a quote is not a completed
+operation's effective-stat report. Existing daily-series granularity is unchanged.
+
 UI and addon consumers use the global `ArtisanLogbookAPI`, not SavedVariables,
 dimension rows, or the private Core addon namespace. The API is loaded before
 `ADDON_LOADED`; queries become available after `ArtisanLogbook_Core` initializes.

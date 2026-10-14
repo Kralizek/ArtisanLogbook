@@ -16,6 +16,15 @@ These remain read-only API v1 catalogue queries; capture and storage are unchang
 
 ## Pages and navigation
 
+The shared **Craft type** selection defaults to All crafts, with Personal crafting,
+Crafting orders and Patron orders. It persists across pages/reloads and applies to
+craft activity, outcomes, rankings, ingredients and tooltip populations. Craft
+tooltips and Craft Detail distinguish ordinary personal crafting from personal
+orders; recrafting is independent. Craft Detail's Ingredients/Configuration tabs
+inspect quote scope, stats, equipment, supported buffs and finishing selections
+with explicit missing information. This does not add a configuration comparison UI.
+See [the in-game checklist](crafting-observations.md#in-game-verification).
+
 The persistent dark sidebar contains Overview, Logbook, Recipes, Reagents, pinned recipes,
 characters, and professions. Settings stays at the bottom, outside the scrolling
 navigation population. Selected entries have a restrained gold highlight; long
