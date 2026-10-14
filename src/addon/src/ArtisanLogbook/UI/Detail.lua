@@ -106,8 +106,9 @@ function UI.ConfigurationRows(craft)
     { name = "Recraft", value = craft.context and craft.context.isRecraft ~= nil and
       (craft.context.isRecraft and "Yes" or "No") or "Not recorded" } }
   local configuration = craft.configuration
+  local evidence = craft.configurationObservation or {}
   rows[#rows + 1] = { name = "Configuration", value = configuration and
-    (configuration.scope == "attempt-start" and "Observed at craft start" or "Observed when requested") or
+    (evidence.scope == "attempt-start" and "Observed at craft start" or "Observed when requested") or
     (craft.configurationCoverage == "changed" and "Changed during craft" or "Not recorded"),
     explanation = "Crafting statistics are a quote, not a report of the completed operation. Changes or missing observations can leave details unavailable." }
   if not configuration then return rows end
@@ -137,7 +138,7 @@ function UI.ConfigurationRows(craft)
       explanation = equipment.guid and ("Item instance: " .. equipment.guid .. "\n" .. (equipment.itemString or "Item details not recorded")) or
         "Full item identity was not recorded." }
   end
-  if configuration.equipmentCoverage ~= "observed" then
+  if evidence.equipmentCoverage ~= "observed" then
     rows[#rows + 1] = { name = "Equipment", value = "Some details not recorded" }
   end
   for _, buff in ipairs(configuration.buffs or {}) do
@@ -145,13 +146,13 @@ function UI.ConfigurationRows(craft)
     rows[#rows + 1] = { name = "Crafting buff", value = name or ("Spell #" .. buff.spellID),
       explanation = "Stacks: " .. UI.Number(buff.applications, true) }
   end
-  rows[#rows + 1] = { name = "Buff coverage", value = configuration.buffsCoverage == "supported-list" and
+  rows[#rows + 1] = { name = "Buff coverage", value = evidence.buffsCoverage == "supported-list" and
     "Supported profession phials checked" or "Some buffs not recorded",
     explanation = "Only supported crafting phials are checked. Other crafting buffs may not be recorded." }
   for _, reagent in ipairs(configuration.finishingReagents or {}) do
     rows[#rows + 1] = { name = "Finishing reagent", value = itemName(reagent.itemID) .. " x" .. reagent.quantity }
   end
-  if configuration.finishingCoverage ~= "submitted" then
+  if evidence.finishingCoverage ~= "submitted" then
     rows[#rows + 1] = { name = "Finishing reagents", value = "Some details not recorded" }
   elseif #(configuration.finishingReagents or {}) == 0 then
     rows[#rows + 1] = { name = "Finishing reagents", value = "None selected" }
