@@ -29,17 +29,24 @@ case "${1:-}" in
     ;;
   rename-artifacts)
     required VERSION
-    for name in ArtisanLogbook_Core ArtisanLogbook ArtisanLogbook-Bundle; do
-      mv "src/addon/dist/$name.zip" "src/addon/dist/$name-$VERSION.zip"
+    shopt -s nullglob
+    archives=(src/addon/dist/*.zip)
+    ((${#archives[@]} > 0)) || die "No packaged archives found"
+    for archive in "${archives[@]}"; do
+      mv "$archive" "${archive%.zip}-$VERSION.zip"
     done
     ;;
   ensure-assets)
     required TAG; required VERSION; required GH_TOKEN
-    for name in "ArtisanLogbook_Core-$VERSION.zip" "ArtisanLogbook-$VERSION.zip" "ArtisanLogbook-Bundle-$VERSION.zip"; do
+    shopt -s nullglob
+    archives=(src/addon/dist/*.zip)
+    ((${#archives[@]} > 0)) || die "No packaged release archives found"
+    for archive in "${archives[@]}"; do
+      name="${archive##*/}"
       if asset_present "$name"; then
         echo "Preserving existing release asset $name"
       else
-        gh release upload "$TAG" "src/addon/dist/$name" --repo "$GITHUB_REPOSITORY"
+        gh release upload "$TAG" "$archive" --repo "$GITHUB_REPOSITORY"
       fi
     done
     ;;

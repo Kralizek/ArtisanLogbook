@@ -68,8 +68,32 @@ jobs:
       - name: Install Lua and packaging tools
         run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip python3-yaml
 
-      - name: Test and package
-        run: bash src/addon/scripts/package.sh
+      - name: Resolve CurseForge matrix
+        id: game-versions
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python3 .github/workflows/scripts/resolve-curseforge-matrix.py
+
+      - name: Test and package configured flavors
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          MATRIX: ${{ steps.game-versions.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          matrix="$MATRIX"
+          jq -e '.include | length > 0' <<< "$matrix" >/dev/null
+          while IFS=$'\t' read -r index name interface asset; do
+            suffix=''
+            [[ "$name" == retail ]] || suffix="-$name"
+            skip_tests=false
+            [[ "$index" == 0 ]] || skip_tests=true
+            ADDON_INTERFACE="$interface" ARTIFACT_SUFFIX="$suffix" SKIP_TESTS="$skip_tests" \
+              bash src/addon/scripts/package.sh
+            [[ "$asset" == *-"$VERSION".zip ]]
+            test -s "src/addon/dist/${asset%-$VERSION.zip}.zip"
+          done < <(jq -r '.include | to_entries[] | [.key, .value.name, .value.interface, .value.asset] | @tsv' <<< "$matrix")
 
       - name: Prepare release artifacts
         shell: bash
@@ -93,13 +117,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: bash .github/workflows/scripts/release-addon.sh ensure-assets
-
-      - name: Resolve CurseForge matrix
-        id: game-versions
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: python3 .github/workflows/scripts/resolve-curseforge-matrix.py
 
   curseforge:
     needs: release
