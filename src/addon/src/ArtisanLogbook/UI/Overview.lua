@@ -37,7 +37,7 @@ function UI.ReturnTotals(owner, recipes, filter, onResult)
       onResult(total)
       return
     end
-    local outcomeFilter = { time = filter.time, characters = filter.characters }
+    local outcomeFilter = { time = filter.time, characters = filter.characters, craftType = filter.craftType }
     local page = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipe.id, outcomeFilter, { limit = 100, cursor = cursor })
     if not page then self:SetScript("OnUpdate", nil); onResult(nil); return end
     for _, reagent in ipairs(page.returns) do total = total + reagent.returnedQuantity end
@@ -57,7 +57,7 @@ function UI.UsefulResourcefulnessTotals(owner, recipes, filter, generation, onRe
       onResult(total)
       return
     end
-    local outcomeFilter = { time = filter.time, characters = filter.characters }
+    local outcomeFilter = { time = filter.time, characters = filter.characters, craftType = filter.craftType }
     local page = ArtisanLogbookAPI.GetRecipeReturnSets(recipe.id, outcomeFilter, { limit = 100, cursor = cursor })
     if not page then self:SetScript("OnUpdate", nil); onResult(nil); return end
     total = total + UI.NonTrivialCount(page.returns)

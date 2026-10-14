@@ -228,7 +228,8 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     qualityList:Hide(); qualityTitle:Hide()
     local groups, cursor, crafts, splitCrafts, qualities = {}, nil, 0, 0, {}
     self.qualityWorker:SetScript("OnUpdate", function(worker)
-      local page, reason = api.GetCrafts({ recipes = { recipeId }, time = filter.time, characters = filter.characters },
+      local page, reason = api.GetCrafts({ recipes = { recipeId }, time = filter.time, characters = filter.characters,
+        craftType = filter.craftType },
         { limit = 100, cursor = cursor })
       if not page then worker:SetScript("OnUpdate", nil); qualityStatus:SetText(reason or "Output quality unavailable"); return end
       for _, craft in ipairs(page.crafts) do
@@ -400,7 +401,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   end
 
   function pane:Filter()
-    return { characters = state.character and { state.character } or nil, time = period:Time() }
+    return { characters = state.character and { state.character } or nil, time = period:Time(), craftType = UI.CraftType() }
   end
 
   function pane:Refresh(keepMaterialPage)

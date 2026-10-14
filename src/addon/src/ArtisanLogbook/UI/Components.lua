@@ -5,6 +5,32 @@ addon.UI = UI
 UI.ink = { .20, .16, .10 }
 local hiddenRecipeCallbacks = {}
 local craftVisibilityCallbacks = {}
+local craftTypeCallbacks = {}
+local craftTypeChoices = { { label = "All crafts", value = false }, { label = "Personal crafting", value = "personal" },
+  { label = "Crafting orders", value = "orders" }, { label = "Patron orders", value = "patron" } }
+
+function UI.CraftType()
+  local value = type(ArtisanLogbookUISettings) == "table" and ArtisanLogbookUISettings.craftType
+  if value == "personal" or value == "orders" or value == "patron" then return value end
+end
+
+function UI.SetCraftType(value)
+  if value ~= false and value ~= nil and value ~= "personal" and value ~= "orders" and value ~= "patron" then return end
+  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
+  ArtisanLogbookUISettings.craftType = value or nil
+  for _, callback in ipairs(craftTypeCallbacks) do callback() end
+end
+
+function UI.RegisterCraftTypeCallback(callback)
+  craftTypeCallbacks[#craftTypeCallbacks + 1] = callback
+end
+
+function UI.ContextText(craft)
+  local context = craft.context or {}
+  local text = ({ personal = "Personal crafting", order = "Crafting order", patron = "Patron order",
+    public = "Public order", guild = "Guild order", ["personal-order"] = "Personal order" })[context.kind] or "Craft type not recorded"
+  return context.isRecraft == true and (text .. " (recraft)") or text
+end
 
 local function craftVisibilitySettings()
   if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
@@ -348,7 +374,8 @@ function UI.ProfessionIcon(id)
 end
 
 function UI.Population(character, profession)
-  return { characters = character and { character } or nil, professions = profession and { profession } or nil }
+  return { characters = character and { character } or nil, professions = profession and { profession } or nil,
+    craftType = UI.CraftType() }
 end
 
 function UI.Choices(facet, character)
@@ -675,6 +702,10 @@ function UI.FilterBar(parent, width, y)
     control:UpdateState()
     return control
   end
+  bar.craftType = bar:Select("Craft type", craftTypeChoices, UI.SetCraftType, 172)
+  local function updateCraftType() bar.craftType:Update(craftTypeChoices, UI.CraftType() or false) end
+  UI.RegisterCraftTypeCallback(updateCraftType)
+  updateCraftType()
   return bar
 end
 
@@ -1343,10 +1374,10 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       if row.recipe and not row.enriched then
         row.enriched = true
         local outcome = ArtisanLogbookAPI.GetRecipeOutcomes(row.recipe.id,
-          { time = filter.time, characters = filter.characters }, { buckets = 1 })
+          { time = filter.time, characters = filter.characters, craftType = filter.craftType }, { buckets = 1 })
         row.totals = outcome and outcome.totals
         local result = ArtisanLogbookAPI.GetCrafts({ recipes = { row.recipe.id },
-          time = filter.time, characters = filter.characters }, { limit = 1 })
+          time = filter.time, characters = filter.characters, craftType = filter.craftType }, { limit = 1 })
         row.result = result and result.crafts[1]
         list:Repaint()
       end

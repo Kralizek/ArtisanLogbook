@@ -221,7 +221,7 @@ assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
-assert(addon.ledger.database.schemaVersion == 3)
+assert(addon.ledger.database.schemaVersion == 4)
 assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
@@ -580,7 +580,7 @@ do
   assert(confirmed.ledger.database.recipeOutputs[1236472][243807])
   assert(confirmed.ledger.craftById[1].recipeId == 1236472)
   assert(confirmed.ledger.craftById[1].requestId == nil)
-  assert(confirmed.ledger.database.schemaVersion == 3)
+  assert(confirmed.ledger.database.schemaVersion == 4)
   local reloadedKnowledge = reload(confirmed.ledger.database)
   assert(queries == 2 and reloadedKnowledge.ledger.database.recipeOutputs[1236472][243807])
   print("PASS candidate confirmation, silence, schema v1 and durable reload")
@@ -788,7 +788,7 @@ do
   assert(candidateQueries == 9 and enumerationQueries == 0 and infoQueries == 0)
   assert(bounded.lastRecoverySummary.candidateCount == 9 and bounded.lastRecoverySummary.verifiedCount == 3)
   assert(bounded.ledger.unknownRecipeCount == 11 and bounded.ledger.recipeOutputCount == 4)
-  assert(bounded.ledger.database.schemaVersion == 3 and #notices == noticeCount)
+  assert(bounded.ledger.database.schemaVersion == 4 and #notices == noticeCount)
   print(string.format("PASS bounded startup: 2010 recipe dimensions, 2000 good crafts, 14 Unknowns, 9 queries (%.3fs mocked full load)", os.clock() - started))
   environment.C_TradeSkillUI.GetRecipeSchematic = previousSchematic
   environment.C_TradeSkillUI.GetAllRecipeIDs = previousIds
@@ -1058,7 +1058,7 @@ highlightProbe.rows[1].indicators[1].scripts.OnEnter(highlightProbe.rows[1].indi
 assert(environment.GameTooltip.text == "Multicraft: produced 5 additional items")
 local smallCatalogue = environment.CreateFrame("Frame", nil, paperProbe)
 UI.CataloguePage(smallCatalogue, 732, 576, function() end)
-assert(smallCatalogue.filters:GetHeight() == 46 and smallCatalogue.searchInput.y == -16)
+assert(smallCatalogue.filters:GetHeight() == 92 and smallCatalogue.searchInput.y == -62)
 assert(smallCatalogue.resourcefulnessNote == nil)
 local itemProbe = UI.ItemCell(paperProbe, 0, 200)
 itemProbe:Update({ id = 123, name = "Potion" })
@@ -2009,7 +2009,15 @@ do
     end
   end
   record(10052, 5); record(10051, 85); record(10053, 20)
-  local databaseBefore = core.Trace.Serialize(ledger.database)
+  local function serializeFacts(value)
+    if type(value) ~= "table" then return type(value) .. ":" .. tostring(value) end
+    local keys, parts = {}, {}
+    for key in pairs(value) do keys[#keys + 1] = key end
+    table.sort(keys, function(left, right) return tostring(left) < tostring(right) end)
+    for _, key in ipairs(keys) do parts[#parts + 1] = serializeFacts(key) .. "=" .. serializeFacts(value[key]) end
+    return "{" .. table.concat(parts, ";") .. "}"
+  end
+  local databaseBefore = serializeFacts(ledger.database)
   local ui = loadUI()
   local window, helpers = ui.productionWindow, ui.UI
   assert(helpers.TogglePin({ id = 10051, name = "Midnight Prospecting" }))
@@ -2048,9 +2056,11 @@ do
   local overview = window.pages.Overview
   assert(#overview.topRecipes.items == 1 and overview.topRecipes.items[1].recipe.id == 10052)
   assert(overview.summary.tiles[6].value.text == "Potion" and overview.summary.totals.craftCount == 110)
+  assert(serializeFacts(ledger.database) == databaseBefore, "Hiding changed Core data")
   local unknownCraft = assert(environment.RecordFixtureResult(ledger, { itemID = 900100, quantity = 1,
     resourcesReturned = {} }))
   assert(unknownCraft.recipeId == nil)
+  databaseBefore = serializeFacts(ledger.database)
   local originalCrafts, pageQueries = api.GetCrafts, 0
   api.GetCrafts = function(filter, options)
     assert(filter.hiddenRecipes == nil and options.hiddenRecipes == nil)
@@ -2135,7 +2145,7 @@ do
   local professionRecipes = window.pages.Profession.topRecipes
   assert(professionRecipes.empty:IsShown() and professionRecipes.empty.text == "No recipes in this period (3 hidden)")
   dropdown(window.pages.Profession, "Custom dates"):Choose("custom")
-  local professionPeriod = window.pages.Profession.filters.controls[1]
+  local professionPeriod = window.pages.Profession.filters.controls[2]
   professionPeriod.state.customFrom, professionPeriod.state.customTo = 0, 86400
   window.pages.Profession:Refresh(true)
   assert(professionRecipes.hiddenCount == 0 and professionRecipes.empty.text == "No recipes in this period")
@@ -2150,7 +2160,7 @@ do
   api.GetCrafts = originalCrafts
   for recipeId = 11001, 11007 do assert(helpers.SetRecipeHidden(recipeId, true)) end
   assert(helpers.IsRecipeHidden(11007), "Hiding must not inherit the five-pin limit")
-  assert(core.Trace.Serialize(ledger.database) == databaseBefore, "Hiding changed Core data")
+  assert(serializeFacts(ledger.database) == databaseBefore, "Hiding changed Core data")
   assert(#api.GetCrafts(nil, { limit = 200 }).crafts == 111)
   assert(#api.GetRecipeSummaries().recipes == 3)
   window:Hide()
@@ -2617,7 +2627,7 @@ do
     dropdown(page, "Custom dates"):Choose("custom")
     assert(page:Filter().time and page.filters:GetHeight() == 92)
   end
-  local bar = reagent.filters.controls[1]
+  local bar = reagent.filters.controls[2]
   local previousTime = environment.time
   environment.time = os.time
   window:Activate("Reagent", { id = 5301, name = "Bloom" })
@@ -3182,6 +3192,7 @@ do
   local data = ledger.database
   -- Rewrite as a pre-#21 schema-1 database (no outcome or schema-2 measurements).
   data.schemaVersion, data.reagentSeries, data.reagentRequirementSeries, data.firstCraftRewards = 1, nil, nil, nil
+  data.observations = nil
   data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
   for _, craft in ipairs(data.crafts) do
     craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil
@@ -3607,7 +3618,7 @@ assert(#refusedRuntime.ledger.database.dimensions.sessions == 1 and
   #refusedRuntime.ledger.database.dimensions.characters == 1 and
   #refusedRuntime.ledger.database.dimensions.realms == 1)
 assert(refusedRuntime.ledger.database.dimensions.sessions[1].startedAt == 1800000123)
-assert(refusedRuntime.ledger.database.schemaVersion == 3 and refusedData.dimensions.recipes[1].key ==
+assert(refusedRuntime.ledger.database.schemaVersion == 4 and refusedData.dimensions.recipes[1].key ==
   "old-layout")
 assert(#refusedApi.GetCrafts().crafts == 0 and environment.ArtisanLogbookManagement.Status().retainedCrafts == 0)
 refusedRuntime.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
@@ -3622,7 +3633,7 @@ oldData.dimensions.recipes[1230869].maxQuality = nil
 environment.UnitClass = function() return nil, nil end
 environment.C_TradeSkillUI.GetRecipeInfo = function() return nil end
 local oldCore = reload(oldData)
-assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 3)
+assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 4)
 assert(oldCore.ledger.database.dimensions.characters[1].classFile == nil)
 assert(oldCore.ledger.database.dimensions.recipes[1230869].maxQuality == nil)
 environment.UnitClass = function() return "Mage", "MAGE", 8 end
@@ -3634,7 +3645,7 @@ local savedRecipeRow = upgraded.ledger.database.dimensions.recipes[1230869]
 assert(upgraded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 upgraded.HandleRetailEvent("TRADE_SKILL_SHOW")
 assert(upgraded.ledger.database.dimensions.recipes[1230869] == savedRecipeRow)
-assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 3)
+assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 4)
 local reloaded = reload(upgraded.ledger.database)
 assert(reloaded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 assert(reloaded.ledger.database.dimensions.recipes[1230869].maxQuality == 3)
@@ -3658,7 +3669,7 @@ print("PASS optional schema-v1 class and quality enrichment reuses historical di
   assert(core.ledger and environment.ArtisanLogbookDB == core.ledger.database)
   assert(sameTable(legacy, dofile(fixturePath)), "migration rewrote the supplied SavedVariables")
   local status = environment.ArtisanLogbookManagement.Status()
-  assert(status.schemaVersion == 3 and status.migratedFromSchemaVersion == 1 and status.migratedQuoteCrafts == 7)
+  assert(status.schemaVersion == 4 and status.migratedFromSchemaVersion == 1 and status.migratedQuoteCrafts == 7)
   local crafts = core.ledger.database.crafts
   local count = #crafts
   core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 434018)
@@ -4379,12 +4390,12 @@ end)()
   assert(row("Ingenuity").value == "No proc" and row("Resourcefulness").value == "Triggered")
   color(row("Multicraft"), "positive"); color(row("Ingenuity"), "muted")
   assert(table.concat(tooltip.lines, "\n"):find("+1 more materials", 1, true))
-  assert(#tooltip.rows == 10)
+  assert(#tooltip.rows == 11 and row("Craft type").value == "Craft type not recorded")
   assert(tooltip.titleStyle[1] == 1 and tooltip.titleStyle[2] == .82 and tooltip.titleStyle[5] == true)
   craft.outputItem.name = recipe.name
   craft.outputQuantity, craft.multicraftBonus, craft.hasIngenuityProc, craft.ingenuityRefund = 19, 14, true, 218
   ui.CraftTooltip(owner, craft)
-  assert(#tooltip.rows == 9 and row("Produced").value == "19")
+  assert(#tooltip.rows == 10 and row("Produced").value == "19")
   for _, entry in ipairs(tooltip.rows) do assert(entry.label ~= "Output:") end
   assert(row("Multicraft").value == "+14 extra" and row("Ingenuity").value == "+218 refunded")
   color(row("Multicraft"), "positive"); color(row("Ingenuity"), "positive")
@@ -4400,7 +4411,7 @@ end)()
   ui.CraftTooltip(owner, craft)
   assert(row("Multicraft").value == "No proc"); color(row("Multicraft"), "muted")
   ui.CraftTooltip(owner, { recipe = { name = string.rep("Long recipe name ", 25) } })
-  assert(tooltip.text == ui.Elide(string.rep("Long recipe name ", 25), 90) and #tooltip.rows == 8)
+  assert(tooltip.text == ui.Elide(string.rep("Long recipe name ", 25), 90) and #tooltip.rows == 9)
   for _, label in ipairs({ "Date", "Quality", "Concentration", "Produced", "Multicraft", "Resourcefulness", "Ingenuity" }) do
     assert(row(label).value == "Not recorded", label); color(row(label), "muted")
   end
@@ -4452,4 +4463,59 @@ end)()
   parent.scripts.OnEnter(parent)
   assert(not tooltip.shown)
   print("PASS structured tooltips: filter scope, pruned/partial measurements, semantic colors, native precedence, lifecycle and multiple outputs")
+end)()
+
+;(function()
+  local core = reload(nil)
+  local ledger, api = core.ledger, environment.ArtisanLogbookAPI
+  ledger:AddDimension("profession", 171, { name = "Alchemy" })
+  ledger:AddDimension("recipe", 16001, { name = "Configuration potion", professionId = 171 })
+  ledger:AddDimension("item", 16002, { name = "Configuration potion" })
+  for index, kind in ipairs({ "personal", "patron" }) do
+    assert(ledger:SubmitCraft(16001, 1, true, nil,
+      { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } } }, nil, kind == "personal", {
+        context = { kind = kind, source = "submitted-call", isRecraft = false },
+        configuration = { scope = "request", stats = { multicraft = { rating = 180, ratingPct = 12.5 } },
+          useConcentration = true, finishingCoverage = "submitted", finishingReagents = {},
+          buffsCoverage = "supported-list", buffs = {} } }))
+    assert(ledger:RecordResult({ operationID = index, itemID = 16002, quantity = index + 1, multicraft = index,
+      resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } }))
+  end
+  local consumer = loadUI()
+  local ui, window = consumer.UI, consumer.productionWindow
+  ui.SetCraftType(false)
+  window:Show(); window:Activate("Overview")
+  assert(window.pages.Overview.summary.totals.craftCount == 2)
+  window.pages.Overview.filters.craftType:Choose("personal")
+  assert(window.pages.Overview.summary.totals.craftCount == 1)
+  local character = api.GetCharacters()[1]
+  for _, destination in ipairs({ { "Logbook" }, { "Recipes" }, { "Character", character },
+      { "Profession", { skillLineId = 171, name = "Alchemy" } }, { "Reagents" },
+      { "Recipe", { id = 16001, name = "Configuration potion", profession = { skillLineId = 171 } } } }) do
+    window:Activate(destination[1], destination[2])
+    local page = window.pages[destination[1]]
+    if page.Filter then assert(page:Filter().craftType == "personal") end
+    if page.filters then assert(page.filters.craftType.value == "personal") end
+  end
+  assert(window.recipeOutcomes:Filter().craftType == "personal")
+  local detail = ui.CraftDetail(environment.CreateFrame("Frame"), 800, 640, function() end)
+  detail:ShowCraft(1)
+  assert(#detail.configurationList.items > 8)
+  detail.configurationTab.scripts.OnClick(detail.configurationTab)
+  assert(detail.configurationList:IsShown() and not detail.returnedReagents:IsShown())
+  assert(detail.configurationList.items[1].value == "Personal crafting")
+  ui.SetCraftType("patron")
+  window:Activate("Overview")
+  assert(window.pages.Overview.summary.totals.craftCount == 1 and window.pages.Overview.summary.totals.outputQuantity == 3)
+  assert(ui.ContextText({ context = { kind = "personal-order", isRecraft = true } }) == "Personal order (recraft)")
+  assert(ui.ConfigurationRows({ context = { kind = "unknown" } })[3].value == "Not recorded")
+  window:Hide()
+  local reloaded = loadUI()
+  assert(reloaded.UI.CraftType() == "patron")
+  reloaded.UI.SetCraftType(false)
+  assert(ledger:SubmitCraft(16001, 2, false))
+  core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", "Craft-Test-GUID", 16001)
+  core.HandleRetailEvent("UNIT_SPELLCAST_INTERRUPTED", "player", "Craft-Test-GUID", 16001)
+  assert(ledger.pendingRequest == nil and ledger.operationOwnershipUncertain)
+  print("PASS shared craft type selection, cross-page population, configuration inspection, preference reload and matched interruption")
 end)()

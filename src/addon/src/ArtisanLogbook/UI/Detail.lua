@@ -101,6 +101,64 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
   end
 end
 
+function UI.ConfigurationRows(craft)
+  local rows = { { name = "Craft type", value = UI.ContextText(craft) },
+    { name = "Recraft", value = craft.context and craft.context.isRecraft ~= nil and
+      (craft.context.isRecraft and "Yes" or "No") or "Not recorded" } }
+  local configuration = craft.configuration
+  rows[#rows + 1] = { name = "Configuration", value = configuration and
+    (configuration.scope == "attempt-start" and "Observed at craft start" or "Observed when requested") or
+    (craft.configurationCoverage == "changed" and "Changed during craft" or "Not recorded"),
+    explanation = "Crafting statistics are a quote, not a report of the completed operation. Changes or missing observations can leave details unavailable." }
+  if not configuration then return rows end
+  local stats = configuration.stats or {}
+  for _, spec in ipairs({ { "baseSkill", "Base skill" }, { "bonusSkill", "Bonus skill" },
+      { "baseDifficulty", "Difficulty" }, { "bonusDifficulty", "Bonus difficulty" },
+      { "concentrationCost", "Quoted concentration" } }) do
+    rows[#rows + 1] = { name = spec[2], value = stats[spec[1]] ~= nil and tostring(stats[spec[1]]) or "Not recorded" }
+  end
+  for _, spec in ipairs({ { "multicraft", "Multicraft" }, { "resourcefulness", "Resourcefulness" },
+      { "ingenuity", "Ingenuity" }, { "craftingSpeed", "Crafting speed" } }) do
+    local stat = stats[spec[1]]
+    rows[#rows + 1] = { name = spec[2], value = stat and
+      (UI.Number(stat.rating, true) .. " rating / " .. UI.Number(stat.ratingPct, true) .. "%") or "Not recorded",
+      explanation = stat and ("Reported percentage: " .. UI.Number(stat.ratingPct, true) .. "%. Additional percentage: " ..
+        UI.Number(stat.bonusRatingPct, true) .. "%.") or "This stat was not identified in the crafting quote." }
+  end
+  rows[#rows + 1] = { name = "Concentration selected", value = configuration.useConcentration == nil and "Not recorded" or
+    (configuration.useConcentration and "Yes" or "No") }
+  local function itemName(itemId)
+    local name = type(GetItemInfo) == "function" and GetItemInfo(itemId)
+    return name or ("Item #" .. tostring(itemId))
+  end
+  for _, equipment in ipairs(configuration.equipment or {}) do
+    rows[#rows + 1] = { name = "Equipment slot " .. equipment.slot,
+      value = equipment.empty and "Empty" or equipment.itemID and itemName(equipment.itemID) or "Not recorded",
+      explanation = equipment.guid and ("Item instance: " .. equipment.guid .. "\n" .. (equipment.itemString or "Item details not recorded")) or
+        "Full item identity was not recorded." }
+  end
+  if configuration.equipmentCoverage ~= "observed" then
+    rows[#rows + 1] = { name = "Equipment", value = "Some details not recorded" }
+  end
+  for _, buff in ipairs(configuration.buffs or {}) do
+    local name = C_Spell and type(C_Spell.GetSpellName) == "function" and C_Spell.GetSpellName(buff.spellID)
+    rows[#rows + 1] = { name = "Crafting buff", value = name or ("Spell #" .. buff.spellID),
+      explanation = "Stacks: " .. UI.Number(buff.applications, true) }
+  end
+  rows[#rows + 1] = { name = "Buff coverage", value = configuration.buffsCoverage == "supported-list" and
+    "Supported profession phials checked" or "Some buffs not recorded",
+    explanation = "Only supported crafting phials are checked. Other crafting buffs may not be recorded." }
+  for _, reagent in ipairs(configuration.finishingReagents or {}) do
+    rows[#rows + 1] = { name = "Finishing reagent", value = itemName(reagent.itemID) .. " x" .. reagent.quantity }
+  end
+  if configuration.finishingCoverage ~= "submitted" then
+    rows[#rows + 1] = { name = "Finishing reagents", value = "Some details not recorded" }
+  elseif #(configuration.finishingReagents or {}) == 0 then
+    rows[#rows + 1] = { name = "Finishing reagents", value = "None selected" }
+  end
+  return rows
+end
+
 function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local detail = CreateFrame("Frame", nil, parent)
   detail:SetAllPoints(parent)
@@ -143,7 +201,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   end
   detail.fields = fields
   detail.inputEvidence = UI.Text(content, 0, -218, width - 36, 18, "GameFontNormalSmall")
-  UI.Section(content, "Ingredients", 0, -244, width - 36)
+  local ingredientsTab, configurationTab
   local nameWidth, amountWidth = (width - 60) * .6, (width - 60) * .2
   local returnColor = { r = .45, g = .85, b = .45 }
   local shownCraft
@@ -163,6 +221,19 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   }, function(row) if openReagent and not row.qualityUnknown then goBack(); openReagent(row.item) end end,
     "Ingredients weren't recorded for this craft.")
   detail.returnedReagents = reagents
+  local configurationList = UI.ScrollList(content, 0, -280, width - 36, height - 352, {
+    { title = "Observation", width = (width - 60) * .36, value = function(row) return row.name end },
+    { title = "Recorded value", width = (width - 60) * .64, sentence = true,
+      value = function(row) return row.value end, exact = function(row) return row.explanation or row.value end },
+  }, nil, "Configuration wasn't recorded for this craft.")
+  local function selectInspection(configuration)
+    reagents:SetShown(not configuration); configurationList:SetShown(configuration)
+    ingredientsTab:Select(not configuration); configurationTab:Select(configuration)
+  end
+  ingredientsTab = UI.Tab(content, "Ingredients", 0, -244, 124, function() selectInspection(false) end)
+  configurationTab = UI.Tab(content, "Configuration", 128, -244, 140, function() selectInspection(true) end)
+  detail.configurationList, detail.configurationTab = configurationList, configurationTab
+  selectInspection(false)
 
   function detail:ShowCraft(id)
     UI.Tooltip.ReleaseTree(self)
@@ -174,11 +245,12 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       for _, field in pairs(fields) do field:SetText("-") end
       reagents:Reset(); resultRow:Update(nil); resultRow.quantity:SetText("-"); resultRow.bonus:SetText("")
       detail.inputEvidence:SetText("")
+      configurationList:Reset()
       identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       return
     end
     heading:SetText(UI.Elide(UI.Name(craft.recipe, "Unattributed craft"), math.floor((width - 166) / 10)))
-    subtitle:SetText(UI.Name(craft.profession))
+    subtitle:SetText(UI.Name(craft.profession) .. " - " .. UI.ContextText(craft))
     identity:SetTexture(craft.outputItem and type(GetItemIcon) == "function" and GetItemIcon(craft.outputItem.id) or UI.RecipeIcon(craft.recipe))
     resultRow:Update(craft.outputItem)
     resultRow.quantity:SetText(UI.Number(craft.outputQuantity) .. " items")
@@ -212,6 +284,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     detail.inputEvidence:SetText(#rows > 0 and (unknownRequired or not allListed) and
       "Some ingredient details weren't recorded for this craft." or "")
     reagents:Reset(); reagents:Append(rows)
+    configurationList:Reset(); configurationList:Append(UI.ConfigurationRows(craft))
   end
   detail:Hide()
   return detail

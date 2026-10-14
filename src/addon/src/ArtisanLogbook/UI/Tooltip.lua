@@ -179,7 +179,7 @@ function UI.RecipeTooltip(owner, recipe, filter)
     Tooltip.Subtitle("History not available", "muted"); Tooltip.Show(); return
   end
   local historyFilter = { recipes = { recipe.id }, time = filter.time,
-    characters = filter.characters, professions = filter.professions }
+    characters = filter.characters, professions = filter.professions, craftType = filter.craftType }
   local history = ArtisanLogbookAPI.GetCraftSeries(historyFilter)
   if not history then Tooltip.Subtitle("History not available", "muted"); Tooltip.Show(); return end
   local characters, characterCount, unknownCharacters, crafts, lastDay = {}, 0, false, 0, nil
@@ -192,7 +192,7 @@ function UI.RecipeTooltip(owner, recipe, filter)
     else unknownCharacters = true end
   end
   local outcome = crafts > 0 and ArtisanLogbookAPI.GetRecipeOutcomes(recipe.id,
-    { time = filter.time, characters = filter.characters }, { buckets = 1 }) or nil
+    { time = filter.time, characters = filter.characters, craftType = filter.craftType }, { buckets = 1 }) or nil
   local totals = outcome and outcome.totals.craftCount == crafts and outcome.totals or { craftCount = crafts }
   local latest = crafts > 0 and ArtisanLogbookAPI.GetCrafts(historyFilter, { limit = 1 }) or nil
   local craft = latest and latest.crafts[1]
@@ -236,6 +236,7 @@ function UI.CraftTooltip(owner, craft)
   Tooltip.Subtitle((craft.character and UI.CharacterName(craft.character) or "Character not recorded") .. " - " ..
     UI.Name(craft.profession, "Profession not recorded"))
   Tooltip.Section("Craft Details")
+  Tooltip.Row("Craft type", UI.ContextText(craft), craft.context and craft.context.kind ~= "unknown" and "value" or "muted")
   Tooltip.Row("Date", craft.timestamp and UI.DateTime(craft.timestamp, true) or "Not recorded",
     craft.timestamp and "value" or "muted")
   Tooltip.Row("Quality", craft.outputQuality ~= nil and "Rank " .. craft.outputQuality or "Not recorded",
