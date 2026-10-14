@@ -108,7 +108,7 @@ local function projectObservation(ledger, row, result)
   result.configurationCoverage = observation and observation.configurationUnavailableReason or "unavailable"
   if observation and observation.configuration then
     result.configuration = ledger.CopyObservation(observation.configuration)
-    result.configuration.key = tostring(row.observationKey)
+    result.configuration.key = string.format("%.0f", row.observationKey)
     result.configurationCoverage = result.configuration.scope
   end
 end
@@ -215,7 +215,7 @@ local function normalizeFilter(filter)
         if not integer(value, 1) then return nil, "invalid-filter" end
       elseif key == "useConcentration" then
         if type(value) ~= "boolean" then return nil, "invalid-filter" end
-      elseif type(value) ~= "string" or value == "" or #value > 128 then return nil, "invalid-filter" end
+      elseif type(value) ~= "string" or value == "" then return nil, "invalid-filter" end
       selection[key] = value
       local text = tostring(value)
       configurationSignature[#configurationSignature + 1] = key .. ":" .. #text .. ":" .. text
@@ -289,7 +289,7 @@ local function observationMatches(rows, filter)
   if not selection then return true end
   local configuration = observation and observation.configuration
   if not configuration then return false end
-  if selection.key and tostring(rows.observationKey) ~= selection.key then return false end
+  if selection.key and string.format("%.0f", rows.observationKey) ~= selection.key then return false end
   if selection.scope and configuration.scope ~= selection.scope then return false end
   if selection.useConcentration ~= nil and configuration.useConcentration ~= selection.useConcentration then return false end
   if selection.stat then
@@ -619,10 +619,9 @@ local function observationCoverage(ledger, row, totals)
   local counts = { contextObservedCount = observation and observation.context.kind ~= "unknown",
     configurationObservedCount = configuration ~= nil,
     requestConfigurationCount = configuration and configuration.scope == "request",
-    attemptStartConfigurationCount = configuration and configuration.scope == "attempt-start",
-    configurationCapacityLimitedCount = observation and observation.configurationUnavailableReason == "capacity" }
+    attemptStartConfigurationCount = configuration and configuration.scope == "attempt-start" }
   for _, name in ipairs({ "contextObservedCount", "configurationObservedCount", "requestConfigurationCount",
-      "attemptStartConfigurationCount", "configurationCapacityLimitedCount" }) do
+      "attemptStartConfigurationCount" }) do
     totals[name] = (totals[name] or 0) + (counts[name] and row.craftCount or 0)
   end
 end
@@ -717,7 +716,7 @@ function API.GetRecipeConfigurations(recipeId, filter, options)
   table.sort(keys)
   local result = { configurations = {}, coverage = coverage }
   for index = 1, math.min(limit, #keys) do result.configurations[index] = groups[keys[index]] end
-  if #keys > limit then result.nextCursor = prefix .. keys[limit] end
+  if #keys > limit then result.nextCursor = prefix .. string.format("%.0f", keys[limit]) end
   return result
 end
 

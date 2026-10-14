@@ -561,6 +561,78 @@ test("context and configuration filters align durable measurements before and af
   assert(api.GetRecipeOutcomes(101, { configuration = { minimumRating = 1 } }) == nil)
 end)
 
+test("configuration pages preserve all exact snapshots and filters through sparse-key pruning", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  local orphan = assert(ledger:SubmitCraft(101, 1, false, nil, {}, nil, true, {
+    context = { kind = "personal" }, configuration = { scope = "request", stats = { baseSkill = 1 } } }))
+  ledger:CancelCraft()
+  session(ledger, "A", 1)
+  for index = 1, 300 do
+    assert(ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } } },
+      inputEvidence({ 8 }), true, { context = { kind = "personal", source = "submitted-call" },
+        configuration = { scope = "request", stats = { multicraft = { rating = 180 + index / 1024 } },
+          equipment = { { slot = 20, itemID = 888, guid = "Tool-" .. index .. string.rep("x", 150) } } } }))
+    assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = 2, multicraft = 1,
+      resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } }))
+  end
+  local first = assert(api.GetRecipeConfigurations(101, nil, { limit = 200 }))
+  local last = assert(api.GetRecipeConfigurations(101, nil, { limit = 200, cursor = first.nextCursor }))
+  assert(#first.configurations == 200 and #last.configurations == 100 and last.nextCursor == nil)
+  assert(first.coverage.configurationObservedCount == 300 and first.coverage.configurationCapacityLimitedCount == nil)
+  local selected = last.configurations[100].configuration
+  assert(selected.stats.multicraft.rating == 180 + 300 / 1024)
+  local filter = { configuration = { key = selected.key } }
+  local before = assert(api.GetRecipeReagentStatistics(101, filter))
+  assert(before.reagents[1].matchedAllocatedQuantity == 5 and before.reagents[1].matchedReturnedQuantity == 1)
+  assert(api.GetRecipeOutcomes(101, { configuration = { equipmentGUID = selected.equipment[1].guid } }).totals.craftCount == 1)
+  assert(api.GetRecipeOutcomes(101).totals.configurationCapacityLimitedCount == nil)
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  assert(ledger.database.observations[orphan.observationKey] == nil)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  equal(api.GetRecipeReagentStatistics(101, filter), before)
+  equal(api.GetRecipeConfigurations(101, nil, { limit = 200, cursor = first.nextCursor }), last)
+  assert(api.GetRecipeOutcomes(101, filter).totals.configurationObservedCount == 1)
+end)
+
+test("adjacent large sparse observation keys stay distinct in grains filters and cursors", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  ledger.database.nextObservationKey = 9007199254740989
+  for index = 1, 2 do
+    assert(ledger:SubmitCraft(101, 1, false, nil, {}, nil, true, {
+      context = { kind = "personal" }, configuration = { scope = "request", stats = { baseSkill = index } } }))
+    assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = index }))
+  end
+  local first = assert(api.GetRecipeConfigurations(101, nil, { limit = 1 }))
+  local second = assert(api.GetRecipeConfigurations(101, nil, { limit = 1, cursor = first.nextCursor }))
+  assert(first.configurations[1].configuration.key == "9007199254740989")
+  assert(second.configurations[1].configuration.key == "9007199254740990")
+  assert(second.nextCursor == nil)
+  assert(api.GetRecipeOutcomes(101, { configuration = { key = "9007199254740989" } }).totals.outputQuantity == 1)
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  equal(api.GetRecipeConfigurations(101, nil, { limit = 1, cursor = first.nextCursor }), second)
+end)
+
+test("migrated quota loss remains unavailable without capacity API semantics", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitCraft(101, 1, false, nil, {}, nil, true,
+    { context = { kind = "personal" }, configurationUnavailableReason = "unavailable" }))
+  assert(ledger:RecordResult({ operationID = 1, itemID = 100, quantity = 1 }))
+  ledger.database.schemaVersion, ledger.database.nextObservationKey = 4, nil
+  ledger.database.observations[1].configurationUnavailableReason = "capacity"
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(api.GetCraft(1).configuration == nil and api.GetCraft(1).configurationCoverage == "unavailable")
+  local page = assert(api.GetRecipeConfigurations(101))
+  assert(page.coverage.configurationObservedCount == 0 and page.coverage.contextObservedCount == 1)
+  assert(page.coverage.configurationCapacityLimitedCount == nil)
+  assert(page.configurations[1].configurationCoverage == "unavailable")
+end)
+
 test("GetCraft has an explicit denormalized shape and preserves zero and false", function()
   local _, api = fixture()
   local craft = assert(api.GetCraft(1))

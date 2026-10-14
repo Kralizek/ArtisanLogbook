@@ -221,7 +221,7 @@ assert(addon.recorder and not addon.recorder.recording)
 assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
-assert(addon.ledger.database.schemaVersion == 4)
+assert(addon.ledger.database.schemaVersion == 5)
 assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
 assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
@@ -580,7 +580,7 @@ do
   assert(confirmed.ledger.database.recipeOutputs[1236472][243807])
   assert(confirmed.ledger.craftById[1].recipeId == 1236472)
   assert(confirmed.ledger.craftById[1].requestId == nil)
-  assert(confirmed.ledger.database.schemaVersion == 4)
+  assert(confirmed.ledger.database.schemaVersion == 5)
   local reloadedKnowledge = reload(confirmed.ledger.database)
   assert(queries == 2 and reloadedKnowledge.ledger.database.recipeOutputs[1236472][243807])
   print("PASS candidate confirmation, silence, schema v1 and durable reload")
@@ -788,7 +788,7 @@ do
   assert(candidateQueries == 9 and enumerationQueries == 0 and infoQueries == 0)
   assert(bounded.lastRecoverySummary.candidateCount == 9 and bounded.lastRecoverySummary.verifiedCount == 3)
   assert(bounded.ledger.unknownRecipeCount == 11 and bounded.ledger.recipeOutputCount == 4)
-  assert(bounded.ledger.database.schemaVersion == 4 and #notices == noticeCount)
+  assert(bounded.ledger.database.schemaVersion == 5 and #notices == noticeCount)
   print(string.format("PASS bounded startup: 2010 recipe dimensions, 2000 good crafts, 14 Unknowns, 9 queries (%.3fs mocked full load)", os.clock() - started))
   environment.C_TradeSkillUI.GetRecipeSchematic = previousSchematic
   environment.C_TradeSkillUI.GetAllRecipeIDs = previousIds
@@ -3193,6 +3193,7 @@ do
   -- Rewrite as a pre-#21 schema-1 database (no outcome or schema-2 measurements).
   data.schemaVersion, data.reagentSeries, data.reagentRequirementSeries, data.firstCraftRewards = 1, nil, nil, nil
   data.observations = nil
+  data.nextObservationKey = nil
   data.outcomeVersion, data.resourcefulnessSets, data.returnedReagents = nil, nil, nil
   for _, craft in ipairs(data.crafts) do
     craft.hasResourcefulnessProc, craft.resourcefulnessComplete = nil, nil
@@ -3618,7 +3619,7 @@ assert(#refusedRuntime.ledger.database.dimensions.sessions == 1 and
   #refusedRuntime.ledger.database.dimensions.characters == 1 and
   #refusedRuntime.ledger.database.dimensions.realms == 1)
 assert(refusedRuntime.ledger.database.dimensions.sessions[1].startedAt == 1800000123)
-assert(refusedRuntime.ledger.database.schemaVersion == 4 and refusedData.dimensions.recipes[1].key ==
+assert(refusedRuntime.ledger.database.schemaVersion == 5 and refusedData.dimensions.recipes[1].key ==
   "old-layout")
 assert(#refusedApi.GetCrafts().crafts == 0 and environment.ArtisanLogbookManagement.Status().retainedCrafts == 0)
 refusedRuntime.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
@@ -3633,7 +3634,7 @@ oldData.dimensions.recipes[1230869].maxQuality = nil
 environment.UnitClass = function() return nil, nil end
 environment.C_TradeSkillUI.GetRecipeInfo = function() return nil end
 local oldCore = reload(oldData)
-assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 4)
+assert(oldCore.ledger and oldCore.ledger.database.schemaVersion == 5)
 assert(oldCore.ledger.database.dimensions.characters[1].classFile == nil)
 assert(oldCore.ledger.database.dimensions.recipes[1230869].maxQuality == nil)
 environment.UnitClass = function() return "Mage", "MAGE", 8 end
@@ -3645,7 +3646,7 @@ local savedRecipeRow = upgraded.ledger.database.dimensions.recipes[1230869]
 assert(upgraded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 upgraded.HandleRetailEvent("TRADE_SKILL_SHOW")
 assert(upgraded.ledger.database.dimensions.recipes[1230869] == savedRecipeRow)
-assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 4)
+assert(savedRecipeRow.maxQuality == 3 and upgraded.ledger.database.schemaVersion == 5)
 local reloaded = reload(upgraded.ledger.database)
 assert(reloaded.ledger.database.dimensions.characters[1].classFile == "MAGE")
 assert(reloaded.ledger.database.dimensions.recipes[1230869].maxQuality == 3)
@@ -3669,7 +3670,7 @@ print("PASS optional schema-v1 class and quality enrichment reuses historical di
   assert(core.ledger and environment.ArtisanLogbookDB == core.ledger.database)
   assert(sameTable(legacy, dofile(fixturePath)), "migration rewrote the supplied SavedVariables")
   local status = environment.ArtisanLogbookManagement.Status()
-  assert(status.schemaVersion == 4 and status.migratedFromSchemaVersion == 1 and status.migratedQuoteCrafts == 7)
+  assert(status.schemaVersion == 5 and status.migratedFromSchemaVersion == 1 and status.migratedQuoteCrafts == 7)
   local crafts = core.ledger.database.crafts
   local count = #crafts
   core.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 434018)
