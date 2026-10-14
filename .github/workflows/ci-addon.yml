@@ -51,7 +51,7 @@ jobs:
           python3 .github/workflows/scripts/resolve-curseforge-matrix.py
           matrix=$(sed -n 's/^matrix=//p' "$GITHUB_OUTPUT")
           jq -e '.include | length > 0' <<< "$matrix"
-          jq -e '.include[] | select(.name == "retail" and .id == 16519 and .interface == 120100 and .asset == "ArtisanLogbook-Bundle-0.1.0.zip")' <<< "$matrix"
+          jq -e '.include[] | select(.name == "retail" and .id == 16984 and .interface == 120105 and .asset == "ArtisanLogbook-Bundle-0.1.0.zip")' <<< "$matrix"
 
       - name: Test and package
         run: bash src/addon/scripts/package.sh

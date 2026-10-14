@@ -29,10 +29,8 @@ archives. Core's TOC must be at `Interface/AddOns/ArtisanLogbook_Core/ArtisanLog
 the UI requires Core. Restart the client after the first installation.
 Enable **Artisan Logbook** in the addon list.
 
-The TOC targets interface `120100`, based on the live UI source mirror reporting
-12.1.0 (69933) on 2026-09-26. Confirm the actual client using
-`/dump GetBuildInfo()`; the client, not the mirror, is authoritative. Report any
-mismatch before changing the compatibility target. Every recording start also
+The TOC targets interface `120105` for WoW 12.1.5. Confirm the actual client using
+`/dump GetBuildInfo()`; the client is authoritative. Every recording start also
 stores the actual build, interface, locale, character, realm, and capabilities.
 
 Open the tracer with `/al_trace`. Recording starts **paused**

@@ -1,4 +1,4 @@
-## Interface: 120100
+## Interface: 120105
 ## Title: Artisan Logbook
 ## Notes: Passively records observed crafting results.
 ## Version: 0.0.0-dev

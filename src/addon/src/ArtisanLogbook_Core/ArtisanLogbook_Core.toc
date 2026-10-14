@@ -1,4 +1,4 @@
-## Interface: 120100
+## Interface: 120105
 ## Title: Artisan Logbook Core
 ## Notes: Captures and stores observed crafting facts.
 ## Version: 0.0.0-dev
