@@ -254,6 +254,12 @@ test("configuration keeps exact localized quote stats and equipment instances wi
   guid = "Item-instance-B"
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
   assert(observed.equipment[1].guid == guid)
+  guid = "Item-" .. string.rep("x", 150)
+  local itemString = "item:1001" .. string.rep(":123", 600)
+  api.C_Item.GetItemLink = function() return "|H" .. itemString .. "|h[Tool]|h" end
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(observed.equipment[1].guid == guid and observed.equipment[1].itemString == itemString)
+  assert(observed.equipmentCoverage == "observed")
   api.C_Item.GetItemGUID = nil
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
   assert(observed.equipmentCoverage == "partial" and observed.equipment[1].guid == nil)

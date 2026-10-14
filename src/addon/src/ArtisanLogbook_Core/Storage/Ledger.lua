@@ -1,12 +1,10 @@
 local _, addon = ...
 
 local Ledger = {}
-Ledger.schemaVersion = 4
+Ledger.schemaVersion = 5
 Ledger.schemaIdentity = "ArtisanLogbookLedger"
 Ledger.retentionDays = 60
 Ledger.recentOperationLimit = 64
-Ledger.configurationLimit = 256
-Ledger.configurationsPerGrain = 8
 
 local maxInteger = 9007199254740991
 local legacySeriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent",
@@ -92,6 +90,7 @@ local function emptyDatabase()
     schemaIdentity = Ledger.schemaIdentity,
     nextCraftId = 1,
     nextRequestId = 1,
+    nextObservationKey = 1,
     crafts = {},
     craftSeries = {},
     resourcefulnessSets = {},
@@ -149,10 +148,10 @@ end
 
 local contextKinds = { personal = true, order = true, public = true, guild = true,
   ["personal-order"] = true, patron = true, unknown = true }
+local observationCollections = { "crafts", "requests", "craftSeries", "resourcefulnessSets", "reagentSeries",
+  "reagentRequirementSeries", "firstCraftRewards" }
 
-local function encodeObservation(value, depth)
-  depth = (depth or 0) + 1
-  if depth > 8 then error("observation nesting limit") end
+local function encodeObservation(value)
   if type(value) == "number" then
     if not isFinite(value) then error("invalid observation number") end
     return "n" .. string.format("%.17g", value) .. ";"
@@ -166,13 +165,11 @@ local function encodeObservation(value, depth)
   end
   table.sort(keys, function(left, right) return tostring(left) < tostring(right) end)
   for _, key in ipairs(keys) do
-    parts[#parts + 1] = encodeObservation(key, depth)
-    parts[#parts + 1] = encodeObservation(value[key], depth)
+    parts[#parts + 1] = encodeObservation(key)
+    parts[#parts + 1] = encodeObservation(value[key])
   end
   parts[#parts + 1] = "}"
-  local result = table.concat(parts)
-  if #result > 8192 then error("observation size limit") end
-  return result
+  return table.concat(parts)
 end
 
 local statShape = { rating = "number", ratingPct = "number", bonusRatingPct = "number" }
@@ -192,11 +189,11 @@ local function matchesShape(value, shape)
   if shape == "id" then return isInteger(value) end
   if shape == "count" then return isCount(value) end
   if shape == "number" then return isFinite(value) end
-  if shape == "string" then return type(value) == "string" and #value > 0 and #value <= 2048 end
+  if shape == "string" then return type(value) == "string" and #value > 0 end
   if shape == "boolean" then return type(value) == "boolean" end
   if type(value) ~= "table" or getmetatable(value) ~= nil then return false end
   if shape.list then
-    if not isDenseList(value) or #value > 64 then return false end
+    if not isDenseList(value) then return false end
     local previous = 0
     for _, entry in ipairs(value) do
       if not matchesShape(entry, shape.list) or not isInteger(entry[shape.key]) or entry[shape.key] <= previous then return false end
@@ -210,7 +207,7 @@ local function matchesShape(value, shape)
   return true
 end
 
-local function observationSignature(observation)
+local function observationSignature(observation, version)
   if not matchesShape(observation, observationShape) or type(observation.context) ~= "table" or
       not contextKinds[observation.context.kind] or
       (observation.context.isRecraft ~= nil and type(observation.context.isRecraft) ~= "boolean") or
@@ -222,7 +219,8 @@ local function observationSignature(observation)
     return nil, "invalid context provenance"
   end
   local missing = observation.configurationUnavailableReason
-  if missing ~= nil and (configuration or (missing ~= "capacity" and missing ~= "changed" and missing ~= "batch-unobserved")) then
+  local unavailable = version == 4 and "capacity" or "unavailable"
+  if missing ~= nil and (configuration or (missing ~= unavailable and missing ~= "changed" and missing ~= "batch-unobserved")) then
     return nil, "invalid configuration coverage"
   end
   if configuration then
@@ -240,30 +238,26 @@ local function observationSignature(observation)
   return signature
 end
 
-local function stageObservation(ledger, observation, capacity)
+local function stageObservation(ledger, observation)
   if observation == nil then return nil end
   local signature, reason = observationSignature(observation)
   if not signature then return nil, nil, reason end
   local existing = ledger.observationIndex[signature]
-  if existing and not capacity then return existing end
-  if observation.configuration and (capacity or ledger.configurationCount >= Ledger.configurationLimit) then
-    observation = { context = copyValue(observation.context), configurationUnavailableReason = "capacity" }
-    signature = assert(observationSignature(observation))
-    existing = ledger.observationIndex[signature]
-  end
   if existing then return existing end
-  return #ledger.database.observations + 1, { signature = signature, row = copyValue(observation) }
+  local key = ledger.database.nextObservationKey
+  if not canAllocate(key) then return nil, nil, "observation ID precision exhausted" end
+  return key, { signature = signature, row = copyValue(observation) }
 end
 
 local function commitObservation(ledger, key, staged)
   if not staged then return end
   ledger.database.observations[key] = staged.row
+  ledger.database.nextObservationKey = key + 1
   ledger.observationIndex[staged.signature] = key
-  if staged.row.configuration then ledger.configurationCount = ledger.configurationCount + 1 end
 end
 
 local function grainKey(recipeId, observationKey)
-  if observationKey then return tostring(recipeId or 0) .. ":" .. observationKey end
+  if observationKey then return string.format("%.17g:%.0f", recipeId or 0, observationKey) end
   return recipeId or 0
 end
 
@@ -456,22 +450,25 @@ local function validateDatabase(data, version)
     return nil, "unsupported ledger schema"
   end
   if version < 4 and data.observations ~= nil then return nil, "legacy schema has crafting observations" end
+  if version < 5 and data.nextObservationKey ~= nil then return nil, "legacy schema has observation allocator" end
   if v2 and data.outcomeVersion ~= nil then return nil, "schema 2+ does not support outcomeVersion" end
   if version >= 4 then
-    if not isArray(data.observations) then return nil, "invalid crafting observations" end
-    local seen, configurations = {}, 0
-    for _, observation in ipairs(data.observations) do
-      local signature, reason = observationSignature(observation)
+    if type(data.observations) ~= "table" or (version == 4 and not isArray(data.observations)) then
+      return nil, "invalid crafting observations"
+    end
+    local seen, highest = {}, 0
+    for key, observation in pairs(data.observations) do
+      if not isInteger(key) then return nil, "invalid observation key" end
+      highest = math.max(highest, key)
+      local signature, reason = observationSignature(observation, version)
       if not signature then return nil, reason end
       if seen[signature] then return nil, "duplicate crafting observation" end
       seen[signature] = true
-      if observation.configuration then configurations = configurations + 1 end
     end
-    if configurations > Ledger.configurationLimit or #data.observations > Ledger.configurationLimit + 252 then
-      return nil, "crafting observation capacity exceeded"
+    if version >= 5 and (not isInteger(data.nextObservationKey) or data.nextObservationKey <= highest) then
+      return nil, "nextObservationKey would reuse an existing observation key"
     end
-    for _, collection in ipairs({ "crafts", "requests", "craftSeries", "resourcefulnessSets", "reagentSeries",
-        "reagentRequirementSeries", "firstCraftRewards" }) do
+    for _, collection in ipairs(observationCollections) do
       for _, row in ipairs(data[collection] or {}) do
         if row.observationKey ~= nil and (not isInteger(row.observationKey) or not data.observations[row.observationKey]) then
           return nil, "missing crafting observation"
@@ -1409,10 +1406,9 @@ end
 
 function Ledger:RebuildIndexes()
   self.recipeOrder = nil
-  self.observationIndex, self.configurationCount, self.configurationGrains = {}, 0, {}
-  for key, observation in ipairs(self.database.observations) do
+  self.observationIndex = {}
+  for key, observation in pairs(self.database.observations) do
     self.observationIndex[assert(observationSignature(observation))] = key
-    if observation.configuration then self.configurationCount = self.configurationCount + 1 end
   end
   self.returnSetIndex = returnIndex(self.database.resourcefulnessSets, "returnedItemSet")
   self.reagentIndex = returnIndex(self.database.reagentSeries, "itemId")
@@ -1439,11 +1435,6 @@ function Ledger:RebuildIndexes()
     end
     local group = seriesGroup(self.seriesByKey, row.bucketStart, row.characterDimensionId)
     group[grainKey(row.recipeId, row.observationKey)] = row
-    local observation = self.database.observations[row.observationKey]
-    if observation and observation.configuration then
-      local key = row.bucketStart .. ":" .. (row.characterDimensionId or 0) .. ":" .. (row.recipeId or 0)
-      self.configurationGrains[key] = (self.configurationGrains[key] or 0) + 1
-    end
     indexSeriesChoices(self, row.characterDimensionId, row.recipeId)
     if row.recipeId then
       self.recipeCounts[row.recipeId] = (self.recipeCounts[row.recipeId] or 0) + row.craftCount
@@ -1591,7 +1582,7 @@ local function openDatabase(database, clock, options)
     data = copyValue(database)
   end
   if data.schemaIdentity ~= Ledger.schemaIdentity or
-      (data.schemaVersion ~= 1 and data.schemaVersion ~= 2 and data.schemaVersion ~= 3 and
+      (data.schemaVersion ~= 1 and data.schemaVersion ~= 2 and data.schemaVersion ~= 3 and data.schemaVersion ~= 4 and
         data.schemaVersion ~= Ledger.schemaVersion) then
     return nil, "ledger data refused: unsupported ledger schema"
   end
@@ -1623,6 +1614,20 @@ local function openDatabase(database, clock, options)
     data.schemaVersion, data.observations = 4, {}
     migration = migration or { fromSchemaVersion = 3 }
     migration.toSchemaVersion = 4
+  end
+  if data.schemaVersion == 4 then
+    local valid, reason = validateDatabase(data, 4)
+    if valid then valid, reason = validateOutcomes(data, 4) end
+    if not valid then return nil, "ledger data refused: schema 4 migration failed: " .. tostring(reason) end
+    data.nextObservationKey = #data.observations + 1
+    for _, observation in ipairs(data.observations) do
+      if observation.configurationUnavailableReason == "capacity" then
+        observation.configurationUnavailableReason = "unavailable"
+      end
+    end
+    data.schemaVersion = 5
+    migration = migration or { fromSchemaVersion = 4 }
+    migration.toSchemaVersion = 5
   end
   local valid, reason = validateDatabase(data)
   if not valid then
@@ -2353,17 +2358,6 @@ function Ledger:RecordResult(result, expectedRequirements)
   local observationKey, stagedObservation, observationReason = stageObservation(self, craftObservation)
   if observationReason then return nil, observationReason end
   craft.observationKey = observationKey
-  local session = self.dimensionRows.session[craft.sessionId]
-  local characterId = session and session.characterDimensionId
-  local configurationGrain = dayOf(timestamp) .. ":" .. (characterId or 0) .. ":" .. (craft.recipeId or 0)
-  local day = self.seriesByKey[dayOf(timestamp)]
-  local group = day and day[characterId or 0]
-  local existing = group and group[grainKey(craft.recipeId, observationKey)]
-  if craftObservation and craftObservation.configuration and not existing and
-      (self.configurationGrains[configurationGrain] or 0) >= Ledger.configurationsPerGrain then
-    observationKey, stagedObservation = stageObservation(self, craftObservation, true)
-    craft.observationKey = observationKey
-  end
   local stagedSeries
   stagedSeries, reason = stageSeries(self.seriesByKey, self.dimensionRows.session, craft)
   if not stagedSeries then return nil, reason end
@@ -2376,10 +2370,6 @@ function Ledger:RecordResult(result, expectedRequirements)
   if not stagedOutcomes then return nil, reason end
   commitDimensions(self, stagedDimensions)
   commitObservation(self, observationKey, stagedObservation)
-  local committedObservation = data.observations[observationKey]
-  if not stagedSeries.existing and committedObservation and committedObservation.configuration then
-    self.configurationGrains[configurationGrain] = (self.configurationGrains[configurationGrain] or 0) + 1
-  end
   commitStagedSeries(data, self.seriesByKey, self.seriesDays, stagedSeries)
   commitGrains(data.resourcefulnessSets, self.returnSetIndex, stagedOutcomes.sets)
   commitGrains(data.reagentSeries, self.reagentIndex, stagedOutcomes.reagents)
@@ -2742,6 +2732,15 @@ function Ledger:Prune(now)
     end
   end
   data.requests = keptRequests
+  local observations = {}
+  for _, collection in ipairs(observationCollections) do
+    for _, row in ipairs(data[collection]) do
+      if row.observationKey then observations[row.observationKey] = true end
+    end
+  end
+  for key in pairs(data.observations) do
+    if not observations[key] then data.observations[key] = nil end
+  end
   if self.craftById then self:RebuildIndexes() end
   return removed
 end

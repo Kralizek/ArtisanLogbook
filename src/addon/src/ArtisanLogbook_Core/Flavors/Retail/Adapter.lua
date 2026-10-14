@@ -388,8 +388,8 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
             entry.itemID = number(safeQuery(itemApi.GetItemID, location))
             local guid = safeQuery(itemApi.GetItemGUID, location)
             local link = safeQuery(itemApi.GetItemLink, location)
-            if type(guid) == "string" and #guid > 0 and #guid <= 128 then entry.guid = guid end
-            if type(link) == "string" and #link <= 2048 then entry.itemString = link:match("(item:[^|]+)") end
+            if type(guid) == "string" and #guid > 0 then entry.guid = guid end
+            if type(link) == "string" then entry.itemString = link:match("(item:[^|]+)") end
             if not entry.itemID or not entry.guid or not entry.itemString then complete = false end
           else complete = false end
           equipment[#equipment + 1] = entry
