@@ -677,6 +677,27 @@ test("newer and failed schemas are refused without changing saved data", functio
   assert(Ledger.New(malformedDimensions) == nil)
 end)
 
+test("configuration conditions exclude context scope and coverage without dropping unknown fields", function()
+  local personal = { context = { kind = "personal", isRecraft = false, source = "submitted-call" },
+    configuration = { scope = "request", statsCoverage = "partial", stats = { baseSkill = 123.125 },
+      buffsCoverage = "supported-list", buffListVersion = 1, buffs = {}, useConcentration = false } }
+  local order = Ledger.CopyObservation(personal)
+  order.context = { kind = "patron", isRecraft = true, source = "claimed-order" }
+  order.configuration.scope, order.configuration.statsCoverage = "attempt-start", "reported"
+  local first, conditions = Ledger.SplitObservation(personal)
+  local second, same = Ledger.SplitObservation(order)
+  assert(serializedSize(conditions) == serializedSize(same) and conditions.stats.baseSkill == same.stats.baseSkill)
+  assert(first.craftType == "personal" and first.isRecraft == false and first.configurationScope == "request")
+  assert(second.craftType == "patron" and second.isRecraft == true and second.configurationScope == "attempt-start")
+  assert(first.statsCoverage == "partial" and second.statsCoverage == "reported")
+  assert(conditions.scope == nil and conditions.statsCoverage == nil and conditions.context == nil)
+  assert(conditions.buffListVersion == nil and first.buffListVersion == 1)
+  assert(conditions.stats.multicraft == nil and conditions.equipment == nil and #conditions.buffs == 0)
+  assert(conditions.useConcentration == false)
+  conditions.stats.baseSkill = 999
+  assert(personal.configuration.stats.baseSkill == 123.125)
+end)
+
 test("unified observations partition every measurement and survive pruning without stale attribution", function()
   local ledger, clock = newLedger()
   local personal = { context = { kind = "personal", source = "submitted-call", isRecraft = false },
@@ -690,18 +711,18 @@ test("unified observations partition every measurement and survive pruning witho
   end
   local first = craft(personal, 1, true)
   local second = craft(order, 2, false)
-  assert(first.observationKey ~= second.observationKey and #ledger.database.craftSeries == 2)
+  assert(first.configurationKey ~= second.configurationKey and #ledger.database.craftSeries == 2)
   assert(#ledger.database.resourcefulnessSets == 2 and #ledger.database.reagentSeries == 2)
   craft(personal, 3, true)
-  assert(#ledger.database.observations == 2 and ledger.database.craftSeries[1].craftCount == 2)
+  assert(#ledger.database.configurations == 1 and ledger.database.craftSeries[1].craftCount == 2)
   assert(ledger:SubmitCraft(12, 2, false, nil, {}, nil, true, personal))
   assert(ledger:SubmitCraft(12, 1, false, nil, {}, nil, false, order))
   local ambiguous = assert(ledger:RecordResult({ operationID = 4, itemID = 100, quantity = 1 }))
-  assert(ambiguous.observationKey == nil and ambiguous.requestId == nil)
+  assert(ambiguous.configurationKey == nil and ambiguous.requestId == nil)
   clock.current = clock.current + 61 * 86400
   ledger:Prune(clock.current)
   local reloaded = assert(Ledger.New(ledger.database, clock))
-  assert(#reloaded.database.crafts == 0 and #reloaded.database.observations == 2)
+  assert(#reloaded.database.crafts == 0 and #reloaded.database.configurations == 1)
   assert(#reloaded.database.craftSeries == 3 and #reloaded.database.reagentSeries == 2)
 end)
 
@@ -711,18 +732,17 @@ test("batch configurations require fresh begin evidence and changes invalidate o
     configuration = { scope = "request", stats = { baseSkill = 100 } } }
   assert(ledger:SubmitCraft(12, 4, false, nil, {}, nil, true, observation))
   local first = assert(ledger:RecordResult({ operationID = 1, itemID = 100, quantity = 1 }))
-  assert(ledger.database.observations[first.observationKey].configuration.scope == "request")
+  assert(first.configurationScope == "request")
   local second = assert(ledger:RecordResult({ operationID = 2, itemID = 100, quantity = 1 }))
-  assert(ledger.database.observations[second.observationKey].configurationUnavailableReason == "batch-unobserved")
+  assert(second.configurationKey == nil and second.configurationUnavailableReason == "batch-unobserved")
   observation.configuration.scope, observation.configuration.stats.baseSkill = "attempt-start", 110
   ledger:ObserveAttempt(12, observation)
   local third = assert(ledger:RecordResult({ operationID = 3, itemID = 100, quantity = 1 }))
-  assert(ledger.database.observations[third.observationKey].configuration.stats.baseSkill == 110)
+  assert(ledger.database.configurations[third.configurationKey].stats.baseSkill == 110)
   ledger:ObserveAttempt(12, observation)
   ledger:ConfigurationChanged()
   local fourth = assert(ledger:RecordResult({ operationID = 4, itemID = 100, quantity = 1 }))
-  local captured = ledger.database.observations[fourth.observationKey]
-  assert(captured.context.kind == "personal" and captured.configurationUnavailableReason == "changed")
+  assert(fourth.configurationKey == nil and fourth.craftType == "personal" and fourth.configurationUnavailableReason == "changed")
   assert(fourth.outcomeSource == "native")
 end)
 
@@ -733,16 +753,16 @@ test("observation validation and unknown recipe repair preserve the same evidenc
   ledger:InvalidateCraft("CraftEnchant", observation)
   local craft = assert(ledger:RecordResult({ operationID = 1, itemID = 100, quantity = 1,
     resourcesReturned = { { reagent = { itemID = 101 }, quantity = 1 } } }))
-  assert(craft.recipeId == nil and craft.observationKey ~= nil)
+  assert(craft.recipeId == nil and craft.configurationKey ~= nil)
   ledger:AddDimension("recipe", 12)
   assert(ledger:LearnRecipeOutput(12, 100))
   assert(ledger:RepairUnknownRecipes())
-  assert(ledger.database.craftSeries[1].recipeId == 12 and ledger.database.craftSeries[1].observationKey == craft.observationKey)
-  assert(ledger.database.resourcefulnessSets[1].observationKey == craft.observationKey)
-  assert(ledger.database.reagentSeries[1].observationKey == craft.observationKey)
+  assert(ledger.database.craftSeries[1].recipeId == 12 and ledger.database.craftSeries[1].configurationKey == craft.configurationKey)
+  assert(ledger.database.resourcefulnessSets[1].configurationKey == craft.configurationKey)
+  assert(ledger.database.reagentSeries[1].configurationKey == craft.configurationKey)
   local original = ledger.database
   assert(Ledger.New(original, clock))
-  original.observations[craft.observationKey].configuration.stats.multicraft.rating = "invalid"
+  original.configurations[craft.configurationKey].stats.multicraft.rating = "invalid"
   unchangedAfter(original, function() return Ledger.New(original, clock) end)
 end)
 
@@ -759,71 +779,99 @@ test("pruning collects only orphan snapshots and never reuses surviving or delet
   local orphan = assert(ledger:SubmitCraft(12, 1, false, nil, {}, nil, true, observation(12)))
   ledger:CancelCraft()
   ledger:Prune(clock.current)
-  assert(ledger.database.observations[request.observationKey] and ledger.database.observations[orphan.observationKey])
-  local nextKey = ledger.database.nextObservationKey
+  assert(ledger.database.configurations[request.configurationKey] and ledger.database.configurations[orphan.configurationKey])
+  local nextKey = ledger.database.nextConfigurationKey
   clock.current = clock.current + 61 * 86400
   ledger:Prune(clock.current)
   assert(#ledger.database.crafts == 0 and #ledger.database.requests == 0)
-  assert(ledger.database.observations[request.observationKey] == nil)
-  assert(ledger.database.observations[orphan.observationKey] == nil)
-  assert(ledger.database.observations[craft.observationKey].configuration.stats.multicraft.rating == 11)
-  assert(ledger.database.nextObservationKey == nextKey)
+  assert(ledger.database.configurations[request.configurationKey] == nil)
+  assert(ledger.database.configurations[orphan.configurationKey] == nil)
+  assert(ledger.database.configurations[craft.configurationKey].stats.multicraft.rating == 11)
+  assert(ledger.database.nextConfigurationKey == nextKey)
   local loaded = assert(Ledger.New(ledger.database, clock))
-  assert(loaded.database.observations[craft.observationKey])
+  assert(loaded.database.configurations[craft.configurationKey])
   loaded:CreateSession({ characterGUID = "Player-Sanitized", realmName = "Sanitized Realm" })
   local repeated = assert(loaded:SubmitCraft(12, 1, false, nil, {}, nil, true, observation(11, "attempt-start")))
-  assert(repeated.observationKey == craft.observationKey and loaded.database.nextObservationKey == nextKey)
+  assert(repeated.configurationKey == craft.configurationKey and loaded.database.nextConfigurationKey == nextKey)
   local fresh = assert(loaded:SubmitCraft(12, 1, false, nil, {}, nil, true, observation(12)))
-  assert(fresh.observationKey == nextKey and fresh.observationKey ~= orphan.observationKey)
+  assert(fresh.configurationKey == nextKey and fresh.configurationKey ~= orphan.configurationKey)
   loaded:ClearHistory()
-  assert(next(loaded.database.observations) == nil and loaded.database.nextObservationKey == nextKey + 1)
+  assert(next(loaded.database.configurations) == nil and loaded.database.nextConfigurationKey == nextKey + 1)
 end)
 
 test("snapshot collection marks every retained fact request and durable aggregate root", function()
   local ledger, clock = newLedger()
   local data = ledger.database
   for key = 1, 8 do
-    data.observations[key] = { context = { kind = "personal" },
-      configuration = { scope = "request", stats = { baseSkill = key } } }
+    data.configurations[key] = { stats = { baseSkill = key } }
   end
-  data.nextObservationKey = 9
-  data.crafts = { { id = 1, timestamp = clock.current, observationKey = 1 } }
-  data.requests = { { id = 1, timestamp = clock.current, observationKey = 2 } }
+  data.nextConfigurationKey = 9
+  data.crafts = { { id = 1, timestamp = clock.current, configurationKey = 1 } }
+  data.requests = { { id = 1, timestamp = clock.current, configurationKey = 2 } }
   for index, collection in ipairs({ "craftSeries", "resourcefulnessSets", "reagentSeries",
       "reagentRequirementSeries", "firstCraftRewards" }) do
-    data[collection] = { { observationKey = index + 2 } }
+    data[collection] = { { configurationKey = index + 2 } }
   end
   Ledger.Prune({ database = data, wall = clock.wall }, clock.current)
-  for key = 1, 7 do assert(data.observations[key], "lost root " .. key) end
-  assert(data.observations[8] == nil and data.nextObservationKey == 9)
+  for key = 1, 7 do assert(data.configurations[key], "lost root " .. key) end
+  assert(data.configurations[8] == nil and data.nextConfigurationKey == 9)
 end)
 
-test("schema 4 migration preserves keys and unavailable history without replaying aggregates", function()
+test("master schema 3 migrates directly to final schema 4 without replaying aggregates", function()
   local ledger, clock = newLedger()
-  local snapshot = { context = { kind = "personal", source = "submitted-call" },
-    configuration = { scope = "request", stats = { baseSkill = 101.125 } } }
-  local request = assert(ledger:SubmitCraft(12, 1, false, nil, {}, nil, true, snapshot))
-  local craft = assert(ledger:RecordResult({ operationID = 1, itemID = 100, quantity = 3 }))
+  local request = assert(ledger:SubmitCraft(12, 1, false, nil, {}, nil, true))
+  local craft = assert(ledger:RecordResult({ operationID = 1, itemID = 100, quantity = 3,
+    resourcesReturned = { { reagent = { itemID = 101 }, quantity = 1 } } }))
   local data = ledger.database
-  data.schemaVersion, data.nextObservationKey = 4, nil
-  data.observations[2] = { context = { kind = "personal", source = "submitted-call" },
-    configurationUnavailableReason = "capacity" }
-  data.crafts[1].observationKey, data.craftSeries[1].observationKey = 2, 2
+  data.schemaVersion, data.configurations, data.nextConfigurationKey = 3, nil, nil
   local before = serializedSize(data)
   local loaded = assert(Ledger.New(data, clock))
-  assert(data.schemaVersion == 4 and data.observations[2].configurationUnavailableReason == "capacity")
-  assert(serializedSize(data) == before and data.nextObservationKey == nil)
-  assert(loaded.database.schemaVersion == 5 and loaded.database.nextObservationKey == 3)
-  assert(loaded.database.observations[request.observationKey].configuration.stats.baseSkill == 101.125)
-  assert(loaded.database.observations[2].configuration == nil)
-  assert(loaded.database.observations[2].configurationUnavailableReason == "unavailable")
+  assert(data.schemaVersion == 3 and data.configurations == nil)
+  assert(serializedSize(data) == before and data.nextConfigurationKey == nil)
+  assert(loaded.database.schemaVersion == 4 and loaded.database.nextConfigurationKey == 1)
+  assert(loaded.migration.fromSchemaVersion == 3 and loaded.migration.toSchemaVersion == 4)
+  assert(next(loaded.database.configurations) == nil and loaded.database.requests[1].id == request.id)
+  assert(loaded.database.crafts[1].craftType == nil and loaded.database.crafts[1].configurationKey == nil)
   assert(loaded.database.crafts[1].id == craft.id and loaded.database.craftSeries[1].outputQuantity == 3)
+  assert(loaded.database.resourcefulnessSets[1].craftCount == 1 and loaded.database.reagentSeries[1].returnedQuantity == 1)
   local reloaded = assert(Ledger.New(loaded.database, clock))
   assert(reloaded.migration == nil and serializedSize(reloaded.database) == serializedSize(loaded.database))
-  data.crafts[1].observationKey = 99
-  unchangedAfter(data, function() return Ledger.New(data, clock) end)
-  loaded.database.nextObservationKey = 2
+  loaded.database.crafts[1].configurationKey = 99
   unchangedAfter(loaded.database, function() return Ledger.New(loaded.database, clock) end)
+end)
+
+test("master-generated schema 3 fixture preserves every fact and aggregate through direct migration", function()
+  local fixtureData = assert(loadfile(testsRoot .. "/fixtures/legacy/ledger-schema3.lua"))()
+  local expected = Ledger.CopyObservation(fixtureData)
+  local function same(actual, wanted)
+    assert(type(actual) == type(wanted))
+    if type(wanted) ~= "table" then assert(actual == wanted); return end
+    for key, value in pairs(wanted) do same(actual[key], value) end
+    for key in pairs(actual) do assert(wanted[key] ~= nil, tostring(key)) end
+  end
+  local clock = { current = 1800000000 }
+  clock.wall = function() return clock.current end
+  local loaded = assert(Ledger.New(fixtureData, clock))
+  same(fixtureData, expected)
+  expected.schemaVersion, expected.configurations, expected.nextConfigurationKey = 4, {}, 1
+  same(loaded.database, expected)
+  assert(loaded.migration.fromSchemaVersion == 3 and loaded.migration.toSchemaVersion == 4)
+  same(assert(Ledger.New(loaded.database, clock)).database, expected)
+  clock.current = clock.current + 61 * 86400
+  loaded:Prune(clock.current)
+  expected.crafts, expected.requests, expected.reagents = {}, {}, {}
+  same(loaded.database, expected)
+end)
+
+test("unreleased review schemas are rejected instead of migrated", function()
+  local ledger, clock = newLedger()
+  local draft = ledger.database
+  draft.configurations, draft.nextConfigurationKey = nil, nil
+  draft.observations, draft.nextObservationKey = {}, 1
+  for _, version in ipairs({ 4, 5 }) do
+    draft.schemaVersion = version
+    unchangedAfter(draft, function() return Ledger.New(draft, clock) end)
+  end
 end)
 
 test("large valid snapshots preserve all entries strings and floating point values", function()
@@ -838,9 +886,9 @@ test("large valid snapshots preserve all entries strings and floating point valu
   local observation = { context = { kind = "personal" }, configuration = configuration }
   local first = assert(ledger:SubmitCraft(12, 1, false, nil, {}, nil, true, observation))
   local second = assert(ledger:SubmitCraft(12, 1, false, nil, {}, nil, true, Ledger.CopyObservation(observation)))
-  assert(first.observationKey == second.observationKey)
+  assert(first.configurationKey == second.configurationKey)
   local loaded = assert(Ledger.New(ledger.database, clock))
-  local stored = loaded.database.observations[first.observationKey].configuration
+  local stored = loaded.database.configurations[first.configurationKey]
   assert(#stored.finishingReagents == 80 and stored.equipment[80].itemString == configuration.equipment[80].itemString)
   assert(stored.stats.multicraft.rating == configuration.stats.multicraft.rating)
   assert(stored.stats.multicraft.ratingPct == configuration.stats.multicraft.ratingPct)
@@ -889,12 +937,61 @@ test("configuration storage growth follows cardinality without losing equipment 
     local total = 0
     for _, row in ipairs(loaded.database.craftSeries) do total = total + row.craftCount end
     assert(total == 10000 and #loaded.database.craftSeries == cardinality)
-    assert(rowCount(loaded.database.observations) == cardinality)
+    assert(rowCount(loaded.database.configurations) == cardinality)
     local durableBytes = serializedSize(loaded.database)
     assert(durableBytes > previousBytes)
     previousBytes = durableBytes
     print(string.format("CONFIG 10000 crafts / %d configurations: capture %.2fs; retained %d bytes; runtime %.0f KiB; durable %d bytes; prune %.3fs; reload %.3fs",
       cardinality, elapsed, retainedBytes, used, durableBytes, pruneElapsed, reloadElapsed))
+  end
+end)
+
+test("mixed contexts scopes and coverage reuse conditions without multiplying snapshot storage", function()
+  local kinds = { "personal", "patron", "public", "guild", "personal-order", "order" }
+  for _, populationCount in ipairs({ 1, 6, 48 }) do
+    collectgarbage("collect")
+    local ledger, clock = newLedger()
+    local started, memory = os.clock(), collectgarbage("count")
+    local coupled, seen = {}, {}
+    for index = 1, 12000 do
+      local variant = math.floor((index - 1) * populationCount / 12000)
+      local kind = kinds[variant % 6 + 1]
+      local recraft = math.floor(variant / 6) % 2 == 1
+      local scope = math.floor(variant / 12) % 2 == 1 and "attempt-start" or "request"
+      local coverage = math.floor(variant / 24) % 2 == 1 and "partial" or "reported"
+      local observation = { context = { kind = kind, isRecraft = recraft,
+        source = (kind == "personal" or kind == "order") and "submitted-call" or "claimed-order" },
+        configuration = { scope = "request", statsCoverage = coverage, useConcentration = false,
+          stats = { baseSkill = 250, bonusSkill = 20, multicraft = { rating = 180, ratingPct = 12.5, bonusRatingPct = 0 } },
+          equipmentCoverage = "observed", equipment = { { slot = 20, itemID = 1001, guid = "Item-Sanitized-Tool",
+            itemString = "item:1001:123:0:0:0" } }, buffsCoverage = "supported-list", buffListVersion = 1,
+          buffs = { { spellID = 432306, applications = 1 } }, finishingCoverage = "submitted",
+          finishingReagents = { { itemID = 222, quantity = 1 } } } }
+      assert(ledger:SubmitCraft(12, 1, false, nil, { { dataSlotIndex = 1, reagent = { itemID = 101 }, quantity = 5 } },
+        nil, kind == "personal", observation))
+      observation.configuration.scope = scope
+      if scope == "attempt-start" then ledger:ObserveAttempt(12, observation) end
+      local craft = assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = 2, multicraft = 1,
+        resourcesReturned = index % 5 == 0 and { { reagent = { itemID = 101 }, quantity = 1 } } or nil }))
+      local key = Ledger.GrainKey(nil, craft)
+      if not seen[key] then seen[key] = true; coupled[#coupled + 1] = observation end
+    end
+    local elapsed, retainedBytes = os.clock() - started, serializedSize(ledger.database)
+    collectgarbage("collect")
+    local used = collectgarbage("count") - memory
+    clock.current = clock.current + 61 * 86400
+    local pruneStart = os.clock()
+    ledger:Prune(clock.current)
+    local pruneElapsed, reloadStart = os.clock() - pruneStart, os.clock()
+    local loaded = assert(Ledger.New(ledger.database, clock))
+    local reloadElapsed = os.clock() - reloadStart
+    assert(rowCount(loaded.database.configurations) == 1 and #loaded.database.craftSeries == populationCount)
+    local total = 0
+    for _, row in ipairs(loaded.database.craftSeries) do total = total + row.craftCount; assert(row.configurationKey == 1) end
+    assert(total == 12000 and #coupled == populationCount)
+    print(string.format("MIXED 12000 crafts / %d populations: 1 configuration; conditions %d bytes; coupled reference %d bytes; retained %d bytes; durable %d bytes; runtime %.0f KiB; capture %.2fs; prune %.3fs; reload %.3fs",
+      populationCount, serializedSize(loaded.database.configurations), serializedSize(coupled), retainedBytes,
+      serializedSize(loaded.database), used, elapsed, pruneElapsed, reloadElapsed))
   end
 end)
 
@@ -906,14 +1003,14 @@ test("every distinct configuration retains exact values beyond former admission 
       configuration = { scope = "request", stats = { baseSkill = index } } }))
     assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = 1 }))
   end
-  assert(#ledger.database.observations == 300)
+  assert(#ledger.database.configurations == 300)
   assert(#ledger.database.craftSeries == 300)
   local total = 0
   for _, row in ipairs(ledger.database.craftSeries) do total = total + row.craftCount end
   assert(total == 300)
-  local last = ledger.database.observations[ledger.database.crafts[300].observationKey]
-  assert(last.context.kind == "personal" and last.configuration.stats.baseSkill == 300)
-  assert(last.configurationUnavailableReason == nil)
+  local last = ledger.database.configurations[ledger.database.crafts[300].configurationKey]
+  assert(ledger.database.crafts[300].craftType == "personal" and last.stats.baseSkill == 300)
+  assert(ledger.database.crafts[300].configurationUnavailableReason == nil)
   assert(Ledger.New(ledger.database, clock))
 end)
 
@@ -3250,8 +3347,8 @@ test("issue 30 schema-2 migration preserves facts and is idempotent without inve
   end
   schema2 = copy(ledger.database)
   schema2.schemaVersion = 2
-  schema2.observations = nil
-  schema2.nextObservationKey = nil
+  schema2.configurations = nil
+  schema2.nextConfigurationKey = nil
   schema2.reagentRequirementSeries = nil
   for _, row in ipairs(schema2.craftSeries) do row.grossRequirementsCompleteCount = nil end
   for _, fact in ipairs(schema2.crafts) do
