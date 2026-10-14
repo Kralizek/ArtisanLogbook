@@ -23,6 +23,9 @@ tooltips and Craft Detail distinguish ordinary personal crafting from personal
 orders; recrafting is independent. Craft Detail's Ingredients/Configuration tabs
 inspect quote scope, stats, equipment, supported buffs and finishing selections
 with explicit missing information. This does not add a configuration comparison UI.
+Known configurations are never hidden or downgraded to satisfy a storage quota.
+Missing configuration labels describe capture gaps or historically unavailable
+data; aggregate-backed configurations remain available after detail pruning.
 See [the in-game checklist](crafting-observations.md#in-game-verification).
 
 The persistent dark sidebar contains Overview, Logbook, Recipes, Reagents, pinned recipes,

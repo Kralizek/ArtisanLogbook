@@ -12,6 +12,10 @@ The additive context/configuration filters, detached craft projections and
 [Crafting observations: Public API](crafting-observations.md#public-api).
 Every measurement retains independent coverage; a quote is not a completed
 operation's effective-stat report. Existing daily-series granularity is unchanged.
+All successfully observed configurations are retained without admission quotas.
+Configuration keys remain stable through pruning and orphan collection; paging
+does not limit retained configurations. The retired `configurationCapacityLimitedCount`
+field is no longer returned. Previously lost configurations remain unavailable.
 
 UI and addon consumers use the global `ArtisanLogbookAPI`, not SavedVariables,
 dimension rows, or the private Core addon namespace. The API is loaded before

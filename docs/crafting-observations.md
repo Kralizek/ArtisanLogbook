@@ -1,8 +1,8 @@
 # Craft Context and Configuration
 
 Issues #25 and #29 share one capture and persistence extension. Core records
-observations, not prices, inventory, profitability or causal estimates. Schema 4
-extends schema 3; public API v1 remains additive.
+observations, not prices, inventory, profitability or causal estimates. Schema 5
+preserves exact configurations without admission quotas; public API v1 remains additive.
 
 ## Evidence Sources
 
@@ -96,7 +96,7 @@ partial and unavailable. An absent array does not mean an empty set. An empty
 supported buff list does not mean no other crafting buffs. No all-configuration
 "complete" flag is provided.
 
-## Durable Model and Bounds
+## Durable Model and Retention
 
 `observations` interns canonical context/configuration snapshots. Retained
 requests/crafts and all five existing durable collections use an optional
@@ -107,57 +107,90 @@ use the same partition as their parent craft. Existing #24/#31 coverage rules an
 item-level matched savings are unchanged. Unknown-recipe repair transfers the
 same observation partition, not a reconstructed configuration.
 
-- At most 256 exact configuration snapshots account-wide, each at most 8 KiB in
-  canonical form. Arrays are bounded and validated. Repeated equal snapshots
-  reuse their key, independent of table iteration order.
-- At most eight new configuration-bearing daily grains per recipe/character/day
-  are admitted during capture. Already admitted grains keep accumulating.
-- Overflow uses a context-preserving `capacity` partition. Context, outputs,
-  procs, inputs and returns are not dropped. An available original request
-  snapshot remains separately inspectable, not substituted into that partition.
-- The fixed context/recraft/provenance/missing-reason space is bounded separately.
-  No order-ID dimension or per-craft aggregate-membership archive is added.
-- Exact values are not rounded or put into rating buckets. Bucketing would lose
-  comparisons at boundaries while still needing policy for gear/buff combinations.
-- Admission is first-observed, **not random or representative sampling**. Requests
-  which never complete can occupy dictionary entries. Bounded orphan entries are
-  not compacted/reused on pruning, preserving referenced keys. Clear/purge clears
-  the dictionary with the history. A future retention/admission policy can improve
-  long-running coverage without inventing lost configurations.
+- Every valid observed configuration is retained at its reported precision. There
+  is no account-wide quota, per-grain quota, overflow partition, rounding or lossy
+  bucketing. The old per-snapshot byte/string/list quotas are also removed.
+  Structural validation still rejects malformed types, non-finite measurements,
+  duplicate/unsorted identities and unsupported provenance.
+- Repeated equal snapshots reuse the same canonical key, independent of table
+  iteration order. Distinct ratings, tool instances, buffs and selected inputs do
+  not collapse into one configuration. Canonical numeric signatures use 17-digit
+  round-trip precision; persisted measurement values are not converted or rounded.
+- `observations` is a sparse numeric-keyed map. `nextObservationKey` is a validated
+  monotonic allocator, independent of the number of live snapshots. Deleting a
+  snapshot never renumbers another or makes its old key identify a different one.
+- After the existing craft/request/reagent pruning pass, mark keys referenced by
+  retained `crafts`, retained `requests`, `craftSeries`, `resourcefulnessSets`,
+  `reagentSeries`, `reagentRequirementSeries`, and `firstCraftRewards`. Delete only
+  unmarked snapshots. Runtime canonical indexes rebuild after collection. This
+  also runs on load, after complete migration/validation, not on every capture.
+- An abandoned request keeps its snapshot until that request expires. A separate
+  request-time snapshot can be collected once its request expires if only the
+  craft-start snapshot remains referenced. Durable aggregate references protect
+  their snapshots indefinitely, even after all detailed crafts are gone.
+- No per-craft membership archive or persisted reference counts are added. The
+  mark pass uses the existing records, avoiding counter drift during migration,
+  repair or pruning. Collection costs one pass over surviving rows and snapshots.
+  ClearHistory clears snapshots but preserves the allocator; explicit full purge
+  resets the entire database, including its key namespace.
 
 Capture scales with snapshot fields, inputs, returns and touched aggregate grains,
 not all history. Indexes rebuild on load. Queries visit selected daily grains;
-configuration summary results are paged at 50 by default, maximum 200. The public
+configuration summary results are paged at 50 by default, maximum 200 per response,
+with all remaining configurations accessible through cursors. This is not a
+retention or admission limit. The public
 daily-series API combines selected partitions back into its original grain.
 The longstanding session operation-ID registry and retained details still grow
 with session/craft count; these are not configuration dictionaries.
 
-Representative Lua 5.1 container run, 50,000 crafts, one day/character/recipe,
-one input, returns on 20%, full retained detail before pruning:
+Representative Lua 5.1 container run: each workload has 10,000 crafts at one
+day/character/recipe grain, returns on 20%, and an optional finishing input.
+Configurations repeat in contiguous batches. Variants include two same-base-item
+tool GUIDs, a stable accessory, a supported phial active/absent, finishing reagent
+selected/absent, concentration on/off and exact fractional stat changes. These
+are sanitized synthetic API-shaped observations, not assumed game stat formulas.
+The 10,000-configuration case is an adversarial unique-state workload, not typical
+crafting. Every configuration and its aggregate is asserted to survive pruning
+and reload; reported cardinalities are observations, not limits.
 
-| Workload | Capture | Retained estimated Lua bytes | Runtime delta | After pruning | Profiles / daily grains | Pruned reload |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| One repeated configuration | 8.54 s | 52,604,598 | 145,569 KiB | 3,446 bytes | 1 / 1 | 0.009 s |
-| Every craft changes rating and tool GUID | 11.04 s | 52,824,399 | 146,200 KiB | 123,106 bytes | 257 / 9 | 0.035 s |
+| Configurations | Capture | Retained estimated Lua bytes | Runtime delta | Pruned bytes | Prune | Reload |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2.41 s | 10,453,309 | 29,718 KiB | 4,157 | 0.015 s | <0.001 s |
+| 16 | 2.40 s | 11,923,258 | 33,050 KiB | 45,355 | 0.012 s | 0.003 s |
+| 256 | 2.37 s | 12,597,900 | 34,491 KiB | 699,927 | 0.027 s | 0.055 s |
+| 1,024 | 2.58 s | 14,698,862 | 39,116 KiB | 2,794,132 | 0.095 s | 0.207 s |
+| 10,000 | 2.96 s | 37,117,426 | 90,188 KiB | 25,191,036 | 1.166 s | 2.803 s |
 
-These are measurements, not client performance guarantees. Existing 50k-craft
-API benchmarks also exercise duplicate-input item totals, migration and queries.
-Detailed history is still the dominant cost until retention pruning.
+Storage grows with actual configuration cardinality and its observed aggregate
+grains. Deduplication is effective for repeated states; durable configuration
+data can dominate at high cardinality. GC cannot shrink this live history without
+losing analysis data, so fidelity takes precedence. These are measurements, not
+client performance guarantees. Existing 50k-craft API benchmarks still exercise
+duplicate-input item totals, migration and queries.
 
 ## Migration
 
 The original SavedVariables are cloned and validated. Schemas 1 and 2 pass through
 their existing migrations; validated schema 3 gains an empty observation
-dictionary and schema version 4 before final validation and pruning. The original
+dictionary at schema 4, then all validated schema-4 data migrates to schema 5
+before final validation and pruning. The original
 object is installed/replaced only through the existing successful-load path.
 IDs, observations, historical aggregates and #24/#31 provenance are preserved.
 Reload does not replay contributions. Relabeled or malformed schemas are refused.
+
+Schema 4 to 5 keeps every existing observation key and initializes the allocator
+above the highest old key. Old `capacity` markers become generic `unavailable`
+observations, retaining context, reference identities and every aggregate total.
+They do not gain a fabricated configuration or an authoritative negative. Exact
+request snapshots already saved remain independently inspectable. Lost values
+cannot be recovered from the old quota records. Only the schema-4 migration reads
+the retired marker; new capture and the public API have no capacity semantics.
 
 Legacy observation keys remain absent. Old request quotes and savings flags stay
 available in their original API fields, but cannot classify whole already-pruned
 populations or establish operation equipment/buffs. No speculative backfill is
 performed; recipe repair cannot restore absent context/configuration. Back up
-SavedVariables with WoW closed before upgrading. Older Core versions refuse v4.
+SavedVariables with WoW closed before upgrading. Older Core versions refuse v5.
 
 ## Public API
 
@@ -178,8 +211,9 @@ indexes for consumers to dereference.
 
 `GetCraft` adds detached `context`, `configuration`, `configurationCoverage`;
 its `request` has its own separately scoped projection. Unknown configurations
-have no snapshot and coverage `unavailable`, `changed`, `batch-unobserved` or
-`capacity`. Existing facts keep their original semantics.
+have no snapshot and coverage `unavailable`, `changed` or `batch-unobserved`.
+Existing facts keep their original semantics. Known configurations are never
+made unavailable to meet a storage budget.
 
 `GetRecipeConfigurations(recipeId, filter, {limit, cursor})` returns
 `configurations`, selection-wide `coverage`, and optional `nextCursor`. Each
@@ -190,7 +224,8 @@ the same recipe/time/character selection. Pages/cursors are filter-scoped.
 
 Outcome totals and configuration-query coverage add `contextObservedCount`,
 `configurationObservedCount`, `requestConfigurationCount`,
-`attemptStartConfigurationCount`, `configurationCapacityLimitedCount`.
+`attemptStartConfigurationCount`. The former `configurationCapacityLimitedCount`
+field is removed; it is not emitted as a zero.
 These describe selected observations, not authoritative effective-stat coverage.
 
 **Comparison rule:** filtering aligns the selected craft population, not every
@@ -199,13 +234,13 @@ divide separately observed output/bonus/refund sums unless both cover the same
 population, or compare request snapshots to start snapshots as if identical.
 Use `matchedAllocatedQuantity`/`matchedReturnedQuantity` and `matchedCraftCount`
 for per-item savings; neither all returns nor gross expected requirements are a
-substitute. Returned items are not additive proc counts. Missing and capacity-
-limited configurations can bias comparisons. Core exposes facts/coverage, not a
+substitute. Returned items are not additive proc counts. Missing observations and
+historically lost configurations can bias comparisons. Core exposes facts/coverage, not a
 bare effectiveness percentage, confidence interval, causal claim or optimizer.
 
 ## In-Game Verification
 
-- Back up SavedVariables while logged out; load v1/v2/v3 copies and confirm all
+- Back up SavedVariables while logged out; load v1/v2/v3/v4 copies and confirm all
   totals/IDs survive, legacy context stays unknown, and second reload is stable.
 - Craft one ordinary item with manual quality selections and concentration on/off;
   compare request/start quote fields against Blizzard. Repeat automatic selection.
@@ -229,7 +264,11 @@ bare effectiveness percentage, confidence interval, causal claim or optimizer.
 - Inspect the two Craft Detail tabs at 1280x720 and 1920x1080 with UI scales
   0.64, 0.8 and 1.0. Check wrapping, scrolling, tooltips and modal navigation.
 - Reload with Craft type selected; prune a backed-up copy and confirm aggregate
-  filters still agree. Verify overflow is visible as missing configuration.
+  filters still agree and every referenced configuration remains inspectable.
+- Exceed 256 distinct configurations and eight states within one day's recipe;
+  verify exact filtering still works. Abandon requests, expire their detail in a
+  backed-up copy, and verify only truly unreferenced snapshots disappear without
+  renumbering live keys. Check old quota records stay unavailable after upgrade.
 
 The container cannot validate native rendering, taint, secret values, event timing
 or actual item consumption. Do not commit personal SavedVariables or raw traces.
