@@ -329,8 +329,9 @@ bare effectiveness percentage, confidence interval, causal claim or optimizer.
 - Switch Craft type on Overview, Logbook, Recipes, Recipe Detail, Character,
   Profession and Reagents. Check charts, rankings, quality rows, quantities,
   useful Resourcefulness preferences, tooltips and lazy-page continuation.
-- Inspect the two Craft Detail tabs at 1280x720 and 1920x1080 with UI scales
-  0.64, 0.8 and 1.0. Check wrapping, scrolling, tooltips and modal navigation.
+- Inspect the three Craft Detail tabs at 1280x720, 1920x1080 and a smaller
+  viewport with UI scales 0.64, 0.8 and 1.0. Check switching, wrapping, scroll
+  boundaries, tooltips, craft replacement and modal navigation.
 - Reload with Craft type selected; prune a backed-up copy and confirm aggregate
   filters still agree and every referenced configuration remains inspectable.
 - Exceed 256 distinct configurations and eight states within one day's recipe;

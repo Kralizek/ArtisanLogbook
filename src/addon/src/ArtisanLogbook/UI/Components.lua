@@ -742,6 +742,7 @@ function UI.TabbedContent(parent, width, height, y, names, onSelect)
   tabs.buttons, tabs.views = {}, {}
   tabs.body = CreateFrame("Frame", nil, tabs, "BackdropTemplate")
   tabs.body:SetPoint("TOPLEFT", 0, -27); tabs.body:SetSize(width, height - 27)
+  if type(tabs.body.SetClipsChildren) == "function" then tabs.body:SetClipsChildren(true) end
   tabs.body:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
     insets = { left = 3, right = 3, top = 3, bottom = 3 } })
@@ -757,6 +758,7 @@ function UI.TabbedContent(parent, width, height, y, names, onSelect)
     tabs.buttons[name] = UI.Tab(tabs, name, (index - 1) * 128 + 4, 0, 124, function() tabs:Select(name) end)
     local view = CreateFrame("Frame", nil, tabs.body)
     view:SetPoint("TOPLEFT", 12, -12); view:SetSize(width - 24, height - 51)
+    if type(view.SetClipsChildren) == "function" then view:SetClipsChildren(true) end
     tabs.views[name] = view
   end
   function tabs:Resize(newHeight)
@@ -1645,6 +1647,21 @@ function UI.IngredientReturnedText(row, craft)
     text = text .. " Crafting-order materials don't count toward your savings."
   end
   return text
+end
+
+function UI.CraftIngredientNet(row, craft)
+  if row.required == nil then return "-", "Net used is unavailable because the required quantity is unknown." end
+  if craft.inputComplete ~= true and craft.grossRequirementsComplete ~= true then
+    return "-", "Net used is unavailable because complete input quantities weren't recorded."
+  end
+  if craft.outcomeSource ~= "native" or craft.resourcefulnessComplete ~= true then
+    return "-", "Net used is unavailable because return results were incomplete."
+  end
+  if row.returned == nil then return "-", "The returned quantity wasn't recorded." end
+  if row.returned > row.required then return "-", "Net used is unavailable because returns exceed the required amount." end
+  local consumed = row.required - row.returned
+  return UI.Number(consumed), UI.Number(row.required) .. " required - " .. UI.Number(row.returned) ..
+    " returned = " .. UI.Number(consumed) .. " consumed."
 end
 
 function UI.Range(now, days)

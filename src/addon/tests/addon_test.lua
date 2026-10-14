@@ -20,7 +20,7 @@ for _, name in ipairs({
   "LockHighlight", "UnlockHighlight", "SetToplevel", "Raise", "SetAtlas",
   "SetTextColor", "AddMaskTexture", "SetScale", "SetShadowOffset", "SetBlendMode",
   "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor",
-  "SetPropagateMouseClicks",
+  "SetPropagateMouseClicks", "SetClipsChildren",
 }) do
   methods[name] = function() end
 end
@@ -69,6 +69,7 @@ function methods:HookScript(name, callback)
   end
 end
 function methods:SetPropagateMouseClicks(value) self.propagateClicks = value end
+function methods:SetClipsChildren(value) self.clipsChildren = value end
 function methods:RegisterEvent(event) self.events[event] = true end
 function methods:UnregisterEvent(event) self.events[event] = nil end
 function methods:RegisterUnitEvent(event, unit) assert(unit == "player"); self:RegisterEvent(event) end
@@ -1455,9 +1456,11 @@ assert(recentFirst)
 recentFirst.scripts.OnClick(recentFirst)
 assert(uiWindow.openCraftId == 14 and uiWindow.visiblePage ~= logbook)
 local sharedDetail = uiWindow.visiblePage
-assert(not visibleText("Quantity:") and visibleText("Quality:") and not visibleText("Ingenuity proc: Unknown"))
-assert(sharedDetail.result.quality and not sharedDetail.result.quality:IsShown())
-assert(not sharedDetail.fields.Timestamp.text:find("\n", 1, true))
+assert(sharedDetail.heading.text ~= "" and not sharedDetail.heading.text:match("^#%d+$") and
+  sharedDetail.tabs.activeView == "Result")
+assert(sharedDetail.tabViews.Result:IsShown() and not sharedDetail.tabViews.Ingredients:IsShown() and
+  not sharedDetail.tabViews.Configuration:IsShown())
+assert(not sharedDetail.timestamp.text:find("\n", 1, true))
 button(sharedDetail, "Close").scripts.OnClick()
 assert(uiWindow.visiblePage == logbook and logbook:IsShown() and not sharedDetail:IsShown())
 recentFirst.scripts.OnClick(recentFirst)
@@ -2604,8 +2607,9 @@ do
   recipe:SelectView("Reagents")
   window:OpenCraft(craft.id)
   local craftDetail = window.craftDetailPage
-  assert(craftDetail.fields.Quality.text == "2" and not craftDetail.result.quality:IsShown())
-  assert(not craftDetail.fields.Timestamp.text:find("\n", 1, true))
+  assert(craftDetail.tabs.activeView == "Result" and craftDetail.resultView.outcomeCards.quality:IsShown())
+  assert(craftDetail.resultView.outcomeCards.quality.value.text == "Rank 2")
+  assert(not craftDetail.timestamp.text:find("\n", 1, true))
   button(craftDetail, "Close").scripts.OnClick()
   local reagentRow = recipe.outcomes.materialList.rows[1]
   reagentRow.scripts.OnClick(reagentRow)
@@ -2617,7 +2621,7 @@ do
   assert(reagent.fields.rate.text == "-" and #reagent.history.items == 1)
   reagent:SelectView("Craft History")
   reagent.history.rows[1].scripts.OnClick(reagent.history.rows[1])
-  assert(window.openCraftId == craft.id and window.craftDetailPage.result.item.id == 5302)
+  assert(window.openCraftId == craft.id and window.craftDetailPage.craft.outputItem.id == 5302)
   assert(not window.craftDetailPage.reagentSelector)
   window.craftDetailWindow:Hide()
   assert(window.activeTab == "Reagent" and reagent.activeView == "Craft History")
@@ -2890,9 +2894,10 @@ do
   helpers.SetTrivial(8, true)
   assert(helpers.IsTrivial(8))
   assert(pane.stats[3].text == overallResourcefulness)
-  assert(detail.fields.Resourcefulness.text == "Return recorded", detail.fields.Resourcefulness.text)
+  assert(detail.resultView.outcomeCards.resourcefulness.value.text == "1 Tranquility Bloom",
+    detail.resultView.outcomeCards.resourcefulness.value.text)
   assert(#detail.returnedReagents.items == 1 and detail.returnedReagents.items[1].item.id == 8)
-  assert(detail.returnedReagents:GetHeight() >= 150 and detail.result)
+  assert(detail.returnedReagents:GetHeight() >= 150 and detail.resultView)
   local getCraft = api.GetCraft
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -2904,11 +2909,12 @@ do
   end
   detail:ShowCraft(second.id)
   local columns = detail.returnedReagents.columns
-  assert(#columns == 3 and columns[1].title == "Reagent" and columns[2].title == "Required" and columns[3].title == "Returned")
+  assert(#columns == 4 and columns[1].title == "Material" and columns[2].title == "Required" and
+    columns[3].title == "Returned" and columns[4].title == "Net used")
   assert(#detail.returnedReagents.items == 2)
-  assert(detail.fields.Resourcefulness.text == "Return recorded")
-  -- Older crafts without a complete ingredient record get one plain caveat.
-  assert(detail.inputEvidence.text == "Some ingredient details weren't recorded for this craft.", detail.inputEvidence.text)
+  assert(detail.resultView.outcomeCards.resourcefulness.value.text:find("Bloom", 1, true))
+  assert(detail.inputEvidence:GetParent() == detail.tabViews.Ingredients)
+  assert(detail.inputEvidence.text:find("required quantities", 1, true), detail.inputEvidence.text)
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.grossRequirementsComplete = true
@@ -2995,15 +3001,17 @@ do
     assert(required == 18 and returned == 5)
     assert(columns[2].value(items[7]) == "-" and columns[3].value(items[3]) == "0")
     assert(columns[2].exact(items[7]) == "The required quantity couldn't be determined for this craft.")
-    assert(detail.inputEvidence.text == "Some ingredient details weren't recorded for this craft.")
+    assert(detail.inputEvidence.text == "", detail.inputEvidence.text)
     assert(columns[3].exact(items[4]) ==
       "1 Sand was returned by Resourcefulness. Crafting-order materials don't count toward your savings.")
     local familyRow = detail.returnedReagents.rows[4]
     familyRow.scripts.OnEnter(familyRow)
     local tooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
     assert(environment.GameTooltip.text == "Sand")
-    assert(tooltip:find("\nThis recipe requires 4 Sand. Recorded: Sand x2. The quality used for the remaining 2 wasn't recorded.", 1, true), tooltip)
-    for _, word in ipairs({ "schematic", "slot", "famil", "allocation", "reconcil", "Required:", "Returned:" }) do
+    assert(tooltip:find("Required: This recipe requires 4 Sand. Recorded: Sand x2. The quality used for the remaining 2 wasn't recorded.", 1, true), tooltip)
+    assert(tooltip:find("Returned: 1 Sand was returned by Resourcefulness.", 1, true), tooltip)
+    assert(tooltip:find("Net used: 4 required - 1 returned = 3 consumed.", 1, true), tooltip)
+    for _, word in ipairs({ "schematic", "slot", "famil", "allocation", "reconcil" }) do
       assert(not tooltip:find(word, 1, true), word)
     end
     local opened = window.activeTab
@@ -3017,7 +3025,7 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(detail.fields.Resourcefulness.text == "Known returns; other results may be unavailable")
+  assert(detail.resultView.outcomeCards.resourcefulness.value.text:find("more may be missing", 1, true))
   api.GetCraft = function()
     local craft = getCraft(second.id)
     craft.outcomeSource = nil
@@ -3027,7 +3035,7 @@ do
     return craft
   end
   detail:ShowCraft(second.id)
-  assert(detail.fields.Resourcefulness.text == "Outcome unavailable")
+  assert(detail.resultView.outcomeCards.resourcefulness.value.text == "-")
   assert(detail.returnedReagents.items[1].returned == nil and columns[3].value(detail.returnedReagents.items[1]) == "-")
   assert(columns[3].exact(detail.returnedReagents.items[1]) == "Returns weren't recorded for this craft.")
   api.GetCraft = function()
@@ -3040,6 +3048,7 @@ do
   end
   detail:ShowCraft(second.id)
   assert(#detail.returnedReagents.items == 8 and detail.returnedReagents:GetHeight() >= 150)
+  detail.returnedReagents:SetViewportHeight(120)
   assert(detail.returnedReagents.child:GetHeight() > detail.returnedReagents.scroll:GetHeight())
   api.GetCraft = function()
     local craft = getCraft(second.id)
@@ -3050,9 +3059,9 @@ do
   detail:ShowCraft(second.id)
   assert(not detail.reagentSelector and not checkbox)
   assert(detail.returnedReagents.child:GetHeight() == detail.returnedReagents.scroll:GetHeight())
-  assert(detail.result.item.id == 4567 and detail.result.label.text == "Flask")
+  assert(detail.craft.outputItem.id == 4567 and detail.heading.text == "Flask")
   assert(#detail.returnedReagents.items == 0 and detail.inputEvidence.text == "")
-  assert(detail.returnedReagents.empty.text == "Ingredients weren't recorded for this craft.")
+  assert(detail.returnedReagents.empty.text == "No ingredient details are available for this craft.")
   api.GetCraft = getCraft
   button(detail, "Close").scripts.OnClick()
   finishCalculation()
@@ -4258,8 +4267,9 @@ end)()
   assert(items[2].qualityUnknown and items[2].name == "Eversinging Dust")
   assert(items[2].required == 3 and items[2].returned == 0)
   local columns = page.returnedReagents.columns
-  assert(#columns == 3 and columns[2].value(items[2]) == "3" and columns[3].value(items[2]) == "0")
+  assert(#columns == 4 and columns[2].value(items[2]) == "3" and columns[3].value(items[2]) == "0")
   assert(columns[2].value(items[1]) == "5" and columns[3].value(items[1]) == "2")
+  assert(columns[4].value(items[1]) == "3" and columns[4].value(items[2]) == "3")
   assert(columns[2].exact(items[2]) == "This recipe requires 3 Eversinging Dust. The quality used wasn't recorded.")
   assert(columns[3].exact(items[1]) == "2 Mote of Light were returned by Resourcefulness.")
   assert(page.inputEvidence.text == "", page.inputEvidence.text)
@@ -4511,28 +4521,76 @@ end)()
   assert(#detail.configurationPanel.rows.stats == 6)
   assert(detail.configurationPanel.rows.stats[3].value == "12.5%")
   assert(detail.configurationPanel.rows.buffsStatus == "No supported profession phial detected; other buffs aren't checked.")
+  for _, selected in ipairs({ "Ingredients", "Configuration", "Result", "Configuration", "Ingredients" }) do
+    detail.tabs:Select(selected)
+    for _, name in ipairs({ "Result", "Ingredients", "Configuration" }) do
+      assert(detail.tabViews[name]:IsShown() == (name == selected), name)
+    end
+  end
+  detail:ShowCraft(1)
+  assert(detail.tabs.activeView == "Result")
   detail.configurationTab.scripts.OnClick(detail.configurationTab)
-  assert(detail.configurationPanel:IsShown() and not detail.returnedReagents:IsShown())
+  assert(detail.tabViews.Configuration:IsShown() and detail.configurationPanel:IsShown() and
+    not detail.tabViews.Ingredients:IsShown())
   local inspected = api.GetCraft(1)
   assert(inspected.configuration.scope == nil and inspected.configurationObservation.scope == "request")
   inspected.configurationObservation.scope = "attempt-start"
-  assert(ui.ConfigurationRows(inspected).provenance:find("Observed at craft start", 1, true))
+  assert(ui.ConfigurationRows(inspected).provenance:find("Observed when crafting started", 1, true))
   local partial = ui.ConfigurationRows({
     configuration = { stats = { baseSkill = 100, multicraft = { rating = 80, ratingPct = 23.799999237061 } } },
     configurationObservation = { equipmentCoverage = "partial", buffsCoverage = "partial",
       finishingCoverage = "partial", scope = "request" },
   })
-  assert(partial.stats[1].value == "Base 100" and partial.stats[1].detail:find("Total unavailable", 1, true))
+  assert(partial.stats[1].value == "Base 100" and partial.stats[1].explanation:find("total isn't shown", 1, true))
   assert(partial.stats[3].value == "23.8%" and partial.equipment[1] == nil)
   assert(partial.buffsStatus:find("couldn't be checked", 1, true))
   assert(partial.finishingStatus:find("weren't identified", 1, true))
-  assert(partial.provenance:find("Observed at submission", 1, true))
-  local absent = ui.ConfigurationRows({ context = { kind = "unknown" } })
-  assert(absent.stats[1].value == "Not recorded" and absent.buffsStatus == "Buff information wasn't recorded.")
-  assert(absent.finishingStatus == "Finishing reagents weren't recorded.")
+  assert(partial.provenance:find("Observed when crafting was requested", 1, true))
+  local absent = ui.ConfigurationRows({ context = { kind = "unknown" }, configurationCoverage = "unavailable" })
+  assert(absent.emptyTitle == "Configuration unavailable" and
+    absent.emptyMessage == "Equipment, stats and buffs aren't available for this craft.")
+  assert(ui.ConfigurationRows({ configurationCoverage = "changed" }).emptyMessage ==
+    "Conditions changed during this attempt, so no single setup can be shown.")
+  assert(ui.ConfigurationRows({ configurationCoverage = "batch-unobserved" }).emptyMessage ==
+    "No separate setup observation is available for this batch attempt.")
   assert(ui.ConfigurationRows({ configuration = { equipment = {}, buffs = {}, finishingReagents = {} },
     configurationObservation = { equipmentCoverage = "observed", buffsCoverage = "supported-list",
       finishingCoverage = "submitted" } }).finishingStatus == "None selected")
+  local requestOnly = ui.ConfigurationRows({ configurationCoverage = "changed", context = { kind = "personal" },
+    request = { configuration = { stats = { baseSkill = 125 } },
+      configurationObservation = { scope = "request" } } })
+  assert(requestOnly.stats[1].value == "Base 125" and requestOnly.provenance ==
+    "Request-time setup shown; conditions changed during this attempt")
+  local savedGetCraft = api.GetCraft
+  api.GetCraft = function(id)
+    local craft = savedGetCraft(id)
+    craft.multicraftBonus, craft.concentrationSpent = 0, 0
+    craft.hasIngenuityProc, craft.hasResourcefulnessProc, craft.resourcefulnessComplete = false, false, true
+    craft.outcomeSource = "native"
+    craft.reagents = { { item = { id = 8, name = "Bloom" }, allocatedQuantity = 2, returnedQuantity = 0 } }
+    return craft
+  end
+  detail:ShowCraft(1)
+  assert(detail.resultView.outcomeCards.multicraft.value.text == "No bonus items")
+  assert(detail.resultView.outcomeCards.concentration.value.text == "None spent")
+  assert(detail.resultView.outcomeCards.ingenuity.value.text == "Not triggered")
+  assert(detail.resultView.outcomeCards.resourcefulness.value.text == "Not triggered")
+  api.GetCraft = function(id)
+    local craft = savedGetCraft(id)
+    craft.multicraftBonus, craft.concentrationSpent, craft.hasIngenuityProc = nil, nil, nil
+    craft.resourcefulnessComplete, craft.hasResourcefulnessProc, craft.outcomeSource = nil, nil, nil
+    craft.outputQuality, craft.recipe.maxQuality = 1, nil
+    craft.reagents = { { item = { id = 8, name = "Bloom" }, allocatedQuantity = 2 } }
+    return craft
+  end
+  detail:ShowCraft(1)
+  assert(detail.resultView.outcomeCards.multicraft.value.text == "-" and
+    detail.resultView.outcomeCards.ingenuity.value.text == "-" and
+    detail.resultView.outcomeCards.concentration.value.text == "-" and
+    detail.resultView.outcomeCards.quality.value.text == "Rank 1" and
+    detail.resultView.outcomeCards.resourcefulness.value.text == "-")
+  api.GetCraft = savedGetCraft
+  detail:ShowCraft(1)
   local savedItemApi, savedItemIcon, savedSpellApi = environment.C_Item, environment.GetItemInfo, environment.C_Spell
   environment.C_Item = environment.C_Item or {}
   local savedItemInfo = environment.C_Item.GetItemInfo
@@ -4558,6 +4616,10 @@ end)()
   assert(equipmentPanel.buffRows[1].label.text == "Ingenuity phial" and
     equipmentPanel.buffRows[1].stacks.text == "x2" and equipmentPanel.buffRows[1].icon.texture == "Spell-Ingenuity")
   assert(equipmentPanel.reagentCells[1].item.name == "Item information loading")
+  equipmentPanel:ShowCraft({ context = { kind = "unknown" }, configurationCoverage = "unavailable" })
+  assert(equipmentPanel.emptyTitle:IsShown() and not equipmentPanel.statCards[1]:IsShown())
+  equipmentPanel:ShowCraft(equipmentCraft)
+  assert(not equipmentPanel.emptyTitle:IsShown() and equipmentPanel.statCards[1]:IsShown())
   itemReady = true
   detail.scripts.OnEvent(detail, "GET_ITEM_INFO_RECEIVED", 88001, true)
   assert(equipmentPanel.itemCells[1].cell.item.name == "Profession Tool")
@@ -4565,14 +4627,49 @@ end)()
   assert(equipmentPanel.reagentCells[1].item.name == "Finishing Salt")
   local narrowPanel = ui.ConfigurationPanel(environment.CreateFrame("Frame"), 0, 0, 500, 180)
   assert(narrowPanel.statColumns == 2)
+  local compactDetail = ui.CraftDetail(environment.CreateFrame("Frame"), 500, 380, function() end)
+  compactDetail:ShowCraft(1)
+  assert(compactDetail.tabs.views.Result:GetHeight() > 0 and compactDetail.tabs.views.Ingredients:GetHeight() > 0 and
+    compactDetail.tabs.views.Configuration:GetHeight() > 0)
+  assert(compactDetail.configurationPanel.statColumns == 2)
+  local savedCraftQuery = api.GetCraft
+  api.GetCraft = function(id)
+    local craft = savedCraftQuery(id)
+    craft.outputItem.name = string.rep("Long item name ", 8)
+    return craft
+  end
+  compactDetail:ShowCraft(1)
+  assert(not compactDetail.heading.text:find("\n", 1, true) and compactDetail.heading.text:find("...", 1, true))
+  api.GetCraft = savedCraftQuery
+
+  local modalDetail = window.craftDetailPage
+  window:OpenCraft(1)
+  modalDetail.tabs:Select("Ingredients")
+  modalDetail.returnedReagents.scroll:SetVerticalScroll(25)
+  modalDetail.tabs:Select("Configuration")
+  modalDetail.configurationPanel.scroll:SetVerticalScroll(35)
+  window:OpenCraft(2)
+  assert(window.openCraftId == 2 and modalDetail.tabs.activeView == "Result")
+  assert(modalDetail.producedValue.text == "3 items" and #modalDetail.returnedReagents.items > 0)
+  assert(modalDetail.returnedReagents.scroll:GetVerticalScroll() == 0 and
+    modalDetail.configurationPanel.scroll:GetVerticalScroll() == 0)
+  window:OpenCraft(1)
+  assert(window.openCraftId == 1 and modalDetail.tabs.activeView == "Result" and modalDetail.producedValue.text == "2 items")
+  for _, selected in ipairs({ "Ingredients", "Result", "Configuration", "Ingredients", "Result" }) do
+    modalDetail.tabs:Select(selected)
+    for _, name in ipairs({ "Result", "Ingredients", "Configuration" }) do
+      assert(modalDetail.tabViews[name]:IsShown() == (name == selected), name)
+    end
+  end
+  window.craftDetailWindow:Hide()
   environment.C_Item.GetItemInfo, environment.C_Item, environment.GetItemInfo, environment.C_Spell =
     savedItemInfo, savedItemApi, savedItemIcon, savedSpellApi
   ui.SetCraftType("patron")
   window:Activate("Overview")
   assert(window.pages.Overview.summary.totals.craftCount == 1 and window.pages.Overview.summary.totals.outputQuantity == 3)
   assert(ui.ContextText({ context = { kind = "personal-order", isRecraft = true } }) == "Personal order (recraft)")
-  assert(ui.ConfigurationRows({ context = { kind = "unknown" } }).provenance ==
-    "Configuration wasn't recorded - Not verified at completion")
+  assert(ui.ConfigurationRows({ context = { kind = "unknown" } }).emptyMessage ==
+    "Equipment, stats and buffs aren't available for this craft.")
   window:Hide()
   local reloaded = loadUI()
   assert(reloaded.UI.CraftType() == "patron")

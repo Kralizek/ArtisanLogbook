@@ -103,8 +103,18 @@ end
 
 function UI.ConfigurationRows(craft)
   craft = craft or {}
-  local configuration = craft.configuration or {}
-  local evidence = craft.configurationObservation or {}
+  local request = craft.request
+  local observation = craft.configuration and craft or
+    (request and request.configuration and request or nil)
+  local configuration = observation and observation.configuration
+  local evidence = observation and observation.configurationObservation or craft.configurationObservation or {}
+  local reason = craft.configurationCoverage
+  if not configuration then
+    return { emptyTitle = "Configuration unavailable",
+      emptyMessage = reason == "changed" and "Conditions changed during this attempt, so no single setup can be shown." or
+        reason == "batch-unobserved" and "No separate setup observation is available for this batch attempt." or
+        "Equipment, stats and buffs aren't available for this craft." }
+  end
   local stats = configuration.stats or {}
   local rows = { stats = {}, equipment = {}, buffs = {}, finishingReagents = {}, scope = evidence.scope,
     equipmentCoverage = evidence.equipmentCoverage, buffsCoverage = evidence.buffsCoverage,
@@ -114,25 +124,24 @@ function UI.ConfigurationRows(craft)
       return { label = label, value = UI.Number(base + bonus), detail =
         "Base " .. UI.Number(base) .. " + bonus " .. UI.Number(bonus), available = true }
     elseif type(base) == "number" or type(bonus) == "number" then
-      return { label = label, value = (base ~= nil and "Base " .. UI.Number(base) or "Bonus " .. UI.Number(bonus)),
-        detail = "Total unavailable because one value wasn't recorded.", available = true }
+      return { label = label, value = (base ~= nil and ("Base " .. UI.Number(base)) or ("Bonus " .. UI.Number(bonus))),
+        explanation = "A total isn't shown because one skill component wasn't available.", available = true }
     end
-    return { label = label, value = "Not recorded", detail = "This value wasn't available in the crafting quote.", available = false }
+    return { label = label, value = "-", explanation = "This value wasn't available in the crafting quote.", available = false }
   end
   rows.stats[1] = totalStat("Effective skill", stats.baseSkill, stats.bonusSkill)
   rows.stats[2] = totalStat("Difficulty", stats.baseDifficulty, stats.bonusDifficulty)
   for index, spec in ipairs({ { "multicraft", "Multicraft" }, { "resourcefulness", "Resourcefulness" },
       { "ingenuity", "Ingenuity" }, { "craftingSpeed", "Crafting speed" } }) do
     local stat = stats[spec[1]]
-    local value = stat and stat.ratingPct ~= nil and (UI.Number(stat.ratingPct) .. "%") or "Not recorded"
-    local detail = stat and stat.rating ~= nil and (UI.Number(stat.rating) .. " rating") or
-      (stat and "Rating wasn't recorded." or "This stat wasn't identified in the crafting quote.")
-    rows.stats[index + 2] = { label = spec[2], value = value, detail = detail,
+    local value = stat and stat.ratingPct ~= nil and (UI.Number(stat.ratingPct) .. "%") or "-"
+    rows.stats[index + 2] = { label = spec[2], value = value,
       available = stat ~= nil and stat.ratingPct ~= nil,
       explanation = stat and ("Reported rating: " .. UI.Value(stat.rating) .. ". Reported percentage: " ..
-        UI.Value(stat.ratingPct) .. "%. Additional percentage: " .. UI.Value(stat.bonusRatingPct) .. "%.") or nil }
+        UI.Value(stat.ratingPct) .. "%. Additional percentage: " .. UI.Value(stat.bonusRatingPct) .. "%.") or
+        "This stat wasn't identified in the crafting quote." }
   end
-  rows.concentration = configuration.useConcentration == nil and "Not recorded" or
+  rows.concentration = configuration.useConcentration == nil and "-" or
     (configuration.useConcentration and "Used" or "Not used")
   for index, equipment in ipairs(configuration.equipment or {}) do
     rows.equipment[#rows.equipment + 1] = { role = index == 1 and "Profession tool" or "Accessory " .. (index - 1),
@@ -181,12 +190,13 @@ function UI.ConfigurationRows(craft)
   else
     rows.finishingStatus = "Finishing reagents weren't recorded."
   end
-  rows.provenance = evidence.scope == "attempt-start" and "Observed at craft start" or
-    evidence.scope == "request" and "Observed at submission" or "Observation time unavailable"
-  rows.provenance = rows.provenance .. " - Not verified at completion"
-  if not craft.configuration then
-    rows.provenance = (craft.configurationCoverage == "changed" and "Configuration changed during the attempt" or
-      "Configuration wasn't recorded") .. " - Not verified at completion"
+  rows.provenance = evidence.scope == "attempt-start" and "Observed when crafting started" or
+    evidence.scope == "request" and "Observed when crafting was requested" or "Observation time unavailable"
+  rows.provenanceExplanation = "This is an observation, not a verified completion-time report."
+  if not craft.configuration and reason == "changed" then
+    rows.provenance = "Request-time setup shown; conditions changed during this attempt"
+  elseif not craft.configuration and reason == "batch-unobserved" then
+    rows.provenance = "Request-time setup shown; no separate start observation for this batch item"
   end
   return rows
 end
@@ -203,6 +213,10 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
     if self.ScrollBar then self.ScrollBar:SetShown((range or 0) > 0) end
   end)
   frame.scroll, frame.child, frame.itemCells = scroll, child, {}
+  frame.emptyTitle = UI.Text(child, 0, -8, width - 34, 24, "GameFontNormal")
+  frame.emptyBody = UI.Text(child, 0, -38, width - 34, 48, "GameFontNormalSmall")
+  frame.emptyBody:SetWordWrap(true)
+  frame.emptyBody:SetTextColor(.72, .69, .63)
 
   local function sectionHeader(title)
     local header = UI.Text(child, 0, 0, width - 34, 22, "QuestTitleFont")
@@ -260,6 +274,7 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
   frame.equipmentCells, frame.reagentCells, frame.buffRows = equipmentCells, reagentCells, buffRows
 
   function frame:ShowCraft(craft)
+    UI.Tooltip.ReleaseTree(self)
     local rows = UI.ConfigurationRows(craft)
     self.rows = rows
     self.itemCells = {}
@@ -268,6 +283,16 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
     for _, cell in ipairs(equipmentCells) do cell:Hide() end
     for _, cell in ipairs(reagentCells) do cell:Hide() end
     for _, row in ipairs(buffRows) do row:Hide() end
+    if rows.emptyTitle then
+      for _, header in ipairs(self.headers) do header:Hide(); header.rule:Hide() end
+      for _, card in ipairs(self.statCards) do card:Hide() end
+      self.emptyTitle:SetText(rows.emptyTitle); self.emptyTitle:Show()
+      self.emptyBody:SetText(rows.emptyMessage); self.emptyBody:Show()
+      self.child:SetHeight(math.max(self.scroll:GetHeight(), 112))
+      self.scroll:SetVerticalScroll(0)
+      return
+    end
+    self.emptyTitle:Hide(); self.emptyBody:Hide()
     local top = 0
     local function placeHeader(index, title)
       local header = self.headers[index]
@@ -363,7 +388,14 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
         top = top + 30
       end
     end
-    addText(top + 2, rows.provenance, bodyWidth, 18, true)
+    local provenance = addText(top + 2, rows.provenance, bodyWidth, 18, true)
+    provenance.explanation = rows.provenanceExplanation
+    provenance:EnableMouse(rows.provenanceExplanation ~= nil)
+    provenance:SetScript("OnEnter", function(self)
+      if not self.explanation then return end
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.explanation, 1, 1, 1, true); GameTooltip:Show()
+    end)
+    provenance:SetScript("OnLeave", function() GameTooltip:Hide() end)
     top = top + 24
     self.child:SetHeight(math.max(self.scroll:GetHeight(), top))
     self.scroll:SetVerticalScroll(0)
@@ -386,19 +418,23 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   detail:SetAllPoints(parent)
   UI.Surface(detail, false)
   local identity = detail:CreateTexture(nil, "ARTWORK")
-  identity:SetSize(36, 36); identity:SetPoint("TOPLEFT", 16, -8)
-  local heading = UI.Text(detail, 62, -8, width - 166, 26, "GameFontNormalLarge")
+  identity:SetSize(40, 40); identity:SetPoint("TOPLEFT", 12, -7)
+  local heading = UI.Text(detail, 62, -7, width - 148, 25, "GameFontNormalLarge")
   heading:SetWordWrap(false); heading:SetMaxLines(1)
-  local subtitle = UI.Text(detail, 62, -35, width - 166, 20)
-  UI.Button(detail, "Close", width - 92, -8, 76, goBack)
-  local content = CreateFrame("Frame", nil, detail)
-  content:SetPoint("TOPLEFT", 18, -72); content:SetSize(width - 36, height - 72)
-  detail.content = content
+  local subtitle = UI.Text(detail, 62, -30, width - 78, 17, "GameFontNormalSmall")
+  subtitle:SetWordWrap(false); subtitle:SetMaxLines(1)
+  local timestamp = UI.Text(detail, 62, -46, width - 78, 15, "GameFontNormalSmall")
+  timestamp:SetTextColor(.68, .65, .59)
+  UI.Button(detail, "Close", width - 84, -8, 72, goBack)
   local titleHover = CreateFrame("Frame", nil, detail)
-  titleHover:SetPoint("TOPLEFT", 16, -8); titleHover:SetSize(width - 120, 52)
+  titleHover:SetPoint("TOPLEFT", 10, -5); titleHover:SetSize(width - 104, 59)
   titleHover:EnableMouse(true)
-  UI.Tooltip.Bind(titleHover, function(self) if detail.craft then UI.CraftTooltip(self, detail.craft) end end)
+  UI.Tooltip.Bind(titleHover, function(self)
+    if detail.craft and detail.craft.outputItem then UI.ItemTooltip(self, detail.craft.outputItem)
+    elseif detail.craft then UI.CraftTooltip(self, detail.craft) end
+  end)
   detail.titleHover = titleHover
+  detail.heading, detail.subtitle, detail.timestamp = heading, subtitle, timestamp
   local iconHover = CreateFrame("Frame", nil, titleHover)
   iconHover:SetAllPoints(identity); iconHover:EnableMouse(true)
   UI.Tooltip.Bind(iconHover, function(self)
@@ -406,109 +442,241 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     elseif detail.craft then UI.CraftTooltip(self, detail.craft) end
   end)
   detail.iconHover = iconHover
-  UI.Section(content, "Result", 0, 0, width - 36)
-  local resultRow = UI.ItemCell(content, 0, width - 220)
-  resultRow:ClearAllPoints(); resultRow:SetPoint("TOPLEFT", 0, -34)
-  resultRow:SetHeight(40)
-  resultRow.quantity = UI.Text(content, width - 214, -34, 176, 24, "GameFontNormalLarge")
-  resultRow.bonus = UI.Text(content, width - 214, -60, 176, 22)
-  detail.result = resultRow
-  local fields = {}
-  local fieldNames = { "Character", "Timestamp", "Quality", "Concentration", "Multicraft", "Ingenuity", "Resourcefulness" }
-  for index, title in ipairs(fieldNames) do
-    local offset = -100 - math.floor((index - 1) / 2) * 30
-    local left = ((index - 1) % 2) * (width - 36) / 2
-    UI.Text(content, left, offset, 110, 22, "GameFontNormalSmall"):SetText(title .. ":")
-    fields[title] = UI.Text(content, left + 112, offset, (width - 36) / 2 - 126, 24)
+  local tabbed = UI.TabbedContent(detail, width - 24, math.max(240, height - 66), -64,
+    { "Result", "Ingredients", "Configuration" })
+  if type(tabbed.body.SetClipsChildren) == "function" then tabbed.body:SetClipsChildren(true) end
+  for _, view in pairs(tabbed.views) do
+    if type(view.SetClipsChildren) == "function" then view:SetClipsChildren(true) end
   end
-  detail.fields = fields
-  detail.inputEvidence = UI.Text(content, 0, -218, width - 36, 18, "GameFontNormalSmall")
-  local ingredientsTab, configurationTab
-  local nameWidth, amountWidth = (width - 60) * .6, (width - 60) * .2
+  detail.tabs = tabbed
+  detail.tabViews = tabbed.views
+
+  local resultView = tabbed.views.Result
+  detail.resultView = resultView
+  local resultContent, resultScroll = UI.PageScroll(resultView, resultView:GetWidth(), resultView:GetHeight(), 340)
+  resultView.scroll = resultScroll
+  local producedLabel = UI.Text(resultContent, 2, -5, resultContent:GetWidth() - 8, 17, "GameFontNormalSmall")
+  producedLabel:SetText("Output quantity")
+  producedLabel:SetTextColor(.70, .66, .59)
+  local producedValue = UI.Text(resultContent, 2, -23, resultContent:GetWidth() - 8, 31, "GameFontNormalLarge")
+  detail.producedValue = producedValue
+  local outcomeCards, outcomeCardHeight, outcomeGap = {}, 64, 7
+  local outcomeWidth = (resultContent:GetWidth() - 12) / 2
+  local resultOrder = { "quality", "concentration", "multicraft", "ingenuity", "resourcefulness" }
+  local resultLabels = { quality = "Quality", concentration = "Concentration", multicraft = "Multicraft",
+    ingenuity = "Ingenuity", resourcefulness = "Resourcefulness" }
+  for _, key in ipairs(resultOrder) do
+    local card = CreateFrame("Frame", nil, resultContent)
+    card:SetSize(outcomeWidth, outcomeCardHeight)
+    card.background = card:CreateTexture(nil, "BACKGROUND")
+    card.background:SetAllPoints(card); card.background:SetColorTexture(.12, .115, .105, 1)
+    card.label = UI.Text(card, 8, -5, outcomeWidth - 16, 16, "GameFontNormalSmall")
+    card.label:SetTextColor(.71, .67, .59)
+    card.value = UI.Text(card, 8, -22, outcomeWidth - 16, 30, "GameFontNormal")
+    card.value:SetWordWrap(true); card.value:SetMaxLines(2)
+    card:EnableMouse(true)
+    card:SetScript("OnEnter", function(self)
+      if not self.explanation then return end
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.label:GetText())
+      GameTooltip:AddLine(self.explanation, 1, 1, 1, true); GameTooltip:Show()
+    end)
+    card:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    outcomeCards[key] = card
+  end
+  resultView.outcomeCards = outcomeCards
+
+  local ingredientView = tabbed.views.Ingredients
   local returnColor = { r = .45, g = .85, b = .45 }
   local shownCraft
-  local reagents = UI.ScrollList(content, 0, -280, width - 36, height - 352, {
-    { title = "Reagent", width = nameWidth, value = function(row) return row.name end,
-      create = function(owner, left) return UI.ItemCell(owner, left, nameWidth) end,
+  local ingredientWidth = ingredientView:GetWidth()
+  local materialWidth = (ingredientWidth - 24) * .43
+  local quantityWidth = (ingredientWidth - 24) * .17
+  local netWidth = (ingredientWidth - 24) * .23
+  local returnsWidth = (ingredientWidth - 24) - materialWidth - quantityWidth - netWidth
+  local ingredientList = UI.ScrollList(ingredientView, 0, 0, ingredientWidth, ingredientView:GetHeight() - 24, {
+    { title = "Material", width = materialWidth, value = function(row) return row.name end,
+      create = function(owner, left) return UI.ItemCell(owner, left, materialWidth) end,
       update = function(cell, row)
         if row.qualityUnknown then UI.ReagentFamilyCell(cell, row.item, row.name) else UI.ReagentCell(cell, row.item) end
       end },
-    { title = "Required", width = amountWidth, sentence = true, value = function(row)
-      return row.required ~= nil and UI.Number(row.required) or "-"
-    end, exact = UI.IngredientRequiredText },
-    { title = "Returned", width = amountWidth, sentence = true, value = function(row)
+    { title = "Required", width = quantityWidth, value = function(row)
+      if row.required == nil then return "-" end
+      local complete = shownCraft.inputComplete == true or shownCraft.grossRequirementsComplete == true
+      return complete and UI.Number(row.required) or ("Known " .. UI.Number(row.required))
+    end, exact = function(row)
+      local complete = shownCraft.inputComplete == true or shownCraft.grossRequirementsComplete == true
+      if row.required ~= nil and not complete then
+        return UI.Number(row.required) .. " " .. row.name .. " is a known input amount; other required quantities may be missing."
+      end
+      local text = UI.IngredientRequiredText(row)
+      return text
+    end },
+    { title = "Returned", width = returnsWidth, value = function(row)
       return row.returned ~= nil and UI.Number(row.returned) or "-"
     end, exact = function(row) return UI.IngredientReturnedText(row, shownCraft) end,
       color = function(row) return row.returned and row.returned > 0 and returnColor or nil end },
+    { title = "Net used", width = netWidth, value = function(row)
+      return UI.CraftIngredientNet(row, shownCraft)
+    end, exact = function(row) local _, explanation = UI.CraftIngredientNet(row, shownCraft); return explanation end },
   }, function(row) if openReagent and not row.qualityUnknown then goBack(); openReagent(row.item) end end,
-    "Ingredients weren't recorded for this craft.")
-  detail.returnedReagents = reagents
-  local configurationPanel = UI.ConfigurationPanel(content, 0, -280, width - 36, height - 352)
-  local function selectInspection(configuration)
-    reagents:SetShown(not configuration); configurationPanel:SetShown(configuration)
-    ingredientsTab:Select(not configuration); configurationTab:Select(configuration)
-  end
-  ingredientsTab = UI.Tab(content, "Ingredients", 0, -244, 124, function() selectInspection(false) end)
-  configurationTab = UI.Tab(content, "Configuration", 128, -244, 140, function() selectInspection(true) end)
-  detail.configurationList, detail.configurationPanel, detail.configurationTab = configurationPanel, configurationPanel, configurationTab
+    "No ingredient details are available for this craft.")
+  detail.returnedReagents = ingredientList
+  local ingredientNote = UI.Text(ingredientView, 4, -ingredientView:GetHeight() + 16, ingredientWidth - 36, 20,
+    "GameFontNormalSmall")
+  ingredientNote:SetTextColor(.68, .65, .59)
+  detail.inputEvidence = ingredientNote
+
+  local configurationView = tabbed.views.Configuration
+  local configurationPanel = UI.ConfigurationPanel(configurationView, 0, 0,
+    configurationView:GetWidth(), configurationView:GetHeight())
+  detail.configurationList, detail.configurationPanel, detail.configurationTab = configurationPanel, configurationPanel,
+    tabbed.buttons.Configuration
   detail:RegisterEvent("GET_ITEM_INFO_RECEIVED")
   detail:SetScript("OnEvent", function(_, event, itemID, success)
     if event == "GET_ITEM_INFO_RECEIVED" and success and detail.craft then
       configurationPanel:RefreshItem(itemID)
+      if detail.craft.outputItem and detail.craft.outputItem.id == itemID then
+        heading:SetText(UI.Elide(UI.ItemName(itemID), math.floor((width - 166) / 10)))
+        identity:SetTexture(UI.ItemIcon(itemID) or UI.RecipeIcon(detail.craft.recipe))
+      end
     end
   end)
-  selectInspection(false)
+  detail:HookScript("OnHide", function()
+    UI.Tooltip.ReleaseTree(detail)
+    for _, view in pairs(tabbed.views) do UI.Tooltip.ReleaseTree(view) end
+  end)
+
+  local function formatOutcome(craft)
+    local rows = UI.CraftIngredients(craft)
+    local returned, total = {}, 0
+    for _, row in ipairs(rows) do
+      if row.returned and row.returned > 0 then
+        total = total + row.returned
+        returned[#returned + 1] = UI.Number(row.returned) .. " " .. row.name
+      end
+    end
+    local returnsKnown = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
+    local result
+    if #returned > 0 then
+      result = table.concat(returned, ", ")
+      if not returnsKnown then result = result .. " (more may be missing)" end
+    elseif returnsKnown and craft.hasResourcefulnessProc == false then
+      result = "Not triggered"
+    elseif returnsKnown then
+      result = "Triggered; quantity unavailable"
+    else
+      result = "-"
+    end
+    return rows, result, returnsKnown and (#returned == 0 and craft.hasResourcefulnessProc == false and
+      "No materials were returned." or (#returned == 0 and "Return quantities weren't available." or
+      ("Returned " .. UI.Count(total, "material") .. "."))) or
+      (#returned > 0 and "The listed returned materials are known; additional return results may be missing." or
+        "Return results weren't available for this craft.")
+  end
+
+  local function fillResult(craft)
+    local quantity = craft.outputQuantity
+    producedValue:SetText(quantity ~= nil and UI.Count(quantity, "item") or "-")
+    local rows, resourcefulness, resourcefulnessExplanation = formatOutcome(craft)
+    local qualityApplicable = craft.outputQuality ~= nil or
+      (craft.recipe and type(craft.recipe.maxQuality) == "number" and craft.recipe.maxQuality > 1)
+    local concentrationApplicable = craft.concentrationSpent ~= nil or
+      (craft.request and craft.request.useConcentration == true)
+    local values = {
+      quality = qualityApplicable and { value = craft.outputQuality ~= nil and ("Rank " .. UI.Number(craft.outputQuality)) or "-",
+        detail = craft.outputQuality ~= nil and craft.recipe and craft.recipe.maxQuality and
+          ("of " .. UI.Number(craft.recipe.maxQuality)) or "",
+        explanation = "Crafted output quality. A dash means the result did not include a quality." } or nil,
+      concentration = concentrationApplicable and {
+        value = craft.concentrationSpent == nil and "-" or
+          (craft.concentrationSpent == 0 and "None spent" or (UI.Number(craft.concentrationSpent) .. " spent")),
+        explanation = craft.concentrationSpent == nil and
+          "Concentration was selected, but this result did not report expenditure." or
+          "The result's observed concentration expenditure." } or nil,
+      multicraft = craft.multicraftBonus ~= nil and {
+        value = craft.multicraftBonus == 0 and "No bonus items" or
+          ("+" .. UI.Number(craft.multicraftBonus) .. " bonus " .. (craft.multicraftBonus == 1 and "item" or "items")),
+        detail = "", explanation = "Additional items reported by this craft result." } or {
+          value = "-", detail = "", explanation = "Multicraft outcome wasn't available for this result." },
+      ingenuity = craft.hasIngenuityProc == false and { value = "Not triggered", detail = "",
+          explanation = "The result reported no Ingenuity proc." } or
+        craft.hasIngenuityProc == true and { value = craft.ingenuityRefund and craft.ingenuityRefund > 0 and
+          ("Triggered - " .. UI.Number(craft.ingenuityRefund) .. " refunded") or "Triggered", detail = "",
+          explanation = "The result's observed Ingenuity proc and refund." } or
+        { value = "-", detail = "", explanation = "Ingenuity outcome wasn't available for this result." },
+      resourcefulness = { value = resourcefulness, detail = "", explanation = resourcefulnessExplanation },
+    }
+    local index = 0
+    for _, key in ipairs(resultOrder) do
+      local card, value = outcomeCards[key], values[key]
+      if value then
+        local column = index % 2
+        local row = math.floor(index / 2)
+        card:ClearAllPoints(); card:SetPoint("TOPLEFT", column * (outcomeWidth + outcomeGap), -(59 + row * (outcomeCardHeight + outcomeGap)))
+        card.label:SetText(resultLabels[key])
+        card.value:SetText(value.value)
+        card.explanation = value.explanation
+        card:Show(); index = index + 1
+      else
+        card:Hide()
+      end
+    end
+    local resultHeight = 59 + math.ceil(index / 2) * (outcomeCardHeight + outcomeGap) + 12
+    resultContent:SetHeight(math.max(resultScroll:GetHeight(), resultHeight))
+    resultScroll:SetVerticalScroll(0)
+  end
 
   function detail:ShowCraft(id)
     UI.Tooltip.ReleaseTree(self)
     local craft, reason = ArtisanLogbookAPI.GetCraft(id)
     self.craft = craft
+    tabbed:Select("Result")
     if not craft then
       heading:SetText("Craft unavailable")
-      subtitle:SetText(reason or "Unknown craft")
-      for _, field in pairs(fields) do field:SetText("-") end
-      reagents:Reset(); resultRow:Update(nil); resultRow.quantity:SetText("-"); resultRow.bonus:SetText("")
-      detail.inputEvidence:SetText("")
+      subtitle:SetText(reason or "Unknown craft"); timestamp:SetText("")
+      producedValue:SetText("-")
+      for _, card in pairs(outcomeCards) do card:Hide(); card.explanation = nil end
+      ingredientList:Reset(); ingredientNote:SetText("")
       configurationPanel:ShowCraft(nil)
+      configurationPanel:Show()
       identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       return
     end
-    heading:SetText(UI.Elide(UI.Name(craft.recipe, "Unattributed craft"), math.floor((width - 166) / 10)))
-    subtitle:SetText(UI.Name(craft.profession) .. " - " .. UI.ContextText(craft))
+    local itemName = craft.outputItem and (craft.outputItem.name or UI.ItemName(craft.outputItem.id)) or
+      UI.Name(craft.recipe, "Craft result")
+    heading:SetText(UI.Elide(itemName, math.floor((width - 166) / 10)))
+    local identityParts = {}
+    if craft.profession and craft.profession.name then identityParts[#identityParts + 1] = craft.profession.name end
+    if craft.character and craft.character.name then identityParts[#identityParts + 1] = UI.CharacterName(craft.character) end
+    local context = craft.context or {}
+    if context.kind and context.kind ~= "unknown" then identityParts[#identityParts + 1] = UI.ContextText(craft) end
+    subtitle:SetText(table.concat(identityParts, " - "))
+    timestamp:SetText(craft.timestamp and UI.DateTime(craft.timestamp) or "")
     identity:SetTexture(craft.outputItem and UI.ItemIcon(craft.outputItem.id) or UI.RecipeIcon(craft.recipe))
-    resultRow:Update(craft.outputItem)
-    resultRow.quantity:SetText(UI.Number(craft.outputQuantity) .. " items")
-    resultRow.bonus:SetText(craft.multicraftBonus and craft.multicraftBonus > 0 and "+" .. UI.Number(craft.multicraftBonus) .. " Multicraft" or "")
-    fields.Character:SetText(UI.CharacterName(craft.character))
-    fields.Timestamp:SetText(UI.DateTime(craft.timestamp))
-    fields.Quality:SetText(UI.Value(craft.outputQuality))
-    fields.Concentration:SetText(UI.Number(craft.concentrationSpent))
-    fields.Multicraft:SetText(craft.multicraftBonus and (UI.Number(craft.multicraftBonus) .. " additional") or "-")
-    fields.Ingenuity:SetText(craft.hasIngenuityProc == true and
-      (craft.ingenuityRefund and UI.Number(craft.ingenuityRefund) .. " refunded" or "Proc") or
-      (craft.hasIngenuityProc == false and "No proc" or "-"))
+    fillResult(craft)
     local rows = UI.CraftIngredients(craft)
     shownCraft = craft
-    local returnVerified = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
-    local total, unknownRequired = 0, false
-    for _, row in ipairs(rows) do
-      if row.returned and row.returned > 0 then total = total + row.returned end
-      if row.required == nil then unknownRequired = true end
+    ingredientList:Reset(); ingredientList:Append(rows)
+    local inputsKnown = craft.inputComplete == true or craft.grossRequirementsComplete == true
+    local returnsKnown = craft.outcomeSource == "native" and craft.resourcefulnessComplete == true
+    local hasReturn = false
+    for _, row in ipairs(rows) do if row.returned and row.returned > 0 then hasReturn = true end end
+    local note
+    if not inputsKnown and not returnsKnown then
+      note = "Some required amounts and return results are unknown; listed values may be incomplete."
+    elseif not inputsKnown then
+      note = "Some required quantities weren't captured; returned materials are shown where known."
+    elseif not returnsKnown and hasReturn then
+      note = "Other returned materials may be unavailable."
+    elseif not returnsKnown then
+      note = "Return results weren't available; a dash doesn't mean none were returned."
     end
-    if returnVerified and craft.hasResourcefulnessProc == true then
-      fields.Resourcefulness:SetText("Return recorded")
-    elseif returnVerified and craft.hasResourcefulnessProc == false then
-      fields.Resourcefulness:SetText("No return recorded")
-    elseif total > 0 then
-      fields.Resourcefulness:SetText("Known returns; other results may be unavailable")
-    else
-      fields.Resourcefulness:SetText("Outcome unavailable")
-    end
-    local allListed = craft.inputComplete == true or craft.grossRequirementsComplete == true
-    detail.inputEvidence:SetText(#rows > 0 and (unknownRequired or not allListed) and
-      "Some ingredient details weren't recorded for this craft." or "")
-    reagents:Reset(); reagents:Append(rows)
+    if #rows == 0 then note = nil end
+    ingredientNote:SetText(note or "")
+    ingredientNote:Show()
     configurationPanel:ShowCraft(craft)
+    configurationPanel:Show()
+    tabbed:Select("Result")
   end
   detail:Hide()
   return detail
