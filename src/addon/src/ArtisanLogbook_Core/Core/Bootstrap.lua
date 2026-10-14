@@ -329,6 +329,23 @@ function addon.HandleRetailEvent(event, ...)
       local ok = pcall(addon.ledger.BeginCraft, addon.ledger, select(1, ...))
       if not ok then addon.ledgerCaptureError = true end
       tryEnrich(addon.EnrichRecipe, select(1, ...))
+    elseif event == "CRAFT_ATTEMPT_OBSERVATION" then
+      addon.ledger:ObserveAttempt(...)
+    elseif event == "CRAFT_CONFIGURATION_CHECK" then
+      addon.ledger:ConfigurationChanged(select(1, ...))
+    elseif event == "CRAFTING_DETAILS_UPDATE" then
+      tryEnrich(addon.EnrichRecipe, addon.ledger.pendingRecipeId)
+    elseif event == "UNIT_SPELLCAST_START" then
+      local unit, castGUID, spellId = ...
+      local pending = addon.ledger.pendingRequest or addon.ledger.pendingOrderRequest
+      local request = pending and addon.ledger.requestById[pending.id]
+      if unit == "player" and request and request.recipeId == spellId then addon.craftCastGUID = castGUID end
+    elseif event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
+      local unit, castGUID = ...
+      if unit == "player" and castGUID ~= nil and castGUID == addon.craftCastGUID then
+        addon.ledger:CancelCraft()
+        addon.craftCastGUID = nil
+      end
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
       local result = select(1, ...)
       if type(result) == "table" then tryEnrich(addon.EnrichItem, result.itemID) end
@@ -356,6 +373,7 @@ function addon.HandleRetailEvent(event, ...)
       if fact and fact.firstCraftReward then
         tryEnrich(addon.EnrichItem, fact.itemId)
       elseif fact then
+        if fact.requestId then addon.craftCastGUID = nil end
         tryEnrich(addon.EnrichRecipe, fact.recipeId)
         for _, reagent in ipairs(addon.ledger.reagentsByCraftId[fact.id] or {}) do
           tryEnrich(addon.EnrichItem, reagent.itemId)
@@ -369,9 +387,8 @@ function addon.HandleRetailEvent(event, ...)
       end
     elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_LIST_UPDATE" then
       tryEnrich(enrichProfession, event)
-    elseif event == "CRAFTING_DETAILS_UPDATE" then
-      tryEnrich(addon.EnrichRecipe, addon.ledger.pendingRecipeId)
     elseif event == "TRADE_SKILL_CLOSE" then
+      addon.craftCastGUID = nil
       professionRecipeListSignature, professionRecipeListSettled = nil, false
       addon.ledger:CancelCraft()
     end
@@ -379,10 +396,10 @@ function addon.HandleRetailEvent(event, ...)
   addon.Emit(event, ...)
 end
 
-function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible)
+function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible, observation)
   if addon.ledger then
     local ok, request = pcall(addon.ledger.SubmitCraft, addon.ledger,
-      recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible)
+      recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible, observation)
     if not ok or not request then
       addon.ledgerCaptureError = true
       addon.ledger:InvalidateCraft()
@@ -399,8 +416,8 @@ function addon.SubmitCraft(recipeId, count, concentration, quote, selections, in
   end
 end
 
-function addon.InvalidateCraft(operationKind)
-  if addon.ledger then addon.ledger:InvalidateCraft(operationKind) end
+function addon.InvalidateCraft(operationKind, observation)
+  if addon.ledger then addon.ledger:InvalidateCraft(operationKind, observation) end
 end
 
 local function optionalIdentity(api)

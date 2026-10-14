@@ -5,7 +5,11 @@ personal-craft request capture added by issue #12, durable outcomes from #17, an
 the schema-2 authoritative outcome and reagent measurement model from #24. The raw
 capture tracer remains a separate diagnostic store and is not imported into the ledger.
 
-The schema-v3 gross reagent requirement and candidate-set model is documented below. The stable consumer-facing Lua API is documented separately in
+Final schema 4 adds an independent observed-conditions dictionary without admission
+limits, fact-local context/evidence and reference-based snapshot collection to the schema-v3
+measurement model. See [crafting observations](crafting-observations.md) for its
+lifecycle, partitions, migration, garbage collection and cardinality benchmarks. The schema-v3
+gross reagent requirement and candidate-set model is documented below. The stable consumer-facing Lua API is documented separately in
 [lua-api.md](lua-api.md).
 
 ## SavedVariables and Versions
@@ -22,17 +26,27 @@ of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-**Schema 3 is the current persistence contract**, identified by both
-`schemaVersion = 3` and `schemaIdentity = "ArtisanLogbookLedger"`. Schemas 1 and 2
+**Schema 4 is the current persistence contract**, identified by both
+`schemaVersion = 4` and `schemaIdentity = "ArtisanLogbookLedger"`. Schemas 1, 2 and 3
 with this identity are supported upgrade sources and migrate automatically and
 conservatively at startup. **Schema 1** (`schemaVersion = 1` with the same identity,
 in every `outcomeVersion` variant described below) is upgraded through the
-schema-1-to-2 stage before the schema-2-to-3 stage. See [Schema 1 → 2](#schema-1--2-migration)
+schema-1-to-2 stage before the schema-2-to-3 and direct schema-3-to-4 stages. See [Schema 1 → 2](#schema-1--2-migration)
 and [Schema 2 → 3](#schema-2--3-migration) below.
 Schema 2 → 3 preserves existing item facts and aggregates and initializes family
 coverage as unknown; schema 2 did not retain the craft-time alternative set.
-No reset or purge is required. Schema 3 is never downgraded: an older Core build
-refuses a schema-3 database with its usual unsupported-schema diagnostic.
+Schema 3 to 4 leaves context/configuration unknown without replaying facts and
+initializes a sparse `configurations` map plus `nextConfigurationKey`. Normal pruning
+collects only conditions without retained fact, request or durable aggregate
+references. No reset or purge is required for released schemas. Older Core builds
+refuse the final schema 4 with the usual unsupported-schema diagnostic.
+
+The baseline is target `master` schema 3/API v1, not prior review commits. PR #37
+introduces one new ledger version and no API version increment. Unreleased coupled
+observation layouts from earlier review revisions are not supported upgrade sources,
+including the draft labeled schema 5. Their migrations are not retained. Back up
+review data and restore a master-produced database or explicitly reset before use;
+the addon refuses those layouts without modifying them.
 Use authoritative WoW natural IDs directly for WoW entities where a stable
 domain ID exists. Changes to earlier unreleased development layouts did not
 increment `Ledger.schemaVersion` and do not provide a migration path. Such layouts

@@ -5,6 +5,26 @@ addon.UI = UI
 UI.ink = { .20, .16, .10 }
 local hiddenRecipeCallbacks = {}
 local craftVisibilityCallbacks = {}
+local craftTypeChoices = { { label = "All crafts", value = false }, { label = "Personal crafting", value = "personal" },
+  { label = "Crafting orders", value = "orders" }, { label = "Patron orders", value = "patron" } }
+local craftTypeValues = { personal = true, orders = true, patron = true }
+
+function UI.DefaultCraftType()
+  local value = type(ArtisanLogbookUISettings) == "table" and ArtisanLogbookUISettings.defaultCraftType
+  return craftTypeValues[value] and value or false
+end
+
+function UI.CraftTypeFilter(state)
+  local value = state and state.craftType
+  return craftTypeValues[value] and value or nil
+end
+
+function UI.ContextText(craft)
+  local context = craft.context or {}
+  local text = ({ personal = "Personal crafting", order = "Crafting order", patron = "Patron order",
+    public = "Public order", guild = "Guild order", ["personal-order"] = "Personal order" })[context.kind] or "Craft type not recorded"
+  return context.isRecraft == true and (text .. " (recraft)") or text
+end
 
 local function craftVisibilitySettings()
   if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
@@ -347,8 +367,9 @@ function UI.ProfessionIcon(id)
   return "Interface\\Icons\\" .. (UI.professionIcons[id] or "INV_Misc_Book_09")
 end
 
-function UI.Population(character, profession)
-  return { characters = character and { character } or nil, professions = profession and { profession } or nil }
+function UI.Population(character, profession, craftType)
+  return { characters = character and { character } or nil, professions = profession and { profession } or nil,
+    craftType = craftTypeValues[craftType] and craftType or nil }
 end
 
 function UI.Choices(facet, character)
@@ -381,6 +402,34 @@ function UI.ItemTooltip(owner, item)
   GameTooltip:Show()
 end
 
+function UI.ItemIcon(itemId)
+  if itemId == nil then return nil end
+  local itemApi = C_Item
+  local getItemIcon = type(itemApi) == "table" and (itemApi.GetItemIconByID or itemApi.GetItemIcon)
+  if type(getItemIcon) == "function" then
+    local ok, icon = pcall(getItemIcon, itemId)
+    if ok and (type(icon) == "number" or type(icon) == "string") then return icon end
+  end
+  if type(GetItemIcon) == "function" then
+    local ok, icon = pcall(GetItemIcon, itemId)
+    if ok and (type(icon) == "number" or type(icon) == "string") then return icon end
+  end
+end
+
+function UI.ItemName(itemId)
+  if itemId == nil then return "Item information unavailable" end
+  local itemApi = C_Item
+  local getItemInfo = type(itemApi) == "table" and itemApi.GetItemInfo or GetItemInfo
+  if type(getItemInfo) == "function" then
+    local ok, name = pcall(getItemInfo, itemId)
+    if ok and type(name) == "string" and name ~= "" then return name end
+  end
+  if type(itemApi) == "table" and type(itemApi.RequestLoadItemDataByID) == "function" then
+    pcall(itemApi.RequestLoadItemDataByID, itemId)
+  end
+  return "Item information loading"
+end
+
 function UI.ItemCell(parent, left, width)
   local cell = CreateFrame("Frame", nil, parent)
   cell:SetPoint("TOPLEFT", left, 0); cell:SetSize(width, 28)
@@ -399,8 +448,7 @@ function UI.ItemCell(parent, left, width)
   function cell:Update(item, atlas, icon)
     UI.Tooltip.ReleaseTree(self)
     self.item = item
-    self.icon:SetTexture(icon or (item and type(GetItemIcon) == "function" and GetItemIcon(item.id)) or
-      "Interface\\Icons\\INV_Misc_QuestionMark")
+    self.icon:SetTexture(icon or (item and UI.ItemIcon(item.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
     self.quality:SetShown(atlas ~= nil)
     if atlas then self.quality:SetAtlas(atlas) end
     self.label:SetText(UI.Elide(UI.Name(item), math.max(4, math.floor((width - 34) / 6))))
@@ -673,22 +721,51 @@ function UI.FilterBar(parent, width, y)
     end
     control.state, control.inputs = state, inputs
     control:UpdateState()
+    self.period = control
+    return control
+  end
+  function bar:CraftType(state, onChange, size)
+    local activeState = state
+    local control
+    local function updateState(replacement)
+      if replacement then activeState = replacement end
+      if not craftTypeValues[activeState.craftType] and activeState.craftType ~= false then
+        activeState.craftType = UI.DefaultCraftType()
+      elseif activeState.craftType == nil then
+        activeState.craftType = UI.DefaultCraftType()
+      end
+      control:Update(craftTypeChoices, activeState.craftType)
+    end
+    control = self:Select("Craft type", craftTypeChoices, function(value)
+      activeState.craftType = value
+      onChange()
+    end, size or 172)
+    function control:UpdateState(replacement) updateState(replacement) end
+    updateState()
+    self.craftType = control
     return control
   end
   return bar
 end
 
-function UI.TabbedContent(parent, width, height, y, names, onSelect)
+function UI.TabbedContent(parent, width, height, y, names, onSelect, style)
   local tabs = CreateFrame("Frame", nil, parent)
   tabs:SetPoint("TOPLEFT", 0, y); tabs:SetSize(width, height)
   tabs.buttons, tabs.views = {}, {}
   tabs.body = CreateFrame("Frame", nil, tabs, "BackdropTemplate")
   tabs.body:SetPoint("TOPLEFT", 0, -27); tabs.body:SetSize(width, height - 27)
+  if type(tabs.body.SetClipsChildren) == "function" then tabs.body:SetClipsChildren(true) end
   tabs.body:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 12,
     insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-  tabs.body:SetBackdropColor(.86, .76, .56, .6)
-  tabs.body:SetBackdropBorderColor(.45, .36, .20, .8)
+  if style == "dark" then
+    tabs.body:SetBackdropColor(.075, .075, .07, 1)
+    tabs.body:SetBackdropBorderColor(.30, .24, .14, .9)
+  else
+    tabs.body:SetBackdropColor(.86, .76, .56, .6)
+    tabs.body:SetBackdropBorderColor(.45, .36, .20, .8)
+  end
+  tabs.body.contentStyle = style == "dark" and "dark" or "parchment"
   function tabs:Select(name)
     self.activeView = name
     for title, view in pairs(self.views) do view:SetShown(title == name) end
@@ -699,6 +776,7 @@ function UI.TabbedContent(parent, width, height, y, names, onSelect)
     tabs.buttons[name] = UI.Tab(tabs, name, (index - 1) * 128 + 4, 0, 124, function() tabs:Select(name) end)
     local view = CreateFrame("Frame", nil, tabs.body)
     view:SetPoint("TOPLEFT", 12, -12); view:SetSize(width - 24, height - 51)
+    if type(view.SetClipsChildren) == "function" then view:SetClipsChildren(true) end
     tabs.views[name] = view
   end
   function tabs:Resize(newHeight)
@@ -893,7 +971,7 @@ function UI.Activity(craft, extrasOnly)
   local output = UI.CraftOutput(craft)
   if output ~= "" and not extrasOnly then
     local item = craft.outputItem
-    local icon = item and item.id and type(GetItemIcon) == "function" and GetItemIcon(item.id)
+    local icon = item and UI.ItemIcon(item.id)
     add(icon or "Interface\\Icons\\INV_Misc_QuestionMark", "",
       "Output: " .. output .. " (" .. UI.Value(craft.outputQuantity) .. " total)")
     indicators[#indicators].item = item
@@ -1049,6 +1127,10 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         row:SetScript("OnClick", function(self) onOpen(self.item) end)
         UI.Tooltip.Bind(row, function(self)
           if not self.item then return end
+          if type(frame.rowTooltip) == "function" then
+            frame.rowTooltip(self, self.item)
+            return
+          end
           if frame.tooltipKind == "craft" then UI.CraftTooltip(self, self.item); return end
           if frame.tooltipKind == "recipe" then
             local recipe = frame.tooltipRecipe or self.item.recipe
@@ -1343,10 +1425,10 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       if row.recipe and not row.enriched then
         row.enriched = true
         local outcome = ArtisanLogbookAPI.GetRecipeOutcomes(row.recipe.id,
-          { time = filter.time, characters = filter.characters }, { buckets = 1 })
+          { time = filter.time, characters = filter.characters, craftType = filter.craftType }, { buckets = 1 })
         row.totals = outcome and outcome.totals
         local result = ArtisanLogbookAPI.GetCrafts({ recipes = { row.recipe.id },
-          time = filter.time, characters = filter.characters }, { limit = 1 })
+          time = filter.time, characters = filter.characters, craftType = filter.craftType }, { limit = 1 })
         row.result = result and result.crafts[1]
         list:Repaint()
       end
@@ -1587,6 +1669,21 @@ function UI.IngredientReturnedText(row, craft)
     text = text .. " Crafting-order materials don't count toward your savings."
   end
   return text
+end
+
+function UI.CraftIngredientNet(row, craft)
+  if row.required == nil then return "-", "Net used is unavailable because the required quantity is unknown." end
+  if craft.inputComplete ~= true and craft.grossRequirementsComplete ~= true then
+    return "-", "Net used is unavailable because complete input quantities weren't recorded."
+  end
+  if craft.outcomeSource ~= "native" or craft.resourcefulnessComplete ~= true then
+    return "-", "Net used is unavailable because return results were incomplete."
+  end
+  if row.returned == nil then return "-", "The returned quantity wasn't recorded." end
+  if row.returned > row.required then return "-", "Net used is unavailable because returns exceed the required amount." end
+  local consumed = row.required - row.returned
+  return UI.Number(consumed), UI.Number(row.required) .. " required - " .. UI.Number(row.returned) ..
+    " returned = " .. UI.Number(consumed) .. " consumed."
 end
 
 function UI.Range(now, days)

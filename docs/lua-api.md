@@ -7,6 +7,23 @@ separate from the SavedVariables persistence schema documented in
 
 ## API v1
 
+The additive context/configuration filters, detached craft projections and
+`GetRecipeConfigurations` query are specified in
+[Crafting observations: Public API](crafting-observations.md#public-api).
+Every measurement retains independent coverage; a quote is not a completed
+operation's effective-stat report. Existing daily-series granularity is unchanged.
+All successfully observed configurations are retained without admission quotas.
+Configuration keys identify observed condition fields only, independently of
+`context` and `configurationObservation` (scope/coverage/provenance). Shared partial
+values are not proof of identical full configurations. Keys remain stable through
+pruning and orphan collection; paging does not limit retention. Configuration
+summary rows keep context/evidence populations separate even when their keys match.
+Queries can select `contextSource` and `configurationObservation` independently.
+
+Versioning is relative to target `master`: its API is v1 and these additions keep
+that contract version. Its ledger is schema 3; this PR adds final schema 4 directly,
+without preserving migrations for intermediate review-only layouts.
+
 UI and addon consumers use the global `ArtisanLogbookAPI`, not SavedVariables,
 dimension rows, or the private Core addon namespace. The API is loaded before
 `ADDON_LOADED`; queries become available after `ArtisanLogbook_Core` initializes.

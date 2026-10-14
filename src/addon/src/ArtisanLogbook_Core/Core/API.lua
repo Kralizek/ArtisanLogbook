@@ -8,7 +8,11 @@ end
 
 local facets = { "characters", "realms", "expansions", "professions", "recipes" }
 local filterFields = { time = true, characters = true, realms = true, expansions = true,
-  professions = true, recipes = true }
+  professions = true, recipes = true, craftType = true, isRecraft = true, configuration = true,
+  contextSource = true, configurationObservation = true }
+local observationFilterFields = { "scope", "statsCoverage", "equipmentCoverage", "buffsCoverage", "finishingCoverage", "buffListVersion" }
+local craftTypes = { personal = true, orders = true, order = true, patron = true, public = true,
+  guild = true, ["personal-order"] = true, unknown = true }
 local subscribers = {}
 
 local function fields(row, names)
@@ -77,6 +81,7 @@ local function related(ledger, craft)
   local session = dimension(ledger, "session", craft.sessionId)
   local recipeRow = dimension(ledger, "recipe", craft.recipeId)
   return {
+    observation = craft, configuration = ledger.database.configurations[craft.configurationKey],
     characters = session and dimension(ledger, "character", session.characterDimensionId),
     realms = session and dimension(ledger, "realm", session.realmDimensionId),
     recipes = recipeRow,
@@ -99,6 +104,21 @@ local function allocation(ledger, row)
   return result
 end
 
+local function projectObservation(ledger, row, result)
+  local conditions = ledger.database.configurations[row.configurationKey]
+  result.context = { kind = row.craftType or "unknown", isRecraft = row.isRecraft, source = row.contextSource }
+  result.configurationObservation = fields(row, { "statsCoverage", "equipmentCoverage", "buffsCoverage",
+    "finishingCoverage", "buffListVersion" })
+  result.configurationObservation.scope = row.configurationScope
+  result.configurationCoverage = row.configurationUnavailableReason or "unavailable"
+  if conditions then
+    result.configuration = ledger.CopyObservation(conditions)
+    result.configuration.key = string.format("%.0f", row.configurationKey)
+    result.configuration.identityBasis = "observed-fields"
+    result.configurationCoverage = row.configurationScope
+  end
+end
+
 local function projectCraft(ledger, craft)
   local result = fields(craft, { "id", "timestamp", "gameOperationId", "outputQuality", "outputItemLevel",
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
@@ -106,6 +126,7 @@ local function projectCraft(ledger, craft)
     "outcomeSource", "quoteObserved", "inputComplete", "grossRequirementsComplete",
     "materialsSavingsEligible", "requirementObservation", "requestCorrelationReason" })
   local rows = related(ledger, craft)
+  projectObservation(ledger, craft, result)
   result.character = character(ledger, rows.characters)
   result.realm = realm(ledger, rows.realms)
   result.profession = profession(ledger, rows.professions)
@@ -131,6 +152,7 @@ local function projectCraft(ledger, craft)
       "concentrationCost", "baseSkill", "baseDifficulty", "craftingQuality", "inputComplete",
       "grossRequirementsComplete" })
     result.request.recipe = recipe(ledger, dimension(ledger, "recipe", request.recipeId))
+    projectObservation(ledger, request, result.request)
     if request.allocations then
       result.request.allocations = {}
       for _, row in ipairs(request.allocations) do
@@ -183,6 +205,58 @@ local function normalizeFilter(filter)
   if filter == nil then filter = {} end
   if not keysAllowed(filter, filterFields) then return nil, "invalid-filter" end
   local normalized, signature = {}, {}
+  if filter.craftType ~= nil and not craftTypes[filter.craftType] then return nil, "invalid-filter" end
+  if filter.isRecraft ~= nil and type(filter.isRecraft) ~= "boolean" then return nil, "invalid-filter" end
+  normalized.craftType, normalized.isRecraft = filter.craftType, filter.isRecraft
+  if filter.contextSource ~= nil and filter.contextSource ~= "submitted-call" and filter.contextSource ~= "claimed-order" then
+    return nil, "invalid-filter"
+  end
+  normalized.contextSource = filter.contextSource
+  local evidenceSignature = {}
+  if filter.configurationObservation ~= nil then
+    local evidence = filter.configurationObservation
+    if not keysAllowed(evidence, { scope = true, statsCoverage = true, equipmentCoverage = true,
+        buffsCoverage = true, finishingCoverage = true, buffListVersion = true }) then return nil, "invalid-filter" end
+    local available = { statsCoverage = "reported", equipmentCoverage = "observed",
+      buffsCoverage = "supported-list", finishingCoverage = "submitted" }
+    for key, value in pairs(evidence) do
+      if key == "scope" then
+        if value ~= "request" and value ~= "attempt-start" then return nil, "invalid-filter" end
+      elseif key == "buffListVersion" then
+        if not integer(value, 1) then return nil, "invalid-filter" end
+      elseif value ~= available[key] and value ~= "partial" and value ~= "unavailable" then return nil, "invalid-filter" end
+    end
+    normalized.configurationObservation = fields(evidence, observationFilterFields)
+    for _, key in ipairs(observationFilterFields) do evidenceSignature[#evidenceSignature + 1] = tostring(evidence[key] or "-") end
+  end
+  local configurationSignature = {}
+  if filter.configuration ~= nil then
+    local allowed = { key = true, stat = true, minimumRating = true, maximumRating = true, equipmentItemID = true,
+      equipmentGUID = true, buffSpellID = true, finishingItemID = true, useConcentration = true }
+    if not keysAllowed(filter.configuration, allowed) then return nil, "invalid-filter" end
+    local selection = {}
+    for key, value in pairs(filter.configuration) do
+      if key == "minimumRating" or key == "maximumRating" then
+        if not finite(value) then return nil, "invalid-filter" end
+      elseif key == "equipmentItemID" or key == "buffSpellID" or key == "finishingItemID" then
+        if not integer(value, 1) then return nil, "invalid-filter" end
+      elseif key == "useConcentration" then
+        if type(value) ~= "boolean" then return nil, "invalid-filter" end
+      elseif type(value) ~= "string" or value == "" then return nil, "invalid-filter" end
+      selection[key] = value
+      local text = tostring(value)
+      configurationSignature[#configurationSignature + 1] = key .. ":" .. #text .. ":" .. text
+    end
+    if selection.stat and not ({ multicraft = true, resourcefulness = true, ingenuity = true, craftingSpeed = true })[selection.stat] then
+      return nil, "invalid-filter"
+    end
+    if (selection.minimumRating or selection.maximumRating) and not selection.stat then return nil, "invalid-filter" end
+    if selection.minimumRating and selection.maximumRating and selection.minimumRating > selection.maximumRating then
+      return nil, "invalid-filter"
+    end
+    normalized.configuration = selection
+    table.sort(configurationSignature)
+  end
   if filter.time ~= nil then
     if not keysAllowed(filter.time, { from = true, to = true }) then return nil, "invalid-filter" end
     local from, to = filter.time.from, filter.time.to
@@ -224,10 +298,56 @@ local function normalizeFilter(filter)
     end
     signature[#signature + 1] = values ~= nil and ("[" .. table.concat(encoded) .. "]") or "-"
   end
+  signature[#signature + 1] = tostring(filter.craftType or "")
+  signature[#signature + 1] = tostring(filter.isRecraft)
+  signature[#signature + 1] = filter.contextSource or "-"
+  signature[#signature + 1] = table.concat(evidenceSignature, ":")
+  signature[#signature + 1] = filter.configuration and ("[" .. table.concat(configurationSignature, "|") .. "]") or "-"
   return normalized, table.concat(signature, "|")
 end
 
+local function observationMatches(rows, filter)
+  local observation = rows.observation or {}
+  local kind = observation.craftType or "unknown"
+  if filter.craftType == "orders" then
+    if kind == "personal" or kind == "unknown" then return false end
+  elseif filter.craftType and kind ~= filter.craftType then return false end
+  if filter.isRecraft ~= nil and observation.isRecraft ~= filter.isRecraft then return false end
+  if filter.contextSource and observation.contextSource ~= filter.contextSource then return false end
+  for key, value in pairs(filter.configurationObservation or {}) do
+    if observation[key == "scope" and "configurationScope" or key] ~= value then return false end
+  end
+  local selection = filter.configuration
+  if not selection then return true end
+  local configuration = rows.configuration
+  if not configuration then return false end
+  if selection.key and string.format("%.0f", observation.configurationKey) ~= selection.key then return false end
+  if selection.useConcentration ~= nil and configuration.useConcentration ~= selection.useConcentration then return false end
+  if selection.stat then
+    local stat = configuration.stats and configuration.stats[selection.stat]
+    if not stat or stat.rating == nil or (selection.minimumRating and stat.rating < selection.minimumRating) or
+        (selection.maximumRating and stat.rating > selection.maximumRating) then return false end
+  end
+  if selection.equipmentItemID or selection.equipmentGUID then
+    local found = false
+    for _, equipment in ipairs(configuration.equipment or {}) do
+      if (not selection.equipmentItemID or selection.equipmentItemID == equipment.itemID) and
+          (not selection.equipmentGUID or selection.equipmentGUID == equipment.guid) then found = true end
+    end
+    if not found then return false end
+  end
+  for _, spec in ipairs({ { "buffSpellID", "buffs", "spellID" }, { "finishingItemID", "finishingReagents", "itemID" } }) do
+    if selection[spec[1]] then
+      local found = false
+      for _, entry in ipairs(configuration[spec[2]] or {}) do if entry[spec[3]] == selection[spec[1]] then found = true end end
+      if not found then return false end
+    end
+  end
+  return true
+end
+
 local function matches(craft, rows, filter, excluded)
+  if not observationMatches(rows, filter) then return false end
   local time = filter.time
   if time and ((time.from and craft.timestamp < time.from) or
       (time.to and craft.timestamp >= time.to)) then return false end
@@ -388,6 +508,7 @@ local function seriesRelated(ledger, row)
   local characterRow = dimension(ledger, "character", row.characterDimensionId)
   local recipeRow = dimension(ledger, "recipe", row.recipeId)
   return {
+    observation = row, configuration = ledger.database.configurations[row.configurationKey],
     characters = characterRow,
     realms = characterRow and dimension(ledger, "realm", characterRow.realmDimensionId),
     recipes = recipeRow,
@@ -407,7 +528,7 @@ function API.GetCraftSeries(filter, options)
   if not keysAllowed(options, {}) then return nil, "invalid-options" end
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
-  local selected = {}
+  local selected, combined = {}, {}
   local days = ledger.seriesDays
   local first, last = 1, #days + 1
   if time and time.from then
@@ -422,7 +543,20 @@ function API.GetCraftSeries(filter, options)
     for _, group in pairs(ledger.seriesByKey[day]) do
       for _, row in pairs(group) do
         if matches({ timestamp = day }, seriesRelated(ledger, row), normalized) then
-          selected[#selected + 1] = row
+          local key = day .. ":" .. (row.characterDimensionId or 0) .. ":" .. (row.recipeId or 0)
+          local total = combined[key]
+          if not total then
+            total = ledger.CopyObservation(row)
+            total.configurationKey = nil
+            combined[key], selected[#selected + 1] = total, total
+          else
+            for field, value in pairs(row) do
+              if type(value) == "number" and field ~= "bucketStart" and field ~= "characterDimensionId" and
+                  field ~= "recipeId" and field ~= "configurationKey" and field ~= "buffListVersion" then
+                total[field] = (total[field] or 0) + value
+              end
+            end
+          end
         end
       end
     end
@@ -438,7 +572,7 @@ function API.GetCraftSeries(filter, options)
     local leftId = identity("recipes", leftRecipe) or -1
     local rightId = identity("recipes", rightRecipe) or -1
     if leftId ~= rightId then return leftId < rightId end
-    return (left.recipeId or 0) < (right.recipeId or 0)
+    return false
   end)
   local result = { series = {} }
   for _, row in ipairs(selected) do
@@ -468,7 +602,8 @@ local coverageCounts = { "quoteObservedCount", "inputCompleteCount", "matchedCra
 
 local function outcomeQuery(recipeId, filter)
   if not integer(recipeId, 0) then return nil, "invalid-id" end
-  if filter ~= nil and not keysAllowed(filter, { time = true, characters = true }) then
+  if filter ~= nil and not keysAllowed(filter, { time = true, characters = true, craftType = true,
+      isRecraft = true, configuration = true, contextSource = true, configurationObservation = true }) then
     return nil, "invalid-filter"
   end
   local normalized, signature = normalizeFilter(filter)
@@ -497,12 +632,27 @@ local function visitOutcomes(query, visit)
     local day = ledger.seriesDays[position]
     if filter.time and filter.time.to and day >= filter.time.to then break end
     for characterId, recipes in pairs(ledger.seriesByKey[day]) do
-      local row = recipes[query.recipeId]
       local characterRow = ledger.dimensionRows.character[characterId]
-      if row and (not filter.characters or (characterRow and filter.characters[characterRow.key])) then
-        visit(row, day, characterId)
+      if not filter.characters or (characterRow and filter.characters[characterRow.key]) then
+        for _, row in pairs(recipes) do
+          if (row.recipeId or 0) == query.recipeId and observationMatches(seriesRelated(ledger, row), filter) then
+            visit(row, day, characterId)
+          end
+        end
       end
     end
+  end
+end
+
+local function observationCoverage(ledger, row, totals)
+  local configuration = ledger.database.configurations[row.configurationKey]
+  local counts = { contextObservedCount = row.craftType ~= nil and row.craftType ~= "unknown",
+    configurationObservedCount = configuration ~= nil,
+    requestConfigurationCount = configuration and row.configurationScope == "request",
+    attemptStartConfigurationCount = configuration and row.configurationScope == "attempt-start" }
+  for _, name in ipairs({ "contextObservedCount", "configurationObservedCount", "requestConfigurationCount",
+      "attemptStartConfigurationCount" }) do
+    totals[name] = (totals[name] or 0) + (counts[name] and row.craftCount or 0)
   end
 end
 
@@ -520,6 +670,7 @@ function API.GetRecipeOutcomes(recipeId, filter, options)
   visitOutcomes(query, function(row, day)
     firstDay, lastDay = firstDay or day, day
     totals.craftCount = totals.craftCount + row.craftCount
+    observationCoverage(query.ledger, row, totals)
     for _, metric in ipairs(outcomeMetrics) do
       if row[metric] ~= nil then totals[metric] = (totals[metric] or 0) + row[metric] end
       totals[metric .. "ObservedCount"] = totals[metric .. "ObservedCount"] + row[metric .. "ObservedCount"]
@@ -532,7 +683,8 @@ function API.GetRecipeOutcomes(recipeId, filter, options)
     local characterRow = query.ledger.dimensionRows.character[reward.characterDimensionId]
     if reward.recipeId == recipeId and (not period or ((not period.from or reward.bucketStart >= period.from) and
         (not period.to or reward.bucketStart < period.to))) and
-        (not characters or (characterRow and characters[characterRow.key])) then
+        (not characters or (characterRow and characters[characterRow.key])) and
+        observationMatches(seriesRelated(query.ledger, reward), query.filter) then
       totals.firstCraftRewardCount = totals.firstCraftRewardCount + reward.rewardCount
     end
   end
@@ -553,6 +705,49 @@ function API.GetRecipeOutcomes(recipeId, filter, options)
       craftCount = buckets[position] or 0,
     }
   end
+  return result
+end
+
+function API.GetRecipeConfigurations(recipeId, filter, options)
+  local query, reason = outcomeQuery(recipeId, filter)
+  if not query then return nil, reason end
+  options = options or {}
+  if not keysAllowed(options, { limit = true, cursor = true }) then return nil, "invalid-options" end
+  local limit = options.limit or 50
+  if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
+  local prefix, after = "configurations:" .. query.signature .. "\n", nil
+  if options.cursor ~= nil then
+    if type(options.cursor) ~= "string" or options.cursor:sub(1, #prefix) ~= prefix then return nil, "invalid-cursor" end
+    after = options.cursor:sub(#prefix + 1)
+    local identity = after:match("^(%d+):")
+    if not identity or #identity ~= 16 then return nil, "invalid-cursor" end
+  end
+  local groups, keys, coverage = {}, {}, { craftCount = 0 }
+  visitOutcomes(query, function(row)
+    coverage.craftCount = coverage.craftCount + row.craftCount
+    observationCoverage(query.ledger, row, coverage)
+    local key = string.format("%016.0f:", row.configurationKey or 0) .. tostring(query.ledger.GrainKey(nil, row))
+    if after and key <= after then return end
+    local group = groups[key]
+    if not group then
+      group = { totals = { craftCount = 0 } }
+      projectObservation(query.ledger, row, group)
+      for _, metric in ipairs(outcomeMetrics) do group.totals[metric .. "ObservedCount"] = 0 end
+      for _, field in ipairs(coverageCounts) do group.totals[field] = 0 end
+      groups[key], keys[#keys + 1] = group, key
+    end
+    local totals = group.totals
+    totals.craftCount = totals.craftCount + row.craftCount
+    for _, metric in ipairs(outcomeMetrics) do
+      if row[metric] ~= nil then totals[metric] = (totals[metric] or 0) + row[metric] end
+      totals[metric .. "ObservedCount"] = totals[metric .. "ObservedCount"] + row[metric .. "ObservedCount"]
+    end
+    for _, field in ipairs(coverageCounts) do totals[field] = totals[field] + row[field] end
+  end)
+  table.sort(keys)
+  local result = { configurations = {}, coverage = coverage }
+  for index = 1, math.min(limit, #keys) do result.configurations[index] = groups[keys[index]] end
+  if #keys > limit then result.nextCursor = prefix .. keys[limit] end
   return result
 end
 
@@ -596,7 +791,7 @@ local function returnedPage(recipeId, filter, options, kind)
       series.resourcefulnessAuthoritativeProcCountObservedCount
     local bucket = index[day]
     local recipes = bucket and bucket[characterId]
-    for key, row in pairs(recipes and recipes[recipeId] or {}) do
+    for key, row in pairs(recipes and recipes[query.ledger.GrainKey(recipeId, series)] or {}) do
       if (kind ~= "items" or row.returnedQuantity ~= nil) and (after == nil or key > after) and
           (#keys < limit + 1 or key <= keys[#keys]) then
         if selected[key] == nil then
@@ -678,16 +873,11 @@ function API.GetRecipeReagentRequirements(recipeId, filter, options)
     if count < 1 then return nil, "invalid-cursor" end
   end
   local totals = {}
-  local ledger, selection = query.ledger, query.filter
-  for position = query.first, #ledger.seriesDays do
-    local day = ledger.seriesDays[position]
-    if selection.time and selection.time.to and day >= selection.time.to then break end
+  local ledger, overflow = query.ledger, false
+  visitOutcomes(query, function(series, day, characterId)
     local requirementDay = ledger.requirementIndex[day]
-    for characterId, recipes in pairs(ledger.seriesByKey[day]) do
-      local characterRow = ledger.dimensionRows.character[characterId]
-      if recipes[recipeId] and (not selection.characters or
-          (characterRow and selection.characters[characterRow.key])) then
-        local families = requirementDay and requirementDay[characterId] and requirementDay[characterId][recipeId]
+        local families = requirementDay and requirementDay[characterId] and
+          requirementDay[characterId][ledger.GrainKey(recipeId, series)]
         for key, row in pairs(families or {}) do
           local total = totals[key] or { requiredQuantity = 0, craftCount = 0 }
           total.requiredQuantity = total.requiredQuantity + row.requiredQuantity
@@ -696,13 +886,12 @@ function API.GetRecipeReagentRequirements(recipeId, filter, options)
             total.resultObservationCount = (total.resultObservationCount or 0) + row.resultObservationCount
           end
           if not finite(total.requiredQuantity) or not integer(total.craftCount, 0) then
-            return nil, "quantity-overflow"
+            overflow = true
           end
           totals[key] = total
         end
-      end
-    end
-  end
+  end)
+  if overflow then return nil, "quantity-overflow" end
   local keys = {}
   for key in pairs(totals) do if not after or key > after then keys[#keys + 1] = key end end
   table.sort(keys)
@@ -723,7 +912,8 @@ end
 function API.GetReagentSummaries(options)
   if options == nil then options = {} end
   if not keysAllowed(options, { profession = true, search = true, sort = true, limit = true,
-      cursor = true, items = true, excludeItems = true, character = true, time = true }) then return nil, "invalid-options" end
+      cursor = true, items = true, excludeItems = true, character = true, time = true, craftType = true,
+      isRecraft = true, configuration = true, contextSource = true, configurationObservation = true }) then return nil, "invalid-options" end
   local limit, sort = options.limit or 50, options.sort or "name"
   if not integer(limit, 1) or limit > 200 or
       (options.profession ~= nil and not integer(options.profession, 0)) or
@@ -736,7 +926,9 @@ function API.GetReagentSummaries(options)
     return nil, "invalid-options"
   end
   local filter, filterSignature = normalizeFilter({ time = options.time,
-    characters = options.character and { options.character } or nil })
+    characters = options.character and { options.character } or nil, craftType = options.craftType,
+    isRecraft = options.isRecraft, configuration = options.configuration, contextSource = options.contextSource,
+    configurationObservation = options.configurationObservation })
   if not filter then return nil, "invalid-options" end
   for _, bound in pairs(filter.time or {}) do
     if bound % 86400 ~= 0 then return nil, "invalid-options" end
@@ -810,17 +1002,19 @@ function API.GetReagentSummaries(options)
     for seriesCharacter, recipes in pairs(ledger.seriesByKey[day]) do
       if characterId == nil or seriesCharacter == characterId then
         local reagentRecipes = reagentDay and reagentDay[seriesCharacter]
-        for recipeKey, series in pairs(recipes) do
+        for partitionKey, series in pairs(recipes) do
+          local recipeKey = series.recipeId or 0
           local recipeRow = recipeKey ~= 0 and dimension(ledger, "recipe", recipeKey) or nil
           local professionId = recipeRow and recipeRow.professionId
-          if not options.profession or options.profession == professionId then
+            if (not options.profession or options.profession == professionId) and
+              observationMatches(seriesRelated(ledger, series), filter) then
             local counts = coverage[recipeKey] or { crafts = 0, inputs = 0, quotes = 0, returns = 0 }
             counts.crafts = counts.crafts + series.craftCount
             counts.inputs = counts.inputs + series.inputCompleteCount
             counts.quotes = counts.quotes + series.quoteObservedCount
             counts.returns = counts.returns + series.resourcefulnessAuthoritativeProcCountObservedCount
             coverage[recipeKey] = counts
-            for itemId, measures in pairs(reagentRecipes and reagentRecipes[recipeKey] or {}) do
+            for itemId, measures in pairs(reagentRecipes and reagentRecipes[partitionKey] or {}) do
               local row = reagent(itemId, recipeKey, professionId)
               if row then
                 for _, measure in ipairs({ "allocatedQuantity", "returnedQuantity", "matchedAllocatedQuantity",
@@ -901,7 +1095,8 @@ end
 function API.GetRecipeSummaries(options)
   if options == nil then options = {} end
   if not keysAllowed(options, { limit = true, cursor = true, character = true,
-      profession = true, sort = true, search = true, time = true }) then return nil, "invalid-options" end
+      profession = true, sort = true, search = true, time = true, craftType = true, isRecraft = true,
+      configuration = true, contextSource = true, configurationObservation = true }) then return nil, "invalid-options" end
   local limit = options.limit or 50
   if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
   if options.character ~= nil and (type(options.character) ~= "string" or options.character == "") then
@@ -911,12 +1106,16 @@ function API.GetRecipeSummaries(options)
   local sort = options.sort or "name"
   if sort ~= "name" and sort ~= "count" and sort ~= "profession" then return nil, "invalid-options" end
   if options.search ~= nil and type(options.search) ~= "string" then return nil, "invalid-options" end
-  local normalized, timeSignature = normalizeFilter({ time = options.time })
+  local normalized, timeSignature = normalizeFilter({ time = options.time, craftType = options.craftType,
+    isRecraft = options.isRecraft, configuration = options.configuration, contextSource = options.contextSource,
+    configurationObservation = options.configurationObservation })
+  local observedFilter = options.craftType ~= nil or options.isRecraft ~= nil or options.configuration ~= nil or
+    options.contextSource ~= nil or options.configurationObservation ~= nil
   if not normalized then return nil, "invalid-options" end
   for _, bound in pairs(normalized.time or {}) do if bound % 86400 ~= 0 then return nil, "invalid-options" end end
   local search = (options.search or ""):lower()
   local characterKey = options.character or ""
-  local prefix = (search ~= "" or options.time ~= nil) and ("recipe-search:" .. #search .. ":" .. search .. ":" ..
+  local prefix = (search ~= "" or options.time ~= nil or observedFilter) and ("recipe-search:" .. #search .. ":" .. search .. ":" ..
     #characterKey .. ":" .. characterKey .. ":" .. tostring(options.profession or "") .. ":" .. sort .. ":" .. timeSignature .. "\n") or ""
   local offset = 0
   if options.cursor ~= nil then
@@ -931,18 +1130,19 @@ function API.GetRecipeSummaries(options)
   local ledger = addon.ledger
   if not ledger then return nil, "not-ready" end
   local counts = ledger.recipeCounts
-  if options.character or options.time then
+  if options.character or options.time or observedFilter then
     counts = {}
     local characterId = ledger.dimensionIndex.character[options.character]
     for _, row in ipairs(ledger.database.craftSeries) do
       if (not options.character or row.characterDimensionId == characterId) and row.recipeId and
           (not normalized.time or (not normalized.time.from or row.bucketStart >= normalized.time.from) and
-            (not normalized.time.to or row.bucketStart < normalized.time.to)) then
+            (not normalized.time.to or row.bucketStart < normalized.time.to)) and
+          observationMatches(seriesRelated(ledger, row), normalized) then
         counts[row.recipeId] = (counts[row.recipeId] or 0) + row.craftCount
       end
     end
   end
-  if not ledger.recipeOrder or options.character or options.profession or options.time or sort ~= "name" or search ~= "" then
+  if not ledger.recipeOrder or options.character or options.profession or options.time or observedFilter or sort ~= "name" or search ~= "" then
     local order = {}
     for id in pairs(counts) do
       local row = dimension(ledger, "recipe", id)
@@ -966,8 +1166,8 @@ function API.GetRecipeSummaries(options)
       if leftName ~= rightName then return leftName < rightName end
       return a.id < b.id
     end)
-    if not options.character and not options.profession and not options.time and sort == "name" and search == "" then ledger.recipeOrder = order end
-    if options.character or options.profession or options.time or sort ~= "name" or search ~= "" then
+    if not options.character and not options.profession and not options.time and not observedFilter and sort == "name" and search == "" then ledger.recipeOrder = order end
+    if options.character or options.profession or options.time or observedFilter or sort ~= "name" or search ~= "" then
       local result = { recipes = {} }
       if offset > #order then return nil, "invalid-cursor" end
       for index = offset + 1, math.min(offset + limit, #order) do

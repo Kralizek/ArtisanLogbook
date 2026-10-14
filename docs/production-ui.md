@@ -16,6 +16,26 @@ These remain read-only API v1 catalogue queries; capture and storage are unchang
 
 ## Pages and navigation
 
+Each page owns its active **Craft type** and **Period** filters. Craft type defaults
+to All crafts; Period retains that page's existing default. Personal crafting,
+Crafting orders and Patron orders use the same shared choices and query semantics,
+but changing one page never changes another. Selections survive navigation and
+closing/reopening the window during the session; `/reload` initializes pages from
+defaults again. Optional global defaults may initialize new pages but never
+replace active page selections. Craft type applies to that page's craft activity,
+outcomes, rankings, ingredients and tooltip populations. Craft
+tooltips and Craft Detail distinguish ordinary personal crafting from personal
+orders; recrafting is independent. Craft Detail's Result/Ingredients/Configuration tabs
+inspect outcomes, inputs, observed stats, equipment, supported buffs and finishing selections
+with explicit missing information. This does not add a configuration comparison UI.
+Known configurations are never hidden or downgraded to satisfy a storage quota.
+Missing configuration labels describe capture gaps or historically unavailable
+data; aggregate-backed configurations remain available after detail pruning.
+Craft Detail reads scope and coverage from the separate observation evidence,
+not from configuration identity. Identical conditions can share a key across craft
+types while keeping their context and capture limitations distinct.
+See [the in-game checklist](crafting-observations.md#in-game-verification).
+
 The persistent dark sidebar contains Overview, Logbook, Recipes, Reagents, pinned recipes,
 characters, and professions. Settings stays at the bottom, outside the scrolling
 navigation population. Selected entries have a restrained gold highlight; long
@@ -44,7 +64,7 @@ existing current-entry highlight without replacing the primary selection.
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, recorded Resourcefulness proc rate over all selected crafts, known returned material units, and most-crafted recipe. No factual craft list. |
 | Logbook | Period/character/profession filters plus a multi-checkbox craft-visibility menu above a newest-first ledger. Show crafts from unknown recipes is disabled by default and applies to craft-history lists; enabling it includes unattributed crafts. Show hidden recipes includes hidden recipes in Logbook only. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
-| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, Required units/Returned units/Materials saved columns and editable Ignore checkboxes. Materials saved shows a matched share or a dash; its tooltip gives the comparable-craft count. Item IDs live in native item tooltips, not row subtitles. |
+| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, recorded Input/Returned/Saved share columns and editable Ignore checkboxes. Saved share shows Core's same-craft matched ratio or a dash; its muted tooltip summarizes relevant coverage and matched sample without presenting broad population counts as item-specific. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
@@ -177,21 +197,22 @@ sort; Most required, Most returned and Recipe count sort the full selection befo
 scroll offsets survive navigation. No user-facing Prev/Next controls remain.
 
 Header totals cover the complete filtered selection, not just loaded rows. The
-Reagent page shows identity/professions, gross required and known returned
-quantities, durable craft and recipe counts, matched saved share with its matched
-craft count, recent crafters, recipe uses and craft history. Required quantities
-are gross inputs before returns, not net consumed. Headline totals and saved share
-come from `GetReagentSummaries`; the usage worker reads retained craft details only
-for chart/history drill-down, at most 100 crafts per frame. Changing the selection
+Reagent page shows identity/professions, gross recorded allocated input and
+known returned quantities, durable craft and recipe counts, matched saved share
+with its matched craft count, recent crafters, recipe uses and craft history.
+Input quantity is observed allocation, not recipe requirement or net consumed.
+Headline totals and saved share come from `GetReagentSummaries`; the usage worker reads
+retained craft details only for chart/history drill-down, at most 100 crafts per frame.
+Changing the selection
 replaces pending calculations. Histories and recipe uses render 40 rows at a time.
 Metadata events repaint item artwork without restarting aggregate queries.
 
-The two-color chart compares **required quantities and returns on retained craft
-details**, shown as Required and Returned, with at most 60 buckets and quantity/date
+The two-color chart compares **recorded input quantities and returns on retained
+craft details**, shown as Input and Returned, with at most 60 buckets and quantity/date
 tooltips. These chart points and craft-by-craft recipe uses are retained-detail
 views, not lifetime totals. The Saved column uses only Core's per-item matched
-returned and required quantities from the same crafts; unavailable matched samples
-stay unavailable. Gross returned and required totals are never divided together.
+returned and input quantities from the same crafts; unavailable matched samples
+stay unavailable. Independent gross return and input totals are never divided together.
 Duplicate input slots of one item are consolidated by Core before matched savings
 are measured. Missing quantities never become zero. Pruned detail leaves durable
 catalogue totals and matched savings intact without reconstructing craft histories.
@@ -199,11 +220,24 @@ Reagent Detail states how many available craft rows supply chart quantities and
 return results; that retained-detail coverage is separate from its saved-share
 sample, which uses the selected durable item-level comparisons.
 
-Required sums gross known inputs before returns; it does not claim net consumption.
-Returned sums known positive returns from any supported cohort. Exact quantities,
-missing-data caveats, and matched sample details are in row/tile tooltips. There is
-no cross-material savings percentage. Recipe/profession associations describe
-recorded uses, not all game recipes capable of using the item.
+Input sums gross observed allocations. Its coverage flag means every craft in the
+selected population has a complete input snapshot; otherwise the input total may
+be higher. Core's `allocationUnknownCount` counts crafts in the associated recipe
+population that lack complete input snapshots, while `returnUnknownCount` counts
+associated crafts without an authoritative return outcome. Neither counter proves
+that this particular reagent was missing on each craft. The row tooltip therefore
+uses one muted coverage note and does not show these broad counts as item-specific.
+Returned sums known positive returns from supported cohorts; zero appears only
+when return coverage is complete. Saved share uses Core's same-item input and
+authoritative return quantities from matched crafts; independent gross totals are
+never divided together. A valid matched saved share remains available when broader
+coverage is incomplete. The Reagents row tooltip focuses on Input, Returned and
+Saved share, with a concise explanation of incomplete or insufficient data. It
+omits professions, recipe counts, Ignore state and generic quality caveats already
+available elsewhere. The item title is bounded, notes are kept short, and the
+shared tooltip is screen-clamped. There is no cross-material savings percentage.
+Recipe/profession associations describe recorded uses, not all game recipes
+capable of using the item.
 
 Ignore in savings statistics is editable on the standalone Reagent page, Reagents
 catalogue and Recipe Reagents tab. All three share `ArtisanLogbookUISettings.trivialReagents`
@@ -266,31 +300,65 @@ exact page without rebuilding its list. A single Escape registration closes the
 modal first; a second Escape closes the journal. Closing the main window also
 cleans up the shade and modal.
 
-The modal is inspection only. A prominent result row combines item, quality,
-quantity and Multicraft contribution. Paired facts show character, timestamp,
-concentration and outcomes. An Ingredients table shows `Reagent | Required |
-Returned`, one row per ingredient. Required combines the recipe's requirement
-and recorded selections for the same ingredient without adding them twice;
-quantities from different recipe slots for the same item are added. When the
-recipe allows several qualities and the one used wasn't recorded, the row uses
-the plain reagent name (for example "Eversinging Dust") with the recipe total,
-no quality badge, and the tooltip "The quality used wasn't recorded."; returns of
-any of its qualities appear on that row. Quality badges appear only for a
-specific recorded item. A dash means unknown; 0 means Resourcefulness was
-recorded and returned none. Positive returns are lightly highlighted. Tooltips
-are short sentences ("This recipe requires 2 Munsell Ink. The quality used
-wasn't recorded.", "1 Sienna Ink was returned by Resourcefulness."); crafting
-orders add that their materials don't count toward personal savings. A single
-caveat, "Some ingredient details weren't recorded for this craft.", appears only
-when an ingredient or required quantity is genuinely missing (for example older
-crafts captured before the slot-index correction). Item rows open Reagent pages
-after closing the modal; rows with an unrecorded quality do not.
-Logbook Highlights list returns the same way ("1 Sienna Ink (2 required)").
-Recipe and Reagent views use Required for the recorded quantity of that specific
-item; Recipe Reagents notes ingredients that aren't listed by quality and shows
-their recipe totals on hover.
-There is no classification dropdown or duplicate metadata footer. No full-modal
-scrollbar is required. Multiple output identities are not synthesized.
+A consistent dark inset surface is used by all three Craft Detail tabs; other
+TabbedContent views retain their existing parchment treatment.
+
+A compact identity header keeps the crafted item, profession, class-colored
+character, timestamp, and known craft type visible. Below it, **Result**,
+**Ingredients**, and **Configuration** are peer tabs. Each owns a fixed viewport;
+long ingredient/configuration lists scroll inside that tab. Opening another craft
+resets all three views and their scroll positions, while switching tabs hides the
+other views rather than leaving content behind the selected panel.
+
+**Result** leads with output quantity, then quality when the recipe supports it,
+concentration spent, Multicraft, Ingenuity, and Resourcefulness. Known zeroes use
+natural wording (for example "No bonus items" and "Not triggered"); unavailable
+values use a dash with a contextual tooltip. Known partial Resourcefulness
+returns remain visible without claiming that unobserved returns were zero.
+
+**Ingredients** shows `Material | Required | Returned | Net used`. Input and
+return facts remain independent: a known return can be shown when its required
+quantity is unknown, while net usage is calculated only when complete input and
+authoritative complete return measurements are available. A dash is unknown;
+zero is shown only when zero is supported by the recorded evidence. Positive
+returns are lightly highlighted. Partial input/return coverage gets one muted
+explanation inside this tab, not above the tabs. Quality-family rows retain the
+plain reagent name and recipe total when the used quality is unknown. Item rows
+use native item names, icons, and tooltips; clicking a concrete material closes
+the modal and opens its Reagent page. Logbook Highlights use the same returned
+material wording.
+
+**Configuration** groups crafting stats, profession equipment, and buffs/finishing
+reagents. Effective skill and difficulty are totaled only when both additive
+components are available; reported percentages are rounded for display only.
+Equipment uses friendly tool/accessory labels and resolved item names/icons;
+instance GUIDs remain in Core, not the normal UI. Supported-phial coverage says
+that only the checked phials were checked, never that no other crafting buffs
+exist. Historical or otherwise unavailable configuration gets one concise empty
+state rather than a grid of missing values. Request-time and craft-start scope
+remain separate observations, with a small note that neither certifies the
+completion-time setup; details are available by tooltip.
+
+Net material quantities and visible labels are presentation only. They do not
+modify Core measurements, infer missing values, or add gold/economic valuation.
+
+### In-game verification
+
+- Open Result, Ingredients, and Configuration in sequence, repeat the sequence,
+  and confirm only the selected tab's content is visible.
+- Keep the modal open while opening a second craft, then reopen the first. Check
+  that the header, outcome, material rows, configuration, and each scroll offset
+  match the currently selected craft.
+- Inspect a historical craft with returned materials but no required amounts;
+  confirm returns remain visible, required/net remain unknown, and the partial
+  explanation appears only in Ingredients.
+- Inspect a craft with complete inputs and complete returns (including a known
+  zero return); confirm net used and zero values are shown accurately.
+- Inspect a batch-unobserved/changed configuration and a request-only snapshot;
+  confirm the scope note is concise and no value is presented as completion-time
+  verification.
+- Repeat at UI scales 0.64, 0.8, and 1.0 on 1280x720 and a smaller viewport.
+  Check tab borders, scrollbars, long names, item tooltips, and frame clipping.
 
 ## Recipe and craft hover previews
 

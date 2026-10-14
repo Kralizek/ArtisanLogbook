@@ -508,6 +508,217 @@ test("recipe outcome queries never scan craft history or unrelated daily recipes
   assert(ok, reason)
 end)
 
+test("context and configuration filters align durable measurements before and after pruning", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  ledger:AddDimension("profession", 171, { name = "Alchemy" })
+  ledger:AddDimension("recipe", 101, { professionId = 171 })
+  for index, kind in ipairs({ "personal", "patron", "public", "guild", "personal-order", "order", "unknown" }) do
+    local observation = kind ~= "unknown" and {
+      context = { kind = kind, source = "submitted-call", isRecraft = index == 3 },
+      configuration = { scope = "request", stats = { multicraft = { rating = index * 10, ratingPct = index } },
+        equipment = { { slot = 20, itemID = 888, guid = "Tool-" .. index } }, buffs = { { spellID = 432306 } },
+        finishingReagents = { { itemID = 99, quantity = 1 } } } } or nil
+    assert(ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, reagent = { itemID = 8 }, quantity = 5 } },
+      inputEvidence({ 8 }), kind == "personal", observation))
+    assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = index + 1, multicraft = index,
+      hasIngenuityProc = true, ingenuityRefund = 2, concentrationSpent = 10,
+      resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } }))
+  end
+  local function verify()
+    for _, filter in ipairs({ { craftType = "personal" }, { configuration = { stat = "multicraft", maximumRating = 10 } },
+        { configuration = { equipmentGUID = "Tool-1" } } }) do
+      local totals = assert(api.GetRecipeOutcomes(101, filter)).totals
+      assert(totals.craftCount == 1 and totals.outputQuantity == 2 and totals.multicraftBonus == 1)
+      assert(totals.resourcefulnessAuthoritativeProcCount == 1 and totals.ingenuityProcCount == 1)
+      assert(totals.configurationObservedCount == 1 and totals.requestConfigurationCount == 1)
+      local reagents = assert(api.GetRecipeReagentStatistics(101, filter))
+      assert(reagents.coverage.craftCount == 1 and reagents.reagents[1].matchedAllocatedQuantity == 5)
+      assert(reagents.reagents[1].matchedReturnedQuantity == 1)
+      assert(api.GetRecipeReturnSets(101, filter).returns[1].craftCount == 1)
+      assert(api.GetRecipeReturnedReagents(101, filter).returns[1].returnedQuantity == 1)
+      assert(api.GetReagentSummaries(filter).reagents[1].craftCount == 1)
+      assert(api.GetRecipeSummaries(filter).recipes[1].craftCount == 1)
+      assert(api.GetCraftSeries(filter).series[1].craftCount == 1)
+    end
+    assert(api.GetRecipeOutcomes(101, { craftType = "orders" }).totals.craftCount == 5)
+    assert(api.GetRecipeOutcomes(101, { craftType = "unknown" }).totals.craftCount == 1)
+    assert(api.GetRecipeOutcomes(101, { isRecraft = true }).totals.craftCount == 1)
+    local groups = assert(api.GetRecipeConfigurations(101))
+    assert(#groups.configurations == 7 and groups.coverage.craftCount == 7)
+    assert(groups.coverage.configurationObservedCount == 6)
+  end
+  verify()
+  local projected = api.GetCraft(1)
+  projected.configuration.stats.multicraft.rating = 999
+  assert(api.GetCraft(1).configuration.stats.multicraft.rating == 10)
+  assert(#api.GetCrafts({ craftType = "personal" }).crafts == 1)
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  verify()
+  assert(#api.GetCrafts({ craftType = "personal" }).crafts == 0)
+  assert(api.GetRecipeOutcomes(101, { configuration = { minimumRating = 1 } }) == nil)
+end)
+
+test("one observed configuration shares identity across independent context scope and coverage populations", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  local states = {
+    { kind = "personal", recraft = false, source = "submitted-call", scope = "request", coverage = "reported" },
+    { kind = "patron", recraft = false, source = "claimed-order", scope = "request", coverage = "reported" },
+    { kind = "personal", recraft = false, source = "submitted-call", scope = "attempt-start", coverage = "reported" },
+    { kind = "personal", recraft = true, source = "submitted-call", scope = "request", coverage = "reported" },
+    { kind = "personal", recraft = false, source = "submitted-call", scope = "request", coverage = "partial" },
+    { kind = "order", recraft = false, source = "submitted-call", scope = "request", coverage = "reported" },
+    { kind = "personal", recraft = false, source = "submitted-call", scope = "request", coverage = "partial", missing = true },
+    { kind = "personal", recraft = false, source = "submitted-call", scope = "request", coverage = "unavailable", unknown = true },
+    { kind = "personal", recraft = false, source = "submitted-call", scope = "request", coverage = "reported", buffListVersion = 2 },
+  }
+  for index, state in ipairs(states) do
+    local configuration = { scope = state.scope, statsCoverage = state.coverage }
+    if not state.unknown then
+      configuration.stats = { multicraft = { rating = 180, ratingPct = state.missing and nil or 12.5 } }
+      if state.missing then configuration.stats.multicraft.ratingPct = nil end
+      configuration.buffs = {}
+      configuration.buffsCoverage, configuration.buffListVersion = "supported-list", state.buffListVersion or 1
+    end
+    assert(ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } } },
+      inputEvidence({ 8 }), state.kind == "personal", { context = { kind = state.kind, isRecraft = state.recraft, source = state.source },
+        configuration = configuration }))
+    assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = index, multicraft = 1,
+      resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } }))
+    if index <= 2 then
+      assert(ledger:RecordResult({ operationID = index, firstCraftReward = true, itemID = 777, quantity = 1 }))
+    end
+  end
+  local function verify()
+    local page = assert(api.GetRecipeConfigurations(101, nil, { limit = 2 }))
+    local groups, cursor = {}, page.nextCursor
+    for _, group in ipairs(page.configurations) do groups[#groups + 1] = group end
+    while cursor do
+      local more = assert(api.GetRecipeConfigurations(101, nil, { limit = 2, cursor = cursor }))
+      for _, group in ipairs(more.configurations) do groups[#groups + 1] = group end
+      cursor = more.nextCursor
+    end
+    assert(#groups == 9 and page.coverage.craftCount == 9 and page.coverage.configurationObservedCount == 8)
+    local shared = 0
+    for _, group in ipairs(groups) do
+      assert(group.totals.craftCount == 1)
+      if group.configuration and group.configuration.key == "1" then
+        shared = shared + 1
+        assert(group.configuration.scope == nil and group.configuration.statsCoverage == nil)
+        assert(group.configuration.identityBasis == "observed-fields")
+        assert(group.configurationObservation.scope and group.configurationObservation.statsCoverage)
+      end
+    end
+    assert(shared == 7)
+    assert(api.GetRecipeOutcomes(101, { configuration = { key = "1" } }).totals.craftCount == 7)
+    local filter = { craftType = "personal", isRecraft = false, contextSource = "submitted-call",
+      configuration = { key = "1" }, configurationObservation = { scope = "request", statsCoverage = "reported", buffListVersion = 1 } }
+    assert(api.GetRecipeOutcomes(101, filter).totals.outputQuantity == 1)
+    assert(api.GetRecipeOutcomes(101, filter).totals.firstCraftRewardCount == 1)
+    assert(api.GetRecipeOutcomes(101, { craftType = "patron" }).totals.firstCraftRewardCount == 1)
+    local materials = api.GetRecipeReagentStatistics(101, filter)
+    assert(materials.coverage.craftCount == 1 and materials.reagents[1].matchedAllocatedQuantity == 5)
+    assert(api.GetRecipeReturnSets(101, filter).returns[1].craftCount == 1)
+    assert(api.GetRecipeReturnedReagents(101, filter).returns[1].returnedQuantity == 1)
+    assert(api.GetCraftSeries(filter).series[1].craftCount == 1)
+    assert(api.GetRecipeSummaries(filter).recipes[1].craftCount == 1)
+    assert(api.GetReagentSummaries(filter).reagents[1].craftCount == 1)
+    assert(api.GetRecipeOutcomes(101, { contextSource = "claimed-order" }).totals.craftCount == 1)
+    assert(api.GetRecipeOutcomes(101, { configurationObservation = { statsCoverage = "partial" } }).totals.craftCount == 2)
+    assert(api.GetRecipeOutcomes(101, { configuration = { stat = "multicraft", minimumRating = 180 } }).totals.craftCount == 8)
+    assert(api.GetRecipeOutcomes(101, { configurationObservation = { buffListVersion = 2 } }).totals.craftCount == 1)
+  end
+  assert(#ledger.database.configurations == 2)
+  for index = 1, 6 do assert(ledger.database.crafts[index].configurationKey == 1) end
+  assert(ledger.database.crafts[7].configurationKey == 2 and ledger.database.crafts[8].configurationKey == nil)
+  assert(api.GetCraft(8).configuration == nil and api.GetCraft(8).configurationObservation.statsCoverage == "unavailable")
+  assert(api.GetCrafts({ configurationObservation = { scope = "attempt-start" } }).crafts[1].id == 3)
+  local projected = api.GetCraft(1)
+  projected.configurationObservation.statsCoverage = "changed"
+  assert(api.GetCraft(1).configurationObservation.statsCoverage == "reported")
+  verify()
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(#addon.ledger.database.configurations == 2)
+  verify()
+  assert(api.GetRecipeOutcomes(101, { configurationObservation = { statsCoverage = "complete" } }) == nil)
+  assert(api.GetRecipeOutcomes(101, { configuration = { scope = "request" } }) == nil)
+end)
+
+test("configuration pages preserve all exact snapshots and filters through sparse-key pruning", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  local orphan = assert(ledger:SubmitCraft(101, 1, false, nil, {}, nil, true, {
+    context = { kind = "personal" }, configuration = { scope = "request", stats = { baseSkill = 1 } } }))
+  ledger:CancelCraft()
+  session(ledger, "A", 1)
+  for index = 1, 300 do
+    assert(ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } } },
+      inputEvidence({ 8 }), true, { context = { kind = "personal", source = "submitted-call" },
+        configuration = { scope = "request", stats = { multicraft = { rating = 180 + index / 1024 } },
+          equipment = { { slot = 20, itemID = 888, guid = "Tool-" .. index .. string.rep("x", 150) } } } }))
+    assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = 2, multicraft = 1,
+      resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } }))
+  end
+  local first = assert(api.GetRecipeConfigurations(101, nil, { limit = 200 }))
+  local last = assert(api.GetRecipeConfigurations(101, nil, { limit = 200, cursor = first.nextCursor }))
+  assert(#first.configurations == 200 and #last.configurations == 100 and last.nextCursor == nil)
+  assert(first.coverage.configurationObservedCount == 300 and first.coverage.configurationCapacityLimitedCount == nil)
+  local selected = last.configurations[100].configuration
+  assert(selected.stats.multicraft.rating == 180 + 300 / 1024)
+  local filter = { configuration = { key = selected.key } }
+  local before = assert(api.GetRecipeReagentStatistics(101, filter))
+  assert(before.reagents[1].matchedAllocatedQuantity == 5 and before.reagents[1].matchedReturnedQuantity == 1)
+  assert(api.GetRecipeOutcomes(101, { configuration = { equipmentGUID = selected.equipment[1].guid } }).totals.craftCount == 1)
+  assert(api.GetRecipeOutcomes(101).totals.configurationCapacityLimitedCount == nil)
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  assert(ledger.database.configurations[orphan.configurationKey] == nil)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  equal(api.GetRecipeReagentStatistics(101, filter), before)
+  equal(api.GetRecipeConfigurations(101, nil, { limit = 200, cursor = first.nextCursor }), last)
+  assert(api.GetRecipeOutcomes(101, filter).totals.configurationObservedCount == 1)
+end)
+
+test("adjacent large sparse observation keys stay distinct in grains filters and cursors", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  ledger.database.nextConfigurationKey = 9007199254740989
+  for index = 1, 2 do
+    assert(ledger:SubmitCraft(101, 1, false, nil, {}, nil, true, {
+      context = { kind = "personal" }, configuration = { scope = "request", stats = { baseSkill = index } } }))
+    assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = index }))
+  end
+  local first = assert(api.GetRecipeConfigurations(101, nil, { limit = 1 }))
+  local second = assert(api.GetRecipeConfigurations(101, nil, { limit = 1, cursor = first.nextCursor }))
+  assert(first.configurations[1].configuration.key == "9007199254740989")
+  assert(second.configurations[1].configuration.key == "9007199254740990")
+  assert(second.nextCursor == nil)
+  assert(api.GetRecipeOutcomes(101, { configuration = { key = "9007199254740989" } }).totals.outputQuantity == 1)
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  equal(api.GetRecipeConfigurations(101, nil, { limit = 1, cursor = first.nextCursor }), second)
+end)
+
+test("direct master migration preserves API v1 and leaves historical configuration unknown", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitCraft(101, 1, false, nil, {}, nil, true))
+  assert(ledger:RecordResult({ operationID = 1, itemID = 100, quantity = 1 }))
+  ledger.database.schemaVersion, ledger.database.nextConfigurationKey, ledger.database.configurations = 3, nil, nil
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  assert(api.GetCraft(1).configuration == nil and api.GetCraft(1).configurationCoverage == "unavailable")
+  local page = assert(api.GetRecipeConfigurations(101))
+  assert(page.coverage.configurationObservedCount == 0 and page.coverage.contextObservedCount == 0)
+  assert(api.GetVersion() == 1 and addon.ledger.database.schemaVersion == 4)
+  assert(page.configurations[1].configurationCoverage == "unavailable")
+end)
+
 test("GetCraft has an explicit denormalized shape and preserves zero and false", function()
   local _, api = fixture()
   local craft = assert(api.GetCraft(1))
@@ -520,6 +731,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
   local reagentItem = { id = 202, name = "Reagent", expansion = oldExpansion }
   equal(craft, {
     id = 1, timestamp = 1800000000, gameOperationId = 1,
+    context = { kind = "unknown" }, configurationCoverage = "unavailable", configurationObservation = {},
     character = { key = realm.key .. ":guid:Player-A", name = "A", guid = "Player-A", realm = realm },
     realm = realm, profession = profession, recipe = recipe, expansion = expansion,
     outputItem = { id = 201, name = "Output", expansion = oldExpansion },
@@ -529,6 +741,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
     quoteObserved = true, grossRequirementsComplete = false, materialsSavingsEligible = true,
     reagentRequirements = {},
     request = { id = 1, timestamp = 1800000000, requestedCount = 1, useConcentration = false,
+      context = { kind = "unknown" }, configurationCoverage = "unavailable", configurationObservation = {},
       concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0, recipe = recipe,
       materialsSavingsEligible = true,
       allocations = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, quality = 0 } } },
