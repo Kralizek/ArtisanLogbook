@@ -2212,9 +2212,14 @@ do
   local partialText = reagentTooltip(partialSummary)
   assert(environment.GameTooltip.text == "Artisan's Ledger" and environment.GameTooltip.clamped)
   assert(partialText:find("Input: 3 recorded", 1, true) and partialText:find("Returned: -", 1, true), partialText)
-  assert(partialText:find("Input missing for 4 crafts", 1, true) and partialText:find("total may be higher", 1, true), partialText)
-  assert(partialText:find("Returns unavailable for 5 crafts", 1, true), partialText)
-  assert(partialText:find("Not enough comparable data to calculate savings.", 1, true))
+  assert(partialText:find("Coverage is incomplete; input total may be higher; savings unavailable.", 1, true), partialText)
+  assert(not partialText:find("4 crafts", 1, true) and not partialText:find("5 crafts", 1, true) and
+    not partialText:find("About these amounts", 1, true), partialText)
+  local coverageLine
+  for _, line in ipairs(environment.GameTooltip.lines) do
+    if line:find("Coverage is incomplete", 1, true) then coverageLine = line end
+  end
+  assert(coverageLine and environment.GameTooltip.lineStyles[coverageLine][1] == ui.UI.Tooltip.colors.muted[1])
   for _, internal in ipairs({ "Profession", "Recipes", "Ignore", "gross requirements", "quality may not be identified" }) do
     assert(not partialText:find(internal, 1, true), internal)
   end
@@ -2224,7 +2229,7 @@ do
     matchedCraftCount = 3, matchedAllocatedQuantity = 5, matchedReturnedQuantity = 2 }
   local completeText = reagentTooltip(completeSummary)
   assert(completeText:find("Input: 5", 1, true) and completeText:find("Returned: 2", 1, true))
-  assert(completeText:find("Saved share: 40.0%", 1, true) and completeText:find("Based on 3 comparable crafts", 1, true))
+  assert(completeText:find("Saved share: 40.0%", 1, true) and completeText:find("Saved share uses 3 comparable crafts", 1, true))
   assert(not completeText:lower():find("quality", 1, true))
   local zeroSummary = { item = { id = 89, name = "Zero Return Herb" }, allocatedQuantity = 5, allocationComplete = true,
     returnedQuantity = 0, returnComplete = true, matchedCraftCount = 2,
@@ -2237,9 +2242,17 @@ do
   partialReturn.qualityUnknown = true
   local partialReturnText = reagentTooltip(partialReturn)
   assert(partialReturnText:find("Returned: 1 recorded", 1, true) and
-    partialReturnText:find("Some return results are missing.", 1, true) and
+    partialReturnText:find("Return coverage is incomplete. Savings use 1 comparable craft.", 1, true) and
     partialReturnText:find("Saved share: 20.0%", 1, true), partialReturnText)
   assert(not partialReturnText:lower():find("quality", 1, true))
+  local partialInputMatched = { item = { id = 92, name = "Matched Partial Input" }, allocatedQuantity = 5,
+    allocationComplete = false, returnedQuantity = 1, returnComplete = true, matchedCraftCount = 1,
+    matchedAllocatedQuantity = 5, matchedReturnedQuantity = 1 }
+  local partialInputText = reagentTooltip(partialInputMatched)
+  assert(partialInputText:find("Input: 5 recorded", 1, true) and
+    partialInputText:find("Saved share: 20.0%", 1, true) and
+    partialInputText:find("Input coverage is incomplete; total may be higher. Savings use 1 comparable craft.", 1, true), partialInputText)
+  assert(not partialInputText:find("savings unavailable", 1, true))
   local longName = { item = { id = 91, name = string.rep("Long reagent name ", 8) }, allocationComplete = false,
     returnComplete = false, matchedCraftCount = 0 }
   reagentTooltip(longName)
@@ -2332,7 +2345,7 @@ do
   filteredRow.scripts.OnEnter(filteredRow)
   assert(environment.GameTooltip.rows[1].value == "3 recorded" and environment.GameTooltip.rows[2].value == "1")
   assert(environment.GameTooltip.rows[3].value == "-" and
-    table.concat(environment.GameTooltip.lines, "\n"):find("Not enough comparable data", 1, true))
+    table.concat(environment.GameTooltip.lines, "\n"):find("Input coverage is incomplete; total may be higher; savings unavailable.", 1, true))
   environment.GameTooltip:Hide()
   dropdown(page, "Alchemy"):Choose(false)
   local function search(text)

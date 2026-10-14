@@ -70,30 +70,29 @@ function UI.ReagentSummaryTooltip(owner, row)
   local savingsAvailable = saved ~= "Unavailable" and not UI.IsTrivial(row.item.id)
   UI.Tooltip.Row("Saved share", UI.IsTrivial(row.item.id) and "Excluded" or (savingsAvailable and saved or "-"))
 
-  local notes = {}
-  if not row.allocationComplete then
-    local missing = row.allocationUnknownCount or 0
-    notes[#notes + 1] = missing > 0 and
-      ("Input missing for " .. UI.Count(missing, "craft") .. "; total may be higher.") or
-      "Some input details are missing; total may be higher."
-  end
-  if not row.returnComplete then
-    local missing = row.returnUnknownCount or 0
-    notes[#notes + 1] = row.returnedQuantity ~= nil and "Some return results are missing." or
-      (missing > 0 and ("Returns unavailable for " .. UI.Count(missing, "craft") .. ".") or
-        "Return results are incomplete.")
-  end
-  if UI.IsTrivial(row.item.id) then
-    notes[#notes + 1] = "Excluded from savings by preference."
+  local inputIncomplete, returnsIncomplete = not row.allocationComplete, not row.returnComplete
+  local ignored = UI.IsTrivial(row.item.id)
+  local note
+  if ignored then
+    note = "Savings are excluded by your preference. Amounts above are unchanged."
+  elseif inputIncomplete and returnsIncomplete then
+    note = savingsAvailable and
+      ("Coverage is incomplete; input total may be higher. Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. ".") or
+      "Coverage is incomplete; input total may be higher; savings unavailable."
+  elseif inputIncomplete then
+    note = savingsAvailable and
+      ("Input coverage is incomplete; total may be higher. Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. ".") or
+      "Input coverage is incomplete; total may be higher; savings unavailable."
+  elseif returnsIncomplete then
+    note = savingsAvailable and
+      ("Return coverage is incomplete. Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. ".") or
+      "Return coverage is incomplete; savings unavailable."
   elseif not savingsAvailable then
-    notes[#notes + 1] = "Not enough comparable data to calculate savings."
+    note = "Not enough comparable crafts to calculate savings."
   elseif row.matchedCraftCount and row.matchedCraftCount > 0 then
-    notes[#notes + 1] = "Based on " .. UI.Count(row.matchedCraftCount, "comparable craft") .. "."
+    note = "Saved share uses " .. UI.Count(row.matchedCraftCount, "comparable craft") .. "."
   end
-  if #notes > 0 then
-    UI.Tooltip.Section("About these amounts")
-    for _, note in ipairs(notes) do UI.Tooltip.Subtitle(UI.Elide(note, 56), "partial") end
-  end
+  if note then UI.Tooltip.Subtitle(UI.Elide(note, 88), "muted") end
   UI.Tooltip.Show()
 end
 

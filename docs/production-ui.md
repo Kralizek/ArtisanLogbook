@@ -64,7 +64,7 @@ existing current-entry highlight without replacing the primary selection.
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, recorded Resourcefulness proc rate over all selected crafts, known returned material units, and most-crafted recipe. No factual craft list. |
 | Logbook | Period/character/profession filters plus a multi-checkbox craft-visibility menu above a newest-first ledger. Show crafts from unknown recipes is disabled by default and applies to craft-history lists; enabling it includes unattributed crafts. Show hidden recipes includes hidden recipes in Logbook only. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
 | Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
-| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, recorded Input/Returned/Saved share columns and editable Ignore checkboxes. Saved share shows Core's same-craft matched ratio or a dash; its tooltip explains relevant coverage and sample size. Item IDs live in native item tooltips, not row subtitles. |
+| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, recorded Input/Returned/Saved share columns and editable Ignore checkboxes. Saved share shows Core's same-craft matched ratio or a dash; its muted tooltip summarizes relevant coverage and matched sample without presenting broad population counts as item-specific. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
@@ -221,14 +221,19 @@ return results; that retained-detail coverage is separate from its saved-share
 sample, which uses the selected durable item-level comparisons.
 
 Input sums gross observed allocations. Its coverage flag means every craft in the
-selected population has a complete input snapshot; otherwise the tooltip notes
-that details are missing and the actual total may be higher. Returned sums known
-positive returns from any supported cohort; zero appears only when return
-coverage is complete. Saved share uses Core's same-item input and authoritative
-return quantities from matched crafts; independent gross totals are never divided
-together. The Reagents row tooltip focuses on Input, Returned and Saved share,
-with a concise explanation of incomplete or insufficient data. It omits
-professions, recipe counts, Ignore state and generic quality caveats already
+selected population has a complete input snapshot; otherwise the input total may
+be higher. Core's `allocationUnknownCount` counts crafts in the associated recipe
+population that lack complete input snapshots, while `returnUnknownCount` counts
+associated crafts without an authoritative return outcome. Neither counter proves
+that this particular reagent was missing on each craft. The row tooltip therefore
+uses one muted coverage note and does not show these broad counts as item-specific.
+Returned sums known positive returns from supported cohorts; zero appears only
+when return coverage is complete. Saved share uses Core's same-item input and
+authoritative return quantities from matched crafts; independent gross totals are
+never divided together. A valid matched saved share remains available when broader
+coverage is incomplete. The Reagents row tooltip focuses on Input, Returned and
+Saved share, with a concise explanation of incomplete or insufficient data. It
+omits professions, recipe counts, Ignore state and generic quality caveats already
 available elsewhere. The item title is bounded, notes are kept short, and the
 shared tooltip is screen-clamped. There is no cross-material savings percentage.
 Recipe/profession associations describe recorded uses, not all game recipes
