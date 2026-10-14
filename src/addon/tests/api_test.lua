@@ -508,6 +508,59 @@ test("recipe outcome queries never scan craft history or unrelated daily recipes
   assert(ok, reason)
 end)
 
+test("context and configuration filters align durable measurements before and after pruning", function()
+  local ledger, api, clock, addon = newLedger()
+  session(ledger, "A", 1)
+  ledger:AddDimension("profession", 171, { name = "Alchemy" })
+  ledger:AddDimension("recipe", 101, { professionId = 171 })
+  for index, kind in ipairs({ "personal", "patron", "public", "guild", "personal-order", "order", "unknown" }) do
+    local observation = kind ~= "unknown" and {
+      context = { kind = kind, source = "submitted-call", isRecraft = index == 3 },
+      configuration = { scope = "request", stats = { multicraft = { rating = index * 10, ratingPct = index } },
+        equipment = { { slot = 20, itemID = 888, guid = "Tool-" .. index } }, buffs = { { spellID = 432306 } },
+        finishingReagents = { { itemID = 99, quantity = 1 } } } } or nil
+    assert(ledger:SubmitCraft(101, 1, false, nil, { { dataSlotIndex = 1, reagent = { itemID = 8 }, quantity = 5 } },
+      inputEvidence({ 8 }), kind == "personal", observation))
+    assert(ledger:RecordResult({ operationID = index, itemID = 100, quantity = index + 1, multicraft = index,
+      hasIngenuityProc = true, ingenuityRefund = 2, concentrationSpent = 10,
+      resourcesReturned = { { reagent = { itemID = 8 }, quantity = 1 } } }))
+  end
+  local function verify()
+    for _, filter in ipairs({ { craftType = "personal" }, { configuration = { stat = "multicraft", maximumRating = 10 } },
+        { configuration = { equipmentGUID = "Tool-1" } } }) do
+      local totals = assert(api.GetRecipeOutcomes(101, filter)).totals
+      assert(totals.craftCount == 1 and totals.outputQuantity == 2 and totals.multicraftBonus == 1)
+      assert(totals.resourcefulnessAuthoritativeProcCount == 1 and totals.ingenuityProcCount == 1)
+      assert(totals.configurationObservedCount == 1 and totals.requestConfigurationCount == 1)
+      local reagents = assert(api.GetRecipeReagentStatistics(101, filter))
+      assert(reagents.coverage.craftCount == 1 and reagents.reagents[1].matchedAllocatedQuantity == 5)
+      assert(reagents.reagents[1].matchedReturnedQuantity == 1)
+      assert(api.GetRecipeReturnSets(101, filter).returns[1].craftCount == 1)
+      assert(api.GetRecipeReturnedReagents(101, filter).returns[1].returnedQuantity == 1)
+      assert(api.GetReagentSummaries(filter).reagents[1].craftCount == 1)
+      assert(api.GetRecipeSummaries(filter).recipes[1].craftCount == 1)
+      assert(api.GetCraftSeries(filter).series[1].craftCount == 1)
+    end
+    assert(api.GetRecipeOutcomes(101, { craftType = "orders" }).totals.craftCount == 5)
+    assert(api.GetRecipeOutcomes(101, { craftType = "unknown" }).totals.craftCount == 1)
+    assert(api.GetRecipeOutcomes(101, { isRecraft = true }).totals.craftCount == 1)
+    local groups = assert(api.GetRecipeConfigurations(101))
+    assert(#groups.configurations == 7 and groups.coverage.craftCount == 7)
+    assert(groups.coverage.configurationObservedCount == 6)
+  end
+  verify()
+  local projected = api.GetCraft(1)
+  projected.configuration.stats.multicraft.rating = 999
+  assert(api.GetCraft(1).configuration.stats.multicraft.rating == 10)
+  assert(#api.GetCrafts({ craftType = "personal" }).crafts == 1)
+  clock.current = clock.current + 61 * 86400
+  ledger:Prune(clock.current)
+  addon.ledger = assert(addon.Ledger.New(ledger.database, clock))
+  verify()
+  assert(#api.GetCrafts({ craftType = "personal" }).crafts == 0)
+  assert(api.GetRecipeOutcomes(101, { configuration = { minimumRating = 1 } }) == nil)
+end)
+
 test("GetCraft has an explicit denormalized shape and preserves zero and false", function()
   local _, api = fixture()
   local craft = assert(api.GetCraft(1))
@@ -520,6 +573,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
   local reagentItem = { id = 202, name = "Reagent", expansion = oldExpansion }
   equal(craft, {
     id = 1, timestamp = 1800000000, gameOperationId = 1,
+    context = { kind = "unknown" }, configurationCoverage = "unavailable",
     character = { key = realm.key .. ":guid:Player-A", name = "A", guid = "Player-A", realm = realm },
     realm = realm, profession = profession, recipe = recipe, expansion = expansion,
     outputItem = { id = 201, name = "Output", expansion = oldExpansion },
@@ -529,6 +583,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
     quoteObserved = true, grossRequirementsComplete = false, materialsSavingsEligible = true,
     reagentRequirements = {},
     request = { id = 1, timestamp = 1800000000, requestedCount = 1, useConcentration = false,
+      context = { kind = "unknown" }, configurationCoverage = "unavailable",
       concentrationCost = 0, baseSkill = 10, baseDifficulty = 20, craftingQuality = 0, recipe = recipe,
       materialsSavingsEligible = true,
       allocations = { { dataSlotIndex = 1, item = reagentItem, allocatedQuantity = 3, quality = 0 } } },
