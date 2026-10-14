@@ -47,6 +47,56 @@ function UI.ReagentFamilyCell(cell, item, label)
     reagentDisplay(item.id).icon or "Interface\\Icons\\INV_Misc_QuestionMark")
 end
 
+function UI.ReagentSummaryTooltip(owner, row)
+  if not row or not row.item then return end
+  UI.Tooltip.Begin(owner, UI.Elide(UI.Name(row.item), 44))
+
+  local input = row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
+  if row.allocatedQuantity ~= nil and not row.allocationComplete then input = input .. " recorded" end
+  UI.Tooltip.Row("Input", input)
+
+  local returned
+  if row.returnComplete then
+    if row.returnedQuantity == nil or row.returnedQuantity == 0 then returned = "None"
+    else returned = UI.Number(row.returnedQuantity) end
+  elseif row.returnedQuantity ~= nil then
+    returned = UI.Number(row.returnedQuantity) .. " recorded"
+  else
+    returned = "-"
+  end
+  UI.Tooltip.Row("Returned", returned)
+
+  local saved = UI.MatchedSavings(row)
+  local savingsAvailable = saved ~= "Unavailable" and not UI.IsTrivial(row.item.id)
+  UI.Tooltip.Row("Saved share", UI.IsTrivial(row.item.id) and "Excluded" or (savingsAvailable and saved or "-"))
+
+  local notes = {}
+  if not row.allocationComplete then
+    local missing = row.allocationUnknownCount or 0
+    notes[#notes + 1] = missing > 0 and
+      ("Input missing for " .. UI.Count(missing, "craft") .. "; total may be higher.") or
+      "Some input details are missing; total may be higher."
+  end
+  if not row.returnComplete then
+    local missing = row.returnUnknownCount or 0
+    notes[#notes + 1] = row.returnedQuantity ~= nil and "Some return results are missing." or
+      (missing > 0 and ("Returns unavailable for " .. UI.Count(missing, "craft") .. ".") or
+        "Return results are incomplete.")
+  end
+  if UI.IsTrivial(row.item.id) then
+    notes[#notes + 1] = "Excluded from savings by preference."
+  elseif not savingsAvailable then
+    notes[#notes + 1] = "Not enough comparable data to calculate savings."
+  elseif row.matchedCraftCount and row.matchedCraftCount > 0 then
+    notes[#notes + 1] = "Based on " .. UI.Count(row.matchedCraftCount, "comparable craft") .. "."
+  end
+  if #notes > 0 then
+    UI.Tooltip.Section("About these amounts")
+    for _, note in ipairs(notes) do UI.Tooltip.Subtitle(UI.Elide(note, 56), "partial") end
+  end
+  UI.Tooltip.Show()
+end
+
 function UI.CataloguePage(page, width, height, openRecipe)
   UI.Section(page, "Recipes", 0, -2, width)
   local character, profession, sort, search = false, false, "count", ""
@@ -411,11 +461,11 @@ function UI.ReagentsPage(page, width, height, openReagent)
       return table.concat(names, ", ")
     end },
     { title = "Recipes", width = 54, value = function(row) return UI.Number(row.recipeCount) end },
-    { title = "Quantity", width = 80, value = function(row)
+    { title = "Input", width = 80, value = function(row)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
     end, exact = function(row)
       return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-        " Total quantity recorded for this item across crafts. Returns are shown separately; some recipe qualities may not be identified."
+        " Input quantity recorded for this item across crafts. Returns are shown separately."
     end },
       { title = "Returned", width = 80, value = function(row)
       return UI.ReagentAmount(row, "returnedQuantity", "returnComplete")
@@ -436,6 +486,7 @@ function UI.ReagentsPage(page, width, height, openReagent)
       update = function(check, row) check:SetItem(row.item.id) end },
   }, function(row) openReagent(row.item) end, "No reagents in this selection")
   page.catalogue = list
+  list.rowTooltip = UI.ReagentSummaryTooltip
   function filters.onLayout(filterHeight)
     local top = 48 + filterHeight
     summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -top)

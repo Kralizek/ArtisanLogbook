@@ -2193,7 +2193,60 @@ do
   local window, helpers = ui.productionWindow, ui.UI
   local page, list = window.pages.Reagents, window.pages.Reagents.catalogue
   assert(list.columns[1].width < 600 and list.columns[2].title == "Profession" and list.columns[2].width == 180)
-  assert(list.columns[4].title == "Quantity" and list.columns[6].title == "Saved share")
+  assert(list.columns[4].title == "Input" and list.columns[6].title == "Saved share")
+  local tooltipOwner = environment.CreateFrame("Frame")
+  local function reagentTooltip(row)
+    ui.UI.ReagentSummaryTooltip(tooltipOwner, row)
+    local lines = { environment.GameTooltip.text }
+    for _, line in ipairs(environment.GameTooltip.lines) do lines[#lines + 1] = line end
+    for _, entry in ipairs(environment.GameTooltip.rows or {}) do
+      lines[#lines + 1] = entry.label .. " " .. entry.value
+    end
+    return table.concat(lines, "\n")
+  end
+  local partialSummary = { item = { id = 246448, name = "Artisan's Ledger" }, recipeCount = 3,
+    professions = { { name = "Alchemy" }, { name = "Enchanting" }, { name = "Inscription" } },
+    allocatedQuantity = 3, allocationComplete = false, allocationUnknownCount = 4,
+    returnedQuantity = nil, returnComplete = false, returnUnknownCount = 5,
+    matchedCraftCount = 0, matchedAllocatedQuantity = nil, matchedReturnedQuantity = nil }
+  local partialText = reagentTooltip(partialSummary)
+  assert(environment.GameTooltip.text == "Artisan's Ledger" and environment.GameTooltip.clamped)
+  assert(partialText:find("Input: 3 recorded", 1, true) and partialText:find("Returned: -", 1, true), partialText)
+  assert(partialText:find("Input missing for 4 crafts", 1, true) and partialText:find("total may be higher", 1, true), partialText)
+  assert(partialText:find("Returns unavailable for 5 crafts", 1, true), partialText)
+  assert(partialText:find("Not enough comparable data to calculate savings.", 1, true))
+  for _, internal in ipairs({ "Profession", "Recipes", "Ignore", "gross requirements", "quality may not be identified" }) do
+    assert(not partialText:find(internal, 1, true), internal)
+  end
+  local completeSummary = { item = { id = 88, name = "Dense Dreamleaf", note = "Recorded quality: 2." }, recipeCount = 2,
+    allocatedQuantity = 5, allocationComplete = true, allocationUnknownCount = 0,
+    returnedQuantity = 2, returnComplete = true, returnUnknownCount = 0,
+    matchedCraftCount = 3, matchedAllocatedQuantity = 5, matchedReturnedQuantity = 2 }
+  local completeText = reagentTooltip(completeSummary)
+  assert(completeText:find("Input: 5", 1, true) and completeText:find("Returned: 2", 1, true))
+  assert(completeText:find("Saved share: 40.0%", 1, true) and completeText:find("Based on 3 comparable crafts", 1, true))
+  assert(not completeText:lower():find("quality", 1, true))
+  local zeroSummary = { item = { id = 89, name = "Zero Return Herb" }, allocatedQuantity = 5, allocationComplete = true,
+    returnedQuantity = 0, returnComplete = true, matchedCraftCount = 2,
+    matchedAllocatedQuantity = 5, matchedReturnedQuantity = 0 }
+  local zeroText = reagentTooltip(zeroSummary)
+  assert(zeroText:find("Returned: None", 1, true) and zeroText:find("Saved share: 0.0%", 1, true))
+  local partialReturn = { item = { id = 90, name = "Partial Return Herb" }, allocatedQuantity = 5,
+    allocationComplete = true, returnedQuantity = 1, returnComplete = false, returnUnknownCount = 2,
+    matchedCraftCount = 1, matchedAllocatedQuantity = 5, matchedReturnedQuantity = 1 }
+  partialReturn.qualityUnknown = true
+  local partialReturnText = reagentTooltip(partialReturn)
+  assert(partialReturnText:find("Returned: 1 recorded", 1, true) and
+    partialReturnText:find("Some return results are missing.", 1, true) and
+    partialReturnText:find("Saved share: 20.0%", 1, true), partialReturnText)
+  assert(not partialReturnText:lower():find("quality", 1, true))
+  local longName = { item = { id = 91, name = string.rep("Long reagent name ", 8) }, allocationComplete = false,
+    returnComplete = false, matchedCraftCount = 0 }
+  reagentTooltip(longName)
+  assert(#environment.GameTooltip.text <= 47 and environment.GameTooltip.anchor == "ANCHOR_RIGHT",
+    tostring(#environment.GameTooltip.text) .. " / " .. tostring(environment.GameTooltip.anchor) .. " / " .. environment.GameTooltip.text)
+  local refreshedText = reagentTooltip(completeSummary)
+  assert(environment.GameTooltip.text == "Dense Dreamleaf" and refreshedText:find("Saved share: 40.0%", 1, true))
   window:Show(); window:Activate("Reagents")
   assert(window.navItems[3].entry.page == "Recipes" and window.navItems[4].entry.page == "Reagents")
   assert(window.navItems[4].selection:IsShown() and not window.navItems[3].selection:IsShown())
@@ -2221,6 +2274,18 @@ do
   record(9702, 4008, "Bloom", 3, 1, 1)
   assert(#list.items == 2 and list.items[2].item.id == 4009)
   assert(#list.items[1].professions == 2 and list.items[1].recipeCount == 2)
+  local firstReagentRow, secondReagentRow
+  for _, row in ipairs(list.rows) do
+    if row.item and row.item.item.id == 4008 then firstReagentRow = row end
+    if row.item and row.item.item.id == 4009 then secondReagentRow = row end
+  end
+  assert(firstReagentRow and secondReagentRow)
+  firstReagentRow.scripts.OnEnter(firstReagentRow)
+  assert(environment.GameTooltip.text == "Bloom" and environment.GameTooltip.clamped)
+  local firstInput = environment.GameTooltip.rows[1].value
+  secondReagentRow.scripts.OnEnter(secondReagentRow)
+  assert(environment.GameTooltip.text == "Bloom" and environment.GameTooltip.rows[1].value ~= firstInput)
+  assert(not table.concat(environment.GameTooltip.lines, "\n"):find("Profession", 1, true))
   local savedCell
   for _, cell in ipairs(list.rows[1].cells) do
     if cell.column.title == "Saved share" then savedCell = cell end

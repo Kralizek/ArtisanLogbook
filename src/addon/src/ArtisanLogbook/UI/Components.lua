@@ -1127,6 +1127,10 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
         row:SetScript("OnClick", function(self) onOpen(self.item) end)
         UI.Tooltip.Bind(row, function(self)
           if not self.item then return end
+          if type(frame.rowTooltip) == "function" then
+            frame.rowTooltip(self, self.item)
+            return
+          end
           if frame.tooltipKind == "craft" then UI.CraftTooltip(self, self.item); return end
           if frame.tooltipKind == "recipe" then
             local recipe = frame.tooltipRecipe or self.item.recipe
