@@ -2326,6 +2326,14 @@ do
   dropdown(page, "Name"):Choose("name")
   dropdown(page, "Enchanting"):Choose(333)
   assert(#list.items == 1 and list.items[1].allocatedQuantity == 3 and list.items[1].returnedQuantity == 1)
+  local filteredRow
+  for _, row in ipairs(list.rows) do if row.item and row.item.item.id == 4008 then filteredRow = row end end
+  assert(filteredRow)
+  filteredRow.scripts.OnEnter(filteredRow)
+  assert(environment.GameTooltip.rows[1].value == "3 recorded" and environment.GameTooltip.rows[2].value == "1")
+  assert(environment.GameTooltip.rows[3].value == "-" and
+    table.concat(environment.GameTooltip.lines, "\n"):find("Not enough comparable data", 1, true))
+  environment.GameTooltip:Hide()
   dropdown(page, "Alchemy"):Choose(false)
   local function search(text)
     page.searchInput:SetText(text)
