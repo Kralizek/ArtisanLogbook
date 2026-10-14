@@ -195,6 +195,123 @@ test("personal and order submissions freeze selections with separate savings eli
   assert(invalidations == 1 and kinds[1] == "CraftEnchant")
 end)
 
+test("submitted context distinguishes orders without leaking unrelated claimed metadata", function()
+  local api, _, hooks = environment()
+  api.Enum = { CraftingOrderType = { Public = 0, Guild = 1, Personal = 2, Npc = 3 } }
+  local order = { orderID = 77, orderType = 3, isRecraft = true, customerName = "not-recorded" }
+  api.C_CraftingOrders = { GetClaimedOrder = function() return order end }
+  local observed
+  addon.CreateFlavorAdapter(api, function() end, nil,
+    function(_, _, _, _, _, _, _, observation) observed = observation end)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(observed.context.kind == "personal" and observed.context.isRecraft == false)
+  for name, kind in pairs({ Public = "public", Guild = "guild", Personal = "personal-order", Npc = "patron" }) do
+    order.orderType = api.Enum.CraftingOrderType[name]
+    hooks.CraftRecipe(456, 1, {}, nil, 77, false)
+    assert(observed.context.kind == kind and observed.context.isRecraft == true)
+    assert(observed.context.customerName == nil and observed.context.orderID == nil)
+  end
+  order.orderID = 78
+  hooks.CraftRecipe(456, 1, {}, nil, 77, false)
+  assert(observed.context.kind == "order" and observed.context.source == "submitted-call")
+  assert(observed.context.isRecraft == nil)
+  api.C_CraftingOrders.GetClaimedOrder = function() error("unavailable") end
+  hooks.CraftRecipe(456, 1, {}, nil, 77, false)
+  assert(observed.context.kind == "order")
+end)
+
+test("configuration keeps exact localized quote stats and equipment instances with independent coverage", function()
+  local api, _, hooks = environment()
+  api.CRAFTING_DETAILS_MULTICRAFT = "Mehrfachherstellung"
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function()
+    return { recipeID = 456, baseSkill = 100, bonusSkill = 27, bonusStats = {
+      { bonusStatName = "Mehrfachherstellung", bonusStatValue = 180, ratingPct = 12.5, bonusRatingPct = 2.25 },
+      { bonusStatName = "Unrecognized", bonusStatValue = 7 } } }
+  end
+  api.C_TradeSkillUI.GetProfessionInfoByRecipeID = function() return { profession = 4 } end
+  api.C_TradeSkillUI.GetProfessionSlots = function(profession) assert(profession == 4); return { 22, 20, 21 } end
+  api.ItemLocation = { CreateFromEquipmentSlot = function(_, slot) return slot end }
+  local guid = "Item-instance-A"
+  api.C_Item = { DoesItemExist = function(slot) return slot == 20 end,
+    GetItemID = function() return 1001 end, GetItemGUID = function() return guid end,
+    GetItemLink = function() return "|Hitem:1001:123:0:0|h[Tool]|h" end }
+  local queried = {}
+  api.C_UnitAuras = { GetPlayerAuraBySpellID = function(spellId)
+    queried[spellId] = true
+    if spellId == 432306 then return { spellId = spellId, applications = 1, expirationTime = 9999 } end
+  end }
+  local observed
+  addon.CreateFlavorAdapter(api, function() end, nil,
+    function(_, _, _, _, _, _, _, observation) observed = observation.configuration end)
+  hooks.CraftRecipe(456, 2, {}, nil, nil, true)
+  assert(observed.scope == "request" and observed.useConcentration == true)
+  assert(observed.stats.multicraft.rating == 180 and observed.stats.multicraft.ratingPct == 12.5)
+  assert(observed.stats.resourcefulness == nil and observed.statsCoverage == "partial")
+  assert(observed.equipmentCoverage == "observed" and observed.equipment[1].guid == guid)
+  assert(observed.equipment[1].itemString == "item:1001:123:0:0" and observed.equipment[2].empty == true)
+  assert(observed.buffsCoverage == "supported-list" and #observed.buffs == 1 and not queried[123])
+  assert(observed.buffs[1].expirationTime == nil and observed.finishingCoverage == "unavailable")
+  guid = "Item-instance-B"
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(observed.equipment[1].guid == guid)
+  api.C_Item.GetItemGUID = nil
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(observed.equipmentCoverage == "partial" and observed.equipment[1].guid == nil)
+end)
+
+test("finishing observations consolidate selections and distinguish empty from ambiguous or unavailable", function()
+  local api, _, hooks = environment()
+  api.Enum = { TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },
+    CraftingReagentType = { Basic = 1, Finishing = 2 } }
+  local slots = {
+    { dataSlotIndex = 1, dataSlotType = 2, reagentType = 2, required = false, hiddenInCraftingForm = false,
+      quantityRequired = 2, reagents = { { itemID = 222 } }, variableQuantities = {} },
+    { dataSlotIndex = 2, dataSlotType = 2, reagentType = 2, required = false, hiddenInCraftingForm = false,
+      quantityRequired = 1, reagents = { { itemID = 222 } }, variableQuantities = {} },
+  }
+  api.C_TradeSkillUI.GetRecipeSchematic = function() return { recipeID = 456, reagentSlotSchematics = slots } end
+  local captured
+  addon.CreateFlavorAdapter(api, function() end, nil,
+    function(_, _, _, _, _, _, _, observation) captured = observation.configuration end)
+  hooks.CraftRecipe(456, 1, { { dataSlotIndex = 1, reagent = { itemID = 222 }, quantity = 2 },
+    { dataSlotIndex = 2, reagent = { itemID = 222 }, quantity = 1 } }, nil, nil, false)
+  assert(captured.finishingCoverage == "submitted" and #captured.finishingReagents == 1)
+  assert(captured.finishingReagents[1].quantity == 3)
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(captured.finishingCoverage == "submitted" and #captured.finishingReagents == 0)
+  hooks.CraftRecipe(456, 1, nil, nil, nil, false)
+  assert(captured.finishingCoverage == "unavailable" and captured.finishingReagents == nil)
+  slots[1].hiddenInCraftingForm = true
+  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
+  assert(captured.finishingCoverage == "partial")
+  slots[1].hiddenInCraftingForm = false
+  hooks.CraftRecipe(456, 1, { { dataSlotIndex = 99, reagent = { itemID = 222 }, quantity = 1 } }, nil, nil, false)
+  assert(captured.finishingCoverage == "partial")
+end)
+
+test("begin observations refresh equipment and buffs but never sample unrelated recipes", function()
+  local api, frame, hooks = environment()
+  local active, observations = true, {}
+  api.C_UnitAuras = { GetPlayerAuraBySpellID = function(spellId)
+    if active and spellId == 1239755 then return { spellId = spellId, applications = 1 } end
+  end }
+  addon.CreateFlavorAdapter(api, function(event, recipeId, observation)
+    if event == "CRAFT_ATTEMPT_OBSERVATION" then observations[#observations + 1] = observation end
+  end, nil, function() end)
+  hooks.CraftRecipe(456, 3, {}, nil, nil, false)
+  frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
+  assert(#observations == 1 and #observations[1].configuration.buffs == 1)
+  active = false
+  frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
+  assert(#observations == 2 and #observations[2].configuration.buffs == 0)
+  assert(observations[2].configuration.scope == "attempt-start")
+  frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 999)
+  assert(#observations == 2)
+  frame.onEvent(frame, "TRADE_SKILL_CLOSE")
+  frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
+  assert(#observations == 2)
+end)
+
 test("schematic snapshots preserve required basic quality families without assigning a tier", function()
   local function slot(fields)
     local row = { dataSlotType = 1, reagentType = 1, required = true, hiddenInCraftingForm = false,

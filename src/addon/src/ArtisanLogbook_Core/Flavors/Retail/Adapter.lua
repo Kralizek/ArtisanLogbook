@@ -9,6 +9,8 @@ local events = {
   "TRADE_SKILL_LIST_UPDATE",
   "TRADE_SKILL_CLOSE",
   "CRAFTING_DETAILS_UPDATE",
+  "PLAYER_EQUIPMENT_CHANGED",
+  "UNIT_AURA",
   "GET_ITEM_INFO_RECEIVED",
   "UNIT_SPELLCAST_SENT",
   "UNIT_SPELLCAST_START",
@@ -104,6 +106,7 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
   end
 
   local probingQuote = false
+  local activeConfiguration
   local function isPositiveInteger(value)
     return type(value) == "number" and value > 0 and value < math.huge and value % 1 == 0
   end
@@ -299,6 +302,167 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
     return { recipeId = recipeId, requirements = requirements, observation = "result" }
   end
 
+  local function snapshotContext(orderId, isRecraft)
+    local context = { kind = orderId == nil and "personal" or "order", source = "submitted-call" }
+    if orderId == nil or isRecraft == true then context.isRecraft = isRecraft end
+    if orderId == nil then return context end
+    local orders = api.C_CraftingOrders
+    local types = api.Enum and api.Enum.CraftingOrderType
+    if type(orders) ~= "table" or type(orders.GetClaimedOrder) ~= "function" then return context end
+    local ok, order = pcall(orders.GetClaimedOrder)
+    if not ok or type(order) ~= "table" or not readable(order) or
+        not readable(order.orderID) or order.orderID ~= orderId then return context end
+    if type(types) == "table" and readable(order.orderType) then
+      for name, kind in pairs({ Public = "public", Guild = "guild", Personal = "personal-order", Npc = "patron" }) do
+        if types[name] ~= nil and order.orderType == types[name] then
+          context.kind, context.source = kind, "claimed-order"
+        end
+      end
+    end
+    if isRecraft ~= true and readable(order.isRecraft) and type(order.isRecraft) == "boolean" then
+      context.isRecraft = order.isRecraft
+    end
+    return context
+  end
+
+  local function safeQuery(method, ...)
+    if type(method) ~= "function" then return nil end
+    local ok, value = pcall(method, ...)
+    if ok and readable(value) then return value end
+  end
+
+  local function number(value)
+    if readable(value) and type(value) == "number" and value == value and
+        value > -math.huge and value < math.huge then return value end
+  end
+
+  local function snapshotConfiguration(recipeId, selections, concentration, recipeLevel, quote)
+    local configuration = { scope = "request", statsCoverage = "unavailable",
+      equipmentCoverage = "unavailable", buffsCoverage = "unavailable", finishingCoverage = "unavailable" }
+    if type(concentration) == "boolean" then configuration.useConcentration = concentration end
+    configuration.recipeLevel = number(recipeLevel)
+    if type(quote) == "table" and readable(quote) and readable(quote.recipeID) and quote.recipeID == recipeId then
+      configuration.stats = {}
+      for _, field in ipairs({ "baseSkill", "bonusSkill", "baseDifficulty", "bonusDifficulty", "craftingQuality",
+          "concentrationCost", "ingenuityRefund", "lowerSkillThreshold", "upperSkillTreshold" }) do
+        configuration.stats[field] = number(quote[field])
+      end
+      local labels = { multicraft = "CRAFTING_DETAILS_MULTICRAFT", resourcefulness = "CRAFTING_DETAILS_RESOURCEFULNESS",
+        ingenuity = "CRAFTING_DETAILS_INGENUITY", craftingSpeed = "ITEM_MOD_CRAFTING_SPEED_SHORT" }
+      local complete = dense(quote.bonusStats)
+      for _, stat in pairs(readable(quote.bonusStats) and type(quote.bonusStats) == "table" and quote.bonusStats or {}) do
+        local name
+        if type(stat) == "table" and readable(stat) and readable(stat.bonusStatName) then
+          for key, label in pairs(labels) do
+            if type(api[label]) == "string" and api[label] == stat.bonusStatName then name = key end
+          end
+        end
+        if name and configuration.stats[name] == nil then
+          local value = { rating = number(stat.bonusStatValue), ratingPct = number(stat.ratingPct),
+            bonusRatingPct = number(stat.bonusRatingPct) }
+          configuration.stats[name] = value
+          if value.rating == nil or value.ratingPct == nil or value.bonusRatingPct == nil then complete = false end
+        else
+          complete = false
+        end
+      end
+      configuration.statsCoverage = complete and "reported" or "partial"
+    end
+    local tradeSkill = api.C_TradeSkillUI
+    local profession = safeQuery(tradeSkill.GetProfessionInfoByRecipeID, recipeId)
+    local slots = type(profession) == "table" and readable(profession.profession) and
+      safeQuery(tradeSkill.GetProfessionSlots, profession.profession)
+    local itemApi, locationApi = api.C_Item, api.ItemLocation
+    if dense(slots) and #slots > 0 and type(itemApi) == "table" and type(locationApi) == "table" and
+        type(locationApi.CreateFromEquipmentSlot) == "function" then
+      local equipment, complete, seen = {}, true, {}
+      for _, slot in ipairs(slots) do
+        if not isPositiveInteger(slot) or seen[slot] then complete = false
+        else
+          seen[slot] = true
+          local location = safeQuery(locationApi.CreateFromEquipmentSlot, locationApi, slot)
+          local exists = location and safeQuery(itemApi.DoesItemExist, location)
+          local entry = { slot = slot }
+          if exists == false then entry.empty = true
+          elseif exists == true then
+            entry.itemID = number(safeQuery(itemApi.GetItemID, location))
+            local guid = safeQuery(itemApi.GetItemGUID, location)
+            local link = safeQuery(itemApi.GetItemLink, location)
+            if type(guid) == "string" and #guid > 0 and #guid <= 128 then entry.guid = guid end
+            if type(link) == "string" and #link <= 2048 then entry.itemString = link:match("(item:[^|]+)") end
+            if not entry.itemID or not entry.guid or not entry.itemString then complete = false end
+          else complete = false end
+          equipment[#equipment + 1] = entry
+        end
+      end
+      table.sort(equipment, function(left, right) return left.slot < right.slot end)
+      configuration.equipment, configuration.equipmentCoverage = equipment, complete and "observed" or "partial"
+    end
+    local auraApi = api.C_UnitAuras
+    if type(auraApi) == "table" and type(auraApi.GetPlayerAuraBySpellID) == "function" then
+      local buffs, complete = {}, true
+      for _, spellId in ipairs({ 393665, 432306, 1239755 }) do
+        local ok, aura = pcall(auraApi.GetPlayerAuraBySpellID, spellId)
+        if not ok or not readable(aura) then complete = false
+        elseif aura ~= nil then
+          if type(aura) == "table" and readable(aura.spellId) and aura.spellId == spellId then
+            buffs[#buffs + 1] = { spellID = spellId, applications = number(aura.applications) }
+          else complete = false end
+        end
+      end
+      configuration.buffs, configuration.buffsCoverage = buffs, complete and "supported-list" or "partial"
+      configuration.buffListVersion = 1
+    end
+    local schematic = safeQuery(tradeSkill.GetRecipeSchematic, recipeId, false, recipeLevel)
+    local types = api.Enum and api.Enum.CraftingReagentType
+    local slotTypes = api.Enum and api.Enum.TradeskillSlotDataType
+    if dense(selections) and type(schematic) == "table" and schematic.recipeID == recipeId and
+        dense(schematic.reagentSlotSchematics) and types and types.Finishing and slotTypes then
+      local finishing, complete, seen, knownSlots = {}, true, {}, {}
+      for _, slot in ipairs(schematic.reagentSlotSchematics) do
+        if type(slot) ~= "table" or not readable(slot) then complete = false
+        elseif slot.reagentType == types.Finishing then
+          if slot.dataSlotType ~= slotTypes.ModifiedReagent or not isPositiveInteger(slot.dataSlotIndex) or
+              seen[slot.dataSlotIndex] or not dense(slot.reagents) or slot.hiddenInCraftingForm ~= false or
+              type(slot.required) ~= "boolean" or not isPositiveInteger(slot.quantityRequired) or
+              (slot.variableQuantities ~= nil and (not dense(slot.variableQuantities) or #slot.variableQuantities > 0)) then complete = false
+          else
+            seen[slot.dataSlotIndex] = true
+            local candidates, quantity = {}, 0
+            for _, reagent in ipairs(slot.reagents) do
+              if type(reagent) == "table" and isPositiveInteger(reagent.itemID) then candidates[reagent.itemID] = true end
+            end
+            for _, selection in ipairs(selections) do
+              if type(selection) ~= "table" then complete = false
+              elseif selection.dataSlotIndex == slot.dataSlotIndex then
+                local itemId = selection.reagent and selection.reagent.itemID
+                if not candidates[itemId] or not number(selection.quantity) or selection.quantity < 0 then complete = false
+                elseif selection.quantity > 0 then
+                  finishing[itemId] = (finishing[itemId] or 0) + selection.quantity
+                  quantity = quantity + selection.quantity
+                end
+              end
+            end
+            if quantity ~= slot.quantityRequired and (slot.required ~= false or quantity ~= 0) then complete = false end
+          end
+        end
+        if type(slot) == "table" and readable(slot) and isPositiveInteger(slot.dataSlotIndex) then
+          knownSlots[slot.dataSlotIndex] = true
+        end
+      end
+      for _, selection in ipairs(selections) do
+        if type(selection) ~= "table" or not knownSlots[selection.dataSlotIndex] or
+            type(selection.reagent) ~= "table" or not isPositiveInteger(selection.reagent.itemID) or
+            not (selection.quantity == 0 or isPositiveInteger(selection.quantity)) then complete = false end
+      end
+      local items = {}
+      for itemId, quantity in pairs(finishing) do items[#items + 1] = { itemID = itemId, quantity = quantity } end
+      table.sort(items, function(left, right) return left.itemID < right.itemID end)
+      configuration.finishingReagents, configuration.finishingCoverage = items, complete and "submitted" or "partial"
+    end
+    return configuration
+  end
+
   local function submitPersonalCraft(recipeId, count, orderId, concentration, recipeLevel, submitted)
     if type(submitCraft) ~= "function" then return end
     if count == nil then count = 1 end
@@ -327,8 +491,25 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
         end
       end
     end
+    local context = snapshotContext(orderId, false)
+    activeConfiguration = function(beginRecipeId)
+      if beginRecipeId ~= recipeId then return nil end
+      local info
+      probingQuote = true
+      if orderId ~= nil then
+        info = safeQuery(tradeSkill.GetCraftingOperationInfoForOrder, recipeId, selections, orderId, concentration)
+      else
+        info = safeQuery(tradeSkill.GetCraftingOperationInfo, recipeId, selections, nil, concentration)
+      end
+      probingQuote = false
+      local configuration = snapshotConfiguration(recipeId, selections, concentration, recipeLevel, info)
+      configuration.scope = "attempt-start"
+      return { context = context, configuration = configuration }
+    end
     submitCraft(recipeId, count, concentration, quote, selections,
-      snapshotRecipeInputs(recipeId, recipeLevel, selections), orderId == nil)
+      snapshotRecipeInputs(recipeId, recipeLevel, selections), orderId == nil,
+      { context = context,
+        configuration = snapshotConfiguration(recipeId, selections, concentration, recipeLevel, quote) })
   end
   local function observeClaimedOrder(orderID, observation)
     local orders = api.C_CraftingOrders
@@ -412,6 +593,13 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
   end
   frame:SetScript("OnEvent", function(_, event, ...)
     forward(event, ...)
+    if event == "TRADE_SKILL_CRAFT_BEGIN" and activeConfiguration then
+      local recipeId = ...
+      local ok, observation = pcall(activeConfiguration, recipeId)
+      if ok and observation then forward("CRAFT_ATTEMPT_OBSERVATION", recipeId, observation) end
+    elseif event == "TRADE_SKILL_CLOSE" then
+      activeConfiguration = nil
+    end
   end)
 
   for _, name in ipairs(craftFunctions) do
@@ -427,7 +615,11 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
             if type(invalidateCraft) == "function" then pcall(invalidateCraft) end
           end
         elseif type(invalidateCraft) == "function" then
-          local ok = pcall(invalidateCraft, hookedName)
+          activeConfiguration = nil
+          local orderId = hookedName == "RecraftRecipeForOrder" and select(1, ...) or nil
+          local isRecraft = hookedName == "RecraftRecipe" or hookedName == "RecraftRecipeForOrder"
+          local observation = hookedName ~= "CraftSalvage" and { context = snapshotContext(orderId, isRecraft) } or nil
+          local ok = pcall(invalidateCraft, hookedName, observation)
           if not ok then capabilities.captureError = true end
         end
         forward("CALL_POST:C_TradeSkillUI." .. hookedName, ...)
