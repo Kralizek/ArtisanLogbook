@@ -42,19 +42,33 @@ jobs:
         run: bash -n .github/workflows/scripts/*.sh
 
       - name: Validate CurseForge matrix
+        id: game-versions
         env:
           VERSION: 0.1.0
         run: |
           set -euo pipefail
-          export GITHUB_OUTPUT="$(mktemp)"
-          trap 'rm -f "$GITHUB_OUTPUT"' EXIT
           python3 .github/workflows/scripts/resolve-curseforge-matrix.py
           matrix=$(sed -n 's/^matrix=//p' "$GITHUB_OUTPUT")
           jq -e '.include | length > 0' <<< "$matrix"
           jq -e '.include[] | select(.name == "retail" and .id == 16984 and .interface == 120105 and .asset == "ArtisanLogbook-Bundle-0.1.0.zip")' <<< "$matrix"
 
-      - name: Test and package
-        run: bash src/addon/scripts/package.sh
+      - name: Test and package configured flavors
+        shell: bash
+        env:
+          VERSION: 0.1.0
+          MATRIX: ${{ steps.game-versions.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r index name interface asset; do
+            suffix=''
+            [[ "$name" == retail ]] || suffix="-$name"
+            skip_tests=false
+            [[ "$index" == 0 ]] || skip_tests=true
+            ADDON_FLAVOR="$name" ARTIFACT_SUFFIX="$suffix" SKIP_TESTS="$skip_tests" \
+              bash src/addon/scripts/package.sh
+            [[ "$asset" == *-"$VERSION".zip ]]
+            test -s "src/addon/dist/${asset%-$VERSION.zip}.zip"
+          done < <(jq -r '.include | to_entries[] | [.key, .value.name, .value.interface, .value.asset] | @tsv' <<< "$MATRIX")
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'workflow_dispatch'
         with:

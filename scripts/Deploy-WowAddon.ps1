@@ -203,12 +203,31 @@ try {
         default { @("ArtisanLogbook_Core", "ArtisanLogbook") }
     }
 
+    $interfaces = @()
     foreach ($directory in $directories) {
         $source = Join-Path $expanded $directory
         if (-not (Test-Path $source)) {
             throw "Package does not contain expected addon directory '$directory'."
         }
 
+        $tocPath = Join-Path $source "$directory.toc"
+        if (-not (Test-Path $tocPath)) {
+            throw "Package does not contain expected TOC '$directory.toc'."
+        }
+        $interfaceLines = @(Select-String -Path $tocPath -Pattern '^## Interface: [0-9]+$' | ForEach-Object { $_.Line })
+        if ($interfaceLines.Count -ne 1) {
+            throw "Expected exactly one numeric interface in '$directory.toc'."
+        }
+        $interfaces += $interfaceLines[0] -replace '^## Interface: ', ''
+    }
+
+    if (@($interfaces | Select-Object -Unique).Count -ne 1) {
+        throw "The UI and Core packages target different WoW interfaces."
+    }
+    Write-Host "Validated WoW interface $($interfaces[0])."
+
+    foreach ($directory in $directories) {
+        $source = Join-Path $expanded $directory
         $destination = Join-Path $addonsDirectory $directory
         Write-Host "Deploying $directory -> $destination"
         Copy-Addon -Source $source -Destination $destination

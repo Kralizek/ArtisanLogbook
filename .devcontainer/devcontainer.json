@@ -7,7 +7,7 @@
     },
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y lua5.1 luarocks && sudo luarocks install luacheck",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y lua5.1 luarocks python3 python3-yaml jq && sudo luarocks install luacheck",
   "remoteUser": "vscode",
   "customizations": {
     "vscode": {

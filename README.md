@@ -12,4 +12,6 @@ flavor only after validating addon compatibility. To look up a CurseForge game
 version ID for a future entry, run
 `bash src/addon/scripts/fetch-curseforge-version.sh <version> [flavor]`. The
 script reads `CF_API_TOKEN` or `CURSE_FORGE_TOKEN` from the environment or root
-`.env` and requires `curl` and `jq`.
+`.env` and requires `curl` and `jq`. Packaging defaults to the configured Retail
+flavor; set `ADDON_FLAVOR` to build another configured flavor. Package builds
+require Lua 5.1, Python 3 with PyYAML, `jq`, `zip`, and `unzip`.

@@ -6,10 +6,17 @@ lua_bin="${LUA_BIN:-lua5.1}"
 command -v "$lua_bin" >/dev/null
 command -v zip >/dev/null
 command -v unzip >/dev/null
+command -v python3 >/dev/null || { printf 'python3 is required to read .curseforge.yml.\n' >&2; exit 2; }
+command -v jq >/dev/null || { printf 'jq is required to select the configured flavor.\n' >&2; exit 2; }
 
 core_root="$addon_root/src/ArtisanLogbook_Core"
 ui_root="$addon_root/src/ArtisanLogbook"
-addon_interface="${ADDON_INTERFACE:-$(sed -n 's/^## Interface: //p' "$core_root/ArtisanLogbook_Core.toc" | head -n 1)}"
+addon_flavor="${ADDON_FLAVOR:-retail}"
+version_matrix="$(VERSION=local GITHUB_OUTPUT=/dev/null python3 "$addon_root/../../.github/workflows/scripts/resolve-curseforge-matrix.py")"
+if ! addon_interface="$(jq -er --arg flavor "$addon_flavor" '.include[] | select(.name == $flavor) | .interface' <<< "$version_matrix")"; then
+	printf 'Flavor %s is not configured in .curseforge.yml.\n' "$addon_flavor" >&2
+	exit 2
+fi
 artifact_suffix="${ARTIFACT_SUFFIX:-}"
 skip_tests="${SKIP_TESTS:-false}"
 
