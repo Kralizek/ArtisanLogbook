@@ -49,7 +49,7 @@ cp -R "$ui_root/". "$staging/ArtisanLogbook/"
 for toc in \
 	"$staging/ArtisanLogbook/ArtisanLogbook.toc" \
 	"$staging/ArtisanLogbook_Core/ArtisanLogbook_Core.toc"; do
-	sed -i "s/^## Interface: .*/## Interface: $addon_interface/" "$toc"
+	sed -i "1i## Interface: $addon_interface" "$toc"
 	grep -Fx "## Interface: $addon_interface" "$toc" >/dev/null
 done
 test -f "$staging/ArtisanLogbook_Core/Core/API.lua"
