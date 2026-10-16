@@ -151,9 +151,13 @@ local contextKinds = { personal = true, order = true, public = true, guild = tru
 local observationCollections = { "crafts", "requests", "craftSeries", "resourcefulnessSets", "reagentSeries",
   "reagentRequirementSeries", "firstCraftRewards" }
 
-local function encodeObservation(value)
+local function encodeObservation(value, identityShape)
   if type(value) == "number" then
     if not isFinite(value) then error("invalid observation number") end
+    if identityShape == "percentage" then
+      local text = string.format("%.2f", value)
+      return "n" .. (tonumber(text) == 0 and "0.00" or text) .. ";"
+    end
     return "n" .. string.format("%.17g", value) .. ";"
   elseif type(value) == "boolean" then return value and "t" or "f"
   elseif type(value) == "string" then return "s" .. #value .. ":" .. value
@@ -166,7 +170,7 @@ local function encodeObservation(value)
   table.sort(keys, function(left, right) return tostring(left) < tostring(right) end)
   for _, key in ipairs(keys) do
     parts[#parts + 1] = encodeObservation(key)
-    parts[#parts + 1] = encodeObservation(value[key])
+    parts[#parts + 1] = encodeObservation(value[key], identityShape and identityShape[key])
   end
   parts[#parts + 1] = "}"
   return table.concat(parts)
@@ -259,6 +263,12 @@ end
 
 local conditionsShape = {}
 for _, field in ipairs(conditionFields) do conditionsShape[field] = configurationShape[field] end
+-- Percentage fields already use the 0-100 scale; canonicalize identity, never stored values.
+local percentageIdentity = { ratingPct = "percentage", bonusRatingPct = "percentage" }
+local configurationIdentityShape = { stats = {
+  multicraft = percentageIdentity, resourcefulness = percentageIdentity,
+  ingenuity = percentageIdentity, craftingSpeed = percentageIdentity,
+} }
 local recordShape = { craftType = "string", isRecraft = "boolean", contextSource = "string", configurationKey = "id",
   configurationScope = "string", configurationUnavailableReason = "string" }
 for _, field in ipairs(evidenceFields) do recordShape[field] = configurationShape[field] end
@@ -267,7 +277,7 @@ local function configurationSignature(conditions)
   if not matchesShape(conditions, conditionsShape) or next(conditions) == nil then
     return nil, "invalid configuration conditions"
   end
-  local ok, signature = pcall(encodeObservation, conditions)
+  local ok, signature = pcall(encodeObservation, conditions, configurationIdentityShape)
   if not ok then return nil, signature end
   return signature
 end
@@ -523,14 +533,12 @@ local function validateDatabase(data, version)
     if type(data.configurations) ~= "table" then
       return nil, "invalid configurations"
     end
-    local seen, highest = {}, 0
+    local highest = 0
     for key, conditions in pairs(data.configurations) do
       if not isInteger(key) then return nil, "invalid configuration key" end
       highest = math.max(highest, key)
       local signature, reason = configurationSignature(conditions)
       if not signature then return nil, reason end
-      if seen[signature] then return nil, "duplicate configuration" end
-      seen[signature] = true
     end
     if not isInteger(data.nextConfigurationKey) or data.nextConfigurationKey <= highest then
       return nil, "nextConfigurationKey would reuse an existing configuration key"
@@ -1486,7 +1494,10 @@ function Ledger:RebuildIndexes()
   self.recipeOrder = nil
   self.configurationIndex = {}
   for key, conditions in pairs(self.database.configurations) do
-    self.configurationIndex[assert(configurationSignature(conditions))] = key
+    local signature = assert(configurationSignature(conditions))
+    local existing = self.configurationIndex[signature]
+    -- Persistence can make distinct snapshots equivalent; their referenced keys stay immutable.
+    if not existing or key < existing then self.configurationIndex[signature] = key end
   end
   self.returnSetIndex = returnIndex(self.database.resourcefulnessSets, "returnedItemSet")
   self.reagentIndex = returnIndex(self.database.reagentSeries, "itemId")
@@ -1952,8 +1963,8 @@ function Ledger:ConfigurationChanged(observation)
     self.configurationChanged = true
     return
   end
-  local previous = encodeObservation(previousConfiguration)
-  local current = encodeObservation(observation.configuration)
+  local previous = encodeObservation(previousConfiguration, configurationIdentityShape)
+  local current = encodeObservation(observation.configuration, configurationIdentityShape)
   if previous ~= current then self.configurationChanged = true end
 end
 

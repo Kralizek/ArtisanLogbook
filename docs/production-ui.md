@@ -34,7 +34,18 @@ data; aggregate-backed configurations remain available after detail pruning.
 Craft Detail reads scope and coverage from the separate observation evidence,
 not from configuration identity. Identical conditions can share a key across craft
 types while keeping their context and capture limitations distinct.
+Equivalent conditions can also retain different keys after persistence; their
+historical populations remain separate rather than being silently merged.
 See [the in-game checklist](crafting-observations.md#in-game-verification).
+
+If Core refuses the ledger, a shared "Craft history unavailable" page replaces
+normal page contents and displays the actual initialization error. The sidebar
+states that capture is disabled, rather than claiming that history is empty or
+crafts are still being recorded. Preserve SavedVariables when investigating this
+state; purging is not a recovery procedure.
+Navigation during an outage retains the requested page. Periodic status polling
+updates changing errors, closes stale detail views on failure, and restores the
+requested page if Core becomes available again.
 
 The persistent dark sidebar contains Overview, Logbook, Recipes, Reagents, pinned recipes,
 characters, and professions. Settings stays at the bottom, outside the scrolling

@@ -41,6 +41,25 @@ collects only conditions without retained fact, request or durable aggregate
 references. No reset or purge is required for released schemas. Older Core builds
 refuse the final schema 4 with the usual unsupported-schema diagnostic.
 
+Configuration keys are immutable surrogate identities, not unique hashes of their
+conditions. Numeric persistence can make previously distinct condition snapshots
+equivalent. Schema 4 accepts these keys without rewriting references or merging
+aggregate grains; key-specific queries keep their original populations. The
+in-memory signature index reuses the lowest existing key for canonically matching
+conditions on subsequent capture. Only `ratingPct` and `bonusRatingPct` within
+multicraft, resourcefulness, ingenuity and crafting-speed stats use two decimal
+places on the 0-100 percentage scale (12.34 means 12.34%, not 0.1234).
+Identity uses `%.2f` formatting, normalizing negative zero; values exactly on a
+half-hundredth boundary follow the Lua runtime's floating-point formatting.
+Raw ratings, skill/difficulty values, quality, costs/refunds, thresholds and
+recipe level retain full precision: their units do not justify percentage rounding.
+Equipment IDs/slots, buff IDs/stacks, finishing IDs/quantities and all other
+identifiers and integers remain exact. No stored measurement is rounded or rewritten.
+The same signature policy applies to new observations, rebuilt persisted indexes,
+and attempt configuration-change comparisons. Signature matching is an allocation
+optimization, not a persistence invariant: equivalent historical keys remain valid.
+Malformed conditions, missing references and key-counter reuse still refuse loading.
+
 The baseline is target `master` schema 3/API v1, not prior review commits. PR #37
 introduces one new ledger version and no API version increment. Unreleased coupled
 observation layouts from earlier review revisions are not supported upgrade sources,

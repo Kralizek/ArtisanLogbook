@@ -4846,3 +4846,80 @@ end)()
   assert(ledger.pendingRequest == nil and ledger.operationOwnershipUncertain)
   print("PASS page-local craft and period filters, defaults, embedded filter state, configuration inspection, and matched interruption")
 end)()
+
+;(function()
+  local fixture = assert(loadfile("tests/fixtures/configuration-aliases.lua"))()
+  local data = fixture(addon.Ledger, { wall = environment.GetServerTime })
+  local restored = reload(data)
+  assert(restored.ledger and not restored.ledgerError)
+  assert(#environment.ArtisanLogbookAPI.GetCrafts().crafts == 2)
+  local restoredUI = loadUI()
+  local window = restoredUI.productionWindow
+  local function poll(target)
+    for _, frame in ipairs(frames) do
+      if frame.parent == target and frame.scripts.OnUpdate then
+        frame.scripts.OnUpdate(frame, 1.1)
+      end
+    end
+  end
+  window:Show()
+  window:Activate("Logbook")
+  assert(not window.unavailable:IsShown() and not window.captureStatus:IsShown())
+  assert(#window.pages.Logbook.history.items == 2)
+  window:OpenCraft(1)
+  local activeLedger = restored.ledger
+  restored.ledger, restored.ledgerError = nil, "Synthetic periodic failure"
+  poll(window)
+  assert(window.unavailable:IsShown() and not window.openCraftId)
+  assert(not window.craftDetailWindow:IsShown())
+  assert(window.visiblePage == window.unavailable)
+  assert(window.unavailable.message:GetText():find("Synthetic periodic failure", 1, true))
+  window:Activate("Recipes")
+  assert(window.activeTab == "Recipes" and not window.pages.Recipes:IsShown())
+  restored.ledgerError = "Synthetic updated error"
+  poll(window)
+  assert(window.unavailable.message:GetText():find("Synthetic updated error", 1, true))
+  restored.ledger, restored.ledgerError = activeLedger, nil
+  poll(window)
+  assert(not window.unavailable:IsShown() and window.pages.Recipes:IsShown())
+  window:Activate("Recipe", { id = 123, name = "Synthetic recipe" })
+  window:OpenCraft(1)
+  restored.ledger, restored.ledgerError = nil, "Synthetic recipe failure"
+  poll(window)
+  assert(window.unavailable:IsShown() and not window.openCraftId)
+  assert(not window.pages.Recipe:IsShown())
+  restored.ledger, restored.ledgerError = activeLedger, nil
+  poll(window)
+  assert(window.pages.Recipe:IsShown() and not window.unavailable:IsShown())
+  window:Activate("Logbook")
+  restored.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+    { operationID = 3, itemID = 456, quantity = 1 })
+  assert(#restored.ledger.database.crafts == 3 and not restored.ledgerCaptureError)
+  local broken = restored.Ledger.CopyObservation(data)
+  broken.crafts[1].configurationKey = broken.nextConfigurationKey + 10
+  local refused = reload(broken)
+  assert(not refused.ledger and refused.ledgerError)
+  local refusedUI = loadUI()
+  window = refusedUI.productionWindow
+  window:Show()
+  assert(window.unavailable:IsShown() and window.captureStatus:IsShown())
+  assert(window.unavailable.message:GetText():find(refused.ledgerError, 1, true))
+  assert(window.unavailable.message:GetText():find("New crafts are not being recorded.", 1, true))
+  assert(window.captureStatus:GetText() == "Craft capture is disabled.")
+  for _, tab in ipairs({ "Overview", "Logbook", "Recipes", "Reagents", "Settings" }) do
+    window:Activate(tab)
+    window:Refresh()
+    assert(window.unavailable:IsShown() and not window.pages[tab]:IsShown())
+    assert(window.activeTab == tab and window.visiblePage == window.unavailable)
+  end
+  refused.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+    { operationID = 4, itemID = 456, quantity = 1 })
+  assert(environment.ArtisanLogbookDB == broken and #broken.crafts == 2)
+  refused.ledger = assert(refused.Ledger.New(nil, { wall = environment.GetServerTime }))
+  assert(refused.CreateCurrentSession(refused.ledger))
+  refused.ledgerError = nil
+  window:Refresh()
+  assert(not window.unavailable:IsShown() and not window.captureStatus:IsShown())
+  assert(window.pages.Settings:IsShown())
+  print("PASS issue 40: equivalent configurations load and capture; refused Core shows explicit error instead of empty history")
+end)()
