@@ -43,6 +43,9 @@ normal page contents and displays the actual initialization error. The sidebar
 states that capture is disabled, rather than claiming that history is empty or
 crafts are still being recorded. Preserve SavedVariables when investigating this
 state; purging is not a recovery procedure.
+Navigation during an outage retains the requested page. Periodic status polling
+updates changing errors, closes stale detail views on failure, and restores the
+requested page if Core becomes available again.
 
 The persistent dark sidebar contains Overview, Logbook, Recipes, Reagents, pinned recipes,
 characters, and professions. Settings stays at the bottom, outside the scrolling

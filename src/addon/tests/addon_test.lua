@@ -4855,10 +4855,43 @@ end)()
   assert(#environment.ArtisanLogbookAPI.GetCrafts().crafts == 2)
   local restoredUI = loadUI()
   local window = restoredUI.productionWindow
+  local function poll(target)
+    for _, frame in ipairs(frames) do
+      if frame.parent == target and frame.scripts.OnUpdate then
+        frame.scripts.OnUpdate(frame, 1.1)
+      end
+    end
+  end
   window:Show()
   window:Activate("Logbook")
   assert(not window.unavailable:IsShown() and not window.captureStatus:IsShown())
   assert(#window.pages.Logbook.history.items == 2)
+  window:OpenCraft(1)
+  local activeLedger = restored.ledger
+  restored.ledger, restored.ledgerError = nil, "Synthetic periodic failure"
+  poll(window)
+  assert(window.unavailable:IsShown() and not window.openCraftId)
+  assert(not window.craftDetailWindow:IsShown())
+  assert(window.visiblePage == window.unavailable)
+  assert(window.unavailable.message:GetText():find("Synthetic periodic failure", 1, true))
+  window:Activate("Recipes")
+  assert(window.activeTab == "Recipes" and not window.pages.Recipes:IsShown())
+  restored.ledgerError = "Synthetic updated error"
+  poll(window)
+  assert(window.unavailable.message:GetText():find("Synthetic updated error", 1, true))
+  restored.ledger, restored.ledgerError = activeLedger, nil
+  poll(window)
+  assert(not window.unavailable:IsShown() and window.pages.Recipes:IsShown())
+  window:Activate("Recipe", { id = 123, name = "Synthetic recipe" })
+  window:OpenCraft(1)
+  restored.ledger, restored.ledgerError = nil, "Synthetic recipe failure"
+  poll(window)
+  assert(window.unavailable:IsShown() and not window.openCraftId)
+  assert(not window.pages.Recipe:IsShown())
+  restored.ledger, restored.ledgerError = activeLedger, nil
+  poll(window)
+  assert(window.pages.Recipe:IsShown() and not window.unavailable:IsShown())
+  window:Activate("Logbook")
   restored.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
     { operationID = 3, itemID = 456, quantity = 1 })
   assert(#restored.ledger.database.crafts == 3 and not restored.ledgerCaptureError)
@@ -4877,6 +4910,7 @@ end)()
     window:Activate(tab)
     window:Refresh()
     assert(window.unavailable:IsShown() and not window.pages[tab]:IsShown())
+    assert(window.activeTab == tab and window.visiblePage == window.unavailable)
   end
   refused.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
     { operationID = 4, itemID = 456, quantity = 1 })
@@ -4884,8 +4918,8 @@ end)()
   refused.ledger = assert(refused.Ledger.New(nil, { wall = environment.GetServerTime }))
   assert(refused.CreateCurrentSession(refused.ledger))
   refused.ledgerError = nil
-  window:Activate("Logbook")
+  window:Refresh()
   assert(not window.unavailable:IsShown() and not window.captureStatus:IsShown())
-  assert(window.pages.Logbook:IsShown())
+  assert(window.pages.Settings:IsShown())
   print("PASS issue 40: equivalent configurations load and capture; refused Core shows explicit error instead of empty history")
 end)()

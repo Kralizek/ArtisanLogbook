@@ -3582,4 +3582,106 @@ test("issue 40: persistence-equivalent configurations preserve every referenced 
   end
 end)
 
+test("issue 40: percentage signatures use hundredths without changing stored measurements", function()
+  local ledger, clock = newLedger()
+  local function submit(configuration)
+    configuration.scope = "request"
+    local observation = { context = { kind = "personal" }, configuration = configuration }
+    local original = deepCopy(observation)
+    local request = assert(ledger:SubmitCraft(123, 1, false, nil, {}, nil, true, observation))
+    deepEqual(observation, original)
+    ledger:CancelCraft()
+    return request.configurationKey
+  end
+  for _, stat in ipairs({ "multicraft", "resourcefulness", "ingenuity", "craftingSpeed" }) do
+    for _, field in ipairs({ "ratingPct", "bonusRatingPct" }) do
+      local function conditions(value) return { stats = { [stat] = { [field] = value } } } end
+      local key = submit(conditions(12.34000015258789))
+      assert(submit(conditions(12.34)) == key)
+      assert(submit(conditions(12.3449)) == key)
+      assert(submit(conditions(12.3451)) ~= key)
+      assert(submit(conditions(12.35)) == submit(conditions(12.3451)))
+      assert(submit(conditions(1)) ~= submit(conditions(100)))
+      assert(submit(conditions(0)) == submit(conditions(-0.00001)))
+      assert(submit(conditions(0.0049)) == submit(conditions(0)))
+      assert(submit(conditions(0.0051)) == submit(conditions(0.01)))
+      assert(submit(conditions(99.9999)) == submit(conditions(100)))
+      assert(ledger.database.configurations[key].stats[stat][field] == 12.34000015258789)
+    end
+  end
+  for _, field in ipairs({ "baseSkill", "bonusSkill", "baseDifficulty", "bonusDifficulty",
+      "craftingQuality", "concentrationCost", "ingenuityRefund", "lowerSkillThreshold", "upperSkillTreshold" }) do
+    assert(submit({ stats = { [field] = 100 } }) ~= submit({ stats = { [field] = 101 } }))
+    assert(submit({ stats = { [field] = 100.001 } }) ~= submit({ stats = { [field] = 100.002 } }))
+  end
+  assert(submit({ stats = { multicraft = { rating = 100.001 } } }) ~=
+    submit({ stats = { multicraft = { rating = 100.002 } } }))
+  assert(submit({ recipeLevel = 1.001 }) ~= submit({ recipeLevel = 1.002 }))
+  assert(submit({ equipment = { { slot = 23, itemID = 9007199254740990 } } }) ~=
+    submit({ equipment = { { slot = 23, itemID = 9007199254740991 } } }))
+  assert(submit({ buffs = { { spellID = 123, applications = 1 } } }) ~=
+    submit({ buffs = { { spellID = 123, applications = 2 } } }))
+  assert(submit({ finishingReagents = { { itemID = 123, quantity = 1 } } }) ~=
+    submit({ finishingReagents = { { itemID = 123, quantity = 2 } } }))
+  assert(submit({ useConcentration = true }) ~= submit({ useConcentration = false }))
+  local original = deepCopy(ledger.database)
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  deepEqual(loaded.database, original)
+end)
+
+test("issue 40: rebuilt canonical index preserves near-equivalent historical snapshots verbatim", function()
+  local fixture = assert(loadfile(testsRoot .. "/fixtures/configuration-aliases.lua"))()
+  local clock = { wall = function() return 1800000000 end }
+  local source, keys = fixture(Ledger, clock)
+  source.configurations[keys[1]].stats.ingenuity.ratingPct = 12.34
+  source.configurations[keys[2]].stats.ingenuity.ratingPct = 12.34000015258789
+  local original = deepCopy(source)
+  local loaded = assert(Ledger.New(source, clock))
+  deepEqual(loaded.database, original)
+  assert(loaded:CreateSession({}))
+  local configuration = deepCopy(source.configurations[keys[2]])
+  configuration.scope = "request"
+  local request = assert(loaded:SubmitCraft(123, 1, false, nil, {}, nil, true,
+    { context = { kind = "personal" }, configuration = configuration }))
+  assert(request.configurationKey == keys[1])
+  deepEqual(loaded.database.configurations, original.configurations)
+  for _, collection in ipairs({ "crafts", "craftSeries", "resourcefulnessSets",
+      "reagentSeries", "reagentRequirementSeries", "firstCraftRewards" }) do
+    deepEqual(loaded.database[collection], original[collection])
+  end
+end)
+
+test("issue 40: canonical percentages reuse keys across repeated persistence cycles", function()
+  local function roundTrip(value, digits)
+    if type(value) == "number" then return tonumber(string.format("%." .. digits .. "g", value)) end
+    if type(value) ~= "table" then return value end
+    local copy = {}
+    for key, child in pairs(value) do copy[key] = roundTrip(child, digits) end
+    return copy
+  end
+  for _, digits in ipairs({ 14, 16, 17 }) do
+    local ledger, clock = newLedger()
+    local observation = { context = { kind = "personal" },
+      configuration = { scope = "request", stats = { ingenuity = {
+        rating = 211, ratingPct = 21.100000381469727, bonusRatingPct = 21.100000381469727 } } } }
+    for cycle = 1, 8 do
+      assert(ledger:CreateSession({}))
+      local request = assert(ledger:SubmitCraft(123, 1, false, nil, {}, nil, true, observation))
+      assert(request.configurationKey == 1 and ledger.database.nextConfigurationKey == 2)
+      ledger:ObserveAttempt(123, observation)
+      local refreshed = deepCopy(observation)
+      refreshed.configuration.stats.ingenuity.ratingPct = 21.1
+      ledger:ConfigurationChanged(refreshed)
+      assert(not ledger.configurationChanged)
+      refreshed.configuration.stats.ingenuity.ratingPct = 21.11
+      ledger:ConfigurationChanged(refreshed)
+      assert(ledger.configurationChanged)
+      ledger.configurationChanged = nil
+      assert(ledger:RecordResult({ operationID = cycle, itemID = 456, quantity = 1 }))
+      ledger = assert(Ledger.New(roundTrip(ledger.database, digits), clock))
+      assert(#ledger.database.crafts == cycle and ledger.database.nextConfigurationKey == 2)
+    end
+  end
+end)
+
 print(string.format("%d ledger tests passed", passed))

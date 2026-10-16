@@ -63,13 +63,16 @@ function addon.CreateProductionWindow()
   captureStatus:ClearAllPoints(); captureStatus:SetPoint("BOTTOMLEFT", settingsNav, "TOPLEFT", 4, 6)
   captureStatus:SetJustifyH("LEFT"); captureStatus:SetTextColor(.72, .52, .24); captureStatus:Hide()
   window.captureStatus = captureStatus
+  local closeCraft
   function window:RefreshCaptureStatus(status, reason)
     if status == nil then status, reason = management.Status() end
     local suspended = status and status.authoritativeCaptureSuspended == true
     captureStatus:SetShown(not status or suspended == true)
     unavailable:SetShown(not status)
     if not status then
+      if self.openCraftId then closeCraft() end
       for _, page in pairs(pages) do page:Hide() end
+      self.visiblePage = unavailable
       captureStatus:SetText("Craft capture is disabled.")
       unavailable.message:SetText((reason or "Core is not ready.") ..
         "\n\nSaved history is unavailable, not necessarily empty. New crafts are not being recorded." ..
@@ -85,7 +88,11 @@ function addon.CreateProductionWindow()
     statusElapsed = statusElapsed + elapsed
     if statusElapsed >= 1 then
       statusElapsed = 0
+      local wasUnavailable = unavailable:IsShown()
       window:RefreshCaptureStatus()
+      if unavailable:IsShown() ~= wasUnavailable then
+        window:Activate(window.activeTab, window.identity)
+      end
     end
   end)
 
@@ -178,13 +185,15 @@ function addon.CreateProductionWindow()
   craftBody:SetPoint("TOPLEFT", 12, -34); craftBody:SetSize(676, 568)
   local closingMain, closingCraft = false, false
   local detail
-  local function closeCraft()
+  closeCraft = function()
     if closingCraft then return end
     closingCraft = true
     craftModal:Hide(); detail:Hide(); modalShade:Hide()
     window.visiblePage = pages[window.activeTab]
     window.openCraftId = nil
-    if not closingMain and window.activeTab == "Recipe" then pages.Recipe.outcomes:Refresh(true) end
+    if not closingMain and not unavailable:IsShown() and window.activeTab == "Recipe" then
+      pages.Recipe.outcomes:Refresh(true)
+    end
     closingCraft = false
   end
   detail = UI.CraftDetail(craftBody, 676, 550, closeCraft, function(item) window:Activate("Reagent", item) end)
@@ -232,6 +241,7 @@ function addon.CreateProductionWindow()
     if not pages[name] then return end
     if (name == "Character" or name == "Profession" or name == "Recipe" or name == "Reagent") and not identity then return end
     if self.openCraftId then closeCraft() end
+    self.activeTab, self.identity = name, identity
     local status, reason = management.Status()
     if not self:RefreshCaptureStatus(status, reason) then
       self:RefreshSidebar()
@@ -240,14 +250,15 @@ function addon.CreateProductionWindow()
     local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)
     if signature ~= self.dataSignature then self:Invalidate(); self.dataSignature = signature end
     for _, page in pairs(pages) do page:Hide() end
-    self.activeTab, self.identity = name, identity
     pages[name]:Open(identity)
     pages[name]:Show(); self.visiblePage = pages[name]
     self:RefreshSidebar(); self:Raise()
   end
   function window:Refresh()
+    local wasUnavailable = unavailable:IsShown()
     self:RefreshSidebar()
     if not self:RefreshCaptureStatus() then return end
+    if wasUnavailable then self:Activate(self.activeTab, self.identity); return end
     if not self.openCraftId then pages[self.activeTab]:Open(self.identity) end
   end
   function window:Invalidate()

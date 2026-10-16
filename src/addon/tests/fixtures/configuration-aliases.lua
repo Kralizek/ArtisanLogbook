@@ -19,6 +19,8 @@ return function(Ledger, clock, digits)
   for operationId = 1, 2 do
     assert(ledger:CreateSession({ characterName = "Synthetic", characterGUID = "Synthetic",
       realmName = "Synthetic", projectId = 1, regionId = 1, gameRealmId = 1 }))
+    -- Model historical allocation before percentage canonicalization, not current capture.
+    if operationId == 2 and digits < 17 then ledger.configurationIndex = {} end
     local request = assert(ledger:SubmitCraft(123, 1, false, nil,
       { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 8 } } }, inputs, true, observation))
     keys[operationId] = request.configurationKey

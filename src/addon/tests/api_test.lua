@@ -1780,6 +1780,7 @@ test("issue 40: equivalent configuration keys retain separate filters and additi
     local filter = { configuration = { key = text } }
     local crafts = api.GetCrafts(filter).crafts
     assert(#crafts == 1 and crafts[1].configuration.key == text)
+    equal(crafts[1].configuration.stats, source.configurations[key].stats)
     assert(api.GetRecipeOutcomes(123, filter).totals.craftCount == 1)
     assert(api.GetRecipeReturnSets(123, filter).returns[1].craftCount == 1)
     assert(api.GetRecipeReturnedReagents(123, filter).returns[1].returnedQuantity == 1)

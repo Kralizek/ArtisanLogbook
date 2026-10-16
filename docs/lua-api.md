@@ -17,6 +17,9 @@ Configuration keys identify persisted observation populations, not globally uniq
 condition hashes. Equivalent conditions may have distinct keys after numeric
 save/reload round-trips. Existing keys and key-specific filter populations are
 preserved; unfiltered queries add their contributions once each.
+New captures compare stat `ratingPct` and `bonusRatingPct` at two decimal places
+on the 0-100 scale for identity only. Projections retain the original stored
+measurements; other numbers and identifiers are not rounded.
 Configuration keys identify observed condition fields only, independently of
 `context` and `configurationObservation` (scope/coverage/provenance). Shared partial
 values are not proof of identical full configurations. Keys remain stable through
