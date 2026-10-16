@@ -13,6 +13,10 @@ The additive context/configuration filters, detached craft projections and
 Every measurement retains independent coverage; a quote is not a completed
 operation's effective-stat report. Existing daily-series granularity is unchanged.
 All successfully observed configurations are retained without admission quotas.
+Configuration keys identify persisted observation populations, not globally unique
+condition hashes. Equivalent conditions may have distinct keys after numeric
+save/reload round-trips. Existing keys and key-specific filter populations are
+preserved; unfiltered queries add their contributions once each.
 Configuration keys identify observed condition fields only, independently of
 `context` and `configurationObservation` (scope/coverage/provenance). Shared partial
 values are not proof of identical full configurations. Keys remain stable through

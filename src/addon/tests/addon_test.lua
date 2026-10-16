@@ -4846,3 +4846,46 @@ end)()
   assert(ledger.pendingRequest == nil and ledger.operationOwnershipUncertain)
   print("PASS page-local craft and period filters, defaults, embedded filter state, configuration inspection, and matched interruption")
 end)()
+
+;(function()
+  local fixture = assert(loadfile("tests/fixtures/configuration-aliases.lua"))()
+  local data = fixture(addon.Ledger, { wall = environment.GetServerTime })
+  local restored = reload(data)
+  assert(restored.ledger and not restored.ledgerError)
+  assert(#environment.ArtisanLogbookAPI.GetCrafts().crafts == 2)
+  local restoredUI = loadUI()
+  local window = restoredUI.productionWindow
+  window:Show()
+  window:Activate("Logbook")
+  assert(not window.unavailable:IsShown() and not window.captureStatus:IsShown())
+  assert(#window.pages.Logbook.history.items == 2)
+  restored.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+    { operationID = 3, itemID = 456, quantity = 1 })
+  assert(#restored.ledger.database.crafts == 3 and not restored.ledgerCaptureError)
+  local broken = restored.Ledger.CopyObservation(data)
+  broken.crafts[1].configurationKey = broken.nextConfigurationKey + 10
+  local refused = reload(broken)
+  assert(not refused.ledger and refused.ledgerError)
+  local refusedUI = loadUI()
+  window = refusedUI.productionWindow
+  window:Show()
+  assert(window.unavailable:IsShown() and window.captureStatus:IsShown())
+  assert(window.unavailable.message:GetText():find(refused.ledgerError, 1, true))
+  assert(window.unavailable.message:GetText():find("New crafts are not being recorded.", 1, true))
+  assert(window.captureStatus:GetText() == "Craft capture is disabled.")
+  for _, tab in ipairs({ "Overview", "Logbook", "Recipes", "Reagents", "Settings" }) do
+    window:Activate(tab)
+    window:Refresh()
+    assert(window.unavailable:IsShown() and not window.pages[tab]:IsShown())
+  end
+  refused.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+    { operationID = 4, itemID = 456, quantity = 1 })
+  assert(environment.ArtisanLogbookDB == broken and #broken.crafts == 2)
+  refused.ledger = assert(refused.Ledger.New(nil, { wall = environment.GetServerTime }))
+  assert(refused.CreateCurrentSession(refused.ledger))
+  refused.ledgerError = nil
+  window:Activate("Logbook")
+  assert(not window.unavailable:IsShown() and not window.captureStatus:IsShown())
+  assert(window.pages.Logbook:IsShown())
+  print("PASS issue 40: equivalent configurations load and capture; refused Core shows explicit error instead of empty history")
+end)()

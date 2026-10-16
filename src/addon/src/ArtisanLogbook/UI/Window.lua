@@ -46,6 +46,12 @@ function addon.CreateProductionWindow()
     pages[name]:Hide()
   end
   window.pages, window.activeTab = pages, "Overview"
+  local unavailable = CreateFrame("Frame", nil, body)
+  unavailable:SetAllPoints(body)
+  UI.Section(unavailable, "Craft history unavailable", 0, -2, inner)
+  unavailable.message = UI.Text(unavailable, 0, -48, inner, 160)
+  unavailable:Hide()
+  window.unavailable = unavailable
   local navContent, navScroll = UI.PageScroll(sidebar, sideWidth - 4, height - 132, height - 132)
   navScroll:ClearAllPoints(); navScroll:SetPoint("TOPLEFT", 2, -8)
   window.sidebar, window.sidebarScroll, window.navItems = sidebar, navScroll, {}
@@ -57,13 +63,21 @@ function addon.CreateProductionWindow()
   captureStatus:ClearAllPoints(); captureStatus:SetPoint("BOTTOMLEFT", settingsNav, "TOPLEFT", 4, 6)
   captureStatus:SetJustifyH("LEFT"); captureStatus:SetTextColor(.72, .52, .24); captureStatus:Hide()
   window.captureStatus = captureStatus
-  function window:RefreshCaptureStatus(status)
-    if status == nil then status = management.Status() end
+  function window:RefreshCaptureStatus(status, reason)
+    if status == nil then status, reason = management.Status() end
     local suspended = status and status.authoritativeCaptureSuspended == true
-    captureStatus:SetShown(suspended)
-    if suspended then
+    captureStatus:SetShown(not status or suspended == true)
+    unavailable:SetShown(not status)
+    if not status then
+      for _, page in pairs(pages) do page:Hide() end
+      captureStatus:SetText("Craft capture is disabled.")
+      unavailable.message:SetText((reason or "Core is not ready.") ..
+        "\n\nSaved history is unavailable, not necessarily empty. New crafts are not being recorded." ..
+        "\n\nPreserve your SavedVariables files. Do not purge the database to resolve this error.")
+    elseif suspended then
       captureStatus:SetText("Detailed crafting statistics are temporarily unavailable. Crafts are still being recorded.")
     end
+    return status ~= nil
   end
   local statusPoller, statusElapsed = CreateFrame("Frame", nil, window), 0
   statusPoller:SetScript("OnUpdate", function(_, elapsed)
@@ -89,7 +103,8 @@ function addon.CreateProductionWindow()
     end
     if #pins == 0 then entries[#entries + 1] = { section = "No pinned recipes" } end
     entries[#entries + 1] = { section = "CHARACTERS" }
-    local characters = API.GetCharacters() or {}
+    local characters, charactersReason = API.GetCharacters()
+    characters = characters or {}
     table.sort(characters, function(left, right)
       if UI.Name(left) == UI.Name(right) then return left.key < right.key end
       return UI.Name(left) < UI.Name(right)
@@ -98,15 +113,20 @@ function addon.CreateProductionWindow()
       entries[#entries + 1] = { label = UI.Name(character), page = "Character", identity = character,
         classFile = character.classFile, icon = "Interface\\Icons\\INV_Helmet_03" }
     end
-    if #characters == 0 then entries[#entries + 1] = { section = "No crafts yet" } end
+    if #characters == 0 then
+      entries[#entries + 1] = { section = charactersReason and "History unavailable" or "No crafts yet" }
+    end
     entries[#entries + 1] = { section = "PROFESSIONS" }
-    local professions = API.GetProfessions() or {}
+    local professions, professionsReason = API.GetProfessions()
+    professions = professions or {}
     table.sort(professions, function(left, right) return UI.Name(left) < UI.Name(right) end)
     for _, profession in ipairs(professions) do
       entries[#entries + 1] = { label = UI.Name(profession), page = "Profession", identity = profession,
         icon = UI.ProfessionIcon(profession.skillLineId) }
     end
-    if #professions == 0 then entries[#entries + 1] = { section = "No crafts yet" } end
+    if #professions == 0 then
+      entries[#entries + 1] = { section = professionsReason and "History unavailable" or "No crafts yet" }
+    end
     for _, item in ipairs(self.navItems) do item:Hide() end
     for _, heading in ipairs(headings) do heading:Hide() end
     local offset, itemCount, headingCount = 0, 0, 0
@@ -212,8 +232,11 @@ function addon.CreateProductionWindow()
     if not pages[name] then return end
     if (name == "Character" or name == "Profession" or name == "Recipe" or name == "Reagent") and not identity then return end
     if self.openCraftId then closeCraft() end
-    local status = management.Status()
-    self:RefreshCaptureStatus(status)
+    local status, reason = management.Status()
+    if not self:RefreshCaptureStatus(status, reason) then
+      self:RefreshSidebar()
+      return
+    end
     local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)
     if signature ~= self.dataSignature then self:Invalidate(); self.dataSignature = signature end
     for _, page in pairs(pages) do page:Hide() end
@@ -224,7 +247,7 @@ function addon.CreateProductionWindow()
   end
   function window:Refresh()
     self:RefreshSidebar()
-    self:RefreshCaptureStatus()
+    if not self:RefreshCaptureStatus() then return end
     if not self.openCraftId then pages[self.activeTab]:Open(self.identity) end
   end
   function window:Invalidate()

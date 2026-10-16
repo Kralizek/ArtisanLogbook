@@ -523,14 +523,12 @@ local function validateDatabase(data, version)
     if type(data.configurations) ~= "table" then
       return nil, "invalid configurations"
     end
-    local seen, highest = {}, 0
+    local highest = 0
     for key, conditions in pairs(data.configurations) do
       if not isInteger(key) then return nil, "invalid configuration key" end
       highest = math.max(highest, key)
       local signature, reason = configurationSignature(conditions)
       if not signature then return nil, reason end
-      if seen[signature] then return nil, "duplicate configuration" end
-      seen[signature] = true
     end
     if not isInteger(data.nextConfigurationKey) or data.nextConfigurationKey <= highest then
       return nil, "nextConfigurationKey would reuse an existing configuration key"
@@ -1486,7 +1484,10 @@ function Ledger:RebuildIndexes()
   self.recipeOrder = nil
   self.configurationIndex = {}
   for key, conditions in pairs(self.database.configurations) do
-    self.configurationIndex[assert(configurationSignature(conditions))] = key
+    local signature = assert(configurationSignature(conditions))
+    local existing = self.configurationIndex[signature]
+    -- Persistence can make distinct snapshots equivalent; their referenced keys stay immutable.
+    if not existing or key < existing then self.configurationIndex[signature] = key end
   end
   self.returnSetIndex = returnIndex(self.database.resourcefulnessSets, "returnedItemSet")
   self.reagentIndex = returnIndex(self.database.reagentSeries, "itemId")

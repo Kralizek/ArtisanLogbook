@@ -3541,4 +3541,45 @@ test("historical quarantined Patron repair restores only evidenced recipe identi
   assert(loaded:RepairUnknownRecipes({ [241309] = true }).repairedCount == 0)
 end)
 
+test("issue 40: persistence-equivalent configurations preserve every referenced key and grain", function()
+  local fixture = assert(loadfile(testsRoot .. "/fixtures/configuration-aliases.lua"))()
+  for _, digits in ipairs({ 14, 16, 17 }) do
+    local clock = { wall = function() return 1800000000 end }
+    local source, keys = fixture(Ledger, clock, digits)
+    local original = deepCopy(source)
+    if digits < 17 then
+      assert(keys[1] ~= keys[2])
+      deepEqual(source.configurations[keys[1]], source.configurations[keys[2]])
+    end
+    local loaded = assert(Ledger.New(source, clock))
+    deepEqual(source, original)
+    deepEqual(loaded.database, original)
+    for _, collection in ipairs({ "crafts", "requests", "craftSeries", "resourcefulnessSets",
+        "reagentSeries", "reagentRequirementSeries", "firstCraftRewards" }) do
+      assert(#loaded.database[collection] > 0, collection)
+      for _, row in ipairs(loaded.database[collection]) do
+        assert(row.configurationKey and loaded.database.configurations[row.configurationKey], collection)
+      end
+    end
+    assert(loaded:CreateSession({}))
+    local conditions = source.configurations[keys[2]]
+    local configuration = deepCopy(conditions)
+    configuration.scope = "request"
+    local request = assert(loaded:SubmitCraft(123, 1, false, nil, {}, nil, true,
+      { context = { kind = "personal" }, configuration = configuration }))
+    assert(request.configurationKey == math.min(keys[1], keys[2]))
+    assert(loaded.database.nextConfigurationKey == source.nextConfigurationKey)
+    assert(Ledger.New(loaded.database, clock))
+    for _, corrupt in ipairs({
+      function(data) data.configurations[keys[2]].stats.ingenuity.ratingPct = "invalid" end,
+      function(data) data.nextConfigurationKey = keys[2] end,
+      function(data) data.crafts[1].configurationKey = source.nextConfigurationKey + 10 end,
+    }) do
+      local invalid = deepCopy(source)
+      corrupt(invalid)
+      unchangedAfter(invalid, function() return Ledger.New(invalid, clock) end)
+    end
+  end
+end)
+
 print(string.format("%d ledger tests passed", passed))

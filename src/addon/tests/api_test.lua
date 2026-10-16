@@ -1754,4 +1754,49 @@ test("issue 24: 50,000 crafts with duplicate slots stay within measured query an
     captureSeconds, querySeconds, reloadSeconds, #data.reagentSeries, legacyCaptureSeconds, migrationSeconds))
 end)
 
+test("issue 40: equivalent configuration keys retain separate filters and additive durable totals", function()
+  local _, api, clock, addon = newLedger()
+  local fixture = assert(loadfile(testsRoot .. "/fixtures/configuration-aliases.lua"))()
+  local source, keys = fixture(addon.Ledger, clock)
+  assert(keys[1] ~= keys[2])
+  addon.ledger = assert(addon.Ledger.New(source, clock))
+  local totals = api.GetRecipeOutcomes(123).totals
+  assert(totals.craftCount == 2 and totals.outputQuantity == 2)
+  assert(totals.resourcefulnessProcCount == 2 and totals.inputCompleteCount == 0)
+  assert(#api.GetCrafts().crafts == 2)
+  local cursor, seen = nil, {}
+  repeat
+    local page = assert(api.GetRecipeConfigurations(123, nil, { limit = 1, cursor = cursor }))
+    for _, row in ipairs(page.configurations) do
+      assert(not seen[row.configuration.key])
+      seen[row.configuration.key] = true
+      assert(row.totals.craftCount == 1)
+    end
+    cursor = page.nextCursor
+  until not cursor
+  for _, key in ipairs(keys) do
+    local text = tostring(key)
+    assert(seen[text])
+    local filter = { configuration = { key = text } }
+    local crafts = api.GetCrafts(filter).crafts
+    assert(#crafts == 1 and crafts[1].configuration.key == text)
+    assert(api.GetRecipeOutcomes(123, filter).totals.craftCount == 1)
+    assert(api.GetRecipeReturnSets(123, filter).returns[1].craftCount == 1)
+    assert(api.GetRecipeReturnedReagents(123, filter).returns[1].returnedQuantity == 1)
+    assert(api.GetRecipeReagentStatistics(123, filter).reagents[1].matchedCraftCount == 1)
+    assert(api.GetRecipeReagentRequirements(123, filter).requirements[1].requiredQuantity == 5)
+  end
+  assert(api.GetRecipeReturnedReagents(123).returns[1].returnedQuantity == 2)
+  assert(api.GetRecipeReagentStatistics(123).reagents[1].matchedCraftCount == 2)
+  clock.current = clock.current + 61 * 86400
+  addon.ledger = assert(addon.Ledger.New(addon.ledger.database, clock))
+  assert(#api.GetCrafts().crafts == 0)
+  equal(api.GetRecipeOutcomes(123).totals, totals)
+  for _, key in ipairs(keys) do
+    local filter = { configuration = { key = tostring(key) } }
+    assert(api.GetRecipeOutcomes(123, filter).totals.craftCount == 1)
+    assert(api.GetRecipeReagentStatistics(123, filter).reagents[1].matchedCraftCount == 1)
+  end
+end)
+
 print(string.format("%d API tests passed", passed))

@@ -41,6 +41,17 @@ collects only conditions without retained fact, request or durable aggregate
 references. No reset or purge is required for released schemas. Older Core builds
 refuse the final schema 4 with the usual unsupported-schema diagnostic.
 
+Configuration keys are immutable surrogate identities, not unique hashes of their
+conditions. Numeric persistence can make previously distinct condition snapshots
+equivalent. Schema 4 accepts these keys without rewriting references or merging
+aggregate grains; key-specific queries keep their original populations. The
+in-memory signature index reuses the lowest existing key for exactly matching
+conditions on subsequent capture. Signature matching is a best-effort allocation
+optimization, not a persistence invariant: no client decimal precision is assumed
+and no measurements or IDs are rounded by Core. Save/reload cycles may allocate
+additional keys but cannot invalidate history merely because conditions converge.
+Malformed conditions, missing references and key-counter reuse still refuse loading.
+
 The baseline is target `master` schema 3/API v1, not prior review commits. PR #37
 introduces one new ledger version and no API version increment. Unreleased coupled
 observation layouts from earlier review revisions are not supported upgrade sources,
