@@ -182,8 +182,16 @@ reload/login ordering with in-flight callbacks remains a live-validation boundar
 Call-backed `CraftSalvage` results can carry recipe identity without a personal
 request or authoritative outcome. Runtime correlation counts distinct operation
 IDs against the submitted batch count; multiple outputs retain identity through
-a bounded 64-ID cache and do not consume extra positions. Completing that count
-retires outstanding salvage state. Salvage results do not teach output-to-recipe
+a bounded 64-ID cache and do not consume extra positions. This bounds recent
+identity recovery, not batch size or craft count. Eviction retains the existing
+session-long seen-ID rejection, so an evicted ID cannot acquire a new recipe.
+Completing the submitted count retires outstanding salvage state; an unexpected
+complete unseen result before the next submission quarantines future unseen
+operations. Count-based completion assumes one distinct operation ID per counted
+operation. An unseen external result first arriving during a clean new batch
+cannot be distinguished from that batch's own result using the available payload;
+quarantine does not guarantee rejection without an observable uncertain boundary.
+Salvage results do not teach output-to-recipe
 relationships or repair history. See the
 [Recycling evidence and limitations](crafting-observations.md#recycling-build-70448-investigation).
 Nonpersonal outstanding context is runtime-only and independent of personal

@@ -148,6 +148,14 @@ positive operation ID consumes one batch position. Further outputs of that ID
 retain its recipe without consuming a position, including after another batch
 starts. The positive identity cache is bounded to 64 operation IDs; the existing
 seen-ID rejection registry prevents evicted IDs from stealing a newer batch.
+This reuses the existing recent-operation bound, not a delay threshold measured
+from this trace. It limits only how many recent operation identities can be
+recovered for additional outputs: it does not limit batch size or the number of
+recorded crafts. Active remaining-count state is independent of the cache, so
+the observed 184-operation batch can evict early identities and still complete.
+Evicted IDs remain in the existing session-long `observedOperationIds` registry,
+including after history pruning; they cannot reacquire identity from a newer
+submission. The new positive cache adds no unbounded recording.
 Completing the submitted count retires outstanding salvage ownership without
 waiting for a stop signal.
 
@@ -163,8 +171,53 @@ cannot safely acquire fresh operation identity. Known recent IDs can retain
 their already established recipe after cancellation; unknown or evicted IDs
 stay unknown. Clear/purge discard positive salvage identity without resetting
 the existing ownership guard. No timer or output-item guess clears uncertainty.
-Results preceding the submitted-call hook, cross-session in-flight events and
-very late outputs beyond the 64-operation window remain unverified.
+Results observed before the submitted-call hook and evicted operation IDs cannot
+subsequently acquire a new batch's recipe.
+
+#### Batch-transition assumptions and review findings
+
+The count-based lifecycle assumes each counted salvage operation produces one
+distinct positive operation ID, shared by its outputs. The Recycling trace
+supports this for that batch; it is not an API-proven submission identifier or
+a guarantee for every salvage variant.
+
+- **Unfinished previous batch:** if an older operation has never returned any
+  output, its position remains outstanding. Replacing that batch, cancelling it
+  or closing the profession quarantines ownership before another submission.
+  A synthetic regression delivers the old unseen ID after a different-recipe
+  submission and verifies that both it and the new operation stay unknown and
+  consume no positions. Known cached IDs still retain their original recipe.
+- **Completed previous batch:** all requested distinct IDs have been seen under
+  the count model. Additional outputs with those IDs are recoverable while
+  cached, or remain unknown after eviction. They never consume another position.
+  Sequential completed batches of the same or different recipe are supported.
+- **Unexpected output between batches (confirmed defect):** previously, a
+  complete, unseen operation ID after counted completion stayed unknown but left
+  subsequent submissions eligible. This is an observable contradiction of the
+  tracked lifecycle. Core now quarantines future unseen operations after
+  committing that unknown result. Known cached or evicted IDs between batches
+  are not such a contradiction and do not themselves trigger quarantine.
+  Malformed payloads alone are not evidence of a new completed operation.
+- **Unobservable origin (unresolved limitation):** suppose batch A has counted
+  completion, batch B starts cleanly, and a previously unseen ID first appears
+  during B. The payload can describe either B's next operation or an additional
+  operation from A/outside captured context. There is no submission token in
+  the payload to distinguish them. Under the supported count model an unseen
+  A operation would have kept A unfinished; outside that model (extra IDs per
+  operation, missed hooks, or cross-session in-flight work), the two origins
+  are indistinguishable. Core can associate that ID with B. Quarantine protects
+  observable uncertain transitions, **not** this undetectable case. No claim is
+  made that every possible late unseen operation is rejected; doing so would
+  also reject legitimate new-batch results. No timer, output-item guess or
+  retroactive rewriting is used to conceal this limitation.
+
+The review regressions are synthetic lifecycle extensions, explicitly separated
+from the curated live trace: same/different-recipe completion, unfinished
+replacement, known and unseen outputs between submissions, delayed additional
+outputs, cache eviction during a 184-operation batch, and stale callbacks after
+history pruning. Controlled live-game validation should check the one-ID-per-
+counted-operation assumption for each salvage family and capture transitions
+between different recipes; those live sequences are not present in this trace.
 
 The curated first-three-result fixture preserves actual ordering, IDs and timing,
 removing locations, item/cast GUIDs and UI chatter. Tests separately label batch

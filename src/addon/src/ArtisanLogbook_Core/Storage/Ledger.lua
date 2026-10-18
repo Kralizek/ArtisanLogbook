@@ -2321,12 +2321,14 @@ function Ledger:RecordResult(result, expectedRequirements)
   local primaryKinds = { CraftRecipe = true, CraftEnchant = true, RecraftRecipe = true, RecraftRecipeForOrder = true }
   local observation = result.operationID and self.observedOperationIds[result.operationID]
   local salvage = self.pendingSalvage
-  local salvageRecipeId, newSalvageOperation
+  local salvageRecipeId, newSalvageOperation, unexpectedSalvageOperation
   if isInteger(result.operationID) and isInteger(result.itemID) and isInteger(result.quantity) then
     salvageRecipeId = self.salvageOperations[result.operationID]
     if not salvageRecipeId and salvage and not observation and not self.operationOwnershipUncertain and
         not self.requestAmbiguous then
       salvageRecipeId, newSalvageOperation = salvage.recipeId, true
+    elseif not salvageRecipeId and not observation and not salvage and self.operationKind == "CraftSalvage" then
+      unexpectedSalvageOperation = true
     end
   end
   local pendingOwnerState = self.pendingRequest or self.pendingOrderRequest
@@ -2529,6 +2531,7 @@ function Ledger:RecordResult(result, expectedRequirements)
       self.nonpersonalOperationOutstanding = nil
     end
   end
+  if unexpectedSalvageOperation then self.operationOwnershipUncertain = true end
   if pending and request then
     self.attemptObservation, self.configurationChanged = nil, nil
     pending.remaining = pending.remaining - 1

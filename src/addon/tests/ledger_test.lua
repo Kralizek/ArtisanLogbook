@@ -3804,4 +3804,115 @@ test("salvage cancellation preserves only known IDs; clear and purge retire posi
   end
 end)
 
+-- Synthetic lifecycle extensions; only the fixture replay above is live-trace evidence.
+test("salvage unseen late operations cannot cross an unfinished batch boundary", function()
+  for _, boundary in ipairs({ "replace", "cancel" }) do
+    local ledger = newLedger()
+    assert(ledger:SubmitSalvage(1229930, 2))
+    assert(ledger:RecordResult({ operationID = 10, itemID = 500, quantity = 1 }).recipeId == 1229930)
+    -- Operation 11 belongs to the old batch but has not produced any callback yet.
+    assert(ledger.observedOperationIds[11] == nil)
+    if boundary ~= "replace" then ledger:CancelCraft() end
+    assert(ledger:SubmitSalvage(1231127, 2))
+    assert(ledger.operationOwnershipUncertain)
+    for _, operationId in ipairs({ 11, 12 }) do
+      local craft = assert(ledger:RecordResult({ operationID = operationId, itemID = 500, quantity = 1 }))
+      assert(craft.recipeId == nil and craft.outcomeSource == "unverified")
+      assert(ledger.pendingSalvage.remaining == 2)
+    end
+    assert(ledger:RecordResult({ operationID = 10, itemID = 501, quantity = 1 }).recipeId == 1229930)
+    assert(ledger.pendingSalvage.remaining == 2)
+  end
+end)
+
+test("salvage completed batches preserve identity across same and different recipe transitions", function()
+  local fixture = dofile(testsRoot .. "/fixtures/retail-recycling-70448.lua")
+  for _, nextRecipeId in ipairs({ fixture.recipeId, 1231127, 1231132 }) do
+    local ledger = newLedger()
+    -- Shorten the real batch to its three retained results; all following events are synthetic.
+    assert(ledger:SubmitSalvage(fixture.recipeId, 3))
+    local firstOperationId
+    for _, event in ipairs(fixture.events) do
+      if event.name == "TRADE_SKILL_CRAFT_BEGIN" then ledger:BeginCraft(event.arguments[1])
+      elseif event.name == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
+        local payload = event.arguments[1]
+        firstOperationId = firstOperationId or payload.operationID
+        assert(ledger:RecordResult(payload).recipeId == fixture.recipeId)
+      end
+    end
+    assert(not ledger.pendingSalvage and not ledger.nonpersonalOperationOutstanding)
+    -- A known late output between submissions does not reopen the completed batch.
+    assert(ledger:RecordResult({ operationID = firstOperationId, itemID = 500, quantity = 1 }).recipeId == fixture.recipeId)
+    assert(not ledger.nonpersonalOperationOutstanding and not ledger.operationOwnershipUncertain)
+    assert(ledger:SubmitSalvage(nextRecipeId, 2))
+    assert(ledger:RecordResult({ operationID = firstOperationId, itemID = 501, quantity = 1 }).recipeId == fixture.recipeId)
+    assert(ledger.pendingSalvage.remaining == 2)
+    for _, operationId in ipairs({ 10, 11 }) do
+      assert(ledger:RecordResult({ operationID = operationId, itemID = 500, quantity = 1 }).recipeId == nextRecipeId)
+      local remaining = ledger.pendingSalvage and ledger.pendingSalvage.remaining
+      assert(remaining == (operationId == 10 and 1 or nil))
+      assert(ledger:RecordResult({ operationID = operationId, itemID = 502, quantity = 1 }).recipeId == nextRecipeId)
+      assert((ledger.pendingSalvage and ledger.pendingSalvage.remaining) == remaining)
+    end
+    assert(not ledger.nonpersonalOperationOutstanding and not ledger.operationOwnershipUncertain)
+    assert(#ledger.database.crafts == 9 and #ledger.database.requests == 0)
+  end
+end)
+
+test("salvage unexpected unseen outputs between batches quarantine later unseen operations", function()
+  local ledger = newLedger()
+  assert(ledger:SubmitSalvage(1229930, 1))
+  assert(ledger:RecordResult({ operationID = 10, itemID = 500, quantity = 1 }).recipeId == 1229930)
+  assert(not ledger.nonpersonalOperationOutstanding)
+  -- These IDs cannot all belong to the counted, completed one-operation batch.
+  -- Once this contradiction is observable, later ownership must fail closed.
+  local unexpected = assert(ledger:RecordResult({ operationID = 11, itemID = 500, quantity = 1 }))
+  assert(unexpected.recipeId == nil)
+  assert(ledger.operationOwnershipUncertain)
+  assert(ledger:SubmitSalvage(1231127, 1))
+  for _, operationId in ipairs({ 11, 12, 13 }) do
+    assert(ledger:RecordResult({ operationID = operationId, itemID = 500, quantity = 1 }).recipeId == nil)
+    assert(ledger.pendingSalvage.remaining == 1)
+  end
+  assert(ledger:RecordResult({ operationID = 10, itemID = 501, quantity = 1 }).recipeId == 1229930)
+  assert(ledger.pendingSalvage.remaining == 1 and ledger.database.recipeOutputs[1231127] == nil)
+end)
+
+test("salvage 184-operation batches outgrow the identity cache without losing active ownership", function()
+  local fixture = dofile(testsRoot .. "/fixtures/retail-recycling-70448.lua")
+  local ledger = newLedger()
+  assert(ledger:SubmitSalvage(fixture.recipeId, fixture.requestedCount))
+  -- Synthetic outputs/count stress, not the 184 individual results from the original trace.
+  for operationId = 1, fixture.requestedCount do
+    ledger:BeginCraft(fixture.recipeId)
+    assert(ledger:RecordResult({ operationID = operationId, itemID = 243581, quantity = 3 }).recipeId == fixture.recipeId)
+    assert(rowCount(ledger.salvageOperations) == math.min(operationId, Ledger.recentOperationLimit))
+    if operationId < fixture.requestedCount then
+      assert(ledger.pendingSalvage.remaining == fixture.requestedCount - operationId)
+      assert(ledger.nonpersonalOperationOutstanding)
+    else assert(not ledger.pendingSalvage and not ledger.nonpersonalOperationOutstanding) end
+    -- Exercise both sides of eviction while the long batch is still active.
+    if operationId == Ledger.recentOperationLimit + 1 then
+      assert(ledger:RecordResult({ operationID = 1, itemID = 500, quantity = 1 }).recipeId == nil)
+      assert(ledger.pendingSalvage.remaining == fixture.requestedCount - operationId)
+    end
+    assert(not ledger.operationOwnershipUncertain)
+  end
+  assert(#ledger.salvageOperationOrder == 64 and ledger.observedOperationIds[1])
+  -- Known evicted callbacks between batches are negative evidence, not a new contradiction.
+  ledger:BeginCraft(fixture.recipeId)
+  assert(ledger:RecordResult({ operationID = 1, itemID = 501, quantity = 1 }).recipeId == nil)
+  assert(not ledger.operationOwnershipUncertain)
+  -- Eviction and negative identity survive history pruning.
+  ledger:Prune(ledger.wall() + 61 * 86400)
+  assert(ledger.observedOperationIds[1] and ledger.salvageOperations[1] == nil)
+  assert(ledger:SubmitSalvage(1231127, 1))
+  assert(ledger:RecordResult({ operationID = 1, itemID = 502, quantity = 1 }).recipeId == nil)
+  assert(ledger:RecordResult({ operationID = fixture.requestedCount, itemID = 503, quantity = 1 }).recipeId == fixture.recipeId)
+  assert(ledger.pendingSalvage.remaining == 1 and not ledger.operationOwnershipUncertain)
+  assert(ledger:RecordResult({ operationID = 185, itemID = 504, quantity = 1 }).recipeId == 1231127)
+  assert(not ledger.pendingSalvage and not ledger.nonpersonalOperationOutstanding)
+  assert(not ledger.operationOwnershipUncertain and #ledger.database.requests == 0)
+end)
+
 print(string.format("%d ledger tests passed", passed))

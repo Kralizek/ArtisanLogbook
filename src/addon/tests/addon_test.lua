@@ -4973,7 +4973,34 @@ end)()
   assert(core.ledger:CreateSession({}))
   hooks.CraftSalvage(nil, nil, {}, {}, false)
   assert(core.ledgerCaptureError and not core.ledger.pendingSalvage)
+  -- Synthetic unexpected-result boundary after a completed batch.
+  core = reload(nil)
+  hooks.CraftSalvage(fixture.recipeId, 1, {}, {}, false)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 10, itemID = 243581, quantity = 1 })
+  assert(not core.ledger.pendingSalvage and not core.ledger.nonpersonalOperationOutstanding)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 11, itemID = 243581, quantity = 1 })
+  assert(core.ledger.database.crafts[2].recipeId == nil and core.ledger.operationOwnershipUncertain)
+  assert(environment.ArtisanLogbookManagement.Status().authoritativeCaptureSuspended)
+  hooks.CraftSalvage(1231127, 1, {}, {}, false)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 12, itemID = 243581, quantity = 1 })
+  assert(core.ledger.database.crafts[3].recipeId == nil and core.ledger.pendingSalvage.remaining == 1)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 10, itemID = 500, quantity = 1 })
+  assert(core.ledger.database.crafts[4].recipeId == fixture.recipeId)
+  assert(core.ledger.pendingSalvage.remaining == 1 and not core.ledgerCaptureError)
+  core = reload(nil)
+  hooks.CraftSalvage(fixture.recipeId, 2, {}, {}, false)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 10, itemID = 243581, quantity = 1 })
+  event("TRADE_SKILL_CLOSE")
+  hooks.CraftSalvage(1231127, 2, {}, {}, false)
+  assert(core.ledger.operationOwnershipUncertain)
+  -- Neither the unseen old operation nor the actual new operation can claim ownership.
+  for _, operationId in ipairs({ 11, 12 }) do
+    event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = operationId, itemID = 243581, quantity = 1 })
+    local crafts = core.ledger.database.crafts
+    assert(crafts[#crafts].recipeId == nil and core.ledger.pendingSalvage.remaining == 2)
+  end
+  assert(not core.ledgerCaptureError)
   environment.C_TradeSkillUI.CraftSalvage = savedSalvage
   environment.C_TradeSkillUI.GetRecipeSchematic = savedSchematic
-  print("PASS Recycling build-70448 production replay, completion, delayed outputs and matched interruption")
+  print("PASS Recycling build-70448 production replay, batch boundaries, delayed outputs and matched interruption")
 end)()
