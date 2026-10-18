@@ -338,7 +338,7 @@ function addon.HandleRetailEvent(event, ...)
     elseif event == "UNIT_SPELLCAST_START" then
       local unit, castGUID, spellId = ...
       local pending = addon.ledger.pendingRequest or addon.ledger.pendingOrderRequest
-      local request = pending and addon.ledger.requestById[pending.id]
+      local request = pending and addon.ledger.requestById[pending.id] or addon.ledger.pendingSalvage
       if unit == "player" and request and request.recipeId == spellId then addon.craftCastGUID = castGUID end
     elseif event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
       local unit, castGUID = ...
@@ -348,6 +348,7 @@ function addon.HandleRetailEvent(event, ...)
       end
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
       local result = select(1, ...)
+      local salvage = addon.ledger.pendingSalvage
       if type(result) == "table" then tryEnrich(addon.EnrichItem, result.itemID) end
       local pending = addon.ledger.pendingRequest or addon.ledger.pendingOrderRequest
       local request = pending and addon.ledger.requestById[pending.id]
@@ -373,7 +374,7 @@ function addon.HandleRetailEvent(event, ...)
       if fact and fact.firstCraftReward then
         tryEnrich(addon.EnrichItem, fact.itemId)
       elseif fact then
-        if fact.requestId then addon.craftCastGUID = nil end
+        if fact.requestId or (salvage and not addon.ledger.pendingSalvage) then addon.craftCastGUID = nil end
         tryEnrich(addon.EnrichRecipe, fact.recipeId)
         for _, reagent in ipairs(addon.ledger.reagentsByCraftId[fact.id] or {}) do
           tryEnrich(addon.EnrichItem, reagent.itemId)
@@ -416,8 +417,18 @@ function addon.SubmitCraft(recipeId, count, concentration, quote, selections, in
   end
 end
 
-function addon.InvalidateCraft(operationKind, observation)
-  if addon.ledger then addon.ledger:InvalidateCraft(operationKind, observation) end
+function addon.InvalidateCraft(operationKind, observation, recipeId, count)
+  if not addon.ledger then return end
+  if operationKind == "CraftSalvage" then
+    addon.craftCastGUID = nil
+    local ok, submitted = pcall(addon.ledger.SubmitSalvage, addon.ledger, recipeId, count)
+    if not ok or not submitted then
+      addon.ledgerCaptureError = true
+      addon.ledger:InvalidateCraft(operationKind)
+    end
+  else
+    addon.ledger:InvalidateCraft(operationKind, observation)
+  end
 end
 
 local function optionalIdentity(api)

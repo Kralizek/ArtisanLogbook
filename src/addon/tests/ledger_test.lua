@@ -3684,4 +3684,124 @@ test("issue 40: canonical percentages reuse keys across repeated persistence cyc
   end
 end)
 
+test("Recycling build-70448 replay keeps submitted identity across next-begin-before-result", function()
+  local fixture = dofile(testsRoot .. "/fixtures/retail-recycling-70448.lua")
+  local ledger, clock = newLedger()
+  for _, event in ipairs(fixture.events) do
+    clock.current = 1800000000 + event.elapsed - fixture.events[1].elapsed
+    local arguments = event.arguments
+    if event.name == "TRADE_SKILL_CRAFT_BEGIN" then ledger:BeginCraft(arguments[1])
+    elseif event.name == "CALL_POST:C_TradeSkillUI.CraftSalvage" then
+      assert(ledger:SubmitSalvage(arguments[1], arguments[2]))
+    elseif event.name == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
+      local craft = assert(ledger:RecordResult(arguments[1]))
+      assert(craft.recipeId == fixture.recipeId and craft.requestId == nil)
+      assert(craft.outcomeSource == "unverified" and craft.resourcefulnessComplete == nil)
+    end
+  end
+  assert(#ledger.database.crafts == 3 and #ledger.database.requests == 0)
+  assert(ledger.pendingSalvage.remaining == 181 and not ledger.ambiguousRecipe)
+  assert(ledger.database.crafts[3].hasResourcefulnessProc == true)
+  assert(ledger.database.recipeOutputs[fixture.recipeId] == nil)
+  assert(Ledger.New(ledger.database, clock))
+end)
+
+test("salvage multi-output identity is bounded and independent of subsequent requests", function()
+  local ledger = newLedger()
+  assert(ledger:SubmitSalvage(1229930, 2))
+  local first = assert(ledger:RecordResult({ operationID = 100, itemID = 243581, quantity = 4 }))
+  assert(first.recipeId == 1229930 and ledger.pendingSalvage.remaining == 1)
+  ledger:BeginCraft(1229930)
+  local extra = assert(ledger:RecordResult({ operationID = 100, itemID = 500, quantity = 1, bonusCraft = true }))
+  assert(extra.recipeId == first.recipeId and ledger.pendingSalvage.remaining == 1)
+  assert(ledger:RecordResult({ operationID = 101, itemID = 243581, quantity = 3 }).recipeId == 1229930)
+  assert(not ledger.pendingSalvage and not ledger.nonpersonalOperationOutstanding)
+  -- Synthetic different-recipe submission and delayed old output, not observed in the Recycling trace.
+  assert(ledger:SubmitSalvage(1231127, 1))
+  assert(ledger:RecordResult({ operationID = 100, itemID = 501, quantity = 1 }).recipeId == 1229930)
+  assert(ledger.pendingSalvage.remaining == 1)
+  assert(ledger:RecordResult({ operationID = 102, itemID = 502, quantity = 1 }).recipeId == 1231127)
+  assert(not ledger.pendingSalvage and not ledger.operationOwnershipUncertain)
+  local request = assert(ledger:SubmitCraft(12, 1, false))
+  assert(ledger:RecordResult({ operationID = 102, itemID = 503, quantity = 1 }).recipeId == 1231127)
+  assert(ledger.pendingRequest.remaining == 1)
+  local personal = assert(ledger:RecordResult({ operationID = 103, itemID = 504, quantity = 1 }))
+  assert(personal.recipeId == 12 and personal.requestId == request.id and personal.outcomeSource == "native")
+  for id = 104, 104 + Ledger.recentOperationLimit do
+    assert(ledger:SubmitSalvage(1229930, 1))
+    assert(ledger:RecordResult({ operationID = id, itemID = 243581, quantity = 1 }).recipeId == 1229930)
+  end
+  assert(#ledger.salvageOperationOrder == Ledger.recentOperationLimit)
+  assert(rowCount(ledger.salvageOperations) == Ledger.recentOperationLimit)
+  assert(ledger.salvageOperations[100] == nil)
+  assert(ledger:SubmitSalvage(1231127, 1))
+  assert(ledger:RecordResult({ operationID = 100, itemID = 505, quantity = 1 }).recipeId == nil)
+  assert(ledger.pendingSalvage.remaining == 1)
+end)
+
+test("salvage missing fields, conflicting begins and unfinished replacements fail closed", function()
+  local ledger = newLedger()
+  unchangedAfter(ledger.database, function() return ledger:SubmitSalvage(nil, 1) end)
+  unchangedAfter(ledger.database, function() return ledger:SubmitSalvage(1229930, 0) end)
+  assert(ledger:SubmitSalvage(1229930, 2))
+  ledger:BeginCraft(nil)
+  assert(ledger:RecordResult({ itemID = 243581, quantity = 1 }).recipeId == nil)
+  assert(ledger:RecordResult({ operationID = 10, itemID = 243581 }).recipeId == nil)
+  assert(ledger.pendingSalvage.remaining == 2 and not ledger.operationOwnershipUncertain)
+  assert(ledger:RecordResult({ operationID = 11, itemID = 243581, quantity = 1 }).recipeId == 1229930)
+  ledger:BeginCraft(1231127)
+  assert(ledger:RecordResult({ operationID = 12, itemID = 243581, quantity = 1 }).recipeId == nil)
+  assert(ledger.operationOwnershipUncertain)
+  assert(ledger:CreateSession({}))
+  assert(ledger:SubmitSalvage(1229930, 2))
+  assert(ledger:RecordResult({ operationID = 20, itemID = 243581, quantity = 1 }).recipeId == 1229930)
+  assert(ledger:SubmitSalvage(1231127, 1))
+  assert(ledger:RecordResult({ operationID = 21, itemID = 243581, quantity = 1 }).recipeId == nil)
+  assert(ledger:RecordResult({ operationID = 20, itemID = 500, quantity = 1 }).recipeId == 1229930)
+  assert(ledger.pendingSalvage.remaining == 1)
+end)
+
+test("salvage bonus-first outputs count once and first-craft rewards never consume positions", function()
+  local ledger = newLedger()
+  assert(ledger:SubmitSalvage(1229930, 2))
+  local bonus = assert(ledger:RecordResult({ operationID = 10, itemID = 500, quantity = 1, bonusCraft = true }))
+  assert(bonus.recipeId == 1229930 and ledger.pendingSalvage.remaining == 1)
+  local reward = assert(ledger:RecordResult({ operationID = 10, itemID = 600, quantity = 1, firstCraftReward = true }))
+  assert(reward.firstCraftReward and reward.recipeId == 1229930 and #ledger.database.crafts == 1)
+  assert(ledger.pendingSalvage.remaining == 1)
+  assert(ledger:RecordResult({ operationID = 10, itemID = 501, quantity = 1 }).recipeId == 1229930)
+  assert(ledger.pendingSalvage.remaining == 1)
+  assert(ledger:RecordResult({ operationID = 11, itemID = 502, quantity = 1 }).recipeId == 1229930)
+  assert(not ledger.pendingSalvage and #ledger.database.crafts == 3)
+end)
+
+test("salvage completion does not depend on begin, quote, stop or diagnostic events", function()
+  for _, recipeId in ipairs({ 1229930, 1231127, 1231132 }) do
+    local ledger = newLedger()
+    for id = 1, 3 do
+      assert(ledger:SubmitSalvage(recipeId, 1))
+      assert(ledger:RecordResult({ operationID = id, itemID = 500, quantity = 1 }).recipeId == recipeId)
+      assert(not ledger.pendingSalvage and not ledger.operationOwnershipUncertain)
+    end
+    assert(#ledger.database.crafts == 3 and #ledger.database.requests == 0)
+  end
+end)
+
+test("salvage cancellation preserves only known IDs; clear and purge retire positive identity", function()
+  for _, reset in ipairs({ "cancel", "clear", "purge" }) do
+    local ledger = newLedger()
+    assert(ledger:SubmitSalvage(1229930, 2))
+    assert(ledger:RecordResult({ operationID = 10, itemID = 243581, quantity = 1 }))
+    if reset == "cancel" then ledger:CancelCraft()
+    elseif reset == "clear" then assert(ledger:ClearHistory())
+    else assert(ledger:Purge()) end
+    assert(not ledger.pendingSalvage and ledger.operationOwnershipUncertain)
+    assert(ledger:SubmitSalvage(1231127, 1))
+    assert(ledger:RecordResult({ operationID = 11, itemID = 500, quantity = 1 }).recipeId == nil)
+    local late = assert(ledger:RecordResult({ operationID = 10, itemID = 501, quantity = 1 }))
+    assert(late.recipeId == (reset == "cancel" and 1229930 or nil))
+    assert(ledger.pendingSalvage.remaining == 1)
+  end
+end)
+
 print(string.format("%d ledger tests passed", passed))

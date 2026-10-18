@@ -3847,9 +3847,9 @@ end)()
     end
     return core, api, event, result, submit
   end
-  local function unowned(core, api, fact)
+  local function unowned(core, api, fact, recipeId)
     local projected = api.GetCraft(fact.id)
-    assert(fact.outcomeSource == "unverified" and fact.requestId == nil and fact.recipeId == nil)
+    assert(fact.outcomeSource == "unverified" and fact.requestId == nil and fact.recipeId == recipeId)
     assert(projected.inputComplete == nil and projected.quoteObserved == nil and projected.request == nil)
     for _, reagent in ipairs(core.ledger.reagentsByCraftId[fact.id] or {}) do
       assert(reagent.allocatedQuantity == nil and reagent.inputTotalComplete == nil)
@@ -3913,17 +3913,17 @@ end)()
     local requestId = submit()
     local late = result({ operationID = 700, itemID = 801, quantity = 1,
       resourcesReturned = positive and { { reagent = { itemID = 100 }, quantity = 2 } } or nil })
-    unowned(core, api, late)
+    unowned(core, api, late, 123)
     assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
     local actual = result({ operationID = 701, itemID = 900, quantity = 1 })
-    unowned(core, api, actual)
-    assert(core.ledger.pendingRequest == nil and core.ledger.requestAmbiguous)
+    assert(actual.requestId == requestId and actual.recipeId == 456 and actual.outcomeSource == "native")
+    assert(core.ledger.pendingRequest == nil and not core.ledger.requestAmbiguous)
     assert(not (core.ledger.database.recipeOutputs[456] or {})[801])
-    assert(not (core.ledger.database.recipeOutputs[456] or {})[900])
+    assert(core.ledger.database.recipeOutputs[456][900])
     assert(core.ledger:RepairUnknownRecipes().repairedCount == 0)
     assert(core.ledger.craftById[historical.id].recipeId == nil)
-    assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount == 0)
-    assert(#api.GetRecipeReagentStatistics(456).reagents == 0)
+    assert(api.GetRecipeOutcomes(456).totals.resourcefulnessAuthoritativeProcCountObservedCount == 1)
+    assert(#api.GetRecipeReagentStatistics(456).reagents == 1)
     stable(core, api)
   end
   do
@@ -3943,7 +3943,7 @@ end)()
     event("TRADE_SKILL_CLOSE")
     core.ledger:Prune(core.ledger.wall() + 61 * 86400)
     local requestId = submit()
-    unowned(core, api, result({ operationID = 703, itemID = 801, quantity = 1 }))
+    unowned(core, api, result({ operationID = 703, itemID = 801, quantity = 1 }), 123)
     assert(core.ledger.pendingRequest.id == requestId and core.ledger.pendingRequest.remaining == 1)
   end
   for _, callback in ipairs({ {}, { operationID = 9, itemID = 901, quantity = 1, bonusCraft = true } }) do
@@ -4923,4 +4923,57 @@ end)()
   assert(not window.unavailable:IsShown() and not window.captureStatus:IsShown())
   assert(window.pages.Settings:IsShown())
   print("PASS issue 40: equivalent configurations load and capture; refused Core shows explicit error instead of empty history")
+end)()
+
+;(function()
+  local fixture = dofile("tests/fixtures/retail-recycling-70448.lua")
+  local savedSalvage = environment.C_TradeSkillUI.CraftSalvage
+  local savedSchematic = environment.C_TradeSkillUI.GetRecipeSchematic
+  environment.C_TradeSkillUI.CraftSalvage = function() end
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, reagentSlotSchematics = {} }
+  end
+  local core = reload(nil)
+  local function event(name, ...)
+    core.adapter.frame.scripts.OnEvent(core.adapter.frame, name, ...)
+  end
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 243581, quantity = 1 })
+  local historical = core.ledger.database.crafts[1]
+  assert(historical.recipeId == nil and not core.recorder.recording)
+  for _, record in ipairs(fixture.events) do
+    local arguments = record.arguments
+    if record.name == "CALL_POST:C_TradeSkillUI.CraftSalvage" then
+      -- Shorten only the batch count to exercise completion with the three real results.
+      hooks.CraftSalvage(arguments[1], 3, arguments[3], arguments[4], arguments[5])
+    else event(record.name, unpack(arguments, 1, arguments.n)) end
+  end
+  assert(#core.ledger.database.crafts == 4 and #core.ledger.database.requests == 0)
+  assert(not core.ledger.pendingSalvage and not core.ledger.nonpersonalOperationOutstanding)
+  assert(not core.ledger.operationOwnershipUncertain and not core.ledgerCaptureError and not core.craftCastGUID)
+  for index = 2, 4 do
+    local craft = core.ledger.database.crafts[index]
+    assert(craft.recipeId == fixture.recipeId and craft.requestId == nil and craft.outcomeSource == "unverified")
+    assert(environment.ArtisanLogbookAPI.GetCraft(craft.id).recipe.id == fixture.recipeId)
+  end
+  assert(historical.recipeId == nil and core.ledger.database.recipeOutputs[fixture.recipeId] == nil)
+  hooks.CraftSalvage(1231127, 1, {}, {}, false)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 3854211863, itemID = 500, quantity = 1 })
+  assert(core.ledger.database.crafts[5].recipeId == fixture.recipeId)
+  assert(core.ledger.pendingSalvage.remaining == 1)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2, itemID = 501, quantity = 1 })
+  assert(core.ledger.database.crafts[6].recipeId == 1231127 and not core.ledger.pendingSalvage)
+  hooks.CraftSalvage(fixture.recipeId, 2, {}, {}, false)
+  event("UNIT_SPELLCAST_START", "player", "Cast-Cancel", fixture.recipeId)
+  event("UNIT_SPELLCAST_FAILED", "player", "Cast-Unrelated", fixture.recipeId)
+  assert(core.ledger.pendingSalvage.remaining == 2)
+  event("UNIT_SPELLCAST_INTERRUPTED", "player", "Cast-Cancel", fixture.recipeId)
+  assert(not core.ledger.pendingSalvage and core.ledger.operationOwnershipUncertain)
+  event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 3, itemID = 243581, quantity = 1 })
+  assert(core.ledger.database.crafts[7].recipeId == nil and not core.ledgerCaptureError)
+  assert(core.ledger:CreateSession({}))
+  hooks.CraftSalvage(nil, nil, {}, {}, false)
+  assert(core.ledgerCaptureError and not core.ledger.pendingSalvage)
+  environment.C_TradeSkillUI.CraftSalvage = savedSalvage
+  environment.C_TradeSkillUI.GetRecipeSchematic = savedSchematic
+  print("PASS Recycling build-70448 production replay, completion, delayed outputs and matched interruption")
 end)()

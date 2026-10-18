@@ -170,7 +170,7 @@ request. A correctly associated primary with a malformed return list can retain
 complete inputs while its outcome remains partial.
 
 Interrupted/replaced requests and transitions away from outstanding nonpersonal
-calls (salvage, enchant, recraft and orders) leave identity
+calls (salvage, enchant, recraft and orders) leave new operation identity
 uncertain. Known stale IDs cannot acquire the new request; unseen IDs in this
 state are unverified/unowned and invalidate pending batch correlation. This guard
 lasts until a new runtime session, not merely until another craft hook. Therefore
@@ -178,6 +178,14 @@ even the actual new craft can lose coverage after an uncertain transition. No
 incorrect output relationship is learned from those callbacks. The ID registry
 survives detail pruning in memory but is not persisted across runtime sessions;
 reload/login ordering with in-flight callbacks remains a live-validation boundary.
+
+Call-backed `CraftSalvage` results can carry recipe identity without a personal
+request or authoritative outcome. Runtime correlation counts distinct operation
+IDs against the submitted batch count; multiple outputs retain identity through
+a bounded 64-ID cache and do not consume extra positions. Completing that count
+retires outstanding salvage state. Salvage results do not teach output-to-recipe
+relationships or repair history. See the
+[Recycling evidence and limitations](crafting-observations.md#recycling-build-70448-investigation).
 Nonpersonal outstanding context is runtime-only and independent of personal
 requests. Closing or replacing it does not prove all callbacks have arrived.
 Successful purge retains observed IDs but retires every old same-request

@@ -204,9 +204,10 @@ anything is staged:
   invalidation of a live request, a contradictory begin, or transition away from
   any outstanding nonpersonal call leaves operation ownership uncertain. Enchant,
   recraft, order and salvage contexts are tracked independently of personal
-  `pendingRequest`; its absence does not establish completion. A result alone
-  does not retire a nonpersonal context because no drain/attempt-count contract
-  has been established. Close, direct personal replacement and another
+  `pendingRequest`; its absence does not establish completion. Call-backed
+  salvage retires only after the submitted count of distinct operation IDs,
+  not after each output callback. Other unsupported nonpersonal contexts have
+  no verified completion boundary. Close of unfinished work, direct personal replacement and another
   nonpersonal hook therefore apply the same conservative rule. Known stale IDs do not consume
   a new batch. An unseen ID in that uncertain state stays unowned/unverified and
   conservatively invalidates the pending batch. Another hook cannot clear this
@@ -217,6 +218,8 @@ anything is staged:
   emit several callbacks for one operation. These remain craft facts, not
   authoritative attempt counts. Ordering across replaced operations still
   requires in-game validation; a matching last call is not a server identity token.
+  Call-backed salvage recipe attribution uses a separate bounded identity cache;
+  see [the build-70448 investigation](crafting-observations.md#recycling-build-70448-investigation).
   The runtime ID registry is not persisted or capped and is reset when a new
   runtime session is created. It does not alter schema-1 migration or previously
   committed aggregates. Live evidence is needed before implementing any less
@@ -305,7 +308,7 @@ schematic, without assigning ownership to either the crafter or customer.
 The Retail adapter normalizes omitted `CraftRecipe` count/concentration arguments
 to one cast and no concentration. It does not turn missing reagent selections
 into exact allocations. Identical repeated begin events are idempotent only while
-the same clean personal request is pending. Conflicting begins, replaced unfinished
+the same clean personal request or call-backed salvage batch is pending. Conflicting begins, replaced unfinished
 batches and interrupted operations still refuse request ownership; a reload resets
 runtime quarantine, not historical outcome provenance.
 

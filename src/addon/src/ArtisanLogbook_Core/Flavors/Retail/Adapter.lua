@@ -637,7 +637,9 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           local orderId = hookedName == "RecraftRecipeForOrder" and select(1, ...) or nil
           local isRecraft = hookedName == "RecraftRecipe" or hookedName == "RecraftRecipeForOrder"
           local observation = hookedName ~= "CraftSalvage" and { context = snapshotContext(orderId, isRecraft) } or nil
-          local ok = pcall(invalidateCraft, hookedName, observation)
+          local recipeId = hookedName == "CraftSalvage" and select(1, ...) or nil
+          local count = hookedName == "CraftSalvage" and select(2, ...) or nil
+          local ok = pcall(invalidateCraft, hookedName, observation, recipeId, count)
           if not ok then capabilities.captureError = true end
         end
         forward("CALL_POST:C_TradeSkillUI." .. hookedName, ...)

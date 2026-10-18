@@ -83,10 +83,103 @@ Missing event ordering or unavailable/secret APIs can reduce coverage.
 conservative nonpersonal ownership lifecycle. Their call-backed context and
 independent recraft flag can be captured for an owned primary result, but target-
 dependent configuration and allocations are unavailable in this implementation.
-`CraftSalvage` and unsupported/multi-output callbacks remain unknown. No global
-operation-ID merging or new attempt-count semantics are introduced. First-craft
+`CraftSalvage` uses the separate call-backed recipe lifecycle described below;
+it still receives no configuration or authoritative input/outcome evidence. No global
+operation-ID merging or new persisted attempt-count semantics are introduced. First-craft
 rewards inherit a known parent's observation and never consume a batch position.
 This leaves #32 free to separate attempts from outputs using the same dimension.
+
+### Recycling: build-70448 investigation
+
+The temporary diagnostic archive contains 160,258 retained events (sequences
+41,923-202,180), recorded with `0.0.0-dev-9ec1926`. Its recipe dimension identifies
+1229930 as Recycling. These are observed IDs, not name/output guesses:
+
+| Sequence | Elapsed seconds | Observed evidence |
+| --- | --- | --- |
+| 41924 | 345770.6931341 | `TRADE_SKILL_CRAFT_BEGIN(1229930)` |
+| 41933 | 345770.717189 | `CraftSalvage(1229930, 184, location, {}, false)` post-hook |
+| 41934 | 345770.717227 | Request probe reports `operation = "unavailable"` |
+| 41940-41941 | 345772.540002 | Player spell success/stop for 1229930 |
+| 41942 | 345772.5753771 | **Next** begin for 1229930, before the previous result |
+| 41943 | 345772.6564928 | Operation 3854211863, item 243581, quantity 4 |
+| 42948-42949 | 345774.764398 | Next begin followed about 2 ms later by operation 533880495, quantity 3 |
+| 43960 / 44001 | 345776.830418 / 345776.924349 | Next begin, then operation 2010458240, quantity 3; 3 of item 245807 returned |
+| 201106-201107 | 346153.112978 | Final result (operation 722306087, quantity 2), then stopped(false) |
+
+There is one submitted call, 184 begins, 184 player cast starts/successes/stops,
+and 184 results with distinct positive operation IDs. Every result is item
+243581 (Evercore in the captured link), quality 1, quantity 2-5; none carries a
+recipe ID, `bonusCraft = true`, or `firstCraftReward = true`. Results span
+380.4564852 seconds, with successive results 1.4708158-2.5886088 seconds apart.
+This recording does **not** demonstrate multiple item-result callbacks for a
+single Recycling operation. Multi-output regression cases are explicitly
+synthetic extensions, not claimed observations.
+
+All 184 operation IDs match saved crafts 1132-1315, each without a recipe and
+with `requestCorrelationReason = "ownership-quarantine"`. Earlier saved rows in
+the same runtime session already have that reason, before recording started.
+The trace cannot establish which earlier transition first caused quarantine.
+It does establish two independent defects in the old salvage path:
+
+1. The adapter discards the submitted recipe/count when it invalidates personal
+   correlation for `CraftSalvage`. The diagnostic quote being unavailable is
+   unrelated: the submitted recipe ID is already readable and authoritative.
+2. Without a supported pending batch, repeated same-recipe begins become ambiguous.
+   The first next-begin-before-result pair already reproduces this in a clean
+   session. Salvage never retires its outstanding context on completion, so a
+   later hook or close also triggers session-long ownership quarantine.
+
+The saved ledger provides comparison, not live event sequences for other crafts.
+It contains ordinary recipe 1229853 crafts with request-backed identity and native
+outcomes, 62 known Midnight Prospecting (1231127) output rows including 15 shared
+operation IDs, and 7 known Crushing (1231132) rows. Those salvage rows have no
+personal request. This does not prove their original attribution mechanism.
+The captured relationship for Recycling does not include output 243581, so
+existing output-based recovery has no confirming relationship for these results.
+Recycling is not a unique API category here: the defective hook/lifecycle is
+shared by `CraftSalvage` operations.
+
+The corrected passive hook retains the submitted recipe and explicit positive
+batch count in runtime-only salvage state, even when tracing is off or quotes
+are unavailable. Matching begins are idempotent; they cannot consume or overwrite
+an output's identity. The first complete output for each previously unseen
+positive operation ID consumes one batch position. Further outputs of that ID
+retain its recipe without consuming a position, including after another batch
+starts. The positive identity cache is bounded to 64 operation IDs; the existing
+seen-ID rejection registry prevents evicted IDs from stealing a newer batch.
+Completing the submitted count retires outstanding salvage ownership without
+waiting for a stop signal.
+
+This changes recipe attribution only. There is still one craft fact per result
+callback, no manufactured attempt/reagent/configuration facts, no new persisted
+fields, no salvage output-to-recipe learning, and no historical repair. Positive
+returned quantities remain measurable, but absent returns are not promoted to
+authoritative negatives. Diagnostic retention is unchanged.
+
+Conflicting begins, replacing/interruption/closing unfinished work, malformed
+submissions, missing operation/output fields, and already quarantined sessions
+cannot safely acquire fresh operation identity. Known recent IDs can retain
+their already established recipe after cancellation; unknown or evicted IDs
+stay unknown. Clear/purge discard positive salvage identity without resetting
+the existing ownership guard. No timer or output-item guess clears uncertainty.
+Results preceding the submitted-call hook, cross-session in-flight events and
+very late outputs beyond the 64-operation window remain unverified.
+
+The curated first-three-result fixture preserves actual ordering, IDs and timing,
+removing locations, item/cast GUIDs and UI chatter. Tests separately label batch
+shortening, alternate output items, reordered extra callbacks and interruption
+as synthetic variations. The full temporary trace was also replayed directly
+against the old and corrected ledger in a clean session, without committing it.
+The baseline produced 0 known / 184 unknown results; the corrected ledger
+produced 184 known / 0 unknown, exactly 184 craft facts, no outstanding batch or
+quarantine after close, and a 64-entry positive cache. This replay does not
+retroactively clear the recorded session's pre-existing quarantine.
+
+Separately, 158,664 of the captured records are UI quote-call/probe events (more
+than 99% of the trace). They are not submitted craft requests and are not used
+as identity evidence. Their volume is an unrelated diagnostic/performance
+observation; neither quote probing nor trace retention is changed by this fix.
 
 ## Fields and Coverage
 

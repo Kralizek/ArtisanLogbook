@@ -635,6 +635,20 @@ test("target-dependent quotes stay unavailable and quote hook errors stay contai
   assert(received[6][1].status == "error")
 end)
 
+test("salvage submits recipe and batch identity even with diagnostic recording off", function()
+  local api, _, hooks = environment()
+  api.C_TradeSkillUI.CraftSalvage = function() end
+  local submitted = {}
+  local adapter = addon.CreateFlavorAdapter(api, function() end, function() return false end, nil,
+    function(kind, observation, recipeId, count)
+      submitted[#submitted + 1] = { kind, observation, recipeId, count }
+    end)
+  hooks.CraftSalvage(1229930, 184, {}, {}, false)
+  assert(submitted[1][1] == "CraftSalvage" and submitted[1][2] == nil)
+  assert(submitted[1][3] == 1229930 and submitted[1][4] == 184)
+  assert(not adapter.capabilities.captureError)
+end)
+
 test("capture failures cannot propagate through a craft hook", function()
   local api, frame, hooks = environment()
   local adapter = addon.CreateFlavorAdapter(api, function() error("capture failure") end)

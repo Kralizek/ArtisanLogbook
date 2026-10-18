@@ -63,7 +63,9 @@ claim. For ordinary unowned results only, unique existing output metadata suppor
 identity and a result-time schematic observation supports expected Basic quantities.
 The new provenance remains separate from submitted selections, complete exact
 inputs and player savings; outcomes are never upgraded by this enrichment. No
-prospecting/salvage correlation changes are included (#32).
+prospecting/salvage input or authoritative outcome changes are included here.
+Call-backed salvage recipe identity is now handled independently; see the
+[Recycling investigation](crafting-observations.md#recycling-build-70448-investigation).
 
 The latest hook or `TRADE_SKILL_CRAFT_BEGIN` alone does not prove that a later asynchronous result belongs to that hook. Positive game operation IDs retain runtime observation provenance. Previously seen unsupported/stale IDs cannot acquire a newer personal request, consume its count, copy its input proof or teach its output mapping. Primary identity eligibility gates authoritative normalization, personal request association, batch consumption and output learning coherently.
 

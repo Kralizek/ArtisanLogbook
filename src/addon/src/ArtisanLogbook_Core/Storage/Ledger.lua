@@ -1726,6 +1726,8 @@ local function openDatabase(database, clock, options)
     wall = nowFunction(clock),
     migration = migration,
     observedOperationIds = {},
+    salvageOperations = {},
+    salvageOperationOrder = {},
   }, {
     __index = Ledger,
   })
@@ -1903,6 +1905,8 @@ local function createSession(self, metadata)
   self.observedOperationIds = {}
   self.operationOwnershipUncertain = nil
   self.recentOperations, self.recentOperationOrder = {}, {}
+  self.pendingSalvage = nil
+  self.salvageOperations, self.salvageOperationOrder = {}, {}
   return sessionId
 end
 
@@ -1913,6 +1917,12 @@ function Ledger:CreateSession(metadata)
 end
 
 function Ledger:BeginCraft(recipeId)
+  if self.pendingSalvage then
+    if isInteger(recipeId) and recipeId ~= self.pendingSalvage.recipeId then
+      self.operationOwnershipUncertain = true
+    end
+    return
+  end
   if self.ambiguousRecipe then
     return
   end
@@ -2112,6 +2122,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   self.requestById[request.id] = request
   if self.pendingRequest or self.nonpersonalOperationOutstanding then self.operationOwnershipUncertain = true end
   self.nonpersonalOperationOutstanding = nil
+  self.pendingSalvage = nil
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
   self.operationKind = "CraftRecipe"
@@ -2134,6 +2145,7 @@ function Ledger:CancelCraft()
     self.operationOwnershipUncertain = true
   end
   self.nonpersonalOperationOutstanding = nil
+  self.pendingSalvage = nil
   self.pendingRequest = nil
   self.pendingOrderRequest = nil
   self.requestAmbiguous = nil
@@ -2162,6 +2174,19 @@ function Ledger:InvalidateCraft(operationKind, observation)
   self.operationKind = type(operationKind) == "string" and operationKind or nil
   self.operationObservation = observation and validateObservation(observation) and copyValue(observation) or nil
   self.nonpersonalOperationOutstanding = self.operationKind ~= nil or nil
+  self.pendingSalvage = nil
+end
+
+function Ledger:SubmitSalvage(recipeId, requestedCount)
+  if not self.currentSessionId or not isInteger(recipeId) or not isInteger(requestedCount) then
+    return nil, "salvage submission is incomplete"
+  end
+  local id, reason = self:AddDimension("recipe", recipeId)
+  if not id then return nil, reason end
+  self:InvalidateCraft("CraftSalvage")
+  self.pendingRecipeId, self.ambiguousRecipe = nil, nil
+  self.pendingSalvage = { recipeId = id, remaining = requestedCount }
+  return true
 end
 
 local function operationIdSeen(ledger, operationId)
@@ -2295,6 +2320,15 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
   local primaryKinds = { CraftRecipe = true, CraftEnchant = true, RecraftRecipe = true, RecraftRecipeForOrder = true }
   local observation = result.operationID and self.observedOperationIds[result.operationID]
+  local salvage = self.pendingSalvage
+  local salvageRecipeId, newSalvageOperation
+  if isInteger(result.operationID) and isInteger(result.itemID) and isInteger(result.quantity) then
+    salvageRecipeId = self.salvageOperations[result.operationID]
+    if not salvageRecipeId and salvage and not observation and not self.operationOwnershipUncertain and
+        not self.requestAmbiguous then
+      salvageRecipeId, newSalvageOperation = salvage.recipeId, true
+    end
+  end
   local pendingOwnerState = self.pendingRequest or self.pendingOrderRequest
   local pendingOwner = pendingOwnerState and self.requestById[pendingOwnerState.id]
   local seen = observation and (observation.consumed or not pendingOwner or observation.requestId ~= pendingOwner.id)
@@ -2303,7 +2337,8 @@ function Ledger:RecordResult(result, expectedRequirements)
     isGameId(result.itemID) and result.itemID > 0 and isGameId(result.quantity) and result.quantity > 0 and
     result.bonusCraft ~= true
   local eligible = validPrimary and not seen and not self.requestAmbiguous and not self.ambiguousRecipe and
-    not self.operationOwnershipUncertain and not contradictoryBegin
+    not self.operationOwnershipUncertain and not contradictoryBegin and
+    self.operationKind ~= "CraftSalvage" and not salvageRecipeId
   local primary = eligible and primaryKinds[self.operationKind] == true
   local returns, returnReason = normalizeReturns(result.resourcesReturned, primary)
   if not returns then return nil, returnReason end
@@ -2332,6 +2367,10 @@ function Ledger:RecordResult(result, expectedRequirements)
   local recipeId = self.pendingRecipeId
   local ambiguousRecipe = self.ambiguousRecipe
   local reason
+  if salvageRecipeId then
+    craft.recipeId, reason = stageDimension(stagedDimensions, "recipe", salvageRecipeId)
+    if not craft.recipeId then return nil, reason end
+  end
   if not craft.recipeId and eligible and not self.requestAmbiguous and
       recipeId and not ambiguousRecipe and
       craft.gameOperationId and craft.gameOperationId > 0 and
@@ -2477,6 +2516,19 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
   data.nextCraftId = craft.id + 1
   data.crafts[#data.crafts + 1] = craft
+  if newSalvageOperation then
+    -- Count operations, not output callbacks. Keep positive identity bounded; the
+    -- existing seen-ID registry still rejects stale IDs after cache eviction.
+    self.salvageOperations[result.operationID] = salvageRecipeId
+    local order = self.salvageOperationOrder
+    order[#order + 1] = result.operationID
+    if #order > Ledger.recentOperationLimit then self.salvageOperations[table.remove(order, 1)] = nil end
+    salvage.remaining = salvage.remaining - 1
+    if salvage.remaining == 0 then
+      self.pendingSalvage = nil
+      self.nonpersonalOperationOutstanding = nil
+    end
+  end
   if pending and request then
     self.attemptObservation, self.configurationChanged = nil, nil
     pending.remaining = pending.remaining - 1
@@ -2844,6 +2896,7 @@ end
 
 function Ledger:ClearHistory()
   self:CancelCraft()
+  self.salvageOperations, self.salvageOperationOrder = {}, {}
   self.database.crafts = {}
   self.database.requests = {}
   self.database.reagents = {}
@@ -2881,6 +2934,7 @@ function Ledger:Purge()
   self:RebuildIndexes()
   self.currentSessionId = sessionId
   self:CancelCraft()
+  self.salvageOperations, self.salvageOperationOrder = {}, {}
   for _, observation in pairs(self.observedOperationIds) do observation.consumed = true end
   return true
 end
