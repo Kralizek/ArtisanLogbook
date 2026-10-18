@@ -49,7 +49,6 @@ function addon.CreateTraceWindow()
   text:SetScript("OnEscapePressed", text.ClearFocus)
   text:SetScript("OnTextChanged", function()
     text:SetHeight(math.max(scroll:GetHeight(), text:GetStringHeight()))
-    scroll:UpdateScrollChildRect()
   end)
   text:SetScript("OnCursorChanged", function(_, _, cursorY, _, cursorHeight)
     local offset = scroll:GetVerticalScroll()
@@ -77,16 +76,13 @@ function addon.CreateTraceWindow()
   end
 
   function window:Refresh(resetPage)
-    if resetPage then page = nil end
-    local pageCount = math.max(1, math.ceil(#addon.recorder.database.records / pageSize))
-    if page then
-      page = math.min(page, pageCount)
-      text:SetText(addon.recorder:Export((page - 1) * pageSize + 1, pageSize))
-      pageLabel:SetText(string.format("Export page %d / %d", page, pageCount))
-    else
-      text:SetText(addon.recorder:Export(1, #addon.recorder.database.records))
-      pageLabel:SetText(string.format("Complete export: %d events", #addon.recorder.database.records))
-    end
+    local recordCount = #addon.recorder.database.records
+    local pageCount = math.max(1, math.ceil(recordCount / pageSize))
+    -- Never insert the entire trace into an EditBox: large recordings can freeze the UI.
+    if resetPage or not page then page = pageCount end
+    page = math.max(1, math.min(page, pageCount))
+    text:SetText(addon.recorder:Export((page - 1) * pageSize + 1, pageSize))
+    pageLabel:SetText(string.format("Export page %d / %d (%d events total)", page, pageCount, recordCount))
     text:SetCursorPosition(0)
     text:ClearFocus()
     scroll:SetVerticalScroll(0)
