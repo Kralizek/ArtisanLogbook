@@ -5004,3 +5004,78 @@ end)()
   environment.C_TradeSkillUI.GetRecipeSchematic = savedSchematic
   print("PASS Recycling build-70448 production replay, batch boundaries, delayed outputs and matched interruption")
 end)()
+
+;(function()
+  local saved = { item = environment.C_Item, location = environment.ItemLocation, enum = environment.Enum,
+    aura = environment.C_UnitAuras, info = environment.C_TradeSkillUI.GetCraftingOperationInfo,
+    schematic = environment.C_TradeSkillUI.GetRecipeSchematic,
+    profession = environment.C_TradeSkillUI.GetProfessionInfoByRecipeID,
+    slots = environment.C_TradeSkillUI.GetProfessionSlots, salvage = environment.C_TradeSkillUI.CraftSalvage }
+  local target = { bagID = 5, slotIndex = 3 }
+  environment.Enum = { TradeskillRecipeType = { Salvage = 3 } }
+  environment.ItemLocation = { CreateFromEquipmentSlot = function(_, slot) return slot end }
+  environment.C_Item = {
+    GetItemID = function(location) return location == target and 245807 or 800 end,
+    GetItemGUID = function(location) return location == target and "Item-Target" or "Item-Tool" end,
+    GetItemLink = function() return "|Hitem:800:0:0|h[Tool]|h" end,
+    DoesItemExist = function() return true end,
+  }
+  environment.C_UnitAuras = { GetPlayerAuraBySpellID = function(id)
+    if id == 432306 then return { spellId = id, applications = 1 } end
+  end }
+  environment.C_TradeSkillUI.CraftSalvage = function() end
+  environment.C_TradeSkillUI.GetProfessionInfoByRecipeID = function()
+    return { profession = 4, professionID = 202 }
+  end
+  environment.C_TradeSkillUI.GetProfessionSlots = function() return { 20 } end
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(id)
+    return { recipeID = id, recipeType = 3, quantityMax = 5, reagentSlotSchematics = {} }
+  end
+  environment.C_TradeSkillUI.GetCraftingOperationInfo = function(id, _, guid)
+    assert(guid == "Item-Target")
+    return { recipeID = id, baseSkill = 100, bonusSkill = 25, baseDifficulty = 200, bonusDifficulty = 0,
+      bonusStats = {} }
+  end
+  local core = reload(nil)
+  local fixture = dofile("tests/fixtures/retail-recycling-70448.lua")
+  -- Real result payloads; target APIs and equipment/quote data are synthetic.
+  for _, event in ipairs(fixture.events) do
+    if event.name == "CALL_POST:C_TradeSkillUI.CraftSalvage" then
+      hooks.CraftSalvage(fixture.recipeId, 3, target, {}, false)
+    elseif event.name == "TRADE_SKILL_CRAFT_BEGIN" or event.name == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
+      core.HandleRetailEvent(event.name, unpack(event.arguments, 1, event.arguments.n))
+    end
+  end
+  local api = environment.ArtisanLogbookAPI
+  local UI = loadUI().UI
+  for id = 1, 3 do
+    local craft = api.GetCraft(id)
+    assert(craft.recipe.id == fixture.recipeId and craft.outputItem.id == 243581)
+    assert(craft.outputQuantity == (id == 1 and 4 or 3))
+    assert(craft.configurationObservation.scope == "request" and craft.configuration.stats.baseSkill == 100)
+    assert(craft.configuration.equipment[1].itemID == 800 and craft.configuration.buffs[1].spellID == 432306)
+    assert(craft.inputComplete == nil and craft.grossRequirementsComplete == nil and craft.request == nil)
+    assert(craft.outcomeSource == "unverified" and craft.resourcefulnessComplete == nil)
+    local ingredients = UI.CraftIngredients(craft)
+    local input
+    for _, row in ipairs(ingredients) do if row.item.id == 245807 then input = row end end
+    assert(input and input.required == 5)
+    local configuration = UI.ConfigurationRows(craft)
+    assert(configuration.scope == "request" and #configuration.equipment == 1 and #configuration.buffs == 1)
+  end
+  local total = 0
+  for _, row in ipairs(core.ledger.database.reagentSeries) do
+    if row.itemId == 245807 then total = total + (row.allocatedQuantity or 0) end
+  end
+  assert(total == 15 and not core.ledgerCaptureError)
+  local data = core.ledger.database
+  local loaded = reload(data)
+  assert(loaded.ledger and environment.ArtisanLogbookAPI.GetCraft(1).configuration.stats.baseSkill == 100)
+  environment.C_Item, environment.ItemLocation, environment.Enum, environment.C_UnitAuras =
+    saved.item, saved.location, saved.enum, saved.aura
+  environment.C_TradeSkillUI.GetCraftingOperationInfo, environment.C_TradeSkillUI.GetRecipeSchematic =
+    saved.info, saved.schematic
+  environment.C_TradeSkillUI.GetProfessionInfoByRecipeID, environment.C_TradeSkillUI.GetProfessionSlots,
+    environment.C_TradeSkillUI.CraftSalvage = saved.profession, saved.slots, saved.salvage
+  print("PASS salvage target inputs, request configuration, output, API/UI projection and reload")
+end)()

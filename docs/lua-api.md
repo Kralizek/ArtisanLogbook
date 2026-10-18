@@ -194,6 +194,14 @@ quarantine does not guarantee rejection without an observable uncertain boundary
 Salvage results do not teach output-to-recipe
 relationships or repair history. See the
 [Recycling evidence and limitations](crafting-observations.md#recycling-build-70448-investigation).
+The first attributable output per operation can carry partial `reagents`
+allocations from the submitted target/schematic quantity and supplied selections.
+They do not set input completeness or matched savings. A target-GUID operation
+quote and independently observed equipment/buffs can populate `configuration`
+with `configurationObservation.scope = "request"`: the batch submission snapshot,
+not a fresh observation of every cast. Cached additional outputs can share that
+configuration but never duplicate the allocations. Missing APIs retain explicit
+unavailable coverage; no historical setup is reconstructed.
 Nonpersonal outstanding context is runtime-only and independent of personal
 requests. Closing or replacing it does not prove all callbacks have arrived.
 Successful purge retains observed IDs but retires every old same-request

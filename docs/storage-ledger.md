@@ -303,6 +303,18 @@ reconstructed. Enchant, salvage and recraft calls do not receive guessed recipe
 inputs. Order `CraftRecipe` snapshots use their submitted selections and
 schematic, without assigning ownership to either the crafter or customer.
 
+Call-backed salvage can instead snapshot its actual submitted target and
+positive reagent selections. The target quantity comes from a matching Salvage
+schematic's `quantityMax`; unavailable target data is not reconstructed. Existing
+reagent rows attach those partial allocations only to the first attributable
+output per distinct operation, with `inputTotalComplete = false`. There is no
+personal request, complete-input claim, or matched savings contribution.
+Existing configuration rows store a request-scope batch snapshot, including a
+target-GUID quote when readable. The bounded recent-operation cache keeps this
+snapshot with recipe identity for delayed outputs; it never duplicates their
+input rows or replaces an old snapshot with a newer submission's setup. No
+schema change, historical backfill, or attempt-start configuration is implied.
+
 ### Ordinary capture and independent expectations
 
 The Retail adapter normalizes omitted `CraftRecipe` count/concentration arguments

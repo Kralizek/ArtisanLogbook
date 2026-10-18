@@ -83,8 +83,9 @@ Missing event ordering or unavailable/secret APIs can reduce coverage.
 conservative nonpersonal ownership lifecycle. Their call-backed context and
 independent recraft flag can be captured for an owned primary result, but target-
 dependent configuration and allocations are unavailable in this implementation.
-`CraftSalvage` uses the separate call-backed recipe lifecycle described below;
-it still receives no configuration or authoritative input/outcome evidence. No global
+`CraftSalvage` uses the separate call-backed lifecycle described below, including
+partial submitted inputs and request-scope configuration. It still receives no
+authoritative complete input/outcome evidence. No global
 operation-ID merging or new persisted attempt-count semantics are introduced. First-craft
 rewards inherit a known parent's observation and never consume a batch position.
 This leaves #32 free to separate attempts from outputs using the same dimension.
@@ -159,11 +160,58 @@ submission. The new positive cache adds no unbounded recording.
 Completing the submitted count retires outstanding salvage ownership without
 waiting for a stop signal.
 
-This changes recipe attribution only. There is still one craft fact per result
-callback, no manufactured attempt/reagent/configuration facts, no new persisted
-fields, no salvage output-to-recipe learning, and no historical repair. Positive
+There is still one craft fact per result callback, no manufactured attempt facts,
+no new persisted fields, no salvage output-to-recipe learning, and no historical repair. Positive
 returned quantities remain measurable, but absent returns are not promoted to
 authoritative negatives. Diagnostic retention is unchanged.
+
+#### Submitted salvage inputs and configuration
+
+After the initial recipe-only implementation, live craft 1368 (18 October,
+23:48 local time) confirmed that Evercore output quantity/quality were persisted
+and displayed, but ingredient rows and configuration had never been captured.
+The extension captures these for future submissions only, using existing ledger
+fields and the same ownership gate:
+
+- `C_Item.GetItemID(submittedItemLocation)` identifies the target item.
+  A matching Salvage recipe schematic's `quantityMax` gives its per-cast input
+  quantity. No bag-stack quantity, guessed recipe ID, or synthetic data-slot
+  index is used. Readable positive submitted reagent selections are copied
+  independently. Missing target/schematic APIs leave those inputs unavailable.
+- The target GUID from `C_Item.GetItemGUID(submittedItemLocation)` is passed as
+  `allocationItemGUID` to `GetCraftingOperationInfo`, together with the actual
+  submitted selections and concentration flag. Without that GUID or a readable
+  submitted selection list, no target-dependent quote is queried. No unrelated
+  UI quote is substituted. Mismatching/unavailable recipe quotes leave stats
+  unavailable while independently observed equipment and supported buffs can
+  still be shown.
+- Equipment, buffs, finishing selections and quote statistics reuse the existing
+  configuration snapshot helper. They are explicitly **request-scope**: observed
+  when the batch was submitted, not an effective setup certified for each cast.
+  They are not resampled at next-begin-before-previous-result boundaries.
+  Changes after submission do not rewrite this historical request snapshot.
+- Inputs attach only to the first attributable output of each distinct operation.
+  Additional/delayed outputs keep cached recipe/configuration identity but do not
+  duplicate input quantities or consume a position. Quarantined or unowned
+  results gain neither inputs nor configuration. Each new submission snapshots
+  its own data; late cached outputs cannot inherit a newer batch's setup.
+- These remain partial allocation observations: `inputTotalComplete = false`,
+  no `inputComplete`, `grossRequirementsComplete`, personal request row, matched
+  material savings, or promotion of `outcomeSource = "unverified"`. The UI shows
+  known input amounts, observed output, and the labeled request configuration.
+  Other fixed/automatic inputs absent from submitted selections remain unknown.
+  Evicted or cross-session identities cannot recover this configuration.
+
+API/UI conventions were verified against
+[Gethe/wow-ui-source b9be937](https://github.com/Gethe/wow-ui-source/tree/b9be9379719047977fca4dba1bb1d9988e8840b3):
+`TradeSkillUIDocumentation.lua`, `TradeSkillUITypesDocumentation.lua`,
+`Blizzard_ProfessionsTransaction.lua` (`FailsSalvageRequirements`,
+`GetAllocationItemGUID`) and `Blizzard_ProfessionsRecipeSchematicForm.lua`
+(salvage slot initialized with `quantityMax` and target-aware operation query).
+Tests combine the real Recycling result order with explicitly synthetic target,
+quote, equipment and buff API responses; the old trace does not contain these
+new post-hook snapshots. Live validation must confirm readable target data at
+post-hook time, particularly when a cast consumes the last target stack.
 
 Conflicting begins, replacing/interruption/closing unfinished work, malformed
 submissions, missing operation/output fields, and already quarantined sessions

@@ -519,6 +519,41 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
       { context = context,
         configuration = snapshotConfiguration(recipeId, selections, concentration, recipeLevel, quote) })
   end
+  local function snapshotSalvage(recipeId, location, submitted, concentration)
+    local selections = snapshotSelections(submitted)
+    local itemApi = api.C_Item
+    local itemId, guid
+    if readable(location) and type(location) == "table" and type(itemApi) == "table" then
+      itemId = number(safeQuery(itemApi.GetItemID, location))
+      guid = safeQuery(itemApi.GetItemGUID, location)
+    end
+    local allocations = {}
+    local schematic = safeQuery(api.C_TradeSkillUI.GetRecipeSchematic, recipeId, false)
+    local recipeTypes = api.Enum and api.Enum.TradeskillRecipeType
+    -- Blizzard's salvage slot uses quantityMax as its per-cast input requirement.
+    if isPositiveInteger(itemId) and type(schematic) == "table" and schematic.recipeID == recipeId and
+        recipeTypes and recipeTypes.Salvage ~= nil and schematic.recipeType == recipeTypes.Salvage and
+        isPositiveInteger(schematic.quantityMax) then
+      allocations[#allocations + 1] = { itemId = itemId, allocatedQuantity = schematic.quantityMax }
+    end
+    for _, selection in ipairs(dense(selections) and selections or {}) do
+      if type(selection) == "table" and isPositiveInteger(selection.dataSlotIndex) and
+          type(selection.reagent) == "table" and isPositiveInteger(selection.reagent.itemID) and
+          isPositiveInteger(selection.quantity) then
+        allocations[#allocations + 1] = { itemId = selection.reagent.itemID,
+          dataSlotIndex = selection.dataSlotIndex, allocatedQuantity = selection.quantity }
+      end
+    end
+    local quote
+    if type(guid) == "string" and guid ~= "" and dense(selections) and type(concentration) == "boolean" then
+      probingQuote = true
+      quote = safeQuery(api.C_TradeSkillUI.GetCraftingOperationInfo, recipeId, selections, guid, concentration)
+      probingQuote = false
+    end
+    return { allocations = allocations, observation = { context = snapshotContext(nil, false),
+      configuration = snapshotConfiguration(recipeId, selections, concentration, nil, quote) } }
+  end
+
   local function observeClaimedOrder(orderID, observation)
     local orders = api.C_CraftingOrders
     if orderID == nil or type(orders) ~= "table" or type(orders.GetClaimedOrder) ~= "function" then
@@ -639,7 +674,12 @@ local function createRetailAdapter(api, emit, isRecording, submitCraft, invalida
           local observation = hookedName ~= "CraftSalvage" and { context = snapshotContext(orderId, isRecraft) } or nil
           local recipeId = hookedName == "CraftSalvage" and select(1, ...) or nil
           local count = hookedName == "CraftSalvage" and select(2, ...) or nil
-          local ok = pcall(invalidateCraft, hookedName, observation, recipeId, count)
+          local capture
+          if hookedName == "CraftSalvage" then
+            local ok, snapshot = pcall(snapshotSalvage, recipeId, select(3, ...), select(4, ...), select(5, ...))
+            if ok then capture = snapshot else capabilities.captureError = true end
+          end
+          local ok = pcall(invalidateCraft, hookedName, observation, recipeId, count, capture)
           if not ok then capabilities.captureError = true end
         end
         forward("CALL_POST:C_TradeSkillUI." .. hookedName, ...)

@@ -417,11 +417,11 @@ function addon.SubmitCraft(recipeId, count, concentration, quote, selections, in
   end
 end
 
-function addon.InvalidateCraft(operationKind, observation, recipeId, count)
+function addon.InvalidateCraft(operationKind, observation, recipeId, count, capture)
   if not addon.ledger then return end
   if operationKind == "CraftSalvage" then
     addon.craftCastGUID = nil
-    local ok, submitted = pcall(addon.ledger.SubmitSalvage, addon.ledger, recipeId, count)
+    local ok, submitted = pcall(addon.ledger.SubmitSalvage, addon.ledger, recipeId, count, capture)
     if not ok or not submitted then
       addon.ledgerCaptureError = true
       addon.ledger:InvalidateCraft(operationKind)

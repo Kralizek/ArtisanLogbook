@@ -2177,15 +2177,34 @@ function Ledger:InvalidateCraft(operationKind, observation)
   self.pendingSalvage = nil
 end
 
-function Ledger:SubmitSalvage(recipeId, requestedCount)
+function Ledger:SubmitSalvage(recipeId, requestedCount, capture)
   if not self.currentSessionId or not isInteger(recipeId) or not isInteger(requestedCount) then
     return nil, "salvage submission is incomplete"
   end
-  local id, reason = self:AddDimension("recipe", recipeId)
+  local copied, snapshot = pcall(copyValue, capture or {})
+  if not copied or type(snapshot) ~= "table" or
+      (snapshot.observation ~= nil and not validateObservation(snapshot.observation)) or
+      (snapshot.allocations ~= nil and not isArray(snapshot.allocations)) then
+    return nil, "salvage snapshot is invalid"
+  end
+  local staged = dimensionStage(self)
+  local id, reason = stageDimension(staged, "recipe", recipeId)
   if not id then return nil, reason end
+  for _, allocation in ipairs(snapshot.allocations or {}) do
+    if type(allocation) ~= "table" or not isInteger(allocation.itemId) or
+        not isInteger(allocation.allocatedQuantity) or
+        (allocation.dataSlotIndex ~= nil and not isInteger(allocation.dataSlotIndex)) then
+      return nil, "salvage allocation is invalid"
+    end
+    local itemId
+    itemId, reason = stageDimension(staged, "item", allocation.itemId)
+    if not itemId then return nil, reason end
+  end
+  commitDimensions(self, staged)
   self:InvalidateCraft("CraftSalvage")
   self.pendingRecipeId, self.ambiguousRecipe = nil, nil
-  self.pendingSalvage = { recipeId = id, remaining = requestedCount }
+  self.pendingSalvage = { recipeId = id, remaining = requestedCount,
+    allocations = snapshot.allocations, observation = snapshot.observation }
   return true
 end
 
@@ -2321,9 +2340,11 @@ function Ledger:RecordResult(result, expectedRequirements)
   local primaryKinds = { CraftRecipe = true, CraftEnchant = true, RecraftRecipe = true, RecraftRecipeForOrder = true }
   local observation = result.operationID and self.observedOperationIds[result.operationID]
   local salvage = self.pendingSalvage
+  local salvageOperation
   local salvageRecipeId, newSalvageOperation, unexpectedSalvageOperation
   if isInteger(result.operationID) and isInteger(result.itemID) and isInteger(result.quantity) then
-    salvageRecipeId = self.salvageOperations[result.operationID]
+    salvageOperation = self.salvageOperations[result.operationID]
+    salvageRecipeId = salvageOperation and salvageOperation.recipeId
     if not salvageRecipeId and salvage and not observation and not self.operationOwnershipUncertain and
         not self.requestAmbiguous then
       salvageRecipeId, newSalvageOperation = salvage.recipeId, true
@@ -2430,6 +2451,14 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
 
   local reagentFacts, slotCounts = {}, {}
+  if newSalvageOperation then
+    for _, allocation in ipairs(salvage.allocations or {}) do
+      reagentFacts[#reagentFacts + 1] = { craftId = craft.id, itemId = allocation.itemId,
+        dataSlotIndex = allocation.dataSlotIndex, allocatedQuantity = allocation.allocatedQuantity,
+        inputTotalComplete = false }
+      slotCounts[allocation.itemId] = (slotCounts[allocation.itemId] or 0) + 1
+    end
+  end
   for _, allocation in ipairs(request and request.allocations or {}) do
     reagentFacts[#reagentFacts + 1] = {
       craftId = craft.id,
@@ -2475,7 +2504,9 @@ function Ledger:RecordResult(result, expectedRequirements)
   craft.quoteObserved = request ~= nil and #(request.allocations or {}) > 0 or nil
   craft.inputComplete = inputComplete or nil
 
-  local craftObservation = primary and (request and storedObservation(data, request) or self.operationObservation) or nil
+  local craftObservation = newSalvageOperation and salvage.observation or
+    (salvageOperation and salvageOperation.observation) or
+    (primary and (request and storedObservation(data, request) or self.operationObservation) or nil)
   if craftObservation and request then
     local attempt = self.attemptObservation
     if attempt and attempt.requestId == request.id and attempt.remaining == pending.remaining then
@@ -2521,7 +2552,7 @@ function Ledger:RecordResult(result, expectedRequirements)
   if newSalvageOperation then
     -- Count operations, not output callbacks. Keep positive identity bounded; the
     -- existing seen-ID registry still rejects stale IDs after cache eviction.
-    self.salvageOperations[result.operationID] = salvageRecipeId
+    self.salvageOperations[result.operationID] = { recipeId = salvageRecipeId, observation = salvage.observation }
     local order = self.salvageOperationOrder
     order[#order + 1] = result.operationID
     if #order > Ledger.recentOperationLimit then self.salvageOperations[table.remove(order, 1)] = nil end

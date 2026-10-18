@@ -3915,4 +3915,58 @@ test("salvage 184-operation batches outgrow the identity cache without losing ac
   assert(not ledger.operationOwnershipUncertain and #ledger.database.requests == 0)
 end)
 
+test("salvage input and request configuration snapshots attach once per distinct operation", function()
+  local ledger, clock = newLedger()
+  local capture = { allocations = {
+      { itemId = 245807, allocatedQuantity = 5 },
+      { itemId = 700, allocatedQuantity = 1, dataSlotIndex = 2 },
+    }, observation = { context = { kind = "personal", source = "submitted-call", isRecraft = false },
+      configuration = { scope = "request", useConcentration = false,
+        statsCoverage = "reported", stats = { baseSkill = 100 } } } }
+  assert(ledger:SubmitSalvage(1229930, 2, capture))
+  capture.allocations[1].allocatedQuantity = 99
+  capture.observation.configuration.stats.baseSkill = 999
+  local first = assert(ledger:RecordResult({ operationID = 10, itemID = 243581, quantity = 2,
+    resourcesReturned = { { reagent = { itemID = 245807 }, quantity = 1 } } }))
+  assert(first.configurationKey and first.configurationScope == "request" and first.craftType == "personal")
+  assert(first.outcomeSource == "unverified" and first.inputComplete == nil and first.requestId == nil)
+  assert(first.grossRequirementsComplete == nil and first.resourcefulnessComplete == nil)
+  assert(ledger.database.configurations[first.configurationKey].stats.baseSkill == 100)
+  assert(ledger.reagentsByCraftId[first.id][1].allocatedQuantity == 5)
+  assert(ledger.reagentsByCraftId[first.id][1].inputTotalComplete == false)
+  local extra = assert(ledger:RecordResult({ operationID = 10, itemID = 500, quantity = 1 }))
+  assert(extra.recipeId == 1229930 and extra.configurationKey == first.configurationKey)
+  assert(#ledger.reagentsByCraftId[extra.id] == 0 and ledger.pendingSalvage.remaining == 1)
+  local second = assert(ledger:RecordResult({ operationID = 11, itemID = 243581, quantity = 3 }))
+  assert(second.configurationKey == first.configurationKey and second.configurationScope == "request")
+  assert(ledger.reagentsByCraftId[second.id][1].allocatedQuantity == 5)
+  assert(not ledger.pendingSalvage and #ledger.database.requests == 0)
+  assert(ledger.database.recipeOutputs[1229930] == nil)
+  assert(ledger:SubmitSalvage(1231127, 1, capture))
+  local delayed = assert(ledger:RecordResult({ operationID = 10, itemID = 501, quantity = 1 }))
+  assert(delayed.recipeId == 1229930 and delayed.configurationKey == first.configurationKey)
+  assert(#ledger.reagentsByCraftId[delayed.id] == 0 and ledger.pendingSalvage.remaining == 1)
+  ledger:CancelCraft()
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  assert(loaded.craftById[first.id].configurationKey == first.configurationKey)
+  local row = reagentRow(loaded.database, 245807)
+  assert(row.allocatedQuantity == 10 and row.matchedCraftCount == nil)
+  assert(loaded:CreateSession({}))
+  assert(loaded:SubmitSalvage(1231127, 2, capture))
+  loaded:CancelCraft()
+  local late = assert(loaded:RecordResult({ operationID = 12, itemID = 243581, quantity = 1 }))
+  assert(late.recipeId == nil and late.configurationKey == nil and #loaded.reagentsByCraftId[late.id] == 0)
+end)
+
+test("invalid salvage capture is rejected without mutating persistent data", function()
+  local ledger = newLedger()
+  for _, capture in ipairs({
+    { allocations = { { itemId = 245807, allocatedQuantity = 0 } } },
+    { allocations = { false } },
+    { observation = { context = { kind = "invalid" } } },
+  }) do
+    unchangedAfter(ledger.database, function() return ledger:SubmitSalvage(1229930, 1, capture) end)
+  end
+end)
+
 print(string.format("%d ledger tests passed", passed))

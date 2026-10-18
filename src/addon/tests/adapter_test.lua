@@ -649,6 +649,51 @@ test("salvage submits recipe and batch identity even with diagnostic recording o
   assert(not adapter.capabilities.captureError)
 end)
 
+test("salvage captures submitted target inputs and target-GUID configuration without enabling tracing", function()
+  local api, _, hooks = environment()
+  api.C_TradeSkillUI.CraftSalvage = function() end
+  api.Enum = { TradeskillRecipeType = { Salvage = 3 } }
+  local target = { bagID = 5, slotIndex = 3 }
+  api.C_Item = {
+    GetItemID = function(location) assert(location == target); return 245807 end,
+    GetItemGUID = function(location) assert(location == target); return "Item-Target" end,
+  }
+  api.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+    return { recipeID = recipeId, recipeType = 3, quantityMax = 5, reagentSlotSchematics = {} }
+  end
+  local queries = 0
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function(recipeId, selections, guid, concentration)
+    assert(recipeId == 1229930 and selections[1].reagent.itemID == 700)
+    assert(guid == "Item-Target" and concentration == false)
+    queries = queries + 1
+    return { recipeID = recipeId, baseSkill = 100, bonusStats = {} }
+  end
+  local capture
+  addon.CreateFlavorAdapter(api, function() end, function() return false end, nil,
+    function(_, _, _, _, snapshot) capture = snapshot end)
+  local selections = { { reagent = { itemID = 700 }, quantity = 1, dataSlotIndex = 2 } }
+  hooks.CraftSalvage(1229930, 184, target, selections, false)
+  assert(queries == 1 and #capture.allocations == 2)
+  assert(capture.allocations[1].itemId == 245807 and capture.allocations[1].allocatedQuantity == 5)
+  assert(capture.allocations[1].dataSlotIndex == nil)
+  assert(capture.observation.configuration.scope == "request")
+  assert(capture.observation.configuration.stats.baseSkill == 100)
+  selections[1].quantity = 99
+  assert(capture.allocations[2].allocatedQuantity == 1)
+  api.C_Item.GetItemGUID = function() return nil end
+  hooks.CraftSalvage(1229930, 1, target, {}, false)
+  assert(queries == 1 and capture.observation.configuration.stats == nil)
+  assert(capture.observation.configuration.statsCoverage == "unavailable")
+  assert(capture.allocations[1].allocatedQuantity == 5)
+  api.C_Item.GetItemID = function() return nil end
+  hooks.CraftSalvage(1229930, 1, target, {}, false)
+  assert(#capture.allocations == 0)
+  api.C_Item.GetItemID = function() return 245807 end
+  api.C_TradeSkillUI.GetRecipeSchematic = function() return { recipeID = 123, recipeType = 3, quantityMax = 5 } end
+  hooks.CraftSalvage(1229930, 1, target, {}, false)
+  assert(#capture.allocations == 0)
+end)
+
 test("capture failures cannot propagate through a craft hook", function()
   local api, frame, hooks = environment()
   local adapter = addon.CreateFlavorAdapter(api, function() error("capture failure") end)
