@@ -110,7 +110,7 @@ function Wait-ForDispatchedRun {
             throw "Unable to list workflow runs."
         }
 
-        $runs = $json | ConvertFrom-Json
+        $runs = ($json -join "`n") | ConvertFrom-Json
         $run = $runs |
             Where-Object {
                 $_.headSha -eq $Sha -and
@@ -127,6 +127,79 @@ function Wait-ForDispatchedRun {
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
 
     throw "Timed out waiting for the workflow_dispatch run for $Sha."
+}
+
+function Get-WorkflowRunsForCommit {
+    param([Parameter(Mandatory)][string]$Sha)
+
+    $json = & gh run list --repo $Repository --workflow $Workflow --commit $Sha --event workflow_dispatch --limit 100 --json databaseId,headSha,createdAt,status,conclusion
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to list existing workflow runs for $Sha."
+    }
+
+    return @(($json -join "`n") | ConvertFrom-Json | Where-Object { $_.headSha -eq $Sha } |
+        Sort-Object { ConvertTo-DateTimeOffset $_.createdAt } -Descending)
+}
+
+function Test-RunArtifact {
+    param([Parameter(Mandatory)]$RunId)
+
+    $json = & gh api "repos/$Repository/actions/runs/$RunId/artifacts?per_page=100"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect artifacts for workflow run $RunId."
+    }
+
+    $response = ($json -join "`n") | ConvertFrom-Json
+    return @($response.artifacts | Where-Object {
+        $_.name -eq $ArtifactName -and -not $_.expired
+    }).Count -gt 0
+}
+
+function Find-ReusableRun {
+    param([Parameter(Mandatory)][string]$Sha)
+
+    $runs = @(Get-WorkflowRunsForCommit -Sha $Sha)
+    foreach ($run in $runs) {
+        if ($run.status -eq "completed" -and $run.conclusion -eq "success" -and (Test-RunArtifact -RunId $run.databaseId)) {
+            return $run
+        }
+    }
+
+    # Reuse a dispatch already queued or running for precisely this commit.
+    return $runs | Where-Object { $_.status -ne "completed" } | Select-Object -First 1
+}
+
+function Find-ReleasePackage {
+    param(
+        [Parameter(Mandatory)][string]$Sha,
+        [Parameter(Mandatory)][string]$ArchivePrefix
+    )
+
+    $json = & gh api "repos/$Repository/releases?per_page=100"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to list GitHub releases."
+    }
+
+    foreach ($release in @(($json -join "`n") | ConvertFrom-Json)) {
+        if ($release.draft -or $release.tag_name -notmatch '^addon-v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') { continue }
+        $version = $release.tag_name.Substring("addon-v".Length)
+        $expectedAsset = "$ArchivePrefix-$version.zip"
+        $asset = @($release.assets | Where-Object {
+            $_.name -eq $expectedAsset -and
+            $_.state -eq "uploaded"
+        } | Select-Object -First 1)
+        if (-not $asset.Count) { continue }
+
+        # target_commitish can be a branch name; resolve the tag to its actual commit.
+        $tagSha = & gh api "repos/$Repository/commits/$($release.tag_name)" --jq '.sha' 2>$null
+        if ($LASTEXITCODE -eq 0 -and $tagSha.Trim() -eq $Sha) {
+            return [pscustomobject]@{
+                Tag = $release.tag_name
+                Asset = $asset[0].name
+            }
+        }
+    }
+    return $null
 }
 
 function Copy-Addon {
@@ -154,44 +227,72 @@ $sha = Get-CurrentSha
 $wowRoot = Resolve-WowPath $WowPath
 $addonsDirectory = Join-Path $wowRoot "_retail_\Interface\AddOns"
 
-Write-Host "Dispatching $Workflow for $branch ($sha)..."
-$dispatchTime = [DateTimeOffset]::UtcNow
-$dispatchOutput = & gh workflow run $Workflow --repo $Repository --ref $branch 2>&1
-if ($LASTEXITCODE -ne 0) {
-    throw "gh workflow run failed with exit code $LASTEXITCODE."
+$archivePrefix = switch ($Addon) {
+    "UI"   { "ArtisanLogbook" }
+    "Core" { "ArtisanLogbook_Core" }
+    default { "ArtisanLogbook-Bundle" }
 }
-$dispatchOutput | ForEach-Object { Write-Host $_ }
-
+$release = Find-ReleasePackage -Sha $sha -ArchivePrefix $archivePrefix
 $runId = $null
-foreach ($line in $dispatchOutput) {
-    if ([string]$line -match '/actions/runs/(?<id>\d+)') {
-        $runId = $Matches.id
-        break
+
+if ($release) {
+    Write-Host "Reusing release $($release.Tag) for commit $sha ($($release.Asset))."
+}
+else {
+    $run = Find-ReusableRun -Sha $sha
+    if ($run) {
+        $runId = $run.databaseId
+        Write-Host "Reusing existing workflow run $runId for commit $sha."
+    }
+    else {
+        Write-Host "No reusable package found. Dispatching $Workflow for $branch ($sha)..."
+        $dispatchTime = [DateTimeOffset]::UtcNow
+        $dispatchOutput = & gh workflow run $Workflow --repo $Repository --ref $branch 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh workflow run failed with exit code $LASTEXITCODE."
+        }
+        $dispatchOutput | ForEach-Object { Write-Host $_ }
+
+        foreach ($line in $dispatchOutput) {
+            if ([string]$line -match '/actions/runs/(?<id>\d+)') {
+                $runId = $Matches.id
+                break
+            }
+        }
+        if (-not $runId) {
+            Write-Host "Workflow run ID was not returned by gh; locating the dispatched run..."
+            $runId = Wait-ForDispatchedRun -Branch $branch -Sha $sha -StartedAfter $dispatchTime
+        }
+    }
+
+    Write-Host "Waiting for workflow run $runId..."
+    Invoke-Gh run watch $runId --repo $Repository --exit-status
+    if (-not (Test-RunArtifact -RunId $runId)) {
+        throw "Workflow run $runId completed without a usable '$ArtifactName' artifact."
     }
 }
-
-if (-not $runId) {
-    Write-Host "Workflow run ID was not returned by gh; locating the dispatched run..."
-    $runId = Wait-ForDispatchedRun -Branch $branch -Sha $sha -StartedAfter $dispatchTime
-}
-Write-Host "Waiting for workflow run $runId..."
-Invoke-Gh run watch $runId --repo $Repository --exit-status
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("ArtisanLogbook-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $temp | Out-Null
 
 try {
-    Write-Host "Downloading CI artifact..."
-    Invoke-Gh run download $runId --repo $Repository --name $ArtifactName --dir $temp
-
-    $archiveName = switch ($Addon) {
-        "UI"   { "ArtisanLogbook.zip" }
-        "Core" { "ArtisanLogbook_Core.zip" }
-        default { "ArtisanLogbook-Bundle.zip" }
+    if ($release) {
+        Write-Host "Downloading release asset $($release.Asset)..."
+        Invoke-Gh release download $release.Tag --repo $Repository --pattern $release.Asset --dir $temp
+        $archive = Join-Path $temp $release.Asset
     }
-    $archive = Join-Path $temp $archiveName
+    else {
+        Write-Host "Downloading CI artifact from run $runId..."
+        Invoke-Gh run download $runId --repo $Repository --name $ArtifactName --dir $temp
+        $archiveName = switch ($Addon) {
+            "UI"   { "ArtisanLogbook.zip" }
+            "Core" { "ArtisanLogbook_Core.zip" }
+            default { "ArtisanLogbook-Bundle.zip" }
+        }
+        $archive = Join-Path $temp $archiveName
+    }
     if (-not (Test-Path $archive)) {
-        throw "Expected artifact '$archiveName' was not downloaded."
+        throw "Expected archive '$archive' was not downloaded."
     }
 
     $expanded = Join-Path $temp "expanded"
