@@ -183,7 +183,7 @@ function Find-ReleasePackage {
     foreach ($release in @($json | ConvertFrom-Json)) {
         if ($release.draft) { continue }
         $asset = @($release.assets | Where-Object {
-            $_.name -match ("^" + [regex]::Escape($ArchivePrefix) + "-.+\\.zip$") -and
+            $_.name -match ("^" + [regex]::Escape($ArchivePrefix) + "-[0-9][0-9A-Za-z.+-]*\.zip$") -and
             $_.state -eq "uploaded"
         } | Select-Object -First 1)
         if (-not $asset.Count) { continue }
