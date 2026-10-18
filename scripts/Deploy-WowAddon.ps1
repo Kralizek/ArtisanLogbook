@@ -110,7 +110,7 @@ function Wait-ForDispatchedRun {
             throw "Unable to list workflow runs."
         }
 
-        $runs = $json | ConvertFrom-Json
+        $runs = ($json -join "`n") | ConvertFrom-Json
         $run = $runs |
             Where-Object {
                 $_.headSha -eq $Sha -and
@@ -137,7 +137,7 @@ function Get-WorkflowRunsForCommit {
         throw "Unable to list existing workflow runs for $Sha."
     }
 
-    return @($json | ConvertFrom-Json | Where-Object { $_.headSha -eq $Sha } |
+    return @(($json -join "`n") | ConvertFrom-Json | Where-Object { $_.headSha -eq $Sha } |
         Sort-Object { ConvertTo-DateTimeOffset $_.createdAt } -Descending)
 }
 
@@ -149,7 +149,7 @@ function Test-RunArtifact {
         throw "Unable to inspect artifacts for workflow run $RunId."
     }
 
-    $response = $json | ConvertFrom-Json
+    $response = ($json -join "`n") | ConvertFrom-Json
     return @($response.artifacts | Where-Object {
         $_.name -eq $ArtifactName -and -not $_.expired
     }).Count -gt 0
@@ -180,7 +180,7 @@ function Find-ReleasePackage {
         throw "Unable to list GitHub releases."
     }
 
-    foreach ($release in @($json | ConvertFrom-Json)) {
+    foreach ($release in @(($json -join "`n") | ConvertFrom-Json)) {
         if ($release.draft -or $release.tag_name -notmatch '^addon-v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') { continue }
         $version = $release.tag_name.Substring("addon-v".Length)
         $expectedAsset = "$ArchivePrefix-$version.zip"
