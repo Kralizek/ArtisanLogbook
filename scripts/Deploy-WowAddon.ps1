@@ -254,7 +254,7 @@ else {
         $dispatchOutput | ForEach-Object { Write-Host $_ }
 
         foreach ($line in $dispatchOutput) {
-            if ([string]$line -match '/actions/runs/(?<id>\\d+)') {
+            if ([string]$line -match '/actions/runs/(?<id>\d+)') {
                 $runId = $Matches.id
                 break
             }
