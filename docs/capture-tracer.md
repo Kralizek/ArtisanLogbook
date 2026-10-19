@@ -30,7 +30,9 @@ the UI requires Core. Restart the client after the first installation.
 Enable **Artisan Logbook** in the addon list.
 
 Source TOCs have no interface value. Packaging requires a configured flavor in
-`.curseforge.yml` and injects its derived interface into staged TOC copies.
+`.flavors.yml` (Retail by default) and injects the interface derived from the
+selected flavor's WoW version into staged TOC copies. Set `ADDON_FLAVOR`
+to package another enabled flavor.
 Confirm the actual client using `/dump GetBuildInfo()`; the client is
 authoritative. Every recording start also stores the actual build, interface,
 locale, character, realm, and capabilities.

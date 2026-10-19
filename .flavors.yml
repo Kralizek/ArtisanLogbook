@@ -1,0 +1,11 @@
+# A flavor describes a WoW client build and its packaging/release identity.
+# Enable a flavor only after validating compatibility and producing its bundle.
+# CurseForge-specific settings live under metadata.curseforge.
+flavors:
+  - id: retail
+    version: '12.1.5'
+  # - id: forever
+  #   version: '1.60.1'
+  #   metadata:
+  #     curseforge:
+  #       versionType: classic
