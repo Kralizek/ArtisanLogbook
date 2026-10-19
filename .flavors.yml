@@ -4,6 +4,10 @@
 flavors:
   - id: retail
     version: '12.1.5'
+    metadata:
+      curseforge:
+        # CurseForge WoW Retail version-type ID (not a game-version ID).
+        versionType: '517'
   # - id: forever
   #   version: '1.60.1'
   #   metadata:
