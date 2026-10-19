@@ -6,92 +6,116 @@ public sealed record HistoryMergeResult(
     IReadOnlyList<CraftObservation> Observations,
     IReadOnlyList<HistoryConflict> Conflicts)
 {
+    /// <summary>Callers MUST NOT persist Observations when conflicts exist.</summary>
     public bool IsSuccessful => Conflicts.Count == 0;
 }
 
 /// <summary>
-/// Merges canonical craft observations. Unknown measurements can be enriched
-/// by known values; contradictory known values remain unresolved conflicts.
-/// Incoming collection order never determines a winner.
+/// Deterministic, database-independent reconciliation of identified crafts.
+/// Missing scalar measurements can be filled from another copy. Explicitly
+/// observed values (including false/zero) never yield to contradictory values.
 /// </summary>
 public static class HistoryReconciler
 {
     public static HistoryMergeResult Merge(
-        IEnumerable<CraftObservation> left,
-        IEnumerable<CraftObservation> right)
+        IEnumerable<CraftObservation> left, IEnumerable<CraftObservation> right)
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-
+        Dictionary<CraftIdentity, CraftObservation> observations = [];
         List<HistoryConflict> conflicts = [];
-        Dictionary<CraftIdentity, CraftObservation> merged = [];
+
         foreach (CraftObservation craft in left.Concat(right))
         {
             ArgumentNullException.ThrowIfNull(craft);
             ArgumentNullException.ThrowIfNull(craft.Identity);
 
-            if (merged.TryGetValue(craft.Identity, out CraftObservation? existing))
-                merged[craft.Identity] = Combine(existing, craft, conflicts);
+            if (observations.TryGetValue(craft.Identity, out CraftObservation? previous))
+                observations[craft.Identity] = Combine(previous, craft, conflicts);
             else
-                merged.Add(craft.Identity, craft);
+                observations.Add(craft.Identity, craft);
         }
 
         return new(
-            merged.Values.OrderBy(c => c.Identity.Origin, StringComparer.Ordinal)
-                .ThenBy(c => c.Identity.Observation, StringComparer.Ordinal).ToArray(),
-            conflicts.OrderBy(c => c.Identity.Origin, StringComparer.Ordinal)
-                .ThenBy(c => c.Identity.Observation, StringComparer.Ordinal)
-                .ThenBy(c => c.Field, StringComparer.Ordinal).ToArray());
+            observations.Values.OrderBy(x => x.Identity.Origin, StringComparer.Ordinal)
+                .ThenBy(x => x.Identity.Observation, StringComparer.Ordinal).ToArray(),
+            conflicts.OrderBy(x => x.Identity.Origin, StringComparer.Ordinal)
+                .ThenBy(x => x.Identity.Observation, StringComparer.Ordinal)
+                .ThenBy(x => x.Field, StringComparer.Ordinal).ToArray());
     }
 
     private static CraftObservation Combine(
-        CraftObservation a, CraftObservation b, List<HistoryConflict> errors)
+        CraftObservation a, CraftObservation b, List<HistoryConflict> conflicts)
     {
-        CraftIdentity id = a.Identity;
-        T? Field<T>(string name, T? x, T? y) where T : struct
+        CraftIdentity identity = a.Identity;
+
+        T? Optional<T>(string field, T? x, T? y) where T : struct
         {
             if (x.HasValue && y.HasValue && !EqualityComparer<T>.Default.Equals(x.Value, y.Value))
-                errors.Add(new(id, name, "Conflicting known measurements; no revision authority supplied."));
+                conflicts.Add(new(identity, field, "Two different known values; correction precedence is unknown."));
             return x ?? y;
         }
 
-        T Reference<T>(string name, T x, T y) where T : class
-        {
-            if (!EqualityComparer<T>.Default.Equals(x, y))
-                errors.Add(new(id, name, "Conflicting identity or source context."));
-            return x;
-        }
-
-        IReadOnlyList<T>? Collection<T>(
-            string name, IReadOnlyList<T>? x, IReadOnlyList<T>? y, Func<T, string> key)
-        {
-            if (x is null) return y;
-            if (y is null) return x;
-            string[] left = x.Select(key).OrderBy(v => v, StringComparer.Ordinal).ToArray();
-            string[] right = y.Select(key).OrderBy(v => v, StringComparer.Ordinal).ToArray();
-            if (!left.SequenceEqual(right))
-                errors.Add(new(id, name, "Conflicting observed collection; incomplete collections cannot be silently combined."));
-            return x;
-        }
-
         if (a.RecordedAt != b.RecordedAt)
-            errors.Add(new(id, nameof(a.RecordedAt), "Conflicting craft timestamps."));
+            conflicts.Add(new(identity, nameof(a.RecordedAt), "Timestamp differs for the same craft identity."));
+        if (a.Character != b.Character)
+            conflicts.Add(new(identity, nameof(a.Character), "Character identity differs for the same craft."));
+        if (a.Provenance is not null && b.Provenance is not null && a.Provenance != b.Provenance)
+            conflicts.Add(new(identity, nameof(a.Provenance), "Source evidence differs."));
+
+        IReadOnlyList<CraftReagent>? MergeReagents()
+        {
+            if (a.Reagents is null) return b.Reagents;
+            if (b.Reagents is null) return a.Reagents;
+            Dictionary<int, CraftReagent> byItem = [];
+            foreach (CraftReagent reagent in a.Reagents)
+                if (!byItem.TryAdd(reagent.ItemId, reagent))
+                    conflicts.Add(new(identity, nameof(a.Reagents), "Duplicate item in first reagent set."));
+            foreach (CraftReagent reagent in b.Reagents)
+            {
+                if (!byItem.TryGetValue(reagent.ItemId, out CraftReagent? existing))
+                {
+                    conflicts.Add(new(identity, nameof(a.Reagents), "Returned set adds an item to an already observed collection."));
+                    continue;
+                }
+
+                byItem[reagent.ItemId] = existing with
+                {
+                    AllocatedQuantity = Optional($"Reagents[{reagent.ItemId}].AllocatedQuantity",
+                        existing.AllocatedQuantity, reagent.AllocatedQuantity),
+                    ReturnedQuantity = Optional($"Reagents[{reagent.ItemId}].ReturnedQuantity",
+                        existing.ReturnedQuantity, reagent.ReturnedQuantity)
+                };
+            }
+            if (byItem.Count != b.Reagents.Select(x => x.ItemId).Distinct().Count())
+                conflicts.Add(new(identity, nameof(a.Reagents), "Observed reagent sets contain different items."));
+            return byItem.Values.OrderBy(x => x.ItemId).ToArray();
+        }
+
+        IReadOnlyList<CraftOutput>? MergeOutputs()
+        {
+            if (a.Outputs is null) return b.Outputs;
+            if (b.Outputs is null) return a.Outputs;
+            static string Key(CraftOutput o) => $"{o.ItemId}:{o.Quality?.ToString() ?? "unknown"}:{o.Quantity}";
+            string[] left = a.Outputs.Select(Key).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            string[] right = b.Outputs.Select(Key).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            if (!left.SequenceEqual(right))
+                conflicts.Add(new(identity, nameof(a.Outputs), "Two different observed output collections."));
+            return a.Outputs.OrderBy(x => x.ItemId).ThenBy(x => x.Quality).ThenBy(x => x.Quantity).ToArray();
+        }
 
         return a with
         {
-            RecipeId = Field(nameof(a.RecipeId), a.RecipeId, b.RecipeId),
-            Character = Reference(nameof(a.Character), a.Character, b.Character),
-            ProfessionId = Field(nameof(a.ProfessionId), a.ProfessionId, b.ProfessionId),
-            ExpansionId = Field(nameof(a.ExpansionId), a.ExpansionId, b.ExpansionId),
-            ConcentrationSpent = Field(nameof(a.ConcentrationSpent), a.ConcentrationSpent, b.ConcentrationSpent),
-            ConcentrationRefunded = Field(nameof(a.ConcentrationRefunded), a.ConcentrationRefunded, b.ConcentrationRefunded),
-            HasIngenuityProc = Field(nameof(a.HasIngenuityProc), a.HasIngenuityProc, b.HasIngenuityProc),
-            HasResourcefulnessProc = Field(nameof(a.HasResourcefulnessProc), a.HasResourcefulnessProc, b.HasResourcefulnessProc),
-            MulticraftBonus = Field(nameof(a.MulticraftBonus), a.MulticraftBonus, b.MulticraftBonus),
-            Reagents = Collection(nameof(a.Reagents), a.Reagents, b.Reagents,
-                r => $"{r.ItemId}:{r.AllocatedQuantity?.ToString() ?? "?"}:{r.ReturnedQuantity?.ToString() ?? "?"}"),
-            Outputs = Collection(nameof(a.Outputs), a.Outputs, b.Outputs,
-                o => $"{o.ItemId}:{o.Quality?.ToString() ?? "?"}:{o.Quantity}"),
+            RecipeId = Optional(nameof(a.RecipeId), a.RecipeId, b.RecipeId),
+            ProfessionId = Optional(nameof(a.ProfessionId), a.ProfessionId, b.ProfessionId),
+            ExpansionId = Optional(nameof(a.ExpansionId), a.ExpansionId, b.ExpansionId),
+            ConcentrationSpent = Optional(nameof(a.ConcentrationSpent), a.ConcentrationSpent, b.ConcentrationSpent),
+            ConcentrationRefunded = Optional(nameof(a.ConcentrationRefunded), a.ConcentrationRefunded, b.ConcentrationRefunded),
+            HasIngenuityProc = Optional(nameof(a.HasIngenuityProc), a.HasIngenuityProc, b.HasIngenuityProc),
+            HasResourcefulnessProc = Optional(nameof(a.HasResourcefulnessProc), a.HasResourcefulnessProc, b.HasResourcefulnessProc),
+            MulticraftBonus = Optional(nameof(a.MulticraftBonus), a.MulticraftBonus, b.MulticraftBonus),
+            Reagents = MergeReagents(),
+            Outputs = MergeOutputs(),
             Provenance = a.Provenance ?? b.Provenance
         };
     }
