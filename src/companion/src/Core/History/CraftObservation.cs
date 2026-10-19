@@ -16,7 +16,70 @@ public sealed record CraftObservation(
     int? MulticraftBonus = null,
     IReadOnlyList<CraftReagent>? Reagents = null,
     IReadOnlyList<CraftOutput>? Outputs = null,
-    CraftProvenance? Provenance = null);
+    CraftProvenance? Provenance = null)
+{
+    // Craft output/reagent collections have value semantics, not array reference semantics.
+    // Their row order is not significant: the canonical grains are keyed by item and quality.
+    public bool Equals(CraftObservation? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Identity == other.Identity
+            && RecordedAt == other.RecordedAt
+            && RecipeId == other.RecipeId
+            && Character == other.Character
+            && ProfessionId == other.ProfessionId
+            && ExpansionId == other.ExpansionId
+            && ConcentrationSpent == other.ConcentrationSpent
+            && IngenuityRefund == other.IngenuityRefund
+            && ConcentrationCurrencyId == other.ConcentrationCurrencyId
+            && HasIngenuityProc == other.HasIngenuityProc
+            && HasResourcefulnessProc == other.HasResourcefulnessProc
+            && MulticraftBonus == other.MulticraftBonus
+            && Provenance == other.Provenance
+            && EqualCollections(Reagents, other.Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity))
+            && EqualCollections(Outputs, other.Outputs, o => (o.ItemId, o.Quality, o.Quantity));
+    }
+
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        hash.Add(Identity);
+        hash.Add(RecordedAt);
+        hash.Add(RecipeId);
+        hash.Add(Character);
+        hash.Add(ProfessionId);
+        hash.Add(ExpansionId);
+        hash.Add(ConcentrationSpent);
+        hash.Add(IngenuityRefund);
+        hash.Add(ConcentrationCurrencyId);
+        hash.Add(HasIngenuityProc);
+        hash.Add(HasResourcefulnessProc);
+        hash.Add(MulticraftBonus);
+        hash.Add(Provenance);
+        AddCollectionHash(ref hash, Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity));
+        AddCollectionHash(ref hash, Outputs, o => (o.ItemId, o.Quality, o.Quantity));
+        return hash.ToHashCode();
+    }
+
+    private static bool EqualCollections<T, TKey>(
+        IReadOnlyList<T>? first, IReadOnlyList<T>? second, Func<T, TKey> key)
+        where TKey : IComparable<TKey>
+    {
+        if (first is null || second is null) return first is null && second is null;
+        return first.Select(key).Order().SequenceEqual(second.Select(key).Order());
+    }
+
+    private static void AddCollectionHash<T, TKey>(
+        ref HashCode hash, IReadOnlyList<T>? items, Func<T, TKey> key)
+        where TKey : IComparable<TKey>
+    {
+        hash.Add(items is not null);
+        if (items is null) return;
+        foreach (TKey item in items.Select(key).Order())
+            hash.Add(item);
+    }
+}
 
 /// <summary>Stable character identity, not the ledger's local dimension ID.</summary>
 public sealed record CharacterIdentity
