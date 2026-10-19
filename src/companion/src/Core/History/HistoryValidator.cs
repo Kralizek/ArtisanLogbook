@@ -31,8 +31,10 @@ public static class HistoryValidator
                 errors.Add(new(craft.Identity, "RecipeId", "Recipe ID must be positive when known."));
             if (craft.ProfessionId is <= 0)
                 errors.Add(new(craft.Identity, "ProfessionId", "Profession ID must be positive when known."));
-            if (craft.ConcentrationSpent is < 0 || craft.ConcentrationRefunded is < 0)
+            if (craft.ConcentrationSpent is < 0 || craft.IngenuityRefund is < 0)
                 errors.Add(new(craft.Identity, "Concentration", "Concentration measurements cannot be negative."));
+            if (craft.ConcentrationCurrencyId is <= 0)
+                errors.Add(new(craft.Identity, "ConcentrationCurrencyId", "Currency ID must be positive when known."));
             if (craft.MulticraftBonus is < 0)
                 errors.Add(new(craft.Identity, "MulticraftBonus", "Multicraft bonus cannot be negative."));
             HashSet<int> reagentItems = [];
