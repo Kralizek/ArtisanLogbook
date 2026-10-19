@@ -62,12 +62,18 @@ public static class CraftHistoryReconciler
             "Recipe", left.Dimensions.Recipes, right.Dimensions.Recipes,
             r => r.Id, (a, b) =>
             {
+                if (a.ExpansionKey is not null && b.ExpansionKey is not null && a.ExpansionKey != b.ExpansionKey)
+                    Conflict("Recipe", a.Id.ToString(), nameof(RecipeDimension.ExpansionKey));
+                if (a.MaxQuality is not null && b.MaxQuality is not null && a.MaxQuality != b.MaxQuality)
+                    Conflict("Recipe", a.Id.ToString(), nameof(RecipeDimension.MaxQuality));
                 if (a.ProfessionId is not null && b.ProfessionId is not null && a.ProfessionId != b.ProfessionId)
                     Conflict("Recipe", a.Id.ToString(), nameof(RecipeDimension.ProfessionId));
                 return a with
                 {
                     Name = Name(a.Name, b.Name),
-                    ProfessionId = a.ProfessionId ?? b.ProfessionId
+                    ProfessionId = a.ProfessionId ?? b.ProfessionId,
+                    ExpansionKey = a.ExpansionKey ?? b.ExpansionKey,
+                    MaxQuality = a.MaxQuality ?? b.MaxQuality
                 };
             });
 
@@ -86,7 +92,7 @@ public static class CraftHistoryReconciler
 
         IReadOnlyList<ExpansionDimension> expansions = Join(
             "Expansion", left.Dimensions.Expansions, right.Dimensions.Expansions,
-            e => e.Id, (a, b) => a with { Name = Name(a.Name, b.Name) });
+            e => e.Key, (a, b) => a with { Name = Name(a.Name, b.Name) });
 
         if (!crafts.IsSuccessful || errors.Count > 0)
             return new(null, crafts.Conflicts, errors);
