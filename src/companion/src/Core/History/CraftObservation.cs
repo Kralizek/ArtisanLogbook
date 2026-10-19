@@ -9,7 +9,8 @@ public sealed record CraftObservation(
     int? ProfessionId = null,
     int? ExpansionId = null,
     int? ConcentrationSpent = null,
-    int? ConcentrationRefunded = null,
+    int? IngenuityRefund = null,
+    int? ConcentrationCurrencyId = null,
     bool? HasIngenuityProc = null,
     bool? HasResourcefulnessProc = null,
     int? MulticraftBonus = null,
@@ -39,5 +40,3 @@ public sealed record CraftReagent(int ItemId, long? AllocatedQuantity, long? Ret
 /// <summary>Craft × output item × quality grain. Quality may be unavailable.</summary>
 public sealed record CraftOutput(int ItemId, int? Quality, long Quantity);
 
-/// <summary>Optional metadata for a WoW item, recipe or profession; names can be enriched independently.</summary>
-public sealed record NamedDimension(int Id, string? Name);
