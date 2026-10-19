@@ -1,0 +1,29 @@
+name: CI Companion
+on:
+  pull_request:
+    paths:
+      - 'src/companion/**'
+      - '.github/workflows/ci-companion.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'src/companion/**'
+      - '.github/workflows/ci-companion.yml'
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: src/companion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: src/companion/global.json
+      - run: dotnet restore ArtisanLogbook.Companion.slnx
+      - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release
+      - run: dotnet test tests/Core/Tests.Core.csproj --no-build -c Release
