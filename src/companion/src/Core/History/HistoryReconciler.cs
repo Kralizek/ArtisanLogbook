@@ -3,11 +3,11 @@ namespace ArtisanLogbook.History;
 public sealed record HistoryConflict(CraftIdentity Identity, string Field, string Description);
 
 public sealed record HistoryMergeResult(
-    IReadOnlyList<CraftObservation> Observations,
+    IReadOnlyList<CraftObservation>? Observations,
     IReadOnlyList<HistoryConflict> Conflicts)
 {
     /// <summary>Callers MUST NOT persist Observations when conflicts exist.</summary>
-    public bool IsSuccessful => Conflicts.Count == 0;
+    public bool IsSuccessful => Observations is not null && Conflicts.Count == 0;
 }
 
 /// <summary>
@@ -36,12 +36,12 @@ public static class HistoryReconciler
                 observations.Add(craft.Identity, craft);
         }
 
-        return new(
-            observations.Values.OrderBy(x => x.Identity.Origin, StringComparer.Ordinal)
-                .ThenBy(x => x.Identity.Observation, StringComparer.Ordinal).ToArray(),
-            conflicts.OrderBy(x => x.Identity.Origin, StringComparer.Ordinal)
+        CraftObservation[] resolved = observations.Values.OrderBy(x => x.Identity.Origin, StringComparer.Ordinal)
+                .ThenBy(x => x.Identity.Observation, StringComparer.Ordinal).ToArray();
+        HistoryConflict[] orderedConflicts = conflicts.OrderBy(x => x.Identity.Origin, StringComparer.Ordinal)
                 .ThenBy(x => x.Identity.Observation, StringComparer.Ordinal)
-                .ThenBy(x => x.Field, StringComparer.Ordinal).ToArray());
+                .ThenBy(x => x.Field, StringComparer.Ordinal).ToArray();
+        return new(orderedConflicts.Length == 0 ? resolved : null, orderedConflicts);
     }
 
     private static CraftObservation Combine(
