@@ -23,7 +23,7 @@ def resolve_matrix(config: dict, addon_version: str) -> dict:
         if not isinstance(flavor, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", flavor) or flavor in seen:
             raise ValueError(f"Invalid or duplicate flavor: {flavor!r}")
         seen.add(flavor)
-        if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+", version):
+        if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
             raise ValueError(f"Invalid game version for {flavor}: {version!r}")
 
         metadata = entry.get("metadata", {})
@@ -55,7 +55,7 @@ def main() -> None:
     rendered = json.dumps(resolve_matrix(config, os.environ["VERSION"]), separators=(",", ":"))
     print(rendered)
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-        output.write(f"matrix={rendered}\\n")
+        output.write(f"matrix={rendered}\n")
 
 
 if __name__ == "__main__":
