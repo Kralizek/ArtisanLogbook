@@ -14,9 +14,12 @@ in-game before enabling them.
 
 CurseForge publication uses
 [`curseforge-publish@v0.6.0`](https://github.com/Kralizek/github-actions/tree/v0.6.0/actions/curseforge-publish)
-to resolve game versions by exact name and version type; numeric CurseForge
-IDs are not committed to this repository. By default the CurseForge version type
-is the flavor `id`. Override it when necessary using:
+to resolve game versions by exact name and version type. Game-version IDs are
+not committed to this repository. CurseForge **version-type IDs** may be set as
+provider metadata when the flavor ID is not an actual CurseForge type name or
+slug: Retail currently uses `metadata.curseforge.versionType: '517'`, since
+the catalog does not recognize `retail` as a type name. Without an override
+the flavor `id` is used as the version type. For example:
 ```yaml
 flavors:
   - id: forever
