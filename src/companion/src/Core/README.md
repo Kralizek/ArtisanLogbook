@@ -7,7 +7,7 @@ Core owns **C01 Craft History Model** and **C02 History Reconciliation** from th
 - `CraftObservation`: **one completed crafting attempt**, not necessarily one output callback, request, or crafting session.
 - `CraftReagent`: **craft × item ID**. Input allocation and Resourcefulness returns are separately nullable. Duplicate item slots must be folded by the SavedVariables adapter, with missing measurements preserved as unknown.
 - `CraftOutput`: **craft × output item ID × quality**, with a nullable quality and positive quantity. Supports operations generating multiple output items.
-- `CraftDimensions`: metadata keyed by stable WoW item/recipe/profession/expansion IDs and the addon's project/region/realm/GUID character key. Display names are enrichment, not identities.
+- `CraftDimensions`: metadata keyed by stable WoW item/recipe/profession IDs and expansion skill-line keys and the addon's project/region/realm/GUID character key. Display names are enrichment, not identities.
 
 `null` measurements mean *not observed*. `false` or `0` mean explicitly observed negatives or zeros. Likewise, a null reagent/output collection means its complete contents were not observed, while an empty collection means it was explicitly observed empty. We do not store historical addon aggregates in Core.
 
