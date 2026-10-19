@@ -20,18 +20,13 @@ public sealed record CraftObservation(
 /// <summary>Stable character identity, not the ledger's local dimension ID.</summary>
 public sealed record CharacterIdentity
 {
-    public string Realm { get; }
-    public string Name { get; }
-    public string Flavor { get; }
+    /// <summary>Blizzard project/region/realm/GUID key; not a local dimension ID or character name.</summary>
+    public string Key { get; }
 
-    public CharacterIdentity(string realm, string name, string flavor)
+    public CharacterIdentity(string key)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(realm);
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentException.ThrowIfNullOrWhiteSpace(flavor);
-        Realm = realm;
-        Name = name;
-        Flavor = flavor;
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        Key = key;
     }
 }
 
