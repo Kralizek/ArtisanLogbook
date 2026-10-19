@@ -1,7 +1,9 @@
 <Project>
   <!-- See https://aka.ms/dotnet/msbuild/customize for more details on customizing your build -->
   <PropertyGroup>
+    <RootNamespace>ArtisanLogbook.Companion</RootNamespace>
+    <AssemblyName>ArtisanLogbook.Companion.$(MSBuildProjectName)</AssemblyName>
 
-
+    
   </PropertyGroup>
 </Project>
