@@ -56,6 +56,8 @@ public static class HistoryReconciler
             return x ?? y;
         }
 
+        if (a.ExpansionKey is not null && b.ExpansionKey is not null && a.ExpansionKey != b.ExpansionKey)
+            conflicts.Add(new(identity, nameof(a.ExpansionKey), "Expansion skill-line keys disagree."));
         if (a.RecordedAt != b.RecordedAt)
             conflicts.Add(new(identity, nameof(a.RecordedAt), "Timestamp differs for the same craft identity."));
         if (a.Character != b.Character)
@@ -108,7 +110,7 @@ public static class HistoryReconciler
         {
             RecipeId = Optional(nameof(a.RecipeId), a.RecipeId, b.RecipeId),
             ProfessionId = Optional(nameof(a.ProfessionId), a.ProfessionId, b.ProfessionId),
-            ExpansionId = Optional(nameof(a.ExpansionId), a.ExpansionId, b.ExpansionId),
+            ExpansionKey = a.ExpansionKey ?? b.ExpansionKey,
             ConcentrationSpent = Optional(nameof(a.ConcentrationSpent), a.ConcentrationSpent, b.ConcentrationSpent),
             IngenuityRefund = Optional(nameof(a.IngenuityRefund), a.IngenuityRefund, b.IngenuityRefund),
             ConcentrationCurrencyId = Optional(nameof(a.ConcentrationCurrencyId), a.ConcentrationCurrencyId, b.ConcentrationCurrencyId),
