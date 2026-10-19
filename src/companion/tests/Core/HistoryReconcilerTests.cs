@@ -1,3 +1,4 @@
+using NUnit.Framework;
 using ArtisanLogbook.History;
 
 namespace Tests.History;
