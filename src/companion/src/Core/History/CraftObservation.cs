@@ -7,7 +7,7 @@ public sealed record CraftObservation(
     int? RecipeId,
     CharacterIdentity Character,
     int? ProfessionId = null,
-    int? ExpansionId = null,
+    string? ExpansionKey = null,
     int? ConcentrationSpent = null,
     int? IngenuityRefund = null,
     int? ConcentrationCurrencyId = null,
@@ -29,7 +29,7 @@ public sealed record CraftObservation(
             && RecipeId == other.RecipeId
             && Character == other.Character
             && ProfessionId == other.ProfessionId
-            && ExpansionId == other.ExpansionId
+            && ExpansionKey == other.ExpansionKey
             && ConcentrationSpent == other.ConcentrationSpent
             && IngenuityRefund == other.IngenuityRefund
             && ConcentrationCurrencyId == other.ConcentrationCurrencyId
@@ -49,7 +49,7 @@ public sealed record CraftObservation(
         hash.Add(RecipeId);
         hash.Add(Character);
         hash.Add(ProfessionId);
-        hash.Add(ExpansionId);
+        hash.Add(ExpansionKey);
         hash.Add(ConcentrationSpent);
         hash.Add(IngenuityRefund);
         hash.Add(ConcentrationCurrencyId);
