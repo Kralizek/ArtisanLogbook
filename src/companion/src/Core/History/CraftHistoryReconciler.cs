@@ -5,9 +5,10 @@ public sealed record DimensionConflict(string Dimension, string Key, string Mess
 public sealed record CraftHistoryMergeResult(
     CraftHistory? History,
     IReadOnlyList<HistoryConflict> CraftConflicts,
-    IReadOnlyList<DimensionConflict> DimensionConflicts)
+    IReadOnlyList<DimensionConflict> DimensionConflicts,
+    IReadOnlyList<HistoryValidationError>? ValidationErrors = null)
 {
-    public bool IsSuccessful => History is not null && CraftConflicts.Count == 0 && DimensionConflicts.Count == 0;
+    public bool IsSuccessful => History is not null && CraftConflicts.Count == 0 && DimensionConflicts.Count == 0 && (ValidationErrors is null || ValidationErrors.Count == 0);
 }
 
 /// <summary>Reconciles craft-level history and optional dimension metadata, never addon aggregate rows.</summary>
@@ -17,6 +18,11 @@ public static class CraftHistoryReconciler
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
+        HistoryValidationError[] inputErrors = CraftHistoryValidator.Validate(left)
+            .Concat(CraftHistoryValidator.Validate(right)).ToArray();
+        if (inputErrors.Length != 0)
+            return new(null, [], [], inputErrors);
+
         HistoryMergeResult crafts = HistoryReconciler.Merge(left.Crafts, right.Crafts);
         List<DimensionConflict> errors = [];
 
@@ -99,6 +105,7 @@ public static class CraftHistoryReconciler
 
         CraftHistory merged = new(crafts.Observations!,
             new(characters, recipes, professions, items, expansions));
-        return new(merged, [], []);
+        IReadOnlyList<HistoryValidationError> finalErrors = CraftHistoryValidator.Validate(merged);
+        return finalErrors.Count == 0 ? new(merged, [], []) : new(null, [], [], finalErrors);
     }
 }
