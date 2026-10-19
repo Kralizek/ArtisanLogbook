@@ -1,8 +1,0 @@
-# Enable a flavor only after validating compatibility and producing its bundle.
-gameVersions:
-  - name: retail
-    version: '12.1.5'
-    id: 16984
-  # - name: forever
-  #   version: '1.60.1'
-  #   id: 17053
