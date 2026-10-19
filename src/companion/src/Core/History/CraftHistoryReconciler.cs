@@ -91,7 +91,7 @@ public static class CraftHistoryReconciler
         if (!crafts.IsSuccessful || errors.Count > 0)
             return new(null, crafts.Conflicts, errors);
 
-        CraftHistory merged = new(crafts.Observations,
+        CraftHistory merged = new(crafts.Observations!,
             new(characters, recipes, professions, items, expansions));
         return new(merged, [], []);
     }
