@@ -20,7 +20,7 @@ public class CraftHistoryReconcilerTests
             [new(123, "Potion One", 171)],
             [new(171, "Alchemy")],
             [new(241308, "Potion One")],
-            [new(10, "Midnight")]));
+            [new("skillLine:2915", "Midnight")]));
 
     [Test]
     public void IndependentlyAddedCraftsMergeAndPreserveTypedFacts()
