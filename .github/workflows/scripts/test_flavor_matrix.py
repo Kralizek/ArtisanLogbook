@@ -40,6 +40,9 @@ class FlavorMatrixTests(unittest.TestCase):
             [{"id": "retail", "version": "12.1"}],
             [{"id": "retail", "version": "12.1.5"}, {"id": "retail", "version": "12.1.6"}],
             [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"versionType": ""}}}],
+            [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"versionType": " retail"}}}],
+            [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"versionType": "retail "}}}],
+            [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"versionType": "\tretail"}}}],
             [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"unknown": 1}}}],
         )
         for flavors in invalid:
