@@ -33,7 +33,7 @@ def resolve_matrix(config: dict, addon_version: str) -> dict:
         if not isinstance(curseforge, dict) or set(curseforge) - {"versionType"}:
             raise ValueError(f"Unsupported CurseForge metadata for flavor {flavor}")
         version_type = curseforge.get("versionType", flavor)
-        if not isinstance(version_type, str) or not version_type.strip():
+        if not isinstance(version_type, str) or not version_type.strip() or version_type != version_type.strip():
             raise ValueError(f"Invalid CurseForge version type for flavor {flavor}")
 
         major, minor, patch = map(int, version.split("."))
