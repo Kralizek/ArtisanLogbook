@@ -95,9 +95,32 @@ case "${1:-}" in
       echo "skip=true" >> "$GITHUB_OUTPUT"
       echo "CurseForge publication already recorded for $TAG."
     else
+      attempt="curseforge-$FLAVOR-$VERSION.attempt.json"
+      if asset_present "$attempt"; then
+        die "CurseForge publication attempt exists without a completion marker ($attempt). Reconcile the upload on CurseForge manually before retrying; do not blindly republish. Once confirmed absent, remove the attempt asset deliberately."
+      fi
       echo "skip=false" >> "$GITHUB_OUTPUT"
-      echo "::notice::No publication marker. Check CurseForge manually before retrying after an ambiguous upload failure."
     fi
+    ;;
+  mark-curseforge-attempt)
+    required TAG; required VERSION; required FLAVOR; required GAME_VERSION; required VERSION_TYPE
+    required ASSET; required BUNDLE_SHA256; required PROJECT_ID; required GH_TOKEN
+    marker="curseforge-$FLAVOR-$VERSION.json"
+    attempt="curseforge-$FLAVOR-$VERSION.attempt.json"
+    # Commit the intent BEFORE invoking the external publishing API. An incomplete
+    # upload is then visible and cannot be automatically repeated on workflow reruns.
+    if asset_present "$marker" || asset_present "$attempt"; then
+      die "Publication marker or attempt already exists; rerun check-curseforge and reconcile existing state."
+    fi
+    jq -n --arg tag "$TAG" --arg flavor "$FLAVOR" --arg version "$VERSION" \
+      --arg gameVersion "$GAME_VERSION" --arg versionType "$VERSION_TYPE" \
+      --arg asset "$ASSET" --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
+      '{tag:$tag, flavor:$flavor, version:$version, gameVersion:$gameVersion,
+        versionType:$versionType, asset:$asset, bundleSha256:$sha, projectId:$project,
+        status:"attempted", note:"Reconcile CurseForge state before retry if completion marker is absent"}' \
+      > "authoritative/$attempt"
+    gh release upload "$TAG" "authoritative/$attempt" --repo "$GITHUB_REPOSITORY" ||
+      die "Failed to persist publication intent; CurseForge upload must not start"
     ;;
   record-curseforge)
     required TAG; required VERSION; required FLAVOR; required GAME_VERSION; required VERSION_TYPE
@@ -119,6 +142,6 @@ case "${1:-}" in
     gh release upload "$TAG" "authoritative/curseforge-$FLAVOR-$VERSION.json" --repo "$GITHUB_REPOSITORY"
     ;;
   *)
-    die "Usage: release-addon.sh {require-master|resolve-channel|stamp|rename-artifacts|ensure-assets|download-bundle|check-curseforge|record-curseforge}"
+    die "Usage: release-addon.sh {require-master|resolve-channel|stamp|rename-artifacts|ensure-assets|download-bundle|check-curseforge|mark-curseforge-attempt|record-curseforge}"
     ;;
 esac

@@ -155,6 +155,21 @@ jobs:
         shell: bash
         run: bash .github/workflows/scripts/release-addon.sh check-curseforge
 
+      - name: Persist CurseForge publication intent
+        if: steps.curseforge.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
+          FLAVOR: ${{ matrix.id }}
+          GAME_VERSION: ${{ matrix.version }}
+          VERSION_TYPE: ${{ matrix.curseforgeVersionType }}
+          ASSET: ${{ matrix.asset }}
+          BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
+          PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
+        shell: bash
+        run: bash .github/workflows/scripts/release-addon.sh mark-curseforge-attempt
+
       - name: Upload bundle to CurseForge
         id: upload
         if: steps.curseforge.outputs.skip != 'true'
