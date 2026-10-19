@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import yaml
 
 MODULE = Path(__file__).with_name("resolve-flavor-matrix.py")
 spec = importlib.util.spec_from_file_location("resolve_flavor_matrix", MODULE)
@@ -33,6 +34,14 @@ class FlavorMatrixTests(unittest.TestCase):
             "asset": "ArtisanLogbook-Bundle-forever-1.0.0.zip",
             "curseforgeVersionType": "classic",
         })
+
+    def test_configured_retail_uses_actual_curseforge_version_type(self):
+        config = yaml.safe_load(Path(".flavors.yml").read_text(encoding="utf-8"))
+        result = resolver.resolve_matrix(config, "0.1.0-beta.5")
+        self.assertEqual(len(result["include"]), 1)
+        self.assertEqual(result["include"][0]["id"], "retail")
+        self.assertEqual(result["include"][0]["version"], "12.1.5")
+        self.assertEqual(result["include"][0]["curseforgeVersionType"], "517")
 
     def test_invalid_flavors_rejected(self):
         invalid = (
