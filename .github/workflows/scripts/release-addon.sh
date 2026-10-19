@@ -89,8 +89,8 @@ case "${1:-}" in
          .versionType == $versionType and .asset == $asset and
          (.gameVersions | type == "array" and length == 1 and
            .[0].version == $gameVersion and .[0].type == $versionType and
-           (.[0].versionId | type == "number")) and
-         (.fileId | type == "number" and . > 0)' "authoritative/$marker" >/dev/null ||
+           (.[0].versionId | type == "number" and . > 0 and . == floor)) and
+         (.fileId | type == "number" and . > 0 and . == floor)' "authoritative/$marker" >/dev/null ||
         die "CurseForge marker conflicts with current bundle, version selector, or project"
       echo "skip=true" >> "$GITHUB_OUTPUT"
       echo "CurseForge publication already recorded for $TAG."
@@ -106,7 +106,7 @@ case "${1:-}" in
     [[ "$PUBLISHED_FILE_ID" =~ ^[1-9][0-9]*$ ]] || die "Missing or invalid CurseForge published file ID"
     jq -e --arg version "$GAME_VERSION" --arg versionType "$VERSION_TYPE" \
       'type == "array" and length == 1 and .[0].version == $version and
-       .[0].type == $versionType and (.[0].versionId | type == "number" and . > 0)' \
+       .[0].type == $versionType and (.[0].versionId | type == "number" and . > 0 and . == floor)' \
        <<< "$RESOLVED_GAME_VERSIONS" >/dev/null ||
       die "CurseForge publisher returned invalid game-versions output"
     jq -n --arg sha "$BUNDLE_SHA256" --arg project "$PROJECT_ID" \
