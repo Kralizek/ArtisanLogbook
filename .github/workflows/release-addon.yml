@@ -69,12 +69,12 @@ jobs:
       - name: Install Lua and packaging tools
         run: sudo apt-get update && sudo apt-get install -y lua5.1 zip unzip python3-yaml
 
-      - name: Resolve CurseForge matrix
+      - name: Resolve flavor matrix
         id: game-versions
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: python3 .github/workflows/scripts/resolve-curseforge-matrix.py
+        run: python3 .github/workflows/scripts/resolve-flavor-matrix.py
 
       - name: Test and package configured flavors
         shell: bash
@@ -94,7 +94,7 @@ jobs:
               bash src/addon/scripts/package.sh
             [[ "$asset" == *-"$VERSION".zip ]]
             test -s "src/addon/dist/${asset%-$VERSION.zip}.zip"
-          done < <(jq -r '.include | to_entries[] | [.key, .value.name, .value.interface, .value.asset] | @tsv' <<< "$matrix")
+          done < <(jq -r '.include | to_entries[] | [.key, .value.id, .value.interface, .value.asset] | @tsv' <<< "$matrix")
 
       - name: Prepare release artifacts
         shell: bash
@@ -134,8 +134,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
           VERSION: ${{ needs.release.outputs.version }}
-          FLAVOR: ${{ matrix.name }}
-          GAME_VERSION_ID: ${{ matrix.id }}
+          FLAVOR: ${{ matrix.id }}
           ASSET: ${{ matrix.asset }}
           INTERFACE: ${{ matrix.interface }}
         shell: bash
@@ -147,28 +146,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
           VERSION: ${{ needs.release.outputs.version }}
-          FLAVOR: ${{ matrix.name }}
-          GAME_VERSION_ID: ${{ matrix.id }}
+          FLAVOR: ${{ matrix.id }}
+          GAME_VERSION: ${{ matrix.version }}
+          VERSION_TYPE: ${{ matrix.curseforgeVersionType }}
           ASSET: ${{ matrix.asset }}
           BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
-          API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
         shell: bash
         run: bash .github/workflows/scripts/release-addon.sh check-curseforge
 
       - name: Upload bundle to CurseForge
+        id: upload
         if: steps.curseforge.outputs.skip != 'true'
-        uses: itsmeow/curseforge-upload@v3.1.2
+        uses: Kralizek/github-actions/actions/curseforge-publish@v0.6.0
         with:
           token: ${{ secrets.CURSEFORGE_API_TOKEN }}
-          project_id: ${{ vars.CURSEFORGE_PROJECT_ID }}
-          game_endpoint: wow
-          game_versions: ${{ matrix.id }}
-          file_path: authoritative/${{ matrix.asset }}
-          release_type: ${{ inputs.channel == 'stable' && 'release' || inputs.channel }}
-          display_name: Artisan Logbook ${{ needs.release.outputs.version }} (${{ matrix.name }})
+          project-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
+          game: wow
+          game-version: ${{ matrix.version }}
+          game-version-type: ${{ matrix.curseforgeVersionType }}
+          file: authoritative/${{ matrix.asset }}
+          release-type: ${{ inputs.channel == 'stable' && 'release' || inputs.channel }}
+          display-name: Artisan Logbook ${{ needs.release.outputs.version }} (${{ matrix.id }})
           changelog: ${{ steps.authoritative.outputs.notes }}
-          changelog_type: markdown
+          changelog-type: markdown
 
       - name: Record CurseForge publication
         if: steps.curseforge.outputs.skip != 'true'
@@ -176,8 +177,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
           VERSION: ${{ needs.release.outputs.version }}
-          FLAVOR: ${{ matrix.name }}
-          GAME_VERSION_ID: ${{ matrix.id }}
+          FLAVOR: ${{ matrix.id }}
+          GAME_VERSION: ${{ matrix.version }}
+          VERSION_TYPE: ${{ matrix.curseforgeVersionType }}
+          RESOLVED_GAME_VERSIONS: ${{ steps.upload.outputs.game-versions }}
+          PUBLISHED_FILE_ID: ${{ steps.upload.outputs.file-id }}
           ASSET: ${{ matrix.asset }}
           BUNDLE_SHA256: ${{ steps.authoritative.outputs.digest }}
           PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
