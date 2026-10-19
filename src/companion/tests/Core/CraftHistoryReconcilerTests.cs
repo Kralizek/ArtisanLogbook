@@ -131,4 +131,54 @@ public class CraftHistoryReconcilerTests
         CraftHistory second = CraftHistoryReconciler.Merge(a, CraftHistoryReconciler.Merge(b, c).History!).History!;
         Assert.That(first.Crafts, Is.EqualTo(second.Crafts));
     }
+
+    [Test]
+    public void DuplicateCraftIdentityInsideOneInputIsRejectedBeforeMerging()
+    {
+        CraftObservation a = Craft("origin-a", "1", 123);
+        CraftHistory bad = History(a, a);
+
+        CraftHistoryMergeResult result = CraftHistoryReconciler.Merge(bad, CraftHistory.Empty);
+
+        Assert.That(result.IsSuccessful, Is.False);
+        Assert.That(result.History, Is.Null);
+        Assert.That(result.ValidationErrors, Is.Not.Empty);
+    }
+
+    [Test]
+    public void ExpansionIdentityIsItsSkillLineKeyNotItsLocalDimensionId()
+    {
+        CraftHistory a = History(Craft("origin-a", "1", 123));
+        CraftHistory b = a with
+        {
+            Dimensions = a.Dimensions with
+            {
+                Expansions = [new ExpansionDimension("skillLine:2915", "Midnight")]
+            }
+        };
+
+        CraftHistoryMergeResult result = CraftHistoryReconciler.Merge(a, b);
+
+        Assert.That(result.IsSuccessful, Is.True);
+        Assert.That(result.History!.Dimensions.Expansions, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void ContradictoryKnownRecipeQualityScaleIsAConflict()
+    {
+        CraftHistory a = History(Craft("origin-a", "1", 123)) with
+        {
+            Dimensions = CraftDimensions.Empty with { Recipes = [new RecipeDimension(123, MaxQuality: 3)] }
+        };
+        CraftHistory b = a with
+        {
+            Dimensions = CraftDimensions.Empty with { Recipes = [new RecipeDimension(123, MaxQuality: 5)] }
+        };
+
+        CraftHistoryMergeResult result = CraftHistoryReconciler.Merge(a, b);
+
+        Assert.That(result.IsSuccessful, Is.False);
+        Assert.That(result.DimensionConflicts.Select(x => x.Message),
+            Has.Some.Contains("MaxQuality"));
+    }
 }
