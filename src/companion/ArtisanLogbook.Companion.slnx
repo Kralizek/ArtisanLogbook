@@ -3,6 +3,6 @@
     <Project Path="src/Core/Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/Core/Core.csproj" />
+    <Project Path="tests/Core/Tests.Core.csproj" />
   </Folder>
 </Solution>
