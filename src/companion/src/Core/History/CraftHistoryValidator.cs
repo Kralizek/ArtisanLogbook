@@ -24,11 +24,11 @@ public static class CraftHistoryValidator
         CheckUnique(dimensions.Recipes.Select(x => x.Id), "RecipeDimension");
         CheckUnique(dimensions.Items.Select(x => x.Id), "ItemDimension");
         CheckUnique(dimensions.Professions.Select(x => x.Id), "ProfessionDimension");
-        CheckUnique(dimensions.Expansions.Select(x => x.Id), "ExpansionDimension");
+        CheckUnique(dimensions.Expansions.Select(x => x.Key), "ExpansionDimension");
 
         foreach (RecipeDimension recipe in dimensions.Recipes)
         {
-            if (recipe.Id <= 0 || recipe.ProfessionId is <= 0)
+            if (recipe.Id <= 0 || recipe.ProfessionId is <= 0 || recipe.MaxQuality is <= 0)
                 errors.Add(new(null, "RecipeDimension", "Known recipe and profession IDs must be positive."));
         }
         foreach (ItemDimension item in dimensions.Items)
@@ -38,8 +38,8 @@ public static class CraftHistoryValidator
             if (profession.Id <= 0 || profession.ParentId is <= 0)
                 errors.Add(new(null, "ProfessionDimension", "Known skill-line IDs must be positive."));
         foreach (ExpansionDimension expansion in dimensions.Expansions)
-            if (expansion.Id < 0)
-                errors.Add(new(null, "ExpansionDimension", "Expansion ID cannot be negative."));
+            if (string.IsNullOrWhiteSpace(expansion.Key))
+                errors.Add(new(null, "ExpansionDimension", "Expansion skill-line key cannot be blank."));
 
         return errors;
     }
