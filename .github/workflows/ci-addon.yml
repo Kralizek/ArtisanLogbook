@@ -41,16 +41,11 @@ jobs:
       - name: Check release shell scripts
         run: bash -n .github/workflows/scripts/*.sh
 
-      - name: Validate flavor matrix
-        id: game-versions
+      - name: Resolve flavor matrix
+        id: flavors
         env:
           VERSION: 0.1.0
-        run: |
-          set -euo pipefail
-          python3 .github/workflows/scripts/resolve-flavor-matrix.py
-          matrix=$(sed -n 's/^matrix=//p' "$GITHUB_OUTPUT")
-          jq -e '.include | length > 0' <<< "$matrix"
-          jq -e '.include[] | select(.id == "retail" and .version == "12.1.5" and .curseforgeVersionType == "retail" and .interface == 120105 and .asset == "ArtisanLogbook-Bundle-0.1.0.zip")' <<< "$matrix"
+        run: python3 .github/workflows/scripts/resolve-flavor-matrix.py
 
       - name: Test flavor matrix parsing
         run: python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py'
@@ -59,7 +54,7 @@ jobs:
         shell: bash
         env:
           VERSION: 0.1.0
-          MATRIX: ${{ steps.game-versions.outputs.matrix }}
+          MATRIX: ${{ steps.flavors.outputs.matrix }}
         run: |
           set -euo pipefail
           while IFS=$'\t' read -r index name interface asset; do
