@@ -7,15 +7,19 @@ Core owns **C01 Craft History Model** and **C02 History Reconciliation** from th
 - `CraftObservation`: **one completed crafting attempt**, not necessarily one output callback, request, or crafting session.
 - `CraftReagent`: **craft × item ID**. Input allocation and Resourcefulness returns are separately nullable. Duplicate item slots must be folded by the SavedVariables adapter, with missing measurements preserved as unknown.
 - `CraftOutput`: **craft × output item ID × quality**, with a nullable quality and positive quantity. Supports operations generating multiple output items.
-- `CraftDimensions`: metadata keyed by stable WoW item/recipe/profession IDs and expansion skill-line keys and the addon's project/region/realm/GUID character key. Display names are enrichment, not identities.
+- `CraftDimensions`: metadata keyed by stable WoW item/recipe/profession IDs and profession expansion keys and the addon's project/region/realm/GUID character key. Display names are enrichment, not identities.
 
 `null` measurements mean *not observed*. `false` or `0` mean explicitly observed negatives or zeros. Likewise, a null reagent/output collection means its complete contents were not observed, while an empty collection means it was explicitly observed empty. We do not store historical addon aggregates in Core.
 
 The recorder's current persisted crafts expose recipe/output IDs, output quantity/quality, timestamps, operation IDs, concentration spent/currency, ingenuity proc/refund, multicraft bonus and sometimes Resourcefulness completion. The source also contains request/allocation, reagent and dimension tables. The SavedVariables adapter will resolve those links and collapse slot-level reagent detail to the agreed craft × item grain. These fields may be absent from individual records; not all crafts can have all measurements reconstructed.
 
-## Game project compatibility
+## Game context and expansion classification
 
-`GameProject` is an `int`-backed enum of Blizzard `WOW_PROJECT_ID` values (Retail, Classic Era, WoW Labs, TBC, Wrath, Cataclysm, Forever/Camelot and Mists). A caller can use `(GameProject)id` for a future client without a Core release; never validate against `Enum.IsDefined` as a requirement. The per-craft `Project` property is nullable so legacy observations without reliable project metadata remain unknown, not assumed Retail. During reconciliation, unknown values may be enriched while two distinct known project IDs conflict. A game project is **not** an expansion, season, progression track, profession skill line or addon API family. Dimensions still need a separate cross-project namespace policy before importing mixed project data into one history.
+Each canonical `CraftObservation` has a **required** `GameContext(GameProject Project, string? ProgressionTrack)`. `GameProject` is an int-backed open enum of Blizzard project IDs, including Retail, Classic and Forever; a future positive numeric project ID remains representable. `ProgressionTrack` optionally identifies a distinct realm/ruleset history within the same game project (for example Classic Era versus Hardcore). It is **not an expansion** and must be established from trustworthy source context rather than guessed.
+
+`ProfessionExpansionKey` is a separate **optional** craft classification, for filtering Retail Midnight crafts separately from Dragonflight crafts recorded in the same Retail game. Unknown classification stays null; it must not be inferred from the craft timestamp or assumed to be the current expansion. It is not a requirement for Classic or Forever to expose Retail-style profession divisions.
+
+All character/item/recipe/profession/expansion **dimension keys are scoped by `GameContext`**, including numeric Blizzard IDs, so a recipe ID reused by Forever cannot be accidentally merged with the Retail recipe of the same number. Same craft identity with contradictory game contexts is a conflict, not an automatic move. Source adapters must establish the context before promoting imported crafts into canonical history; background imports may run for multiple contexts, but analytical queries must be restricted to **one selected context**, with optional profession expansion filtering.
 
 ## Identity and provenance
 
