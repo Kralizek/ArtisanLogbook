@@ -39,7 +39,7 @@ public class GameProjectTests
     [Test]
     public void IdenticalGameContextsMerge()
     {
-        HistoryMergeResult result = HistoryReconciler.Merge([Craft(new GameContext(GameProject.Retail))], [Craft(new GameContext(GameProject.Forever))]);
+        HistoryMergeResult result = HistoryReconciler.Merge([Craft(new GameContext(GameProject.Retail))], [Craft(new GameContext(GameProject.Retail))]);
         Assert.That(result.IsSuccessful, Is.True);
         Assert.That(result.Observations!.Single().Game.Project, Is.EqualTo(GameProject.Retail));
     }
@@ -56,6 +56,6 @@ public class GameProjectTests
     [Test]
     public void GameProjectAffectsCraftValueEquality()
     {
-        Assert.That(Craft(GameProject.Retail), Is.Not.EqualTo(Craft(GameProject.Forever)));
+        Assert.That(Craft(new GameContext(GameProject.Retail)), Is.Not.EqualTo(Craft(new GameContext(GameProject.Forever))));
     }
 }
