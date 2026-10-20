@@ -20,11 +20,19 @@ public static class CraftHistoryValidator
                     errors.Add(new(null, category, $"Duplicate {category} identity: {key}."));
         }
 
-        CheckUnique(dimensions.Characters.Select(x => x.Identity), "CharacterDimension");
-        CheckUnique(dimensions.Recipes.Select(x => x.Id), "RecipeDimension");
+        CheckUnique(dimensions.Characters.Select(x => (x.Game, x.Identity)), "CharacterDimension");
+        CheckUnique(dimensions.Recipes.Select(x => (x.Game, x.Id)), "RecipeDimension");
         CheckUnique(dimensions.Items.Select(x => x.Id), "ItemDimension");
         CheckUnique(dimensions.Professions.Select(x => x.Id), "ProfessionDimension");
-        CheckUnique(dimensions.Expansions.Select(x => x.Key), "ExpansionDimension");
+        CheckUnique(dimensions.Expansions.Select(x => (x.Game, x.Key)), "ExpansionDimension");
+
+        foreach (GameContext game in dimensions.Characters.Select(x => x.Game)
+            .Concat(dimensions.Recipes.Select(x => x.Game))
+            .Concat(dimensions.Items.Select(x => x.Game))
+            .Concat(dimensions.Professions.Select(x => x.Game))
+            .Concat(dimensions.Expansions.Select(x => x.Game)))
+            if (game is null)
+                errors.Add(new(null, "Game", "Every dimension requires a game context."));
 
         foreach (RecipeDimension recipe in dimensions.Recipes)
         {
