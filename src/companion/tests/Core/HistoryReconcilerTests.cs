@@ -46,7 +46,7 @@ public class HistoryReconcilerTests
         CraftObservation repaired = Craft("ledger-a", "1", 789);
         HistoryMergeResult result = HistoryReconciler.Merge([unknown], [repaired]);
         Assert.That(result.IsSuccessful, Is.True);
-        Assert.That(result.Observations.Single().RecipeId, Is.EqualTo(789));
+        Assert.That(result.Observations!.Single().RecipeId, Is.EqualTo(789));
     }
 
     [Test]
@@ -56,7 +56,7 @@ public class HistoryReconcilerTests
         CraftObservation complete = Craft("ledger", "1") with { HasResourcefulnessProc = false };
         HistoryMergeResult result = HistoryReconciler.Merge([partial], [complete]);
         Assert.That(result.IsSuccessful, Is.True);
-        Assert.That(result.Observations.Single().HasResourcefulnessProc, Is.False);
+        Assert.That(result.Observations!.Single().HasResourcefulnessProc, Is.False);
     }
 
     [Test]
