@@ -53,7 +53,7 @@ public static class CraftHistoryReconciler
 
         IReadOnlyList<CharacterDimension> characters = Join(
             "Character", left.Dimensions.Characters, right.Dimensions.Characters,
-            c => c.Identity.Key,
+            c => (c.Game, c.Identity.Key),
             (a, b) => a with
             {
                 Name = Name(a.Name, b.Name),
@@ -62,14 +62,14 @@ public static class CraftHistoryReconciler
 
         IReadOnlyList<ItemDimension> items = Join(
             "Item", left.Dimensions.Items, right.Dimensions.Items,
-            i => i.Id, (a, b) => a with { Name = Name(a.Name, b.Name) });
+            i => (i.Game, i.Id), (a, b) => a with { Name = Name(a.Name, b.Name) });
 
         IReadOnlyList<RecipeDimension> recipes = Join(
             "Recipe", left.Dimensions.Recipes, right.Dimensions.Recipes,
-            r => r.Id, (a, b) =>
+            r => (r.Game, r.Id), (a, b) =>
             {
-                if (a.ExpansionKey is not null && b.ExpansionKey is not null && a.ExpansionKey != b.ExpansionKey)
-                    Conflict("Recipe", a.Id.ToString(), nameof(RecipeDimension.ExpansionKey));
+                if (a.ProfessionExpansionKey is not null && b.ProfessionExpansionKey is not null && a.ProfessionExpansionKey != b.ProfessionExpansionKey)
+                    Conflict("Recipe", a.Id.ToString(), nameof(RecipeDimension.ProfessionExpansionKey));
                 if (a.MaxQuality is not null && b.MaxQuality is not null && a.MaxQuality != b.MaxQuality)
                     Conflict("Recipe", a.Id.ToString(), nameof(RecipeDimension.MaxQuality));
                 if (a.ProfessionId is not null && b.ProfessionId is not null && a.ProfessionId != b.ProfessionId)
@@ -78,14 +78,14 @@ public static class CraftHistoryReconciler
                 {
                     Name = Name(a.Name, b.Name),
                     ProfessionId = a.ProfessionId ?? b.ProfessionId,
-                    ExpansionKey = a.ExpansionKey ?? b.ExpansionKey,
+                    ProfessionExpansionKey = a.ProfessionExpansionKey ?? b.ProfessionExpansionKey,
                     MaxQuality = a.MaxQuality ?? b.MaxQuality
                 };
             });
 
         IReadOnlyList<ProfessionDimension> professions = Join(
             "Profession", left.Dimensions.Professions, right.Dimensions.Professions,
-            p => p.Id, (a, b) =>
+            p => (p.Game, p.Id), (a, b) =>
             {
                 if (a.ParentId is not null && b.ParentId is not null && a.ParentId != b.ParentId)
                     Conflict("Profession", a.Id.ToString(), nameof(ProfessionDimension.ParentId));
@@ -98,7 +98,7 @@ public static class CraftHistoryReconciler
 
         IReadOnlyList<ExpansionDimension> expansions = Join(
             "Expansion", left.Dimensions.Expansions, right.Dimensions.Expansions,
-            e => e.Key, (a, b) => a with { Name = Name(a.Name, b.Name) });
+            e => (e.Game, e.Key), (a, b) => a with { Name = Name(a.Name, b.Name) });
 
         if (!crafts.IsSuccessful || errors.Count > 0)
             return new(null, crafts.Conflicts, errors);
