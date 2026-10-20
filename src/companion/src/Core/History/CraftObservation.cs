@@ -16,7 +16,8 @@ public sealed record CraftObservation(
     int? MulticraftBonus = null,
     IReadOnlyList<CraftReagent>? Reagents = null,
     IReadOnlyList<CraftOutput>? Outputs = null,
-    CraftProvenance? Provenance = null)
+    CraftProvenance? Provenance = null,
+    GameProject? Project = null)
 {
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
@@ -36,6 +37,7 @@ public sealed record CraftObservation(
             && HasIngenuityProc == other.HasIngenuityProc
             && HasResourcefulnessProc == other.HasResourcefulnessProc
             && MulticraftBonus == other.MulticraftBonus
+            && Project == other.Project
             && Provenance == other.Provenance
             && EqualCollections(Reagents, other.Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity))
             && EqualCollections(Outputs, other.Outputs, o => (o.ItemId, o.Quality, o.Quantity));
@@ -57,6 +59,7 @@ public sealed record CraftObservation(
         hash.Add(HasResourcefulnessProc);
         hash.Add(MulticraftBonus);
         hash.Add(Provenance);
+        hash.Add(Project);
         AddCollectionHash(ref hash, Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity));
         AddCollectionHash(ref hash, Outputs, o => (o.ItemId, o.Quality, o.Quantity));
         return hash.ToHashCode();
