@@ -13,6 +13,10 @@ Core owns **C01 Craft History Model** and **C02 History Reconciliation** from th
 
 The recorder's current persisted crafts expose recipe/output IDs, output quantity/quality, timestamps, operation IDs, concentration spent/currency, ingenuity proc/refund, multicraft bonus and sometimes Resourcefulness completion. The source also contains request/allocation, reagent and dimension tables. The SavedVariables adapter will resolve those links and collapse slot-level reagent detail to the agreed craft × item grain. These fields may be absent from individual records; not all crafts can have all measurements reconstructed.
 
+## Game project compatibility
+
+`GameProject` is an `int`-backed enum of Blizzard `WOW_PROJECT_ID` values (Retail, Classic Era, WoW Labs, TBC, Wrath, Cataclysm, Forever/Camelot and Mists). A caller can use `(GameProject)id` for a future client without a Core release; never validate against `Enum.IsDefined` as a requirement. The per-craft `Project` property is nullable so legacy observations without reliable project metadata remain unknown, not assumed Retail. During reconciliation, unknown values may be enriched while two distinct known project IDs conflict. A game project is **not** an expansion, season, progression track, profession skill line or addon API family. Dimensions still need a separate cross-project namespace policy before importing mixed project data into one history.
+
 ## Identity and provenance
 
 `CraftIdentity(Origin, Observation)` denotes a craft's durable identity in a **provenance namespace**. Its two strings are a model contract, **not proof that an imported legacy ledger has globally unique craft IDs**.
