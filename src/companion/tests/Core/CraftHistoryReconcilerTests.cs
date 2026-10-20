@@ -7,21 +7,22 @@ namespace Tests.History;
 [TestFixture]
 public class CraftHistoryReconcilerTests
 {
+    private static readonly GameContext Game = new(GameProject.Retail);
     private static readonly CharacterIdentity Character =
         new("project:1:region:3:realm:1309:guid:Player-1309-0ABC1234");
 
     private static CraftObservation Craft(string origin, string id, int recipe) =>
-        new(new(origin, id), DateTimeOffset.UnixEpoch, recipe, Character,
+        new(new(origin, id), Game, DateTimeOffset.UnixEpoch, recipe, Character,
             Reagents: [new(240991, 5, null), new(236761, 8, 2)],
             Outputs: [new(241308, 2, 5)]);
 
     private static CraftHistory History(params CraftObservation[] crafts) =>
         new(crafts, new(
-            [new(Character, "Jeany", "MAGE")],
-            [new(123, "Potion One", 171)],
-            [new(171, "Alchemy")],
-            [new(241308, "Potion One")],
-            [new("skillLine:2915", "Midnight")]));
+            [new(Game, Character, "Jeany", "MAGE")],
+            [new(Game, 123, "Potion One", 171)],
+            [new(Game, 171, "Alchemy")],
+            [new(Game, 241308, "Potion One")],
+            [new(Game, "skillLine:2915", "Midnight")]));
 
     [Test]
     public void IndependentlyAddedCraftsMergeAndPreserveTypedFacts()
@@ -57,7 +58,7 @@ public class CraftHistoryReconcilerTests
         {
             Dimensions = a.Dimensions with
             {
-                Recipes = [new RecipeDimension(123, "Potion One", 333)]
+                Recipes = [new RecipeDimension(Game, 123, "Potion One", 333)]
             }
         };
 
@@ -154,7 +155,7 @@ public class CraftHistoryReconcilerTests
         {
             Dimensions = a.Dimensions with
             {
-                Expansions = [new ExpansionDimension("skillLine:2915", "Midnight")]
+                Expansions = [new ExpansionDimension(Game, "skillLine:2915", "Midnight")]
             }
         };
 
@@ -169,11 +170,11 @@ public class CraftHistoryReconcilerTests
     {
         CraftHistory a = History(Craft("origin-a", "1", 123)) with
         {
-            Dimensions = CraftDimensions.Empty with { Recipes = [new RecipeDimension(123, MaxQuality: 3)] }
+            Dimensions = CraftDimensions.Empty with { Recipes = [new RecipeDimension(Game, 123, MaxQuality: 3)] }
         };
         CraftHistory b = a with
         {
-            Dimensions = CraftDimensions.Empty with { Recipes = [new RecipeDimension(123, MaxQuality: 5)] }
+            Dimensions = CraftDimensions.Empty with { Recipes = [new RecipeDimension(Game, 123, MaxQuality: 5)] }
         };
 
         CraftHistoryMergeResult result = CraftHistoryReconciler.Merge(a, b);
