@@ -54,6 +54,31 @@ public class GameProjectTests
     }
 
     [Test]
+    public void ProgressionTrackDistinguishesSameProject()
+    {
+        GameContext era = new(GameProject.ClassicEra, "era");
+        GameContext hardcore = new(GameProject.ClassicEra, "hardcore");
+        Assert.That(Craft(era), Is.Not.EqualTo(Craft(hardcore)));
+        Assert.That(HistoryReconciler.Merge([Craft(era)], [Craft(hardcore)]).IsSuccessful, Is.False);
+    }
+
+    [Test]
+    public void ProfessionExpansionDoesNotChangeGameContext()
+    {
+        CraftObservation midnight = Craft(new GameContext(GameProject.Retail)) with
+        {
+            ProfessionExpansionKey = "skillLine:2915"
+        };
+        CraftObservation dragonflight = midnight with
+        {
+            Identity = new CraftIdentity("origin", "craft-2"),
+            ProfessionExpansionKey = "skillLine:2823"
+        };
+        Assert.That(midnight.Game, Is.EqualTo(dragonflight.Game));
+        Assert.That(HistoryReconciler.Merge([midnight], [dragonflight]).Observations, Has.Count.EqualTo(2));
+    }
+
+    [Test]
     public void GameProjectAffectsCraftValueEquality()
     {
         Assert.That(Craft(new GameContext(GameProject.Retail)), Is.Not.EqualTo(Craft(new GameContext(GameProject.Forever))));
