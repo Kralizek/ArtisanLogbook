@@ -94,7 +94,7 @@ public class CraftObservationTests
         Assert.That(forward.IsSuccessful, Is.True);
         Assert.That(backward.IsSuccessful, Is.True);
         Assert.That(forward.Observations, Is.EqualTo(backward.Observations));
-        Assert.That(forward.Observations[0].Reagents![1].AllocatedQuantity, Is.EqualTo(8));
+        Assert.That(forward.Observations![0].Reagents![1].AllocatedQuantity, Is.EqualTo(8));
     }
 
     [Test]
