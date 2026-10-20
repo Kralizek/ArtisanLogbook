@@ -110,6 +110,7 @@ end
 environment.CreateFrame = function(kind, name, parent, template)
   local frame = object()
   frame.kind, frame.name, frame.parent, frame.template = kind, name, parent, template
+  if kind == "EditBox" then frame.GetStringHeight = false end -- FontString-only API
   if template == "BasicFrameTemplateWithInset" then frame.TitleText = object() end
   if template == "TabSystemButtonArtTemplate" then
     frame.Text = object()
@@ -315,12 +316,11 @@ addon.recorder.database.records = savedRecords
 click("Export")
 assert(#displayedExport().records == 0)
 print("PASS bounded trace export with latest-page default and pagination")
+-- Retail multiline EditBoxes size themselves; do not invoke FontString-only methods.
+assert(textEditBox.GetStringHeight == false)
+assert(textEditBox.scripts.OnTextChanged == nil)
 textEditBox:SetText("short export")
-textEditBox.scripts.OnTextChanged()
-assert(textEditBox.height == scrollFrame:GetHeight())
 textEditBox:SetText(string.rep("long line\n", 100))
-textEditBox.scripts.OnTextChanged()
-assert(textEditBox.height > scrollFrame:GetHeight())
 click("Start")
 click("Clear Trace")
 assert(#addon.recorder.database.records == 1)
