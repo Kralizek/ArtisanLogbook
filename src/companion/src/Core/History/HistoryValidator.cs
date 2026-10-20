@@ -25,12 +25,14 @@ public static class HistoryValidator
 
             if (!seen.Add(craft.Identity))
                 errors.Add(new(craft.Identity, "Identity", "Duplicate identity in a single history."));
+            if (craft.Game is null)
+                errors.Add(new(craft.Identity, "Game", "Every craft needs a game context."));
             if (craft.Character is null)
                 errors.Add(new(craft.Identity, "Character", "A craft needs a character identity."));
             if (craft.RecipeId is <= 0)
                 errors.Add(new(craft.Identity, "RecipeId", "Recipe ID must be positive when known."));
-            if (craft.ExpansionKey is not null && string.IsNullOrWhiteSpace(craft.ExpansionKey))
-                errors.Add(new(craft.Identity, "ExpansionKey", "Expansion key cannot be blank."));
+            if (craft.ProfessionExpansionKey is not null && string.IsNullOrWhiteSpace(craft.ProfessionExpansionKey))
+                errors.Add(new(craft.Identity, "ProfessionExpansionKey", "Expansion key cannot be blank."));
             if (craft.ProfessionId is <= 0)
                 errors.Add(new(craft.Identity, "ProfessionId", "Profession ID must be positive when known."));
             if (craft.ConcentrationSpent is < 0 || craft.IngenuityRefund is < 0)
