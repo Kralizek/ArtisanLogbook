@@ -7,10 +7,11 @@ namespace Tests.History;
 [TestFixture]
 public class HistoryReconcilerTests
 {
+    private static readonly GameContext Game = new(GameProject.Retail);
     private static readonly CharacterIdentity Character = new("project:1:region:3:realm:1309:guid:Player-1309-0ABC1234");
 
     private static CraftObservation Craft(string origin, string observation, int? recipe = 123) =>
-        new(new CraftIdentity(origin, observation), DateTimeOffset.UnixEpoch, recipe, Character);
+        new(new CraftIdentity(origin, observation), Game, DateTimeOffset.UnixEpoch, recipe, Character);
 
     [Test]
     public void IdenticalHistoryIsIdempotent()
