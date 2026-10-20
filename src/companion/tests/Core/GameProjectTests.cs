@@ -9,8 +9,8 @@ public class GameProjectTests
 {
     private static readonly CharacterIdentity Character = new("project:1:region:3:realm:1309:guid:Player-1309-12345678");
 
-    private static CraftObservation Craft(GameProject? project) =>
-        new(new CraftIdentity("origin", "craft-1"), DateTimeOffset.UnixEpoch, 123, Character, Project: project);
+    private static CraftObservation Craft(GameContext game) =>
+        new(new CraftIdentity("origin", "craft-1"), game, DateTimeOffset.UnixEpoch, 123, Character);
 
     [Test]
     public void KnownValuesMatchBlizzardProjectIds()
@@ -31,25 +31,25 @@ public class GameProjectTests
     public void UnrecognizedProjectIdRoundTripsWithoutMappingToRetail()
     {
         GameProject future = (GameProject)12345;
-        CraftObservation craft = Craft(future);
-        Assert.That((int)craft.Project!.Value, Is.EqualTo(12345));
-        Assert.That(craft.Project, Is.Not.EqualTo(GameProject.Retail));
+        CraftObservation craft = Craft(new GameContext(future));
+        Assert.That((int)craft.Game.Project, Is.EqualTo(12345));
+        Assert.That(craft.Game.Project, Is.Not.EqualTo(GameProject.Retail));
     }
 
     [Test]
-    public void UnknownProjectCanBeEnrichedByKnownProject()
+    public void IdenticalGameContextsMerge()
     {
-        HistoryMergeResult result = HistoryReconciler.Merge([Craft(null)], [Craft(GameProject.Forever)]);
+        HistoryMergeResult result = HistoryReconciler.Merge([Craft(new GameContext(GameProject.Retail))], [Craft(new GameContext(GameProject.Forever))]);
         Assert.That(result.IsSuccessful, Is.True);
-        Assert.That(result.Observations!.Single().Project, Is.EqualTo(GameProject.Forever));
+        Assert.That(result.Observations!.Single().Game.Project, Is.EqualTo(GameProject.Retail));
     }
 
     [Test]
     public void ContradictoryProjectsProduceConflict()
     {
-        HistoryMergeResult result = HistoryReconciler.Merge([Craft(GameProject.Retail)], [Craft(GameProject.ClassicEra)]);
+        HistoryMergeResult result = HistoryReconciler.Merge([Craft(new GameContext(GameProject.Retail))], [Craft(new GameContext(GameProject.ClassicEra))]);
         Assert.That(result.IsSuccessful, Is.False);
-        Assert.That(result.Conflicts.Select(c => c.Field), Does.Contain(nameof(CraftObservation.Project)));
+        Assert.That(result.Conflicts.Select(c => c.Field), Does.Contain(nameof(CraftObservation.Game)));
         Assert.That(result.Observations, Is.Null);
     }
 
