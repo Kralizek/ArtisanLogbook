@@ -17,7 +17,9 @@ public sealed record CraftObservation(
     int? MulticraftBonus = null,
     IReadOnlyList<CraftReagent>? Reagents = null,
     IReadOnlyList<CraftOutput>? Outputs = null,
-    CraftProvenance? Provenance = null)
+    CraftProvenance? Provenance = null,
+    bool? InputsComplete = null,
+    bool? ResourcefulnessComplete = null)
 {
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
@@ -37,6 +39,8 @@ public sealed record CraftObservation(
             && HasIngenuityProc == other.HasIngenuityProc
             && HasResourcefulnessProc == other.HasResourcefulnessProc
             && MulticraftBonus == other.MulticraftBonus
+            && InputsComplete == other.InputsComplete
+            && ResourcefulnessComplete == other.ResourcefulnessComplete
             && Game == other.Game
             && Provenance == other.Provenance
             && EqualCollections(Reagents, other.Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity))
@@ -59,6 +63,8 @@ public sealed record CraftObservation(
         hash.Add(HasIngenuityProc);
         hash.Add(HasResourcefulnessProc);
         hash.Add(MulticraftBonus);
+        hash.Add(InputsComplete);
+        hash.Add(ResourcefulnessComplete);
         hash.Add(Provenance);
         AddCollectionHash(ref hash, Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity));
         AddCollectionHash(ref hash, Outputs, o => (o.ItemId, o.Quality, o.Quantity));
@@ -98,11 +104,16 @@ public sealed record CharacterIdentity
 }
 
 /// <summary>Source evidence for an observation. A timestamp or operation ID alone is not a globally unique craft key.</summary>
-public sealed record CraftProvenance(string SourceId, long? LocalCraftId = null, long? GameOperationId = null);
+public sealed record CraftProvenance(
+    string SourceId,
+    long? LocalCraftId = null,
+    long? GameOperationId = null,
+    long? LocalRequestId = null,
+    string? SourceSessionId = null,
+    string? ResourcefulnessEvidence = null);
 
 /// <summary>Craft × reagent item grain. Allocated and returned quantities are independently nullable.</summary>
-public sealed record CraftReagent(int ItemId, long? AllocatedQuantity, long? ReturnedQuantity);
+public sealed record CraftReagent(int ItemId, long? AllocatedQuantity, decimal? ReturnedQuantity);
 
 /// <summary>Craft × output item × quality grain. Quality may be unavailable.</summary>
 public sealed record CraftOutput(int ItemId, int? Quality, long Quantity);
-

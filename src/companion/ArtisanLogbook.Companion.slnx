@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Core/Core.csproj" />
+    <Project Path="src/SavedVariables/SavedVariables.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Core/Tests.Core.csproj" />
+    <Project Path="tests/SavedVariables/Tests.SavedVariables.csproj" />
   </Folder>
 </Solution>

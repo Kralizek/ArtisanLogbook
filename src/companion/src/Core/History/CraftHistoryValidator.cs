@@ -22,8 +22,8 @@ public static class CraftHistoryValidator
 
         CheckUnique(dimensions.Characters.Select(x => (x.Game, x.Identity)), "CharacterDimension");
         CheckUnique(dimensions.Recipes.Select(x => (x.Game, x.Id)), "RecipeDimension");
-        CheckUnique(dimensions.Items.Select(x => x.Id), "ItemDimension");
-        CheckUnique(dimensions.Professions.Select(x => x.Id), "ProfessionDimension");
+        CheckUnique(dimensions.Items.Select(x => (x.Game, x.Id)), "ItemDimension");
+        CheckUnique(dimensions.Professions.Select(x => (x.Game, x.Id)), "ProfessionDimension");
         CheckUnique(dimensions.Expansions.Select(x => (x.Game, x.Key)), "ExpansionDimension");
 
         foreach (GameContext game in dimensions.Characters.Select(x => x.Game)

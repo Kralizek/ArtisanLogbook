@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+    <ProjectReference Include="../../src/SavedVariables/SavedVariables.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../../addon/tests/fixtures/legacy/v1-outcome1.lua"
+             Link="Fixtures/v1-outcome1.lua" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../../addon/tests/fixtures/legacy/v1-outcome2.lua"
+             Link="Fixtures/v1-outcome2.lua" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../../addon/tests/fixtures/legacy/ledger-schema3.lua"
+             Link="Fixtures/ledger-schema3.lua" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

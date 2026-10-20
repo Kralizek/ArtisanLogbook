@@ -133,6 +133,31 @@ public class CraftHistoryReconcilerTests
     }
 
     [Test]
+    public void SourceCompletenessEnrichesUnknownValuesAndConflictsWhenContradictory()
+    {
+        CraftObservation partial = Craft("same-ledger", "craft-1", 123) with
+        {
+            InputsComplete = null,
+            ResourcefulnessComplete = null
+        };
+        CraftObservation complete = partial with
+        {
+            InputsComplete = true,
+            ResourcefulnessComplete = true,
+            HasResourcefulnessProc = true
+        };
+        CraftHistoryMergeResult enriched = CraftHistoryReconciler.Merge(History(partial), History(complete));
+        CraftObservation contradiction = complete with { InputsComplete = false };
+        CraftHistoryMergeResult conflict = CraftHistoryReconciler.Merge(
+            History(complete), History(contradiction));
+
+        Assert.That(enriched.IsSuccessful, Is.True);
+        Assert.That(enriched.History!.Crafts.Single().InputsComplete, Is.True);
+        Assert.That(enriched.History.Crafts.Single().ResourcefulnessComplete, Is.True);
+        Assert.That(conflict.IsSuccessful, Is.False);
+    }
+
+    [Test]
     public void LocalIdCollisionUnderSharedOriginIsReportedInsteadOfInventingANewIdentity()
     {
         CraftObservation a = Craft("cloned-ledger", "237", 123);

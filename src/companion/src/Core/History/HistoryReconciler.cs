@@ -56,6 +56,34 @@ public static class HistoryReconciler
             return x ?? y;
         }
 
+        string? OptionalText(string field, string? x, string? y)
+        {
+            if (x is not null && y is not null && !string.Equals(x, y, StringComparison.Ordinal))
+                conflicts.Add(new(identity, field, "Two different known values; correction precedence is unknown."));
+            return x ?? y;
+        }
+
+        CraftProvenance? MergeProvenance()
+        {
+            if (a.Provenance is null) return b.Provenance;
+            if (b.Provenance is null) return a.Provenance;
+            if (!string.Equals(a.Provenance.SourceId, b.Provenance.SourceId, StringComparison.Ordinal))
+                conflicts.Add(new(identity, nameof(a.Provenance), "Source identity differs."));
+            return a.Provenance with
+            {
+                LocalCraftId = Optional(nameof(CraftProvenance.LocalCraftId),
+                    a.Provenance.LocalCraftId, b.Provenance.LocalCraftId),
+                GameOperationId = Optional(nameof(CraftProvenance.GameOperationId),
+                    a.Provenance.GameOperationId, b.Provenance.GameOperationId),
+                LocalRequestId = Optional(nameof(CraftProvenance.LocalRequestId),
+                    a.Provenance.LocalRequestId, b.Provenance.LocalRequestId),
+                SourceSessionId = OptionalText(nameof(CraftProvenance.SourceSessionId),
+                    a.Provenance.SourceSessionId, b.Provenance.SourceSessionId),
+                ResourcefulnessEvidence = OptionalText(nameof(CraftProvenance.ResourcefulnessEvidence),
+                    a.Provenance.ResourcefulnessEvidence, b.Provenance.ResourcefulnessEvidence)
+            };
+        }
+
         if (a.Game != b.Game)
             conflicts.Add(new(identity, nameof(a.Game), "Game contexts differ for the same craft identity."));
         if (a.ProfessionExpansionKey is not null && b.ProfessionExpansionKey is not null && a.ProfessionExpansionKey != b.ProfessionExpansionKey)
@@ -64,9 +92,6 @@ public static class HistoryReconciler
             conflicts.Add(new(identity, nameof(a.RecordedAt), "Timestamp differs for the same craft identity."));
         if (a.Character != b.Character)
             conflicts.Add(new(identity, nameof(a.Character), "Character identity differs for the same craft."));
-        if (a.Provenance is not null && b.Provenance is not null && a.Provenance != b.Provenance)
-            conflicts.Add(new(identity, nameof(a.Provenance), "Source evidence differs."));
-
         IReadOnlyList<CraftReagent>? MergeReagents()
         {
             if (a.Reagents is null) return b.Reagents;
@@ -119,9 +144,11 @@ public static class HistoryReconciler
             HasIngenuityProc = Optional(nameof(a.HasIngenuityProc), a.HasIngenuityProc, b.HasIngenuityProc),
             HasResourcefulnessProc = Optional(nameof(a.HasResourcefulnessProc), a.HasResourcefulnessProc, b.HasResourcefulnessProc),
             MulticraftBonus = Optional(nameof(a.MulticraftBonus), a.MulticraftBonus, b.MulticraftBonus),
+            InputsComplete = Optional(nameof(a.InputsComplete), a.InputsComplete, b.InputsComplete),
+            ResourcefulnessComplete = Optional(nameof(a.ResourcefulnessComplete), a.ResourcefulnessComplete, b.ResourcefulnessComplete),
             Reagents = MergeReagents(),
             Outputs = MergeOutputs(),
-            Provenance = a.Provenance ?? b.Provenance
+            Provenance = MergeProvenance()
         };
     }
 }

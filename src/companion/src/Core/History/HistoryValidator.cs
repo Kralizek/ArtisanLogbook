@@ -41,6 +41,13 @@ public static class HistoryValidator
                 errors.Add(new(craft.Identity, "ConcentrationCurrencyId", "Currency ID must be positive when known."));
             if (craft.MulticraftBonus is < 0)
                 errors.Add(new(craft.Identity, "MulticraftBonus", "Multicraft bonus cannot be negative."));
+            if (craft.InputsComplete == true && craft.Reagents is null)
+                errors.Add(new(craft.Identity, "InputsComplete", "Complete input evidence requires an observed reagent collection."));
+            if (craft.InputsComplete == true && craft.Reagents is not null &&
+                craft.Reagents.Any(r => r.AllocatedQuantity is null))
+                errors.Add(new(craft.Identity, "InputsComplete", "Complete input evidence requires every reagent allocation to be known."));
+            if (craft.ResourcefulnessComplete == true && craft.HasResourcefulnessProc is null)
+                errors.Add(new(craft.Identity, "ResourcefulnessComplete", "Complete Resourcefulness evidence requires an observed proc outcome."));
             HashSet<int> reagentItems = [];
             foreach (CraftReagent reagent in craft.Reagents ?? [])
             {
@@ -49,6 +56,12 @@ public static class HistoryValidator
                 if (!reagentItems.Add(reagent.ItemId))
                     errors.Add(new(craft.Identity, "Reagents", "Reagent rows must be aggregated at craft × item grain."));
             }
+            if (craft.HasResourcefulnessProc == false &&
+                (craft.Reagents ?? []).Any(r => r.ReturnedQuantity is > 0))
+                errors.Add(new(craft.Identity, "HasResourcefulnessProc", "A negative Resourcefulness outcome conflicts with a positive returned quantity."));
+            if (craft.ResourcefulnessComplete == true && craft.HasResourcefulnessProc == true &&
+                !(craft.Reagents ?? []).Any(r => r.ReturnedQuantity is > 0))
+                errors.Add(new(craft.Identity, "ResourcefulnessComplete", "A complete positive proc requires at least one observed positive returned quantity."));
 
             HashSet<(int, int?)> outputItems = [];
             foreach (CraftOutput output in craft.Outputs ?? [])

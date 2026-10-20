@@ -24,7 +24,10 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           global-json-file: src/companion/global.json
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y lua5.1
       - run: dotnet restore ArtisanLogbook.Companion.slnx
       - run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
       - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
       - run: dotnet test tests/Core/Tests.Core.csproj --no-build -c Release
+      - run: dotnet test tests/SavedVariables/Tests.SavedVariables.csproj --no-build -c Release
