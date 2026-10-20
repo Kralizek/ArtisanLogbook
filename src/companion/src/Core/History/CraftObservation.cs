@@ -3,11 +3,12 @@ namespace ArtisanLogbook.History;
 /// <summary>A single completed craft attempt. Null measurements mean unobserved, not zero.</summary>
 public sealed record CraftObservation(
     CraftIdentity Identity,
+    GameContext Game,
     DateTimeOffset RecordedAt,
     int? RecipeId,
     CharacterIdentity Character,
     int? ProfessionId = null,
-    string? ExpansionKey = null,
+    string? ProfessionExpansionKey = null,
     int? ConcentrationSpent = null,
     int? IngenuityRefund = null,
     int? ConcentrationCurrencyId = null,
@@ -16,8 +17,7 @@ public sealed record CraftObservation(
     int? MulticraftBonus = null,
     IReadOnlyList<CraftReagent>? Reagents = null,
     IReadOnlyList<CraftOutput>? Outputs = null,
-    CraftProvenance? Provenance = null,
-    GameProject? Project = null)
+    CraftProvenance? Provenance = null)
 {
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
@@ -30,14 +30,14 @@ public sealed record CraftObservation(
             && RecipeId == other.RecipeId
             && Character == other.Character
             && ProfessionId == other.ProfessionId
-            && ExpansionKey == other.ExpansionKey
+            && ProfessionExpansionKey == other.ProfessionExpansionKey
             && ConcentrationSpent == other.ConcentrationSpent
             && IngenuityRefund == other.IngenuityRefund
             && ConcentrationCurrencyId == other.ConcentrationCurrencyId
             && HasIngenuityProc == other.HasIngenuityProc
             && HasResourcefulnessProc == other.HasResourcefulnessProc
             && MulticraftBonus == other.MulticraftBonus
-            && Project == other.Project
+            && Game == other.Game
             && Provenance == other.Provenance
             && EqualCollections(Reagents, other.Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity))
             && EqualCollections(Outputs, other.Outputs, o => (o.ItemId, o.Quality, o.Quantity));
@@ -47,11 +47,12 @@ public sealed record CraftObservation(
     {
         HashCode hash = new();
         hash.Add(Identity);
+        hash.Add(Game);
         hash.Add(RecordedAt);
         hash.Add(RecipeId);
         hash.Add(Character);
         hash.Add(ProfessionId);
-        hash.Add(ExpansionKey);
+        hash.Add(ProfessionExpansionKey);
         hash.Add(ConcentrationSpent);
         hash.Add(IngenuityRefund);
         hash.Add(ConcentrationCurrencyId);
@@ -59,7 +60,6 @@ public sealed record CraftObservation(
         hash.Add(HasResourcefulnessProc);
         hash.Add(MulticraftBonus);
         hash.Add(Provenance);
-        hash.Add(Project);
         AddCollectionHash(ref hash, Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity));
         AddCollectionHash(ref hash, Outputs, o => (o.ItemId, o.Quality, o.Quantity));
         return hash.ToHashCode();
