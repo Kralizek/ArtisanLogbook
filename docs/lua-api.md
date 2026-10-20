@@ -27,9 +27,8 @@ pruning and orphan collection; paging does not limit retention. Configuration
 summary rows keep context/evidence populations separate even when their keys match.
 Queries can select `contextSource` and `configurationObservation` independently.
 
-Versioning is relative to target `master`: its API is v1 and these additions keep
-that contract version. Its ledger is schema 3; this PR adds final schema 4 directly,
-without preserving migrations for intermediate review-only layouts.
+API version 1 remains stable. PR #43 adds schema 5 over target schema 4;
+supported older persistence schemas migrate without changing API version.
 
 UI and addon consumers use the global `ArtisanLogbookAPI`, not SavedVariables,
 dimension rows, or the private Core addon namespace. The API is loaded before
@@ -131,6 +130,16 @@ retained reagent facts, not proof of no reagent consumption. `request` is absent
 without a correlated submission; `request.allocations` is absent without a
 captured selection. No context, order/customer data, or source is fabricated.
 Request quotes remain separate from observed result measurements.
+Logical attempts add `attemptKind`, `outputs`, optional `lastObservedAt` and
+`outputAmbiguous`. Each detached output has resolved `item`, `quantity`, optional
+`quality`/`itemLevel`, `timestamp`, `measurements`, positive `returns`, optional
+`legacyCraftId` and `quantityAmbiguous`. These are ordered observations, not extra
+attempts. Repeated indistinguishable identities must not be summed as guaranteed
+additional items. `outputQuantity` sums distinct observed outputs only while
+unambiguous, with once-per-attempt coverage; uncertain quantities remain absent.
+Single-item aliases are absent for multiple observations. Inputs/configuration
+belong to the parent, not duplicated children. `CRAFT_COMMITTED` may publish an
+updated existing ID when a sibling arrives; consumers refresh/upsert by ID.
 `hasResourcefulnessProc` is present only when a return outcome was captured;
 `resourcefulnessComplete` is true only when the callback's returned-item list was
 complete and valid. A positive item fact can establish a proc even when the full
@@ -181,9 +190,10 @@ reload/login ordering with in-flight callbacks remains a live-validation boundar
 
 Call-backed `CraftSalvage` results can carry recipe identity without a personal
 request or authoritative outcome. Runtime correlation counts distinct operation
-IDs against the submitted batch count; multiple outputs retain identity through
-a bounded 64-ID cache and do not consume extra positions. This bounds recent
-identity recovery, not batch size or craft count. Eviction retains the existing
+IDs against the submitted batch count; multiple outputs amend one persisted
+attempt without consuming extra positions. Explicit retained attempts are indexed
+by session/operation, supplemented by a 64-ID parent cache after pruning. This
+bounds pruned-parent recovery, not batch size. Eviction retains the existing
 session-long seen-ID rejection, so an evicted ID cannot acquire a new recipe.
 Completing the submitted count retires outstanding salvage state; an unexpected
 complete unseen result before the next submission quarantines future unseen

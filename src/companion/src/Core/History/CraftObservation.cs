@@ -19,7 +19,8 @@ public sealed record CraftObservation(
     IReadOnlyList<CraftOutput>? Outputs = null,
     CraftProvenance? Provenance = null,
     bool? InputsComplete = null,
-    bool? ResourcefulnessComplete = null)
+    bool? ResourcefulnessComplete = null,
+    IReadOnlyList<CraftOutputObservation>? OutputObservations = null)
 {
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
@@ -44,7 +45,9 @@ public sealed record CraftObservation(
             && Game == other.Game
             && Provenance == other.Provenance
             && EqualCollections(Reagents, other.Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity))
-            && EqualCollections(Outputs, other.Outputs, o => (o.ItemId, o.Quality, o.Quantity));
+            && EqualCollections(Outputs, other.Outputs, o => (o.ItemId, o.Quality, o.Quantity))
+            && (OutputObservations is null ? other.OutputObservations is null :
+                other.OutputObservations is not null && OutputObservations.SequenceEqual(other.OutputObservations));
     }
 
     public override int GetHashCode()
@@ -68,6 +71,8 @@ public sealed record CraftObservation(
         hash.Add(Provenance);
         AddCollectionHash(ref hash, Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity));
         AddCollectionHash(ref hash, Outputs, o => (o.ItemId, o.Quality, o.Quantity));
+        hash.Add(OutputObservations is not null);
+        foreach (CraftOutputObservation observation in OutputObservations ?? []) hash.Add(observation);
         return hash.ToHashCode();
     }
 
@@ -117,3 +122,35 @@ public sealed record CraftReagent(int ItemId, long? AllocatedQuantity, decimal? 
 
 /// <summary>Craft × output item × quality grain. Quality may be unavailable.</summary>
 public sealed record CraftOutput(int ItemId, int? Quality, long Quantity);
+
+public sealed record CraftResultMeasurements(
+    int? MulticraftBonus = null,
+    int? ConcentrationSpent = null,
+    int? ConcentrationCurrencyId = null,
+    bool? HasIngenuityProc = null,
+    int? IngenuityRefund = null);
+
+/// <summary>An ordered callback observation, not an additional attempt or a guaranteed distinct output.</summary>
+public sealed record CraftOutputObservation(
+    CraftOutput Output,
+    DateTimeOffset ObservedAt,
+    CraftResultMeasurements Measurements,
+    IReadOnlyList<CraftReagent> Returns,
+    int? ItemLevel = null,
+    bool QuantityAmbiguous = false,
+    long? LegacyCraftId = null)
+{
+    public bool Equals(CraftOutputObservation? other) => other is not null &&
+        Output == other.Output && ObservedAt == other.ObservedAt && Measurements == other.Measurements &&
+        ItemLevel == other.ItemLevel && QuantityAmbiguous == other.QuantityAmbiguous && LegacyCraftId == other.LegacyCraftId &&
+        Returns.OrderBy(row => row.ItemId).SequenceEqual(other.Returns.OrderBy(row => row.ItemId));
+
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        hash.Add(Output); hash.Add(ObservedAt); hash.Add(Measurements);
+        hash.Add(ItemLevel); hash.Add(QuantityAmbiguous); hash.Add(LegacyCraftId);
+        foreach (CraftReagent row in Returns.OrderBy(row => row.ItemId)) hash.Add(row);
+        return hash.ToHashCode();
+    }
+}

@@ -32,7 +32,7 @@ public sealed record SavedVariablesImportResult(
 /// <summary>Maps supported ArtisanLogbook Core ledgers to canonical craft observations.</summary>
 public static class SavedVariablesReader
 {
-    private static readonly HashSet<int> SupportedSchemas = [1, 2, 3, 4];
+    private static readonly HashSet<int> SupportedSchemas = [1, 2, 3, 4, 5];
 
     public static SavedVariablesImportResult Parse(string source, string sourceName = "<memory>")
     {
@@ -90,7 +90,7 @@ public static class SavedVariablesReader
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "unsupported-schema",
                 "ArtisanLogbookDB.schemaVersion", schemaVersion is null
                     ? "Ledger schemaVersion is missing or invalid."
-                    : $"Ledger schema version {schemaVersion.Value} is not supported; supported versions are 1 through 4."));
+                    : $"Ledger schema version {schemaVersion.Value} is not supported; supported versions are 1 through 5."));
             return new(schemaVersion, null, diagnostics, new(0, false));
         }
         if (!string.Equals(ledger.Get("schemaIdentity") as string, "ArtisanLogbookLedger", StringComparison.Ordinal))
@@ -348,8 +348,17 @@ public static class SavedVariablesReader
                 expansionKey = row.Get("companionProfessionExpansionKey") as string;
 
             List<CraftOutput> outputs = [];
+            IReadOnlyList<CraftOutputObservation>? outputObservations = null;
             foreach (LuaTable outputRow in group)
             {
+                if (outputRow.ContainsKey("outputs"))
+                {
+                    IReadOnlyList<CraftOutputObservation> observations = ReadOutputObservations(outputRow, schemaVersion.Value, diagnostics, location);
+                    outputs.AddRange(observations.Where(observation => !observation.QuantityAmbiguous).Select(observation => observation.Output));
+                    if (Boolean(outputRow.Get("companionOutputObservationsPresent")) != false)
+                        outputObservations = observations;
+                    continue;
+                }
                 int? itemId = Integer(outputRow.Get("outputItemId"));
                 long? quantity = Long(outputRow.Get("outputQuantity"));
                 if (itemId is null && quantity is null) continue;
@@ -449,6 +458,12 @@ public static class SavedVariablesReader
                 AddItemDimension(game, reagent.ItemId, itemRows, itemDimensions, seenItems);
             foreach (CraftOutput output in observedOutputs ?? [])
                 AddItemDimension(game, output.ItemId, itemRows, itemDimensions, seenItems);
+            foreach (CraftOutputObservation observation in outputObservations ?? [])
+            {
+                AddItemDimension(game, observation.Output.ItemId, itemRows, itemDimensions, seenItems);
+                foreach (CraftReagent returned in observation.Returns)
+                    AddItemDimension(game, returned.ItemId, itemRows, itemDimensions, seenItems);
+            }
             if (recipeId is > 0)
                 AddRecipeDimension(game, recipeId.Value, recipe, recipeProfessionId, recipeExpansionKey,
                     recipeDimensions, seenRecipes);
@@ -559,7 +574,8 @@ public static class SavedVariablesReader
                 observedOutputs,
                 provenance,
                 inputsComplete,
-                resourcefulnessComplete));
+                resourcefulnessComplete,
+                outputObservations));
         }
 
         long aggregateOnlyCount = CountAggregateOnly(ledger, sessions);
@@ -578,6 +594,68 @@ public static class SavedVariablesReader
                 error.Message));
         return new(schemaVersion, history, diagnostics,
             new(aggregateOnlyCount, aggregateOnlyCount > 0));
+    }
+
+    private static IReadOnlyList<CraftOutputObservation> ReadOutputObservations(
+        LuaTable craft, int schemaVersion, ICollection<SavedVariablesDiagnostic> diagnostics, string location)
+    {
+        void Invalid(string message) => diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error,
+            "invalid-output-observation", location + ".outputs", message));
+        CheckCollection(craft, "outputs", diagnostics, location);
+        IReadOnlyList<LuaTable> rows = Rows(craft.Get("outputs"));
+        if (schemaVersion < 5 || craft.Get("attemptKind") is not ("salvage-operation" or "restored-operation") || rows.Count == 0)
+            Invalid("Nested outputs require a schema-5 logical attempt and a nonempty observation collection.");
+        List<CraftOutputObservation> observations = [];
+        foreach (LuaTable row in rows)
+        {
+            int? itemId = Integer(row.Get("itemId"));
+            long? quantity = Long(row.Get("quantity"));
+            double? timestamp = Number(row.Get("timestamp"));
+            if (itemId is not > 0 || quantity is not > 0 || timestamp is null || !TryTimestamp(timestamp.Value, out DateTimeOffset observedAt) ||
+                row.Get("measurements") is not LuaTable measurements || row.Get("returns") is not LuaTable)
+            {
+                Invalid("Callback observations require an item, positive integer quantity, timestamp, measurements and returns.");
+                continue;
+            }
+            if (row.Get("companionObservedAt") is string preciseTimestamp)
+            {
+                if (!DateTimeOffset.TryParseExact(preciseTimestamp, "O", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out DateTimeOffset precise) || precise.ToUnixTimeSeconds() != observedAt.ToUnixTimeSeconds())
+                    Invalid("Precise callback timestamps must agree with their native timestamp.");
+                else observedAt = precise;
+            }
+            foreach (string field in new[] { "quality", "itemLevel", "legacyCraftId" })
+                if (row.ContainsKey(field) && Long(row.Get(field)) is null) Invalid($"Invalid {field} measurement.");
+            if (row.ContainsKey("quantityAmbiguous") && Boolean(row.Get("quantityAmbiguous")) is null)
+                Invalid("Callback quantity ambiguity must be boolean.");
+            foreach (string field in new[] { "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" })
+                if (measurements.ContainsKey(field) && Integer(measurements.Get(field)) is null) Invalid($"Invalid {field} measurement.");
+            if (measurements.ContainsKey("hasIngenuityProc") && Boolean(measurements.Get("hasIngenuityProc")) is null)
+                Invalid("Callback Ingenuity outcomes must be boolean.");
+            CheckCollection(row, "returns", diagnostics, location + ".outputs");
+            List<CraftReagent> returns = [];
+            foreach (LuaTable returned in Rows(row.Get("returns")))
+            {
+                if (Integer(returned.Get("itemId")) is not > 0 || Decimal(returned.Get("returnedQuantity")) is not > 0)
+                    Invalid("Callback returns require an item and positive measured quantity.");
+                else returns.Add(new(Integer(returned.Get("itemId"))!.Value, null, Decimal(returned.Get("returnedQuantity"))));
+            }
+            observations.Add(new(new(itemId.Value, Integer(row.Get("quality")), quantity.Value), observedAt,
+                new(Integer(measurements.Get("multicraftBonus")), Integer(measurements.Get("concentrationSpent")),
+                    Integer(measurements.Get("concentrationCurrencyId")), Boolean(measurements.Get("hasIngenuityProc")),
+                    Integer(measurements.Get("ingenuityRefund"))), returns,
+                Integer(row.Get("itemLevel")), Boolean(row.Get("quantityAmbiguous")) == true,
+                LongString(row.Get("companionLegacyCraftId")) ?? Long(row.Get("legacyCraftId"))));
+        }
+        foreach (IGrouping<(int, int?, int?), CraftOutputObservation> group in observations.GroupBy(observation =>
+            (observation.Output.ItemId, observation.Output.Quality, observation.ItemLevel)))
+            if (group.Any(observation => observation.QuantityAmbiguous != (group.Count() > 1)))
+                Invalid("Repeated indistinguishable item observations must retain quantity ambiguity.");
+        bool ambiguous = observations.Any(observation => observation.QuantityAmbiguous);
+        if (Boolean(craft.Get("outputAmbiguous")) == true != ambiguous ||
+            (ambiguous ? craft.ContainsKey("outputQuantity") : Long(craft.Get("outputQuantity")) != observations.Sum(observation => observation.Output.Quantity)))
+            Invalid("The attempt output summary disagrees with its callback observations.");
+        return observations;
     }
 
     private static IReadOnlyList<CraftOutput> FoldOutputs(IEnumerable<CraftOutput> outputs) =>

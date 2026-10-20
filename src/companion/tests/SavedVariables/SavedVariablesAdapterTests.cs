@@ -49,10 +49,36 @@ public class SavedVariablesAdapterTests
     public void UnsupportedSchemasFailWithExplicitDiagnostic()
     {
         SavedVariablesImportResult result = SavedVariablesReader.Parse(
-            "ArtisanLogbookDB = { schemaIdentity = \"ArtisanLogbookLedger\", schemaVersion = 5 }");
+            "ArtisanLogbookDB = { schemaIdentity = \"ArtisanLogbookLedger\", schemaVersion = 6 }");
 
         Assert.That(result.History, Is.Null);
         Assert.That(result.Diagnostics.Single().Code, Is.EqualTo("unsupported-schema"));
+    }
+
+    [Test]
+    public void SchemaFiveImportsOneAttemptWithMultipleOutputObservations()
+    {
+        SavedVariablesImportResult result = SavedVariablesReader.Parse("""
+                        ArtisanLogbookDB = {
+                            schemaVersion = 5, schemaIdentity = "ArtisanLogbookLedger",
+                            crafts = { { id = 1, sessionId = 1, timestamp = 1800000000, recipeId = 1231127,
+                                gameOperationId = 3533599395, attemptKind = "salvage-operation", outputQuantity = 2,
+                                outcomeSource = "unverified", outputs = {
+                                    { itemId = 900001, quantity = 1, timestamp = 1800000000, measurements = {}, returns = {} },
+                                    { itemId = 900002, quantity = 1, timestamp = 1800000000, measurements = {}, returns = {} }
+                                } } },
+                            dimensions = {
+                                sessions = { { id = 1, key = "session-1", projectId = 1, characterDimensionId = 1 } },
+                                characters = { { id = 1, key = "project:1:region:3:realm:1309:guid:Player-A" } },
+                                items = { [900001] = { id = 900001 }, [900002] = { id = 900002 } }
+                            }
+                        }
+                        """);
+
+        Assert.That(result.IsSuccessful, Is.True, string.Join(Environment.NewLine, result.Diagnostics));
+        CraftObservation craft = result.History!.Crafts.Single();
+        Assert.That(craft.Outputs, Is.EquivalentTo(new[] { new CraftOutput(900001, null, 1), new CraftOutput(900002, null, 1) }));
+        Assert.That(craft.Provenance!.GameOperationId, Is.EqualTo(3533599395));
     }
 
     [Test]
@@ -567,7 +593,12 @@ public class SavedVariablesAdapterTests
         LuaDocument document = LuaDataParser.Parse(
             SavedVariablesWriter.Serialize(History(craft), options: new(Now)).Content!);
         LuaTable ledger = (LuaTable)document.Assignments["ArtisanLogbookDB"]!;
-        ((LuaTable)ledger.Get("crafts")!).Values.OfType<LuaTable>().Last()["concentrationSpent"] = 50d;
+        LuaTable rows = (LuaTable)ledger.Get("crafts")!;
+        LuaTable duplicate = new();
+        foreach ((object key, object? value) in rows.Values.OfType<LuaTable>().Single()) duplicate[key] = value;
+        duplicate["id"] = 2d;
+        duplicate["concentrationSpent"] = 50d;
+        rows[2d] = duplicate;
 
         SavedVariablesImportResult result = SavedVariablesReader.Parse(LuaDataParser.Serialize(document));
         Assert.That(result.IsSuccessful, Is.False);
@@ -837,7 +868,7 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
-    public void UnknownMultiOutputRestorationIsRejectedUntilAddonRecoverySupportsLogicalCrafts()
+    public void UnknownMultiOutputRestorationRepairsOneLogicalContribution()
     {
         CraftObservation unknown = MakeCraft("recovery", "unknown") with
         {
@@ -849,8 +880,10 @@ public class SavedVariablesAdapterTests
             Outputs = [new(90, 1, 1), new(91, 1, 1)]
         };
         SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(History(unknown, known), options: new(Now));
-        Assert.That(written.IsSuccessful, Is.False);
-        Assert.That(written.Diagnostics.Single().Code, Is.EqualTo("unsupported-unknown-recipe-restoration"));
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        AssertLoaderAccepts(written,
+            "local repaired, reason=ledger:RepairUnknownRecipes(); assert(repaired, reason); assert(repaired.repairedCount==1)",
+            [unknown with { RecipeId = 123 }, known]);
     }
 
     [TestCase(true, false)]
@@ -933,6 +966,54 @@ public class SavedVariablesAdapterTests
         AssertLoaderAccepts(written);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ProspectingSixAttemptFixtureRoundTripsThroughCompanionAndActualAddon(bool repeatedDelivery)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string source = CaptureProspecting(repeatedDelivery);
+        SavedVariablesImportResult imported = SavedVariablesReader.Parse(source);
+        Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
+        Assert.That(imported.History!.Crafts, Has.Count.EqualTo(6));
+        Assert.That(imported.History.Crafts.Sum(craft => craft.OutputObservations!.Count), Is.EqualTo(repeatedDelivery ? 9 : 8));
+        Assert.That(imported.History.Crafts.Sum(craft => craft.Reagents!.Sum(reagent => reagent.AllocatedQuantity)), Is.EqualTo(30));
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(imported.History, options: new(Now));
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        Assert.That(written.DetailedCraftCount, Is.EqualTo(6));
+        Assert.That(SavedVariablesReader.Parse(written.Content!).History!.Crafts, Is.EquivalentTo(imported.History.Crafts));
+        string coverage = repeatedDelivery ? "5" : "6";
+        AssertLoaderAccepts(written, "assert(#ledger.database.crafts==6); " +
+            "local row=ledger.database.craftSeries[1]; assert(row.craftCount==6); " +
+            $"assert(row.outputQuantityObservedCount=={coverage}); assert(ledger.database.reagentSeries[1].allocatedQuantity==30)");
+    }
+
+    private static string CaptureProspecting(bool repeatedDelivery)
+    {
+        string root = FindRepositoryRoot();
+        string ledger = Path.Combine(root, "src/addon/src/ArtisanLogbook_Core/Storage/Ledger.lua");
+        string fixture = Path.Combine(root, "src/addon/tests/fixtures/retail-prospecting-70448.lua");
+        string script = $"local addon={{}}; assert(loadfile({LuaQuote(ledger)}))('Core',addon); " +
+            $"local ledger=assert(addon.Ledger.New(nil,{{wall=function() return {Now.ToUnixTimeSeconds()} end}})); " +
+            "assert(ledger:CreateSession({projectId=1,regionId=3,gameRealmId=1309,characterGUID='Player-Sanitized',realmName='Test'})); " +
+            $"local fixture=dofile({LuaQuote(fixture)}); ledger.database.nextConfigurationKey=197; " +
+            "for _,submission in ipairs(fixture.submissions) do assert(ledger:SubmitSalvage(fixture.recipeId,submission.count,fixture.capture)); " +
+            "for _,result in ipairs(submission.results) do assert(ledger:RecordResult(result)) end end; " +
+            (repeatedDelivery ? "assert(ledger:RecordResult(fixture.submissions[2].results[1])); " : "") +
+            "local function dump(value) if type(value)=='table' then local rows={} for key,child in pairs(value) do " +
+            "rows[#rows+1]='['..dump(key)..']='..dump(child) end return '{'..table.concat(rows,',')..'}' " +
+            "elseif type(value)=='string' then return string.format('%q',value) " +
+            "elseif type(value)=='number' then return string.format('%.17g',value) else return tostring(value) end end; " +
+            "print('ArtisanLogbookDB = '..dump(ledger.database))";
+        ProcessStartInfo start = new("lua5.1") { RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add("-e"); start.ArgumentList.Add(script);
+        using Process process = Process.Start(start)!;
+        string output = process.StandardOutput.ReadToEnd();
+        string error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.That(process.ExitCode, Is.Zero, error);
+        return output;
+    }
+
     private static void AssertLoaderAccepts(SavedVariablesWriteResult written, string? exercise = null,
         IReadOnlyList<CraftObservation>? expected = null)
     {
@@ -948,7 +1029,7 @@ public class SavedVariablesAdapterTests
             string script =
                 $"dofile({LuaQuote(temp)}); local addon={{}}; assert(loadfile({LuaQuote(ledgerPath)}))('ArtisanLogbook_Core', addon); " +
                 $"local ledger, reason=addon.Ledger.New(ArtisanLogbookDB, {{wall=function() return {Now.ToUnixTimeSeconds()} end}}); " +
-                "assert(ledger, reason); assert(ledger.database.schemaVersion == 4); " +
+                "assert(ledger, reason); assert(ledger.database.schemaVersion == 5); " +
                 "assert(_VERSION == 'Lua 5.1'); " +
                 (exercise is null ? "" : exercise + "; ") +
                 "local function dump(v) if type(v)=='table' then local rows={} " +

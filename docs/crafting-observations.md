@@ -6,16 +6,12 @@ identity contains observed conditions only; context and capture evidence are sep
 
 ## Versioning Baseline
 
-The PR target, `master` at `7a1838770db176688f1f5b823116ae3ca0152278`, defines
-ledger schema 3 and public API v1. This PR makes one logical schema change to
-**schema 4**, with a direct 3-to-4 migration. Existing released schema-1/2 migration
-support remains. Unreleased coupled layouts from earlier PR revisions are refused,
-not migrated, even if they used version numbers 4 or 5. Restore a backup from
-master or explicitly reset a backed-up review database before testing this layout.
-Saved data is never silently reset. Additive domain API changes retain API v1.
-
-Schema/API version decisions are relative to the PR target, not previous commits
-within the PR. Intermediate review revisions do not create supported migrations.
+The PR #43 target defines ledger schema 4 and public API v1. Logical salvage
+attempts introduce **schema 5**, with a validated 4-to-5 migration. Supported
+schema-1/2/3 migrations remain and feed that migration. Configuration identity
+and coverage from schema 4 are unchanged. Unsupported experimental layouts are
+still refused without changing the source database. Additive output projections
+retain public API v1. The companion reads schemas 1-5 and writes 5.
 
 ## Evidence Sources
 
@@ -85,10 +81,11 @@ independent recraft flag can be captured for an owned primary result, but target
 dependent configuration and allocations are unavailable in this implementation.
 `CraftSalvage` uses the separate call-backed lifecycle described below, including
 partial submitted inputs and request-scope configuration. It still receives no
-authoritative complete input/outcome evidence. No global
-operation-ID merging or new persisted attempt-count semantics are introduced. First-craft
-rewards inherit a known parent's observation and never consume a batch position.
-This leaves #32 free to separate attempts from outputs using the same dimension.
+authoritative complete input/outcome evidence. There is no global operation-ID
+merging: schema 5 groups explicitly owned salvage operations within the same
+runtime session. Ordinary crafting, enchanting, order and recraft correlation
+remain unchanged. First-craft rewards inherit a known parent's observation and
+never consume a batch position.
 
 ### Recycling: build-70448 investigation
 
@@ -150,9 +147,10 @@ retain its recipe without consuming a position, including after another batch
 starts. The positive identity cache is bounded to 64 operation IDs; the existing
 seen-ID rejection registry prevents evicted IDs from stealing a newer batch.
 This reuses the existing recent-operation bound, not a delay threshold measured
-from this trace. It limits only how many recent operation identities can be
-recovered for additional outputs: it does not limit batch size or the number of
-recorded crafts. Active remaining-count state is independent of the cache, so
+from this trace. Schema 5 also indexes explicit retained attempts by session and
+operation; evicted operations whose detail remains still recover their original
+parent. The cache retains recent parents needed to amend pruned detail, not a
+batch-size limit. Active remaining-count state is independent of the cache, so
 the observed 184-operation batch can evict early identities and still complete.
 Evicted IDs remain in the existing session-long `observedOperationIds` registry,
 including after history pruning; they cannot reacquire identity from a newer
@@ -160,10 +158,75 @@ submission. The new positive cache adds no unbounded recording.
 Completing the submitted count retires outstanding salvage ownership without
 waiting for a stop signal.
 
-There is still one craft fact per result callback, no manufactured attempt facts,
-no new persisted fields, no salvage output-to-recipe learning, and no historical repair. Positive
-returned quantities remain measurable, but absent returns are not promoted to
-authoritative negatives. Diagnostic retention is unchanged.
+The recipe-attribution-only revision still wrote one craft fact per callback.
+Schema 5 replaces that grain for owned salvage with the model below. Salvage
+still does not teach output-to-recipe relationships. Positive returns remain
+evidence; absent returns never become authoritative negatives. Diagnostic
+retention is unchanged.
+
+### Logical Salvage Attempts: Schema 5
+
+The October 20 issue #32 evidence from `0.0.0-dev-4c74770` contains submissions
+of 1 + 5, six operation IDs, eight result callbacks, six allocations of five
+Refulgent Copper Ore, and configuration 197 throughout. Operation 3533599395
+produced Tenuous Stone x1 and Dusk-Shrouded Stone x1; operation 3105221557
+produced Tenuous Stone x1 and Dusk-Shrouded Stone x2.
+
+Each owned positive operation ID creates one `crafts` row with
+`attemptKind = "salvage-operation"` and an ordered `outputs` observation list.
+Each output retains item, quantity, optional quality/item level, timestamp,
+per-callback `measurements` and positive `returns`. Siblings amend that parent;
+they never allocate another craft ID, batch position or input contribution.
+The evidence scenario therefore has **six crafts, eight output observations,
+six input contributions (30 ore), and six references to configuration 197**.
+The configuration belongs to the attempt and applies to all its outputs.
+
+- Correlation requires the same runtime session and an explicit owned parent;
+  no timestamp, output-name, or latest-recipe heuristic is used. Batch replacement,
+  cancellation and quarantine retain existing safeguards. Known cached parents
+  can accept delayed siblings without consuming another submission's position.
+- Different item/quality/item-level identities retain their quantities. A
+  repeated indistinguishable identity is not silently deduplicated or summed:
+  no delivery token proves retry versus additional same-item output. Both
+  observations survive with `quantityAmbiguous = true`; the attempt has
+  `outputAmbiguous = true` and no exact `outputQuantity`.
+- Exact output quantity sums distinct observed outputs. Coverage is once per
+  attempt, not callback, and does not prove no later output can arrive. The old
+  single-item aliases apply only to a single observation.
+- Equal repeated per-attempt measurements contribute once. Missing fields add
+  no evidence. Conflicts withdraw only the affected scalar and coverage; raw
+  values remain. Equal repeated return quantities count once; conflicting
+  quantities stay in observations without an exact material total. Distinct
+  return items remain positive evidence. No complete salvage negative is inferred.
+- Amendments stage replacement daily/material contributions before committing.
+  Recipe counts, inputs and proc denominators stay once per attempt. Recipe
+  repair intersects known output relationships and moves the entire attempt
+  and its material contributions; conflicting siblings stay unknown.
+- Retention removes the attempt and its output/reagent detail together, using
+  its last observation time. Durable aggregates survive. A cached delayed output
+  can amend a pruned parent's original daily grain without another attempt.
+  The cache remains 64 operations; output observations have the same retention
+  bound as former callback rows, without a lossy per-operation output cap.
+- Reload validates summaries against observations and preserves statistics.
+  New sessions never join old session IDs because an operation ID matches.
+  In-flight callbacks across reload can remain separate unverified observations;
+  they cannot be certified as additional attempts. No continuity is invented.
+
+Migration copies and validates the source before correction. It requires positive
+session/operation identity, matching recipe and all shared provenance,
+`unverified` outcome, submitted personal request-scope configuration, no request,
+and exactly one first-row partial input owner proving the PR #43 salvage pattern.
+Every old output and measurement survives; old IDs remain in
+`outputs[].legacyCraftId`, and `nextCraftId` is never reused. Daily/material
+contributions are replaced, including cross-day siblings. Correction precedes
+pruning and is idempotent once schema 5 is saved. Conflicting/missing evidence,
+older schema-1/2/3 groups and already-pruned callback-only aggregates are not
+heuristically rewritten. Their legacy counts are not newly certified attempts.
+
+The fixture `retail-prospecting-70448.lua` is evidence-derived, not a verbatim
+trace. Published multi-output IDs/quantities and 1+5 cardinalities are real;
+unspecified IDs/items/results and configuration contents are labeled synthetic
+stand-ins. No personal SavedVariables or full trace is committed.
 
 #### Submitted salvage inputs and configuration
 
@@ -216,8 +279,9 @@ post-hook time, particularly when a cast consumes the last target stack.
 Conflicting begins, replacing/interruption/closing unfinished work, malformed
 submissions, missing operation/output fields, and already quarantined sessions
 cannot safely acquire fresh operation identity. Known recent IDs can retain
-their already established recipe after cancellation; unknown or evicted IDs
-stay unknown. Clear/purge discard positive salvage identity without resetting
+their already established recipe after cancellation. Evicted IDs with retained
+explicit parents remain recoverable; IDs without either retained or cached
+ownership stay unknown. Clear/purge discard positive salvage identity without resetting
 the existing ownership guard. No timer or output-item guess clears uncertainty.
 Results observed before the submitted-call hook and evicted operation IDs cannot
 subsequently acquire a new batch's recipe.
@@ -417,8 +481,9 @@ duplicate-input item totals, migration and queries.
 
 The original SavedVariables are cloned and validated. Schemas 1 and 2 use the
 migrations already present on master. Validated schema 3 directly gains an empty
-`configurations` dictionary and `nextConfigurationKey = 1` at final schema 4,
-before final validation and normal pruning. Only a successful load installs the
+`configurations` dictionary and `nextConfigurationKey = 1` at the schema-4 stage,
+then follows schema 5's conservative attempt correction before normal pruning.
+Only a successful load installs the
 new object. IDs, facts, all five aggregate collections and #24/#31 coverage remain
 unchanged. Reload does not replay contributions. Malformed source data and the
 unreleased coupled review layouts are refused without rewriting SavedVariables.
@@ -432,7 +497,7 @@ Legacy configuration keys and context/evidence fields remain absent. Old request
 available in their original API fields, but cannot classify whole already-pruned
 populations or establish operation equipment/buffs. No speculative backfill is
 performed; recipe repair cannot restore absent context/configuration. Back up
-SavedVariables with WoW closed before upgrading. Older Core versions refuse the final schema 4.
+SavedVariables with WoW closed before upgrading. Older Core versions refuse schema 5.
 
 ## Public API
 

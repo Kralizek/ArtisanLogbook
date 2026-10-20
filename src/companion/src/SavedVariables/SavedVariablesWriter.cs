@@ -166,10 +166,9 @@ public static class SavedVariablesWriter
             (c.Outputs ?? []).Any(o => o.Quantity > MaximumLuaInteger)))
             return Failure("lua-integer-precision", "crafts",
                 "A quantity exceeds Lua 5.1's exact integer range.");
-        if (crafts.Any(c => c.RecipeId is null &&
-            (c.Outputs is { Count: > 1 } || c.InputsComplete == true)))
+        if (crafts.Any(c => c.RecipeId is null && c.InputsComplete == true))
             return Failure("unsupported-unknown-recipe-restoration", "crafts.RecipeId",
-                "Unknown-recipe crafts with multiple outputs or complete companion-only inputs cannot be safely repaired by the current addon. Reconcile a verified recipe first, or retain these observations in Companion until the addon supports logical restoration contributions.");
+                "Unknown-recipe crafts with complete companion-only inputs cannot yet be safely repaired by the addon. Reconcile a verified recipe first.");
 
         DateTimeOffset now = options.Now ?? DateTimeOffset.UtcNow;
         DateTimeOffset cutoff = now.AddDays(-options.RetentionDays);
@@ -274,7 +273,7 @@ public static class SavedVariablesWriter
         foreach (CraftObservation craft in detailedCrafts)
         {
             craftIds.Add(craft.Identity, nextCraftId);
-            nextCraftId += Math.Max(1, craft.Outputs?.Count ?? 0);
+            nextCraftId++;
         }
         LuaTable detailRows = Sequence(detailedCrafts.SelectMany(craft =>
             MakeCraftRows(craft, craftIds[craft.Identity], sessionIds[craft.Character.Key])));
@@ -295,7 +294,7 @@ public static class SavedVariablesWriter
                 database[key] = Clone(value);
             }
         }
-        Put(database, "schemaVersion", 4);
+        Put(database, "schemaVersion", 5);
         Put(database, "schemaIdentity", "ArtisanLogbookLedger");
         Put(database, "nextCraftId", nextCraftId);
         Put(database, "nextRequestId", 1);
@@ -344,10 +343,9 @@ public static class SavedVariablesWriter
     private static IEnumerable<LuaTable> MakeCraftRows(CraftObservation craft, long id, long sessionId)
     {
         IReadOnlyList<CraftOutput>? outputs = craft.Outputs;
-        int rowCount = Math.Max(1, outputs?.Count ?? 0);
         string outputGroup = Convert.ToBase64String(Encoding.UTF8.GetBytes(
             $"{craft.Identity.Origin.Length}:{craft.Identity.Origin}{craft.Identity.Observation}"));
-        for (int index = 0; index < rowCount; index++)
+        for (int index = 0; index < 1; index++)
         {
             LuaTable row = Table(
                 ("id", id + index),
@@ -420,7 +418,39 @@ public static class SavedVariablesWriter
             Put(row, "companionCompletenessPresent", true);
             if (craft.InputsComplete is bool inputsComplete)
                 Put(row, "companionInputsComplete", inputsComplete);
-            if (outputs is { Count: 0 })
+            if (craft.OutputObservations is not null || outputs is { Count: > 1 })
+            {
+                IReadOnlyList<CraftOutputObservation> observations = craft.OutputObservations ?? outputs!.Select(output =>
+                    new CraftOutputObservation(output, craft.RecordedAt, new(), [])).ToArray();
+                Put(row, "attemptKind", "restored-operation");
+                Put(row, "companionOutputObservationsPresent", craft.OutputObservations is not null);
+                Put(row, "outputs", Sequence(observations.Select(observation => Table(
+                    ("itemId", observation.Output.ItemId), ("quantity", observation.Output.Quantity),
+                    ("quality", observation.Output.Quality), ("itemLevel", observation.ItemLevel),
+                    ("timestamp", observation.ObservedAt.ToUnixTimeSeconds()),
+                    ("companionObservedAt", observation.ObservedAt.ToString("O", CultureInfo.InvariantCulture)),
+                    ("companionLegacyCraftId", observation.LegacyCraftId?.ToString(CultureInfo.InvariantCulture)),
+                    ("quantityAmbiguous", observation.QuantityAmbiguous ? true : null),
+                    ("measurements", Table(("multicraftBonus", observation.Measurements.MulticraftBonus),
+                        ("concentrationSpent", observation.Measurements.ConcentrationSpent),
+                        ("concentrationCurrencyId", observation.Measurements.ConcentrationCurrencyId),
+                        ("hasIngenuityProc", observation.Measurements.HasIngenuityProc),
+                        ("ingenuityRefund", observation.Measurements.IngenuityRefund))),
+                    ("returns", Sequence(observation.Returns.OrderBy(returned => returned.ItemId).Select(returned =>
+                        Table(("itemId", returned.ItemId), ("returnedQuantity", returned.ReturnedQuantity)))))))));
+                bool ambiguous = observations.Any(observation => observation.QuantityAmbiguous);
+                Put(row, "outputAmbiguous", ambiguous ? true : null);
+                Put(row, "outputQuantity", ambiguous ? null : observations.Sum(observation => observation.Output.Quantity));
+                if (observations.Count == 1)
+                {
+                    Put(row, "outputItemId", observations[0].Output.ItemId);
+                    Put(row, "outputQuality", observations[0].Output.Quality);
+                    Put(row, "outputItemLevel", observations[0].ItemLevel);
+                }
+                DateTimeOffset lastObservedAt = observations.Max(observation => observation.ObservedAt);
+                if (lastObservedAt > craft.RecordedAt) Put(row, "lastObservedAt", lastObservedAt.ToUnixTimeSeconds());
+            }
+            else if (outputs is { Count: 0 })
             {
                 Put(row, "companionOutputsObserved", true);
             }
@@ -488,7 +518,8 @@ public static class SavedVariablesWriter
             AddCount(row, "craftCount", 1);
             if (craft.InputsComplete == true) AddCount(row, "inputCompleteCount", 1);
             AddMetric(row, "outputQuantity",
-                craft.Outputs?.Sum(output => (double)output.Quantity));
+                craft.OutputObservations?.Any(observation => observation.QuantityAmbiguous) == true
+                    ? null : craft.Outputs?.Sum(output => (double)output.Quantity));
             AddMetric(row, "multicraftBonus", craft.MulticraftBonus);
             AddMetric(row, "concentrationSpent", craft.ConcentrationSpent);
             AddMetric(row, "ingenuityProcCount", craft.HasIngenuityProc is bool ingenuity ? ingenuity ? 1 : 0 : null);
@@ -607,6 +638,14 @@ public static class SavedVariablesWriter
             foreach (CraftOutput output in craft.Outputs ?? [])
                 if (!items.ContainsKey((double)output.ItemId))
                     Put(items, output.ItemId, Table(("id", output.ItemId)));
+            foreach (CraftOutputObservation observation in craft.OutputObservations ?? [])
+            {
+                if (!items.ContainsKey((double)observation.Output.ItemId))
+                    Put(items, observation.Output.ItemId, Table(("id", observation.Output.ItemId)));
+                foreach (CraftReagent returned in observation.Returns)
+                    if (!items.ContainsKey((double)returned.ItemId))
+                        Put(items, returned.ItemId, Table(("id", returned.ItemId)));
+            }
             if (craft.RecipeId is int usedRecipeId && craft.ProfessionExpansionKey is string key &&
                 recipes.TryGetValue((double)usedRecipeId, out object? recipeValue) &&
                 recipeValue is LuaTable recipe && !recipe.ContainsKey("expansionDimensionId") &&

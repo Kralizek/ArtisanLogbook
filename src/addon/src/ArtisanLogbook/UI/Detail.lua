@@ -460,6 +460,21 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   producedLabel:SetTextColor(.70, .66, .59)
   local producedValue = UI.Text(resultContent, 2, -23, resultContent:GetWidth() - 8, 31, "GameFontNormalLarge")
   detail.producedValue = producedValue
+  local observedOutputs = UI.Text(resultContent, 2, -59, resultContent:GetWidth() - 8, 1, "GameFontNormal")
+  observedOutputs:SetWordWrap(true)
+  detail.observedOutputs = observedOutputs
+  local function renderOutputs(craft)
+    local lines = {}
+    for _, output in ipairs(craft.outputs or {}) do
+      lines[#lines + 1] = UI.Name(output.item) .. " x" .. UI.Number(output.quantity) ..
+        (output.quantityAmbiguous and " (quantity uncertain)" or "")
+    end
+    local outputHeight = #lines > 1 and #lines * 36 + 8 or 0
+    observedOutputs:SetText(outputHeight > 0 and table.concat(lines, "\n") or "")
+    observedOutputs:SetHeight(math.max(1, outputHeight))
+    observedOutputs:SetShown(outputHeight > 0)
+    return outputHeight
+  end
   local outcomeCards, outcomeCardHeight, outcomeGap = {}, 64, 7
   local outcomeWidth = (resultContent:GetWidth() - 12) / 2
   local resultOrder = { "quality", "concentration", "multicraft", "ingenuity", "resourcefulness" }
@@ -539,6 +554,10 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
         heading:SetText(UI.Elide(UI.ItemName(itemID), math.floor((width - 166) / 10)))
         identity:SetTexture(UI.ItemIcon(itemID) or UI.RecipeIcon(detail.craft.recipe))
       end
+      for _, output in ipairs(detail.craft.outputs or {}) do
+        if output.item and output.item.id == itemID then output.item.name = UI.ItemName(itemID) end
+      end
+      renderOutputs(detail.craft)
     end
   end)
   detail:HookScript("OnHide", function()
@@ -577,6 +596,8 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local function fillResult(craft)
     local quantity = craft.outputQuantity
     producedValue:SetText(quantity ~= nil and UI.Count(quantity, "item") or "-")
+    local outputHeight = renderOutputs(craft)
+    local resultTop = 59 + outputHeight
     local rows, resourcefulness, resourcefulnessExplanation = formatOutcome(craft)
     local qualityApplicable = craft.outputQuality ~= nil or
       (craft.recipe and type(craft.recipe.maxQuality) == "number" and craft.recipe.maxQuality > 1)
@@ -612,7 +633,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       if value then
         local column = index % 2
         local row = math.floor(index / 2)
-        card:ClearAllPoints(); card:SetPoint("TOPLEFT", column * (outcomeWidth + outcomeGap), -(59 + row * (outcomeCardHeight + outcomeGap)))
+        card:ClearAllPoints(); card:SetPoint("TOPLEFT", column * (outcomeWidth + outcomeGap), -(resultTop + row * (outcomeCardHeight + outcomeGap)))
         card.label:SetText(resultLabels[key])
         card.value:SetText(value.value)
         card.explanation = value.explanation
@@ -621,7 +642,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
         card:Hide()
       end
     end
-    local resultHeight = 59 + math.ceil(index / 2) * (outcomeCardHeight + outcomeGap) + 12
+    local resultHeight = resultTop + math.ceil(index / 2) * (outcomeCardHeight + outcomeGap) + 12
     resultContent:SetHeight(math.max(resultScroll:GetHeight(), resultHeight))
     resultScroll:SetVerticalScroll(0)
   end

@@ -133,6 +133,15 @@ public static class HistoryReconciler
             return a.Outputs.OrderBy(x => x.ItemId).ThenBy(x => x.Quality).ThenBy(x => x.Quantity).ToArray();
         }
 
+        IReadOnlyList<CraftOutputObservation>? MergeOutputObservations()
+        {
+            if (a.OutputObservations is null) return b.OutputObservations;
+            if (b.OutputObservations is null) return a.OutputObservations;
+            if (!a.OutputObservations.SequenceEqual(b.OutputObservations))
+                conflicts.Add(new(identity, nameof(a.OutputObservations), "Two different ordered callback observation collections."));
+            return a.OutputObservations;
+        }
+
         return a with
         {
             RecipeId = Optional(nameof(a.RecipeId), a.RecipeId, b.RecipeId),
@@ -148,6 +157,7 @@ public static class HistoryReconciler
             ResourcefulnessComplete = Optional(nameof(a.ResourcefulnessComplete), a.ResourcefulnessComplete, b.ResourcefulnessComplete),
             Reagents = MergeReagents(),
             Outputs = MergeOutputs(),
+            OutputObservations = MergeOutputObservations(),
             Provenance = MergeProvenance()
         };
     }

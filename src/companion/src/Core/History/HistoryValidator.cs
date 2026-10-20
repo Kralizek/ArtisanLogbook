@@ -37,8 +37,8 @@ public static class HistoryValidator
                 errors.Add(new(craft.Identity, "ProfessionId", "Profession ID must be positive when known."));
             if (craft.ConcentrationSpent is < 0 || craft.IngenuityRefund is < 0)
                 errors.Add(new(craft.Identity, "Concentration", "Concentration measurements cannot be negative."));
-            if (craft.ConcentrationCurrencyId is <= 0)
-                errors.Add(new(craft.Identity, "ConcentrationCurrencyId", "Currency ID must be positive when known."));
+            if (craft.ConcentrationCurrencyId is < 0)
+                errors.Add(new(craft.Identity, "ConcentrationCurrencyId", "Currency ID must be nonnegative when observed."));
             if (craft.MulticraftBonus is < 0)
                 errors.Add(new(craft.Identity, "MulticraftBonus", "Multicraft bonus cannot be negative."));
             if (craft.InputsComplete == true && craft.Reagents is null)
@@ -71,6 +71,19 @@ public static class HistoryValidator
                 if (!outputItems.Add((output.ItemId, output.Quality)))
                     errors.Add(new(craft.Identity, "Outputs", "Output rows must be aggregated at craft × item × quality grain."));
             }
+            foreach (CraftOutputObservation observation in craft.OutputObservations ?? [])
+            {
+                if (observation.Output.ItemId <= 0 || observation.Output.Quantity <= 0 ||
+                    observation.Output.Quality is < 0 || observation.ItemLevel is < 0 || observation.LegacyCraftId is <= 0 ||
+                    observation.Measurements.ConcentrationSpent is < 0 || observation.Measurements.IngenuityRefund is < 0 ||
+                    observation.Measurements.MulticraftBonus is < 0 || observation.Measurements.ConcentrationCurrencyId is < 0)
+                    errors.Add(new(craft.Identity, "OutputObservations", "Callback observations require positive output identities/quantities and nonnegative measurements."));
+                if (observation.Returns.Any(row => row.ItemId <= 0 || row.AllocatedQuantity is not null || row.ReturnedQuantity is not > 0) ||
+                    observation.Returns.Select(row => row.ItemId).Distinct().Count() != observation.Returns.Count)
+                    errors.Add(new(craft.Identity, "OutputObservations", "Callback returns require distinct item identities and positive observed returns only."));
+            }
+            if (craft.OutputObservations is { Count: 0 })
+                errors.Add(new(craft.Identity, "OutputObservations", "An observed callback collection cannot be empty."));
         }
         return errors;
     }

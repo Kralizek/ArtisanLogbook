@@ -12,6 +12,25 @@ public class CraftObservationTests
     private static readonly CharacterIdentity Character = new("project:1:region:3:realm:1309:guid:Player-1309-12345678");
 
     [Test]
+    public void CallbackEvidenceHasOrderedValueSemanticsAndRetainsAmbiguity()
+    {
+        CraftOutputObservation observation = new(new(10, 1, 2), DateTimeOffset.UnixEpoch,
+            new(ConcentrationSpent: 0), [new(20, null, 1)], QuantityAmbiguous: true);
+        CraftObservation first = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
+            OutputObservations: [observation, observation]);
+        CraftObservation copy = first with
+        {
+            OutputObservations = [
+            observation with { Returns = [new(20, null, 1)] }, observation with { Returns = [new(20, null, 1)] }]
+        };
+        Assert.That(first, Is.EqualTo(copy));
+        Assert.That(first.GetHashCode(), Is.EqualTo(copy.GetHashCode()));
+        Assert.That(HistoryValidator.Validate([first]), Is.Empty);
+        Assert.That(HistoryReconciler.Merge([first], [copy]).IsSuccessful, Is.True);
+        Assert.That(HistoryReconciler.Merge([first], [first with { OutputObservations = [observation] }]).IsSuccessful, Is.False);
+    }
+
+    [Test]
     public void ObservedCollectionsCompareByContentsRatherThanArrayIdentityOrOrder()
     {
         CraftObservation first = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
