@@ -1,19 +1,19 @@
 namespace ArtisanLogbook.History;
 
 /// <summary>Blizzard item ID, optionally enriched with localized display metadata.</summary>
-public sealed record ItemDimension(int Id, string? Name = null);
+public sealed record ItemDimension(GameContext Game, int Id, string? Name = null);
 
 /// <summary>Blizzard recipe ID, optionally enriched with localized display metadata.</summary>
-public sealed record RecipeDimension(int Id, string? Name = null, int? ProfessionId = null, string? ExpansionKey = null, int? MaxQuality = null);
+public sealed record RecipeDimension(GameContext Game, int Id, string? Name = null, int? ProfessionId = null, string? ProfessionExpansionKey = null, int? MaxQuality = null);
 
 /// <summary>Blizzard skill line ID, including expansion-specific child skill lines.</summary>
-public sealed record ProfessionDimension(int Id, string? Name = null, int? ParentId = null);
+public sealed record ProfessionDimension(GameContext Game, int Id, string? Name = null, int? ParentId = null);
 
 /// <summary>Blizzard expansion identifier; never inferred from the crafting timestamp.</summary>
-public sealed record ExpansionDimension(string Key, string? Name = null);
+public sealed record ExpansionDimension(GameContext Game, string Key, string? Name = null);
 
 /// <summary>A character's stable identity and optional mutable display metadata.</summary>
-public sealed record CharacterDimension(CharacterIdentity Identity, string? Name = null, string? ClassFile = null);
+public sealed record CharacterDimension(GameContext Game, CharacterIdentity Identity, string? Name = null, string? ClassFile = null);
 
 /// <summary>
 /// Canonical, unordered dimension metadata. Local SavedVariables dimension IDs
