@@ -108,6 +108,7 @@ public static class HistoryReconciler
 
         return a with
         {
+            Project = Optional(nameof(a.Project), a.Project, b.Project),
             RecipeId = Optional(nameof(a.RecipeId), a.RecipeId, b.RecipeId),
             ProfessionId = Optional(nameof(a.ProfessionId), a.ProfessionId, b.ProfessionId),
             ExpansionKey = a.ExpansionKey ?? b.ExpansionKey,
