@@ -5,11 +5,18 @@ using ArtisanLogbook.History;
 
 namespace ArtisanLogbook.SavedVariables;
 
+public enum SavedVariablesTargetPolicy
+{
+    Reject,
+    Regenerate
+}
+
 public sealed record SavedVariablesWriteOptions(
     DateTimeOffset? Now = null,
     int RetentionDays = 60,
     GameContext? GameContext = null,
-    SavedVariablesCoverage? SourceCoverage = null);
+    SavedVariablesCoverage? SourceCoverage = null,
+    SavedVariablesTargetPolicy ExistingTargetPolicy = SavedVariablesTargetPolicy.Reject);
 
 public sealed record SavedVariablesWriteResult(
     string? Content,
@@ -29,8 +36,8 @@ public static class SavedVariablesWriter
     [
         "schemaVersion", "schemaIdentity", "nextCraftId", "nextRequestId", "nextConfigurationKey",
         "crafts", "craftSeries", "resourcefulnessSets", "reagentSeries", "reagentRequirementSeries",
-        "firstCraftRewards", "configurations", "recipeOutputs", "requests", "reagents", "dimensions",
-        "nextDimensionId", "retentionDays"
+        "firstCraftRewards", "recipeOutputs", "requests", "reagents", "dimensions",
+        "nextDimensionId", "retentionDays", "outcomeVersion", "returnedReagents"
     ];
 
     public static SavedVariablesWriteResult Serialize(
@@ -39,10 +46,30 @@ public static class SavedVariablesWriter
         SavedVariablesWriteOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(history);
-        options ??= new();
+        try
+        {
+            return SerializeCore(history, existingTargetState, options ?? new());
+        }
+        catch (OverflowException)
+        {
+            return Failure("measurement-overflow", "history",
+                "Summed observations exceed the supported numeric range. No content was generated.");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return Failure("invalid-retention-range", "options.RetentionDays",
+                "The retention cutoff is outside the supported timestamp range.");
+        }
+    }
+
+    private static SavedVariablesWriteResult SerializeCore(
+        CraftHistory history, string? existingTargetState, SavedVariablesWriteOptions options)
+    {
         List<SavedVariablesDiagnostic> diagnostics = [];
         if (options.RetentionDays <= 0)
             return Failure("invalid-retention", "options.RetentionDays", "Retention must be a positive number of days.");
+        if (!Enum.IsDefined(options.ExistingTargetPolicy))
+            return Failure("invalid-target-policy", "options.ExistingTargetPolicy", "Select a supported target regeneration policy.");
 
         foreach (HistoryValidationError error in CraftHistoryValidator.Validate(history))
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-canonical-history",
@@ -72,6 +99,11 @@ public static class SavedVariablesWriter
                 if (existingLedger is null)
                     return Failure("invalid-target-ledger", "ArtisanLogbookDB", "The existing target ledger is not a table.");
             }
+            else if (target.ReturnedValue is not null)
+            {
+                return Failure("invalid-target-ledger", "existingTargetState",
+                    "Target state must use SavedVariables assignments, not a returned table.");
+            }
         }
 
         GameContext? selectedGame = options.GameContext;
@@ -92,6 +124,53 @@ public static class SavedVariablesWriter
             .ThenBy(c => c.Identity.Observation, StringComparer.Ordinal)
             .ToArray();
 
+        if (existingLedger is not null)
+        {
+            if (options.ExistingTargetPolicy != SavedVariablesTargetPolicy.Regenerate)
+                return Failure("target-regeneration-policy-required", "options.ExistingTargetPolicy",
+                    "An existing ledger requires explicit Regenerate consent. Requests, sessions, detail and rollups are replaced; addon-only facts cannot all be preserved. C09 must back up the target before replacement.");
+            SavedVariablesImportResult imported = SavedVariablesReader.Parse(existingTargetState!);
+            if (!imported.IsSuccessful)
+                return new(null, imported.Diagnostics.Concat(new[]
+                {
+                    new SavedVariablesDiagnostic(SavedVariablesDiagnosticSeverity.Error,
+                        "invalid-target-history", "existingTargetState",
+                        "The target could not be imported safely. Resolve its diagnostics before regeneration.")
+                }).ToArray(), 0, 0);
+            if (imported.History!.Crafts.Any(c => c.Game != selectedGame) ||
+                GetDimensionRows(existingLedger, "sessions").Any(s =>
+                    Long(s.Get("projectId")) != (int)selectedGame.Project ||
+                    !string.Equals(s.Get("companionProgressionTrack") as string,
+                        selectedGame.ProgressionTrack, StringComparison.Ordinal)))
+                return Failure("target-game-context-mismatch", "existingTargetState",
+                    "Every existing target session and craft must belong to the selected game context.");
+            CraftHistoryMergeResult merged = CraftHistoryReconciler.Merge(history, imported.History);
+            Dictionary<CraftIdentity, CraftObservation> supplied = history.Crafts.ToDictionary(c => c.Identity);
+            if (!merged.IsSuccessful || merged.History!.Crafts.Any(c =>
+                !supplied.TryGetValue(c.Identity, out CraftObservation? provided) || provided != c))
+                return Failure("target-history-not-reconciled", "existingTargetState",
+                    "Import and reconcile every target craft into canonical history before regeneration. Missing, conflicting or unenriched observations would otherwise be lost.");
+            diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "target-operational-state-regenerated",
+                "ArtisanLogbookDB",
+                $"Explicit regeneration replaces {Rows(existingLedger.Get("crafts")).Count} detail rows and {GetDimensionRows(existingLedger, "sessions").Count} sessions; discards {Rows(existingLedger.Get("requests")).Count} requests, {Rows(existingLedger.Get("firstCraftRewards")).Count} first-craft reward rows and {Rows(existingLedger.Get("reagentRequirementSeries")).Count} reagent requirement rollups. All supported rollups are recomputed, not merged. Configuration rows and unrelated assignments/settings are retained; craft-linked configuration/requirement/request evidence is not restored. C09 must retain a verified backup."));
+            if (imported.Coverage.AggregateOnlyCraftCount > 0)
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "source-history-incomplete",
+                    "ArtisanLogbookDB.craftSeries",
+                    $"{imported.Coverage.AggregateOnlyCraftCount} target craft(s) have only aggregate coverage. Those totals are not copied or fabricated; regeneration uses available canonical observations only."));
+        }
+
+        if (crafts.Any(c => !SavedVariablesReader.HasStableCharacterKey(c.Character.Key, (int)c.Game.Project)))
+            return Failure("unrepresentable-character-identity", "crafts.Character",
+                "The addon requires a stable project/region/realm/GUID character key matching the selected context.");
+        if (crafts.Any(c => (c.Reagents ?? []).Any(r => r.AllocatedQuantity > MaximumLuaInteger) ||
+            (c.Outputs ?? []).Any(o => o.Quantity > MaximumLuaInteger)))
+            return Failure("lua-integer-precision", "crafts",
+                "A quantity exceeds Lua 5.1's exact integer range.");
+        if (crafts.Any(c => c.RecipeId is null &&
+            (c.Outputs is { Count: > 1 } || c.InputsComplete == true)))
+            return Failure("unsupported-unknown-recipe-restoration", "crafts.RecipeId",
+                "Unknown-recipe crafts with multiple outputs or complete companion-only inputs cannot be safely repaired by the current addon. Reconcile a verified recipe first, or retain these observations in Companion until the addon supports logical restoration contributions.");
+
         DateTimeOffset now = options.Now ?? DateTimeOffset.UtcNow;
         DateTimeOffset cutoff = now.AddDays(-options.RetentionDays);
         CraftObservation[] detailedCrafts = crafts.Where(c => c.RecordedAt >= cutoff).ToArray();
@@ -105,16 +184,8 @@ public static class SavedVariablesWriter
                 "ArtisanLogbookDB.craftSeries",
                 $"{coverage.AggregateOnlyCraftCount} source craft(s) existed only as rollups and were not fabricated or included in canonical history."));
 
-        if (crafts.Any(c => c.ResourcefulnessComplete == true &&
-            (c.HasResourcefulnessProc != true || c.Reagents is null ||
-             !c.Reagents.Any(r => r.ReturnedQuantity is > 0))))
-            return Failure("incomplete-resourcefulness-export", "crafts.ResourcefulnessComplete",
-                "A complete positive Resourcefulness proc requires at least one observed positive returned reagent.");
-
         Dictionary<string, LuaTable> oldCharacters = IndexByStringKey(
             GetDimensionRows(existingLedger, "characters"), "key");
-        Dictionary<string, LuaTable> oldSessions = IndexOldSessions(
-            existingLedger, oldCharacters, selectedGame);
 
         string[] characterKeys = crafts.Select(c => c.Character.Key).Distinct(StringComparer.Ordinal)
             .OrderBy(x => x, StringComparer.Ordinal).ToArray();
@@ -152,19 +223,15 @@ public static class SavedVariablesWriter
         LuaTable realms = Sequence(Array.Empty<LuaTable>());
         LuaTable sessions = Sequence(characterKeys.Select((key, index) =>
         {
-            CraftObservation[] characterCrafts = crafts.Where(c => c.Character.Key == key).ToArray();
             LuaTable row = new();
-            LuaTable? old = oldSessions.GetValueOrDefault(key);
-            CopyFields(old, row, "addonVersion", "wowVersion", "wowBuild", "wowBuildDate",
-                "interface", "locale", "capabilities");
             long sessionId = index + 1L;
             Put(row, "id", sessionId);
             Put(row, "key", $"companion-session-{selectedGame.Project}-{sessionId}");
-            Put(row, "startedAt", characterCrafts.Length == 0 ? now.ToUnixTimeSeconds() :
-                characterCrafts.Min(c => c.RecordedAt).ToUnixTimeSeconds());
+            Put(row, "startedAt", now.ToUnixTimeSeconds());
+            Put(row, "companionSynthetic", true);
             Put(row, "projectId", (int)selectedGame.Project);
             Put(row, "characterDimensionId", characterIds[key]);
-            Put(row, "capabilities", row.Get("capabilities") ?? new LuaTable());
+            Put(row, "capabilities", new LuaTable());
             if (selectedGame.ProgressionTrack is not null)
                 Put(row, "companionProgressionTrack", selectedGame.ProgressionTrack);
             return row;
@@ -175,8 +242,11 @@ public static class SavedVariablesWriter
             expansionIds);
         LuaTable professions = NaturalDimensions(history.Dimensions.Professions
             .Where(p => p.Game == selectedGame)
-            .Select(p => (p.Id, p.Name, p.ParentId, ExpansionKey: (string?)null, MaxQuality: (int?)null)),
+            .Select(p => (p.Id, p.Name, ProfessionId: (int?)null, ExpansionKey: (string?)null, MaxQuality: (int?)null)),
             expansionIds);
+        foreach (ProfessionDimension profession in history.Dimensions.Professions.Where(p => p.Game == selectedGame))
+            if (profession.ParentId is int parentId && professions.Get(profession.Id) is LuaTable row)
+                Put(row, "companionParent", parentId);
         LuaTable items = NaturalDimensions(history.Dimensions.Items
             .Where(i => i.Game == selectedGame)
             .Select(i => (i.Id, i.Name, ProfessionId: (int?)null,
@@ -257,7 +327,17 @@ public static class SavedVariablesWriter
             : target.Assignments.Where(x => x.Key != "ArtisanLogbookDB")
                 .ToDictionary(x => x.Key, x => Clone(x.Value), StringComparer.Ordinal);
         assignments["ArtisanLogbookDB"] = database;
+        if (!HasSafeLuaNumbers(database))
+            return Failure("lua-integer-precision", "ArtisanLogbookDB",
+                "A measurement or regenerated rollup exceeds Lua 5.1's exact numeric range.");
         string content = LuaDataParser.Serialize(new(assignments, null));
+        SavedVariablesImportResult roundTrip = SavedVariablesReader.Parse(content);
+        if (!roundTrip.IsSuccessful ||
+            !detailedCrafts.ToHashSet().SetEquals(roundTrip.History!.Crafts))
+            return Failure("unrepresentable-craft-observations", "history",
+                "Generated content cannot retain the supplied detailed observations exactly within the supported Lua representation. No content was returned. " +
+                string.Join(" ", roundTrip.Diagnostics.Where(d => d.Severity == SavedVariablesDiagnosticSeverity.Error)
+                    .Select(d => $"{d.Location}: {d.Message}")));
         return new(content, diagnostics, detailRows.Count, crafts.Length);
     }
 
@@ -273,9 +353,14 @@ public static class SavedVariablesWriter
                 ("id", id + index),
                 ("sessionId", sessionId),
                 ("timestamp", craft.RecordedAt.ToUnixTimeSeconds()),
+                ("companionRecordedAt", craft.RecordedAt.ToString("O", CultureInfo.InvariantCulture)),
                 ("companionOutputGroup", outputGroup),
                 ("companionCraftOrigin", craft.Identity.Origin),
-                ("companionCraftObservation", craft.Identity.Observation));
+                ("companionCraftObservation", craft.Identity.Observation),
+                ("companionClassificationPresent", true),
+                ("companionProfession", craft.ProfessionId),
+                ("companionProfessionExpansionKey", craft.ProfessionExpansionKey),
+                ("companionReagentsObserved", craft.Reagents is not null));
             if (craft.Provenance?.SourceId is string sourceId)
             {
                 Put(row, "companionProvenanceSource", sourceId);
@@ -294,6 +379,8 @@ public static class SavedVariablesWriter
             if (craft.RecipeId is int recipeId) Put(row, "recipeId", recipeId);
             if (craft.Provenance?.GameOperationId is long operationId && operationId is > 0 and <= MaximumLuaInteger)
                 Put(row, "gameOperationId", operationId);
+            if (craft.Provenance?.GameOperationId is long sourceOperationId)
+                Put(row, "companionSourceOperation", sourceOperationId.ToString(CultureInfo.InvariantCulture));
             if (craft.Provenance?.LocalRequestId is long requestId)
                 Put(row, "companionSourceRequest", requestId.ToString(CultureInfo.InvariantCulture));
             if (craft.Provenance?.SourceSessionId is string sourceSessionId)
@@ -309,7 +396,11 @@ public static class SavedVariablesWriter
             if (craft.ResourcefulnessComplete is true)
             {
                 Put(row, "resourcefulnessComplete", true);
-                Put(row, "outcomeSource", "native");
+                if (craft.Provenance?.ResourcefulnessEvidence == "native")
+                {
+                    Put(row, "outcomeSource", "native");
+                    Put(row, "materialsSavingsEligible", false);
+                }
             }
             else if (craft.ResourcefulnessComplete is false && craft.HasResourcefulnessProc == true)
             {
@@ -326,6 +417,7 @@ public static class SavedVariablesWriter
                     craft.Provenance.ResourcefulnessEvidence is not null);
             if (craft.ResourcefulnessComplete is bool complete)
                 Put(row, "companionResourcefulnessComplete", complete);
+            Put(row, "companionCompletenessPresent", true);
             if (craft.InputsComplete is bool inputsComplete)
                 Put(row, "companionInputsComplete", inputsComplete);
             if (outputs is { Count: 0 })
@@ -350,11 +442,12 @@ public static class SavedVariablesWriter
         foreach (CraftReagent reagent in craft.Reagents ?? [])
         {
             LuaTable row = Table(("craftId", craftId), ("itemId", reagent.ItemId));
-            if (reagent.AllocatedQuantity is long allocation && allocation > 0)
+            if (reagent.AllocatedQuantity is long allocation)
             {
-                if (allocation > MaximumLuaInteger)
-                    throw new InvalidOperationException("Reagent allocation exceeds the Lua integer precision limit.");
-                Put(row, "allocatedQuantity", allocation);
+                if (allocation == 0)
+                    Put(row, "companionAllocatedQuantity", 0L);
+                else
+                    Put(row, "allocatedQuantity", allocation);
             }
             if (reagent.ReturnedQuantity is decimal returned)
                 Put(row, "returnedQuantity", returned);
@@ -408,7 +501,8 @@ public static class SavedVariablesWriter
             AddMetric(row, "resourcefulnessCompleteProcCount",
                 craft.ResourcefulnessComplete == true ? craft.HasResourcefulnessProc == true ? 1 : 0 : null);
             AddMetric(row, "resourcefulnessAuthoritativeProcCount",
-                craft.ResourcefulnessComplete == true ? craft.HasResourcefulnessProc == true ? 1 : 0 : null);
+                craft.ResourcefulnessComplete == true && craft.Provenance?.ResourcefulnessEvidence == "native"
+                    ? craft.HasResourcefulnessProc == true ? 1 : 0 : null);
         }
         return Sequence(groups.OrderBy(g => g.Key.Day).ThenBy(g => g.Key.CharacterId)
             .ThenBy(g => g.Key.RecipeId).Select(g => g.Value));
@@ -435,7 +529,7 @@ public static class SavedVariablesWriter
                         ("recipeId", craft.RecipeId), ("itemId", reagent.ItemId));
                     groups.Add(key, row);
                 }
-                if (reagent.AllocatedQuantity is long allocation)
+                if (reagent.AllocatedQuantity is > 0 and long allocation)
                 {
                     AddCount(row, "allocationCount", 1);
                     AddCount(row, "allocatedQuantity", allocation);
@@ -466,11 +560,12 @@ public static class SavedVariablesWriter
             {
                 row = Table(("bucketStart", day), ("characterDimensionId", key.Item2),
                     ("recipeId", craft.RecipeId), ("returnedItemSet", items),
-                    ("craftCount", 0L), ("authoritativeCraftCount", 0L));
+                    ("craftCount", 0L));
                 groups.Add(key, row);
             }
             AddCount(row, "craftCount", 1);
-            AddCount(row, "authoritativeCraftCount", 1);
+            if (craft.Provenance?.ResourcefulnessEvidence == "native")
+                AddCount(row, "authoritativeCraftCount", 1);
         }
         return Sequence(groups.OrderBy(g => g.Key.Day).ThenBy(g => g.Key.CharacterId)
             .ThenBy(g => g.Key.RecipeId).ThenBy(g => g.Key.Items, StringComparer.Ordinal)
@@ -514,11 +609,16 @@ public static class SavedVariablesWriter
                     Put(items, output.ItemId, Table(("id", output.ItemId)));
             if (craft.RecipeId is int usedRecipeId && craft.ProfessionExpansionKey is string key &&
                 recipes.TryGetValue((double)usedRecipeId, out object? recipeValue) &&
-                recipeValue is LuaTable recipe && expansionIds.TryGetValue(key, out long expansionId))
+                recipeValue is LuaTable recipe && !recipe.ContainsKey("expansionDimensionId") &&
+                expansionIds.TryGetValue(key, out long expansionId))
+            {
                 Put(recipe, "expansionDimensionId", expansionId);
+                Put(recipe, "companionExpansionKey", key);
+            }
             if (craft.RecipeId is int professionRecipeId && craft.ProfessionId is int usedProfession &&
                 recipes.TryGetValue((double)professionRecipeId, out object? recipeWithProfessionValue) &&
-                recipeWithProfessionValue is LuaTable recipeWithProfession)
+                recipeWithProfessionValue is LuaTable recipeWithProfession &&
+                !recipeWithProfession.ContainsKey("professionId"))
                 Put(recipeWithProfession, "professionId", usedProfession);
         }
     }
@@ -533,7 +633,10 @@ public static class SavedVariablesWriter
             LuaTable row = Table(("id", item.Id), ("name", item.Name));
             if (item.ProfessionId is int professionId) Put(row, "professionId", professionId);
             if (item.ExpansionKey is string key && expansionIds.TryGetValue(key, out long expansionId))
+            {
                 Put(row, "expansionDimensionId", expansionId);
+                Put(row, "companionExpansionKey", key);
+            }
             if (item.MaxQuality is int maxQuality) Put(row, "maxQuality", maxQuality);
             Put(result, item.Id, row);
         }
@@ -549,31 +652,6 @@ public static class SavedVariablesWriter
         rows.Where(row => row.Get(keyField) is string)
             .GroupBy(row => (string)row.Get(keyField)!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
-
-    private static Dictionary<string, LuaTable> IndexOldSessions(
-        LuaTable? ledger,
-        IReadOnlyDictionary<string, LuaTable> oldCharacters,
-        GameContext gameContext)
-    {
-        Dictionary<long, string> characterKeys = oldCharacters
-            .Where(x => Long(x.Value.Get("id")) is not null)
-            .ToDictionary(x => Long(x.Value.Get("id"))!.Value, x => x.Key);
-        Dictionary<string, LuaTable> result = new(StringComparer.Ordinal);
-        foreach (LuaTable session in GetDimensionRows(ledger, "sessions"))
-        {
-            if (Long(session.Get("projectId")) != (int)gameContext.Project ||
-                !string.Equals(session.Get("companionProgressionTrack") as string,
-                    gameContext.ProgressionTrack, StringComparison.Ordinal))
-                continue;
-            long? characterId = Long(session.Get("characterDimensionId"));
-            if (characterId is null || !characterKeys.TryGetValue(characterId.Value, out string? key))
-                continue;
-            LuaTable? existing = result.GetValueOrDefault(key);
-            if (existing is null || Number(session.Get("startedAt")) > Number(existing.Get("startedAt")))
-                result[key] = session;
-        }
-        return result;
-    }
 
     private static LuaTable ExistingDimension(IReadOnlyDictionary<string, LuaTable> oldRows, string key) =>
         oldRows.TryGetValue(key, out LuaTable? row) ? CloneTable(row) : new();
@@ -616,14 +694,6 @@ public static class SavedVariablesWriter
         else table.Remove(key);
     }
 
-    private static void CopyFields(LuaTable? source, LuaTable target, params string[] fields)
-    {
-        if (source is null) return;
-        foreach (string field in fields)
-            if (source.ContainsKey(field))
-                target[field] = Clone(source.Get(field));
-    }
-
     private static LuaTable CloneTable(LuaTable source) => (LuaTable)Clone(source)!;
 
     private static object? Clone(object? value)
@@ -634,6 +704,15 @@ public static class SavedVariablesWriter
             result[key] = Clone(child);
         return result;
     }
+
+    private static bool HasSafeLuaNumbers(object? value) => value switch
+    {
+        LuaTable table => table.Values.All(HasSafeLuaNumbers),
+        long integer => integer is >= -MaximumLuaInteger and <= MaximumLuaInteger,
+        double number => double.IsFinite(number) && Math.Abs(number) <= MaximumLuaInteger,
+        decimal number => Math.Abs(number) <= MaximumLuaInteger,
+        _ => true
+    };
 
     private static long? Long(object? value) => value switch
     {

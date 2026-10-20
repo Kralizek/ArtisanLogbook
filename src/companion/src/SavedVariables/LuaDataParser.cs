@@ -68,6 +68,11 @@ public static class LuaDataParser
     private const int MaximumCharacters = 16 * 1024 * 1024;
     private const int MaximumEntries = 500_000;
     private const int MaximumDepth = 128;
+    private static readonly HashSet<string> Keywords =
+    [
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function",
+        "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"
+    ];
 
     public static LuaDocument Parse(string source)
     {
@@ -114,6 +119,7 @@ public static class LuaDataParser
 
                 if (hasReturn || !Take('='))
                     Fail("Expected a SavedVariables assignment or return table", line, column);
+                if (Keywords.Contains(name)) Fail("A Lua keyword cannot be an assignment name", line, column);
                 if (assignments.ContainsKey(name))
                     Fail($"Duplicate top-level assignment '{name}'", line, column);
                 assignments.Add(name, ParseValue(0));
@@ -166,6 +172,7 @@ public static class LuaDataParser
                     SkipTrivia();
                     if (Take('='))
                     {
+                        if (Keywords.Contains(identifier)) Fail("A Lua keyword cannot be a named table field");
                         key = identifier;
                         value = ParseValue(depth);
                     }
@@ -182,7 +189,8 @@ public static class LuaDataParser
                 }
 
                 if (++_entries > MaximumEntries) Fail("Lua table entry limit exceeded");
-                table[key] = value;
+                if (value is null) table.Remove(key);
+                else table[key] = value;
                 SkipTrivia();
                 if (Take(',') || Take(';'))
                     SkipTrivia();
@@ -211,6 +219,7 @@ public static class LuaDataParser
             char quote = Current;
             Advance();
             StringBuilder result = new();
+            List<byte> bytes = [];
             while (!AtEnd && Current != quote)
             {
                 char character = Current;
@@ -237,12 +246,10 @@ public static class LuaDataParser
                     case '\\': result.Append('\\'); break;
                     case '"': result.Append('"'); break;
                     case '\'': result.Append('\''); break;
-                    case '\n': break;
+                    case '\n': result.Append('\n'); break;
                     case '\r':
                         if (Current == '\n') Advance();
-                        break;
-                    case 'z':
-                        while (!AtEnd && char.IsWhiteSpace(Current)) Advance();
+                        result.Append('\n');
                         break;
                     default:
                         if (escaped is >= '0' and <= '9')
@@ -256,7 +263,9 @@ public static class LuaDataParser
                                 digits++;
                             }
                             if (number > 255) Fail("Decimal string escape exceeds 255");
-                            result.Append((char)number);
+                            bytes.AddRange(Encoding.UTF8.GetBytes(result.ToString()));
+                            result.Clear();
+                            bytes.Add((byte)number);
                         }
                         else
                         {
@@ -267,7 +276,16 @@ public static class LuaDataParser
             }
             if (AtEnd) Fail("Unterminated Lua string");
             Advance();
-            return result.ToString();
+            if (bytes.Count == 0) return result.ToString();
+            bytes.AddRange(Encoding.UTF8.GetBytes(result.ToString()));
+            try
+            {
+                return new UTF8Encoding(false, true).GetString(bytes.ToArray());
+            }
+            catch (DecoderFallbackException)
+            {
+                throw new LuaSyntaxException("Lua byte strings must contain valid UTF-8", _line, _column);
+            }
         }
 
         private double ParseNumber()
@@ -371,7 +389,7 @@ public static class LuaDataParser
         }
 
         private char Peek(int offset) => _position + offset < source.Length ? source[_position + offset] : '\0';
-        private char Current => source[_position];
+        private char Current => AtEnd ? '\0' : source[_position];
         private bool AtEnd => _position >= source.Length;
 
         [DoesNotReturn]
@@ -390,7 +408,7 @@ public static class LuaDataParser
         private static bool IsIdentifierStart(char value) => value is '_' or >= 'a' and <= 'z' or >= 'A' and <= 'Z';
         private static bool IsIdentifierPart(char value) => IsIdentifierStart(value) || char.IsAsciiDigit(value);
         private bool IsNumberStart(char value) =>
-            char.IsAsciiDigit(value) || value is '+' or '-' || value == '.' && char.IsAsciiDigit(Peek(1));
+            char.IsAsciiDigit(value) || value == '-' || value == '.' && char.IsAsciiDigit(Peek(1));
     }
 
     public static string Serialize(LuaDocument document)
@@ -471,7 +489,8 @@ public static class LuaDataParser
 
     private static void ValidateIdentifier(string name)
     {
-        if (string.IsNullOrEmpty(name) || !IsIdentifierStart(name[0]) || name.Any(c => !IsIdentifierPart(c)))
+        if (string.IsNullOrEmpty(name) || Keywords.Contains(name) ||
+            !IsIdentifierStart(name[0]) || name.Any(c => !IsIdentifierPart(c)))
             throw new ArgumentException($"Invalid Lua assignment name '{name}'.", nameof(name));
     }
 

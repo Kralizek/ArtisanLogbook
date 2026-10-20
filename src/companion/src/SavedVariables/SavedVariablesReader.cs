@@ -38,6 +38,19 @@ public static class SavedVariablesReader
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+        try
+        {
+            return ParseCore(source, sourceName);
+        }
+        catch (OverflowException)
+        {
+            return Failure([new(SavedVariablesDiagnosticSeverity.Error, "measurement-overflow",
+                sourceName, "Summed source measurements exceed the supported numeric range; no history was promoted.")]);
+        }
+    }
+
+    private static SavedVariablesImportResult ParseCore(string source, string sourceName)
+    {
         List<SavedVariablesDiagnostic> diagnostics = [];
         LuaDocument document;
         try
@@ -86,6 +99,11 @@ public static class SavedVariablesReader
                 "ArtisanLogbookDB.schemaIdentity", "The table is not an ArtisanLogbook Core ledger."));
             return new(schemaVersion, null, diagnostics, new(0, false));
         }
+        bool legacyOutcomes = schemaVersion == 1 && Integer(ledger.Get("outcomeVersion")) != 2;
+        if (legacyOutcomes)
+            diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "legacy-outcome-coverage-corrected",
+                "ArtisanLogbookDB.outcomeVersion",
+                "Like the addon schema-1 migration, pre-outcome-2 false/set-completeness claims are unproven. Only positive proc/return evidence is promoted."));
 
         if (ledger.Get("dimensions") is not LuaTable && ledger.ContainsKey("dimensions"))
         {
@@ -116,6 +134,23 @@ public static class SavedVariablesReader
         HashSet<long> craftIds = [];
         foreach (LuaTable craft in craftRows)
         {
+            foreach (string field in new[]
+            {
+                "id", "sessionId", "requestId", "gameOperationId", "recipeId", "professionId",
+                "outputItemId", "outputQuantity", "outputQuality", "concentrationSpent",
+                "concentrationCurrencyId", "ingenuityRefund", "multicraftBonus"
+            })
+                if (craft.ContainsKey(field) && Long(craft.Get(field)) is null)
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-craft-measurement",
+                        $"ArtisanLogbookDB.crafts.{field}",
+                        "A known identifier/measurement must be an exact supported integer, not silently treated as unknown."));
+            foreach (string field in new[]
+            {
+                "hasIngenuityProc", "hasResourcefulnessProc", "resourcefulnessComplete", "inputComplete"
+            })
+                if (craft.ContainsKey(field) && Boolean(craft.Get(field)) is null)
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-craft-measurement",
+                        $"ArtisanLogbookDB.crafts.{field}", "A known outcome/completeness value must be a boolean."));
             long? id = Long(craft.Get("id"));
             if (id is not null && !craftIds.Add(id.Value))
                 diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "duplicate-craft-id",
@@ -141,12 +176,29 @@ public static class SavedVariablesReader
         Dictionary<long, LuaTable> expansions = Index(expansionRows, "dimensions.expansions", diagnostics);
         Dictionary<long, LuaTable> requests = Index(requestRows, "requests", diagnostics);
         Dictionary<long, List<LuaTable>> reagentsByCraft = Group(reagentRows, "craftId");
-        Dictionary<long, IReadOnlyList<LuaTable>> allocationsByRequest = [];
+        HashSet<long> invalidRequestCrafts = [];
+        foreach (LuaTable craft in craftRows)
+        {
+            if (Long(craft.Get("requestId")) is not long requestId) continue;
+            if (!requests.TryGetValue(requestId, out LuaTable? request) ||
+                Long(request.Get("sessionId")) != Long(craft.Get("sessionId")) ||
+                Integer(request.Get("recipeId")) != Integer(craft.Get("recipeId")))
+            {
+                if (Long(craft.Get("id")) is long craftId) invalidRequestCrafts.Add(craftId);
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-craft-request-reference",
+                    $"ArtisanLogbookDB.crafts[id={Long(craft.Get("id"))}].requestId",
+                    "A linked request must exist and match the craft's session and recipe. Its inputs cannot be attributed to this craft."));
+            }
+        }
+        foreach (LuaTable reagent in reagentRows)
+            if (Long(reagent.Get("craftId")) is not long craftId || !craftIds.Contains(craftId))
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "orphan-reagent-reference",
+                    "ArtisanLogbookDB.reagents.craftId",
+                    "A reagent row must reference a retained craft; orphan observations cannot be silently omitted."));
         foreach (LuaTable request in requestRows)
         {
-            long? requestId = Long(request.Get("id"));
-            if (requestId is null) continue;
-            allocationsByRequest[requestId.Value] = Rows(request.Get("allocations"));
+            CheckCollection(request, "allocations", diagnostics, "ArtisanLogbookDB.requests");
+            CheckCollection(request, "fixedReagents", diagnostics, "ArtisanLogbookDB.requests");
         }
 
         List<CraftObservation> crafts = [];
@@ -168,6 +220,17 @@ public static class SavedVariablesReader
             string location = localCraftId is null
                 ? "ArtisanLogbookDB.crafts[?]"
                 : $"ArtisanLogbookDB.crafts[id={localCraftId.Value}]";
+            if (group.Any(c => Long(c.Get("id")) is long craftId && invalidRequestCrafts.Contains(craftId)))
+                continue;
+            string[] outputFields = ["id", "outputItemId", "outputQuantity", "outputQuality", "recipeId"];
+            if (group.Select(c => Integer(c.Get("recipeId"))).Where(id => id is not null).Distinct().Count() > 1 ||
+                group.SelectMany(c => c.Keys).OfType<string>().Except(outputFields, StringComparer.Ordinal)
+                    .Any(field => group.Any(c => !Equals(c.Get(field), row.Get(field)))))
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "conflicting-output-group", location,
+                    "Grouped output rows disagree on shared craft facts. They cannot safely become one observation."));
+                continue;
+            }
             if (localCraftId is null or <= 0)
             {
                 diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-craft-id", location,
@@ -268,7 +331,9 @@ public static class SavedVariablesReader
             LuaTable? recipe = recipeId is not null && recipes.TryGetValue(recipeId.Value, out LuaTable? foundRecipe)
                 ? foundRecipe
                 : null;
-            int? professionId = Integer(row.Get("professionId")) ?? Integer(recipe?.Get("professionId"));
+            bool companionClassification = Boolean(row.Get("companionClassificationPresent")) == true;
+            int? professionId = companionClassification ? Integer(row.Get("companionProfession")) :
+                Integer(row.Get("professionId")) ?? Integer(recipe?.Get("professionId"));
             string? expansionKey = null;
             long? expansionId = Long(recipe?.Get("expansionDimensionId"));
             LuaTable? expansion = expansionId is not null && expansions.TryGetValue(expansionId.Value, out LuaTable? foundExpansion)
@@ -276,6 +341,11 @@ public static class SavedVariablesReader
                 : null;
             if (expansion?.Get("key") is string key && key.StartsWith("skillLine:", StringComparison.Ordinal))
                 expansionKey = key;
+            expansionKey = recipe?.Get("companionExpansionKey") as string ?? expansionKey;
+            string? recipeExpansionKey = expansionKey;
+            int? recipeProfessionId = Integer(recipe?.Get("professionId")) ?? professionId;
+            if (companionClassification)
+                expansionKey = row.Get("companionProfessionExpansionKey") as string;
 
             List<CraftOutput> outputs = [];
             foreach (LuaTable outputRow in group)
@@ -307,19 +377,12 @@ public static class SavedVariablesReader
                         AddReagent(reagentFacts, reagent, "allocatedQuantity", "returnedQuantity", diagnostics, location);
                 }
                 else if (Long(groupCraft.Get("requestId")) is long linkedRequestId &&
-                    requests.TryGetValue(linkedRequestId, out LuaTable? linkedRequest) &&
-                    allocationsByRequest.TryGetValue(linkedRequestId, out IReadOnlyList<LuaTable>? allocations))
+                    requests.TryGetValue(linkedRequestId, out LuaTable? linkedRequest))
                 {
-                    foreach (LuaTable allocation in allocations)
-                    {
-                        LuaTable synthetic = new()
-                        {
-                            ["itemId"] = allocation.Get("itemId"),
-                            ["allocatedQuantity"] = allocation.Get("allocatedQuantity")
-                        };
-                        AddReagent(reagentFacts, synthetic, "allocatedQuantity", "returnedQuantity", diagnostics, location);
-                    }
-                    _ = linkedRequest;
+                    foreach (LuaTable allocation in Rows(linkedRequest.Get("allocations")))
+                        AddReagent(reagentFacts, allocation, "allocatedQuantity", "returnedQuantity", diagnostics, location);
+                    foreach (LuaTable fixedReagent in Rows(linkedRequest.Get("fixedReagents")))
+                        AddReagent(reagentFacts, fixedReagent, "requiredQuantity", "returnedQuantity", diagnostics, location);
                 }
             }
             bool? inputsComplete = Boolean(row.Get("inputComplete")) ??
@@ -328,23 +391,28 @@ public static class SavedVariablesReader
             string? resourcefulnessEvidence = companionEvidenceSpecified is bool evidenceSpecified
                 ? evidenceSpecified ? row.Get("companionResourcefulnessEvidence") as string : null
                 : row.Get("companionResourcefulnessEvidence") as string ?? row.Get("outcomeSource") as string;
-            bool? resourcefulnessComplete = Boolean(row.Get("resourcefulnessComplete")) ??
+            bool? resourcefulnessComplete = Boolean(row.Get("companionCompletenessPresent")) == true
+                ? Boolean(row.Get("companionResourcefulnessComplete"))
+                : Boolean(row.Get("resourcefulnessComplete")) ??
                 Boolean(row.Get("companionResourcefulnessComplete")) ??
                 (resourcefulnessEvidence == "partial" ? false : null);
+            if (legacyOutcomes) resourcefulnessComplete = null;
             bool hasObservedEmptyAllocations = group.Any(groupCraft =>
                 Long(groupCraft.Get("requestId")) is long linkedRequestId &&
                 requests.TryGetValue(linkedRequestId, out LuaTable? linkedRequest) &&
                 linkedRequest.Get("allocations") is LuaTable allocationTable &&
-                allocationTable.Count == 0);
+                allocationTable.Count == 0 && Rows(linkedRequest.Get("fixedReagents")).Count == 0);
             IReadOnlyList<CraftReagent>? observedReagents = reagentFacts.Count > 0
                 ? reagentFacts.OrderBy(x => x.Key).Select(x => new CraftReagent(
                     x.Key,
                     x.Value.AllocatedSeen ? x.Value.Allocated : null,
                     x.Value.ReturnedSeen ? x.Value.Returned : null)).ToArray()
+                : Boolean(row.Get("companionReagentsObserved")) == false ? null
                 : inputsComplete == true ||
                   resourcefulnessComplete == true &&
                   Boolean(row.Get("hasResourcefulnessProc")) == false ||
-                  hasObservedEmptyAllocations
+                  hasObservedEmptyAllocations ||
+                  Boolean(row.Get("companionReagentsObserved")) == true
                     ? []
                     : null;
 
@@ -362,6 +430,19 @@ public static class SavedVariablesReader
                     location + ".timestamp", "A finite Unix timestamp in the supported DateTimeOffset range is required."));
                 continue;
             }
+            if (row.ContainsKey("companionRecordedAt"))
+            {
+                if (row.Get("companionRecordedAt") is not string originalTimestamp ||
+                    !DateTimeOffset.TryParseExact(originalTimestamp, "O", CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out DateTimeOffset preciseTimestamp) ||
+                    preciseTimestamp.ToUnixTimeSeconds() != recordedAt.ToUnixTimeSeconds())
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-craft-timestamp",
+                        location + ".companionRecordedAt", "Precise timestamp metadata must agree with the addon timestamp."));
+                    continue;
+                }
+                recordedAt = preciseTimestamp;
+            }
 
             List<CraftReagent> normalizedReagents = observedReagents?.ToList() ?? [];
             foreach (CraftReagent reagent in normalizedReagents)
@@ -369,13 +450,18 @@ public static class SavedVariablesReader
             foreach (CraftOutput output in observedOutputs ?? [])
                 AddItemDimension(game, output.ItemId, itemRows, itemDimensions, seenItems);
             if (recipeId is > 0)
-                AddRecipeDimension(game, recipeId.Value, recipe, professionId, expansionKey,
+                AddRecipeDimension(game, recipeId.Value, recipe, recipeProfessionId, recipeExpansionKey,
                     recipeDimensions, seenRecipes);
             if (professionId is > 0)
                 AddProfessionDimension(game, professionId.Value, professionRows,
                     professionDimensions, seenProfessions);
+            if (recipeProfessionId is > 0)
+                AddProfessionDimension(game, recipeProfessionId.Value, professionRows,
+                    professionDimensions, seenProfessions);
             if (expansionKey is not null && seenExpansions.Add((game, expansionKey)))
                 canonicalExpansions.Add(new(game, expansionKey, expansion?.Get("name") as string));
+            if (recipeExpansionKey is not null && seenExpansions.Add((game, recipeExpansionKey)))
+                canonicalExpansions.Add(new(game, recipeExpansionKey, expansion?.Get("name") as string));
             if (seenCharacters.Add((game, identity.Key)))
                 characterDimensions.Add(new(game, identity, character?.Get("name") as string,
                     character?.Get("classFile") as string));
@@ -385,6 +471,11 @@ public static class SavedVariablesReader
             int? ingenuityRefund = Integer(row.Get("ingenuityRefund"));
             int? multicraftBonus = Integer(row.Get("multicraftBonus"));
             bool? resourcefulnessProc = Boolean(row.Get("hasResourcefulnessProc"));
+            if (legacyOutcomes)
+            {
+                resourcefulnessProc = resourcefulnessProc == true ||
+                    (observedReagents ?? []).Any(r => r.ReturnedQuantity is > 0) ? true : null;
+            }
             string? companionOrigin = row.Get("companionCraftOrigin") as string;
             string? companionObservation = row.Get("companionCraftObservation") as string;
             if (row.ContainsKey("companionCraftOrigin") && row.Get("companionCraftOrigin") is not string ||
@@ -420,7 +511,8 @@ public static class SavedVariablesReader
                     location + ".companionSourceCraft", "Original local craft ID metadata must be a safe integer string."));
                 continue;
             }
-            long? operationId = Long(row.Get("gameOperationId"));
+            long? operationId = LongString(row.Get("companionSourceOperation")) ??
+                Long(row.Get("gameOperationId"));
             long? requestId = Long(row.Get("requestId")) ??
                 LongString(row.Get("companionSourceRequest"));
             if (row.Get("outcomeSource") is string outcomeSource &&
@@ -470,7 +562,7 @@ public static class SavedVariablesReader
                 resourcefulnessComplete));
         }
 
-        long aggregateOnlyCount = CountAggregateOnly(ledger, sessions, crafts);
+        long aggregateOnlyCount = CountAggregateOnly(ledger, sessions);
         if (aggregateOnlyCount > 0)
         {
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "aggregate-only-history",
@@ -508,26 +600,23 @@ public static class SavedVariablesReader
                 location + ".reagents", "A reagent fact with no positive item ID was omitted."));
             return;
         }
-        bool existed = facts.TryGetValue(itemId.Value, out var current);
-        if (!existed) current = (null, null, true, true);
-        long? allocation = Long(row.Get(allocationField));
+        facts.TryGetValue(itemId.Value, out var current);
+        string observedAllocationField = row.ContainsKey(allocationField) ? allocationField :
+            row.ContainsKey("companionAllocatedQuantity") ? "companionAllocatedQuantity" : allocationField;
+        long? allocation = Long(row.Get(observedAllocationField));
         decimal? returned = Decimal(row.Get(returnField));
-        if (row.ContainsKey(allocationField) && allocation is null)
+        if (row.ContainsKey(observedAllocationField) && allocation is null)
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "invalid-reagent-allocation",
                 location + ".reagents.allocatedQuantity", "An invalid allocation value was left unknown."));
         if (row.ContainsKey(returnField) && returned is null)
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "invalid-reagent-return",
                 location + ".reagents.returnedQuantity", "An invalid returned quantity was left unknown."));
-        bool allocationObserved = row.ContainsKey(allocationField) && allocation is not null;
+        bool allocationObserved = row.ContainsKey(observedAllocationField) && allocation is not null;
         bool returnObserved = row.ContainsKey(returnField) && returned is not null;
-        current.AllocatedSeen &= allocationObserved;
-        current.ReturnedSeen &= returnObserved;
-        current.Allocated = current.AllocatedSeen
-            ? checked((current.Allocated ?? 0) + allocation!.Value)
-            : null;
-        current.Returned = current.ReturnedSeen
-            ? checked((current.Returned ?? 0) + returned!.Value)
-            : null;
+        current.AllocatedSeen |= allocationObserved;
+        current.ReturnedSeen |= returnObserved;
+        if (allocationObserved) current.Allocated = checked((current.Allocated ?? 0) + allocation!.Value);
+        if (returnObserved) current.Returned = checked((current.Returned ?? 0) + returned!.Value);
         facts[itemId.Value] = current;
     }
 
@@ -563,22 +652,26 @@ public static class SavedVariablesReader
         ICollection<ProfessionDimension> result,
         ISet<(GameContext, int)> seen)
     {
-        if (seen.Add((game, professionId)))
+        while (seen.Add((game, professionId)))
         {
             LuaTable? row = FindNatural(source, professionId);
-            result.Add(new(game, professionId, row?.Get("name") as string, Integer(row?.Get("parentId"))));
+            int? parentId = Integer(row?.Get("companionParent")) ?? Integer(row?.Get("parentId"));
+            result.Add(new(game, professionId, row?.Get("name") as string, parentId));
+            if (parentId is not > 0) break;
+            professionId = parentId.Value;
         }
     }
 
     private static long CountAggregateOnly(
         LuaTable ledger,
-        IReadOnlyDictionary<long, LuaTable> sessions,
-        IReadOnlyList<CraftObservation> crafts)
+        IReadOnlyDictionary<long, LuaTable> sessions)
     {
         long detailOnly = 0;
         Dictionary<(double Day, long CharacterId, int? RecipeId), long> detailCounts = [];
-        foreach (LuaTable craft in Rows(ledger.Get("crafts")))
+        Dictionary<(double Day, long CharacterId, int? RecipeId), long> aggregateCounts = [];
+        foreach (IGrouping<string, LuaTable> group in GroupCraftRows(Rows(ledger.Get("crafts"))))
         {
+            LuaTable craft = group.First();
             long? sessionId = Long(craft.Get("sessionId"));
             long? characterId = sessionId is not null && sessions.TryGetValue(sessionId.Value, out LuaTable? session)
                 ? Long(session.Get("characterDimensionId"))
@@ -586,7 +679,8 @@ public static class SavedVariablesReader
             double? timestamp = Number(craft.Get("timestamp"));
             if (timestamp is null) continue;
             double day = Math.Floor(timestamp.Value / 86400) * 86400;
-            var key = (day, characterId ?? 0, Integer(craft.Get("recipeId")));
+            var key = (day, characterId ?? 0, group.Select(c => Integer(c.Get("recipeId")))
+                .FirstOrDefault(id => id is not null));
             detailCounts[key] = detailCounts.GetValueOrDefault(key) + 1;
         }
         foreach (LuaTable row in Rows(ledger.Get("craftSeries")))
@@ -597,10 +691,10 @@ public static class SavedVariablesReader
             long? count = Long(row.Get("craftCount"));
             if (day is null || count is null) continue;
             var key = (day.Value, characterId ?? 0, recipeId);
-            long observed = detailCounts.GetValueOrDefault(key);
-            detailOnly += Math.Max(0, count.Value - observed);
+            aggregateCounts[key] = checked(aggregateCounts.GetValueOrDefault(key) + count.Value);
         }
-        _ = crafts;
+        foreach (var (key, count) in aggregateCounts)
+            detailOnly = checked(detailOnly + Math.Max(0, count - detailCounts.GetValueOrDefault(key)));
         return detailOnly;
     }
 
@@ -626,7 +720,7 @@ public static class SavedVariablesReader
         return $"project:{projectId}:region:{regionId}:realm:{gameRealmId}:guid:{guid}";
     }
 
-    private static bool HasStableCharacterKey(string? key, int projectId)
+    internal static bool HasStableCharacterKey(string? key, int projectId)
     {
         if (key is null) return false;
         string prefix = $"project:{projectId}:region:";
@@ -712,6 +806,9 @@ public static class SavedVariablesReader
         if (parent.ContainsKey(name) && parent.Get(name) is not LuaTable)
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-collection",
                 $"{prefix}.{name}", "A saved collection must be a table when present."));
+        if (parent.Get(name) is LuaTable collection && collection.Values.Any(value => value is not LuaTable))
+            diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-collection-row",
+                $"{prefix}.{name}", "Every collection member must be a table; scalar rows cannot be silently omitted."));
     }
 
     private static long? Long(object? value)
