@@ -25,6 +25,25 @@ public class CraftHistoryReconcilerTests
             [new(Game, "skillLine:2915", "Midnight")]));
 
     [Test]
+    public void SameRecipeIdInDifferentGameContextsRemainsSeparate()
+    {
+        GameContext forever = new(GameProject.Forever);
+        CraftHistory retail = new([], CraftDimensions.Empty with
+        {
+            Recipes = [new RecipeDimension(Game, 123, "Retail Recipe")]
+        });
+        CraftHistory other = new([], CraftDimensions.Empty with
+        {
+            Recipes = [new RecipeDimension(forever, 123, "Forever Recipe")]
+        });
+
+        CraftHistoryMergeResult result = CraftHistoryReconciler.Merge(retail, other);
+
+        Assert.That(result.IsSuccessful, Is.True);
+        Assert.That(result.History!.Dimensions.Recipes, Has.Count.EqualTo(2));
+    }
+
+    [Test]
     public void IndependentlyAddedCraftsMergeAndPreserveTypedFacts()
     {
         CraftHistory a = History(Craft("origin-a", "1", 123));
