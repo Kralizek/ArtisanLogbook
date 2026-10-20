@@ -5,13 +5,13 @@ Core owns **C01 Craft History Model** and **C02 History Reconciliation** from th
 ## Canonical grains
 
 - `CraftObservation`: **one completed crafting attempt**, not necessarily one output callback, request, or crafting session.
-- `CraftReagent`: **craft × item ID**. Input allocation and Resourcefulness returns are separately nullable. Duplicate item slots must be folded by the SavedVariables adapter, with missing measurements preserved as unknown.
+- `CraftReagent`: **craft × item ID**. Input allocation and Resourcefulness returns are separately nullable. Allocations are integer quantities; returned quantities use `decimal` to retain legacy fractional SavedVariables observations. Duplicate item slots must be folded by the SavedVariables adapter, with missing measurements preserved as unknown.
 - `CraftOutput`: **craft × output item ID × quality**, with a nullable quality and positive quantity. Supports operations generating multiple output items.
 - `CraftDimensions`: metadata keyed by stable WoW item/recipe/profession IDs and profession expansion keys and the addon's project/region/realm/GUID character key. Display names are enrichment, not identities.
 
 `null` measurements mean *not observed*. `false` or `0` mean explicitly observed negatives or zeros. Likewise, a null reagent/output collection means its complete contents were not observed, while an empty collection means it was explicitly observed empty. We do not store historical addon aggregates in Core.
 
-The recorder's current persisted crafts expose recipe/output IDs, output quantity/quality, timestamps, operation IDs, concentration spent/currency, ingenuity proc/refund, multicraft bonus and sometimes Resourcefulness completion. The source also contains request/allocation, reagent and dimension tables. The SavedVariables adapter will resolve those links and collapse slot-level reagent detail to the agreed craft × item grain. These fields may be absent from individual records; not all crafts can have all measurements reconstructed.
+The recorder's current persisted crafts expose recipe/output IDs, output quantity/quality, timestamps, operation IDs, concentration spent/currency, ingenuity proc/refund, multicraft bonus, Resourcefulness outcome/completeness, and input completeness. `InputsComplete` and `ResourcefulnessComplete` preserve the addon's explicit completion distinctions; null is unknown and false means known incomplete. The source also contains request/allocation, reagent and dimension tables. The SavedVariables adapter resolves those links and collapses slot-level reagent detail to the agreed craft × item grain. These fields may be absent from individual records; not all crafts can have all measurements reconstructed.
 
 ## Game context and expansion classification
 

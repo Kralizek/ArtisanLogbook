@@ -45,6 +45,28 @@ public class CraftObservationTests
     }
 
     [Test]
+    public void SourceCompletenessAndFractionalReturnsArePreserved()
+    {
+        CraftObservation incomplete = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
+            Reagents: [new(20, 3, 0.5m)],
+            InputsComplete: false,
+            ResourcefulnessComplete: false);
+        CraftObservation complete = incomplete with
+        {
+            InputsComplete = true,
+            HasResourcefulnessProc = true,
+            ResourcefulnessComplete = true
+        };
+
+        Assert.That(HistoryValidator.Validate([incomplete, complete with
+        {
+            Identity = new CraftIdentity("capture-1", "craft-43")
+        }]), Is.Empty);
+        Assert.That(incomplete.Reagents![0].ReturnedQuantity, Is.EqualTo(0.5m));
+        Assert.That(incomplete, Is.Not.EqualTo(complete));
+    }
+
+    [Test]
     public void MissingDimensionMetadataDoesNotInvalidateCrafts()
     {
         CraftObservation craft = new(Identity, Game, DateTimeOffset.UnixEpoch, null, Character);
@@ -60,6 +82,20 @@ public class CraftObservationTests
             [], [], []));
         Assert.That(CraftHistoryValidator.Validate(history).Select(e => e.Field),
             Does.Contain("RecipeDimension"));
+    }
+
+    [Test]
+    public void NumericDimensionIdsAreScopedToGameContext()
+    {
+        GameContext other = new(GameProject.Forever);
+        CraftHistory history = new([], new(
+            [],
+            [],
+            [new(Game, 171), new(other, 171)],
+            [new(Game, 123), new(other, 123)],
+            []));
+
+        Assert.That(CraftHistoryValidator.Validate(history), Is.Empty);
     }
 
     [Test]
