@@ -7,13 +7,14 @@ namespace Tests.History;
 [TestFixture]
 public class CraftObservationTests
 {
+    private static readonly GameContext Game = new(GameProject.Retail);
     private static readonly CraftIdentity Identity = new("capture-1", "craft-42");
     private static readonly CharacterIdentity Character = new("project:1:region:3:realm:1309:guid:Player-1309-12345678");
 
     [Test]
     public void ObservedCollectionsCompareByContentsRatherThanArrayIdentityOrOrder()
     {
-        CraftObservation first = new(Identity, DateTimeOffset.UnixEpoch, 123, Character,
+        CraftObservation first = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
             Reagents: [new(20, 3, 0), new(10, 5, null)],
             Outputs: [new(40, 1, 2), new(30, null, 1)]);
         CraftObservation second = first with
@@ -30,7 +31,7 @@ public class CraftObservationTests
     [Test]
     public void MissingAndExplicitlyEmptyCollectionsAreDifferent()
     {
-        CraftObservation absent = new(Identity, DateTimeOffset.UnixEpoch, 123, Character);
+        CraftObservation absent = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character);
         CraftObservation observedEmpty = absent with { Reagents = Array.Empty<CraftReagent>() };
         Assert.That(absent, Is.Not.EqualTo(observedEmpty));
     }
@@ -38,7 +39,7 @@ public class CraftObservationTests
     [Test]
     public void FalseAndUnknownAreDifferentResourcefulnessOutcomes()
     {
-        CraftObservation unknown = new(Identity, DateTimeOffset.UnixEpoch, 123, Character);
+        CraftObservation unknown = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character);
         CraftObservation negative = unknown with { HasResourcefulnessProc = false };
         Assert.That(unknown, Is.Not.EqualTo(negative));
     }
@@ -46,7 +47,7 @@ public class CraftObservationTests
     [Test]
     public void MissingDimensionMetadataDoesNotInvalidateCrafts()
     {
-        CraftObservation craft = new(Identity, DateTimeOffset.UnixEpoch, null, Character);
+        CraftObservation craft = new(Identity, Game, DateTimeOffset.UnixEpoch, null, Character);
         CraftHistory history = new([craft], CraftDimensions.Empty);
         Assert.That(CraftHistoryValidator.Validate(history), Is.Empty);
     }
@@ -55,7 +56,7 @@ public class CraftObservationTests
     public void DuplicateDimensionKeysAreRejected()
     {
         CraftHistory history = new([], new(
-            [], [new(123, "First"), new(123, "Second")],
+            [], [new(Game, 123, "First"), new(Game, 123, "Second")],
             [], [], []));
         Assert.That(CraftHistoryValidator.Validate(history).Select(e => e.Field),
             Does.Contain("RecipeDimension"));
@@ -64,7 +65,7 @@ public class CraftObservationTests
     [Test]
     public void NegativeOrDuplicateReagentMeasurementsAreInvalid()
     {
-        CraftObservation craft = new(Identity, DateTimeOffset.UnixEpoch, 123, Character,
+        CraftObservation craft = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
             Reagents: [new(123, -1, 0), new(123, null, null)]);
         Assert.That(HistoryValidator.Validate([craft]).Count, Is.GreaterThanOrEqualTo(2));
     }
@@ -72,7 +73,7 @@ public class CraftObservationTests
     [Test]
     public void OneCraftCanProduceMultipleOutputsOfDistinctQualities()
     {
-        CraftObservation craft = new(Identity, DateTimeOffset.UnixEpoch, 123, Character,
+        CraftObservation craft = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
             Outputs: [new(10, 1, 2), new(10, 2, 3), new(11, null, 1)]);
         Assert.That(HistoryValidator.Validate([craft]), Is.Empty);
     }
@@ -80,7 +81,7 @@ public class CraftObservationTests
     [Test]
     public void ReconciliationDoesNotDependOnInputOrderingForConflictFreeEnrichment()
     {
-        CraftObservation unknown = new(Identity, DateTimeOffset.UnixEpoch, null, Character,
+        CraftObservation unknown = new(Identity, Game, DateTimeOffset.UnixEpoch, null, Character,
             Reagents: [new(10, 3, null), new(20, null, null)]);
         CraftObservation enriched = unknown with
         {
@@ -105,7 +106,7 @@ public class CraftObservationTests
         {
             CraftObservation[] crafts = Enumerable.Range(0, rng.Next(1, 60))
                 .Select(i => new CraftObservation(new("ledger-" + (i % 3), "craft-" + i),
-                    DateTimeOffset.UnixEpoch.AddSeconds(i), 100 + i, Character,
+                    Game, DateTimeOffset.UnixEpoch.AddSeconds(i), 100 + i, Character,
                     Reagents: [new(10, i + 1, null)], Outputs: [new(20, null, 1)]))
                 .ToArray();
             CraftObservation[] shuffled = crafts.OrderBy(_ => rng.Next()).ToArray();
