@@ -47,9 +47,8 @@ function addon.CreateTraceWindow()
   text:SetWidth(width - 70)
   text:SetMaxLetters(0)
   text:SetScript("OnEscapePressed", text.ClearFocus)
-  text:SetScript("OnTextChanged", function()
-    text:SetHeight(math.max(scroll:GetHeight(), text:GetStringHeight()))
-  end)
+  -- Multiline EditBoxes grow with their contents; GetStringHeight belongs to FontString,
+  -- not EditBox. Let the ScrollFrame track the child size without a resize script.
   text:SetScript("OnCursorChanged", function(_, _, cursorY, _, cursorHeight)
     local offset = scroll:GetVerticalScroll()
     local position = -cursorY
