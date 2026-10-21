@@ -406,7 +406,9 @@ end
 
 local function seriesCount(craft, field)
   if field == "quoteObservedCount" then return craft.quoteObserved == true and 1 or 0 end
-  if field == "inputCompleteCount" then return craft.inputComplete == true and 1 or 0 end
+  if field == "inputCompleteCount" then
+    return (craft.inputComplete == true or craft.companionInputsComplete == true) and 1 or 0
+  end
   if field == "grossRequirementsCompleteCount" then return craft.grossRequirementsComplete == true and 1 or 0 end
   return isMatched(craft) and 1 or 0
 end
@@ -689,6 +691,10 @@ local function validateDatabase(data, version)
       if craft[field] ~= nil and (craft[field] ~= true or craft.requestId == nil) then
         return nil, "craft input observation requires a request"
       end
+    end
+    if craft.companionInputsComplete ~= nil and (version < 5 or type(craft.companionInputsComplete) ~= "boolean" or
+        craft.inputComplete ~= nil or craft.requestId ~= nil) then
+      return nil, "Companion input completeness must be separate from native request evidence"
     end
     ids.craft[craft.id] = true
   end

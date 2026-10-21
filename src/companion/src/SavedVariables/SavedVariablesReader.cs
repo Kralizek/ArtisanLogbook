@@ -147,11 +147,17 @@ public static class SavedVariablesReader
                         "A known identifier/measurement must be an exact supported integer, not silently treated as unknown."));
             foreach (string field in new[]
             {
-                "hasIngenuityProc", "hasResourcefulnessProc", "resourcefulnessComplete", "inputComplete"
+                "hasIngenuityProc", "hasResourcefulnessProc", "resourcefulnessComplete", "inputComplete",
+                "companionInputsComplete"
             })
                 if (craft.ContainsKey(field) && Boolean(craft.Get(field)) is null)
                     diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-craft-measurement",
                         $"ArtisanLogbookDB.crafts.{field}", "A known outcome/completeness value must be a boolean."));
+            if (craft.ContainsKey("companionInputsComplete") &&
+                (schemaVersion.Value < 5 || craft.ContainsKey("requestId") || craft.ContainsKey("inputComplete")))
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-companion-input-completeness",
+                    $"ArtisanLogbookDB.crafts[id={Long(craft.Get("id"))}].companionInputsComplete",
+                    "Companion input completeness is schema-5-only and cannot coexist with native request evidence."));
             long? id = Long(craft.Get("id"));
             if (id is not null && !craftIds.Add(id.Value))
                 diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "duplicate-craft-id",

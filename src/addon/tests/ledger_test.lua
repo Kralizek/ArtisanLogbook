@@ -287,6 +287,135 @@ test("salvage whole-attempt unknown recovery intersects sibling evidence and pre
   end
 end)
 
+test("issue 32 original four Prospecting operations remain four attempts with six outputs", function()
+  local ledger, clock = newLedger()
+  -- The issue reports output names but not item IDs; operation IDs and quantities are unchanged.
+  assert(ledger:SubmitSalvage(1231127, 4))
+  local results = {
+    { 92305409, 900101, 1 }, { 92305409, 900102, 3 },
+    { 652383086, 900102, 4 },
+    { 2660449560, 900101, 1 }, { 2660449560, 900103, 1 },
+    { 1676882099, 900102, 3 },
+  }
+  for _, result in ipairs(results) do
+    assert(ledger:RecordResult({ operationID = result[1], itemID = result[2], quantity = result[3] }))
+  end
+  assert(#ledger.database.crafts == 4 and ledger.recipeCounts[1231127] == 4)
+  assert(ledger.database.craftSeries[1].craftCount == 4 and ledger.database.craftSeries[1].outputQuantity == 13)
+  local expected = {
+    [92305409] = { [900101] = 1, [900102] = 3 },
+    [652383086] = { [900102] = 4 },
+    [2660449560] = { [900101] = 1, [900103] = 1 },
+    [1676882099] = { [900102] = 3 },
+  }
+  local expectedCounts = { [92305409] = 2, [652383086] = 1, [2660449560] = 2, [1676882099] = 1 }
+  for _, craft in ipairs(ledger.database.crafts) do
+    assert(craft.recipeId == 1231127 and #craft.outputs == expectedCounts[craft.gameOperationId])
+    for _, output in ipairs(craft.outputs) do
+      assert(expected[craft.gameOperationId][output.itemId] == output.quantity)
+    end
+  end
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  assert(#loaded.database.crafts == 4 and loaded.database.craftSeries[1].craftCount == 4 and
+    loaded.database.craftSeries[1].outputQuantity == 13)
+end)
+
+test("Prospecting, Crushing, Recycling and Milling share bounded CraftSalvage grouping", function()
+  -- The Milling ID is a stand-in; all families use the same CraftSalvage hook.
+  local families = { { "Prospecting", 1231127 }, { "Crushing", 1231132 },
+    { "Recycling", 1229930 }, { "Milling", 990002 } }
+  for index, family in ipairs(families) do
+    local ledger, clock = newLedger()
+    assert(ledger:SubmitSalvage(family[2], 1))
+    local first = assert(ledger:RecordResult({ operationID = 8000 + index, itemID = 900201, quantity = 1 }))
+    local sibling = assert(ledger:RecordResult({ operationID = 8000 + index, itemID = 900202, quantity = 2 }))
+    assert(sibling.id == first.id and first.recipeId == family[2])
+    assert(#ledger.database.crafts == 1 and #ledger.database.crafts[1].outputs == 2)
+    assert(ledger.database.craftSeries[1].craftCount == 1 and ledger.database.craftSeries[1].outputQuantity == 3)
+    local loaded = assert(Ledger.New(ledger.database, clock))
+    assert(#loaded.database.crafts == 1 and loaded.database.crafts[1].recipeId == family[2])
+  end
+end)
+
+test("Companion input completeness moves once with a multi-output unknown attempt", function()
+  local ledger, clock = newLedger()
+  assert(ledger:SubmitSalvage(1231127, 1, { allocations = { { itemId = 700, allocatedQuantity = 5 } } }))
+  local first = assert(ledger:RecordResult({ operationID = 10, itemID = 500, quantity = 1,
+    concentrationSpent = 4, multicraft = 1 }))
+  assert(ledger:RecordResult({ operationID = 10, itemID = 501, quantity = 2,
+    concentrationSpent = 4, multicraft = 1 }).id == first.id)
+
+  local craft = ledger.craftById[first.id]
+  craft.recipeId = nil
+  craft.attemptKind = "restored-operation"
+  craft.companionCraftOrigin, craft.companionCraftObservation = "restored", "unknown-1"
+  craft.companionInputsComplete = true
+  craft.configurationKey, craft.configurationScope = 197, "request"
+  ledger.database.configurations[197] = { useConcentration = false }
+  ledger.database.nextConfigurationKey = 198
+  local unknownSeries = ledger.database.craftSeries[1]
+  unknownSeries.configurationKey, unknownSeries.configurationScope = craft.configurationKey, craft.configurationScope
+  unknownSeries.recipeId, unknownSeries.inputCompleteCount = nil, 1
+  local unknownReagentSeries = ledger.database.reagentSeries[1]
+  unknownReagentSeries.recipeId = nil
+  unknownReagentSeries.configurationKey, unknownReagentSeries.configurationScope =
+    craft.configurationKey, craft.configurationScope
+  assert(ledger:LearnRecipeOutput(1231127, 500))
+  assert(ledger:LearnRecipeOutput(1231127, 501))
+  ledger:RebuildIndexes()
+
+  local loaded = assert(Ledger.New(ledger.database, clock))
+  local before = loaded.database.craftSeries[1]
+  assert(before.craftCount == 1 and before.inputCompleteCount == 1 and before.matchedCraftCount == 0)
+  assert(before.outputQuantity == 3 and before.concentrationSpent == 4 and before.multicraftBonus == 1)
+  assert(loaded.database.reagentSeries[1].allocatedQuantity == 5)
+  local session = loaded.dimensionRows.session[loaded.craftById[first.id].sessionId]
+  local bucket = loaded.seriesByKey[math.floor(craft.timestamp / 86400) * 86400]
+  local characterGrains = bucket and bucket[session.characterDimensionId or 0]
+  assert(characterGrains and characterGrains[Ledger.GrainKey(nil, loaded.craftById[first.id])],
+    "Companion-restored input grain did not survive load")
+
+  local repair = assert(loaded:RepairUnknownRecipes())
+  assert(repair.repairedCount == 1 and loaded.craftById[first.id].recipeId == 1231127)
+  local repaired = loaded.database.craftSeries[1]
+  assert(repaired.recipeId == 1231127 and repaired.craftCount == 1)
+  assert(repaired.inputCompleteCount == 1 and repaired.matchedCraftCount == 0)
+  assert(repaired.outputQuantity == 3 and repaired.concentrationSpent == 4 and repaired.multicraftBonus == 1)
+  assert(loaded.database.reagentSeries[1].recipeId == 1231127 and
+    loaded.database.reagentSeries[1].allocatedQuantity == 5)
+  assert(loaded.craftById[first.id].companionInputsComplete == true and
+    loaded.craftById[first.id].configurationKey == 197 and #loaded.craftById[first.id].outputs == 2)
+  assert(loaded:RepairUnknownRecipes().repairedCount == 0)
+
+  local reloaded = assert(Ledger.New(loaded.database, clock))
+  assert(reloaded:RepairUnknownRecipes().repairedCount == 0)
+  assert(reloaded.database.craftSeries[1].inputCompleteCount == 1 and
+    reloaded.database.craftSeries[1].matchedCraftCount == 0)
+  assert(reloaded.craftById[first.id].companionInputsComplete == true and
+    reloaded.craftById[first.id].configurationKey == 197 and #reloaded.craftById[first.id].outputs == 2)
+end)
+
+test("Companion input completeness cannot impersonate a native request or downgrade schemas", function()
+  local ledger, clock = newLedger()
+  ledger:BeginCraft(123)
+  assert(ledger:SubmitCraft(123, 1, false))
+  assert(ledger:RecordResult({ operationID = 10, itemID = 500, quantity = 1 }))
+  assert(ledger.database.crafts[1].requestId ~= nil)
+
+  local malformedType = Ledger.CopyObservation(ledger.database)
+  malformedType.crafts[1].companionInputsComplete = "true"
+  unchangedAfter(malformedType, function() return Ledger.New(malformedType, clock) end)
+
+  local requestConflict = Ledger.CopyObservation(ledger.database)
+  requestConflict.crafts[1].companionInputsComplete = true
+  unchangedAfter(requestConflict, function() return Ledger.New(requestConflict, clock) end)
+
+  local legacy = Ledger.CopyObservation(ledger.database)
+  legacy.schemaVersion = 4
+  legacy.crafts[1].companionInputsComplete = true
+  unchangedAfter(legacy, function() return Ledger.New(legacy, clock) end)
+end)
+
 test("salvage corrupted outputs and summaries are refused without changing saved data", function()
   local ledger, clock = newLedger()
   assert(ledger:SubmitSalvage(1231127, 1))

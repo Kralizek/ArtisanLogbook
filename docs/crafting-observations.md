@@ -202,6 +202,13 @@ The configuration belongs to the attempt and applies to all its outputs.
   Recipe counts, inputs and proc denominators stay once per attempt. Recipe
   repair intersects known output relationships and moves the entire attempt
   and its material contributions; conflicting siblings stay unknown.
+- Companion restoration can preserve complete input evidence without inventing
+  a native request. Schema-5 `companionInputsComplete` is separate from native
+  `inputComplete`, requires no `requestId`, and contributes once to input
+  coverage. Unknown-recipe repair transfers that contribution with the logical
+  craft and its outputs/reagents; it never promotes the craft to matched
+  material-savings eligibility. Configuration-grained daily and material rows
+  remain aligned during repair. Ambiguous recipe candidates are unchanged.
 - Retention removes the attempt and its output/reagent detail together, using
   its last observation time. Durable aggregates survive. A cached delayed output
   can amend a pruned parent's original daily grain without another attempt.
@@ -583,8 +590,14 @@ bare effectiveness percentage, confidence interval, causal claim or optimizer.
   Inspect mismatched/unavailable claimed metadata and recrafts independently.
   Order-provided materials must never become assumed personal savings.
 - Craft enchants and ordinary/order recrafts; configuration can remain unavailable.
-  Replay prospecting/crushing/milling and child rewards: no new attribution or
-  negative proc assertions from unsupported multiple-result callbacks (#32).
+  Validate Prospecting, Crushing, Milling and Recycling across same/different
+  recipe batches, delayed siblings, interruptions and close/reopen boundaries.
+  Confirm one attempt per operation, all outputs, and no negative Resourcefulness
+  inference from absent returns. The original four-operation Prospecting capture
+  and six-attempt/eight-result case have sanitized ledger regressions (#32).
+- Restore an unknown-recipe single- and multi-output observation with complete
+  Companion input evidence, then verify repair/reload retains inputs and outputs
+  once and does not enter matched material-savings populations (#53).
 - Set different Craft type and Period filters on Overview and Reagents, then
   navigate away and back. Verify each page retains its own totals, lists, charts,
   rankings and tooltips. Repeat for Recipe Detail and Reagent Detail filters.

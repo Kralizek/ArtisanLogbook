@@ -30,9 +30,11 @@ second logical craft. Legacy unproven rows remain legacy observations.
 2. Prospect recipe 1231127 once, then five times. Compare operation IDs and result
   observations with six history attempts, all observed items/quantities, six
   five-ore input contributions and unchanged request-scope configuration.
-3. Repeat with another salvage family, then same/different recipe batches. Check
-  delayed sibling output updates the original craft and does not consume the
-  new batch or replace its setup. Verify one ID per actual operation in each family.
+3. Repeat with Crushing, Milling, and Recycling, then same/different recipe
+  batches. Check delayed sibling output updates the original craft and does not
+  consume the new batch or replace its setup. Verify one ID per actual operation
+  in each family; the original four-operation Prospecting reproduction is covered
+  by the sanitized ledger regression fixture.
 4. Cancel/intercept an unfinished batch and close/reopen professions. Unseen
   uncertain IDs must stay unowned; known siblings retain their original parent.
 5. Compare totals, per-measurement coverage, ingredients and outputs before/after

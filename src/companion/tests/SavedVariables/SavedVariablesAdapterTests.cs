@@ -962,8 +962,10 @@ public class SavedVariablesAdapterTests
         SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(History(unknown, known), options: new(Now));
         if (inputsComplete)
         {
-            Assert.That(written.IsSuccessful, Is.False);
-            Assert.That(written.Diagnostics.Single().Code, Is.EqualTo("unsupported-unknown-recipe-restoration"));
+            Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+            AssertLoaderAccepts(written,
+                "local repaired, reason=ledger:RepairUnknownRecipes(); assert(repaired, reason); assert(repaired.repairedCount==1)",
+                [unknown with { RecipeId = 123 }, known]);
             return;
         }
         Assert.That(written.IsSuccessful, Is.True);

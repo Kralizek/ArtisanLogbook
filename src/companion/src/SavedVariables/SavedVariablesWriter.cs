@@ -166,9 +166,6 @@ public static class SavedVariablesWriter
             (c.Outputs ?? []).Any(o => o.Quantity > MaximumLuaInteger)))
             return Failure("lua-integer-precision", "crafts",
                 "A quantity exceeds Lua 5.1's exact integer range.");
-        if (crafts.Any(c => c.RecipeId is null && c.InputsComplete == true))
-            return Failure("unsupported-unknown-recipe-restoration", "crafts.RecipeId",
-                "Unknown-recipe crafts with complete companion-only inputs cannot yet be safely repaired by the addon. Reconcile a verified recipe first.");
         if (crafts.Any(c => c.Outputs?.Any(output => output.Quantity is null) == true &&
             FindSerializableOutputEvidence(c) is null))
             return Failure("unrepresentable-output-quantity", "crafts.Outputs",
@@ -330,9 +327,9 @@ public static class SavedVariablesWriter
                 craftConfigurationFields.GetValueOrDefault(craft.Identity))));
         LuaTable reagentRows = Sequence(detailedCrafts.SelectMany(craft =>
             MakeReagentRows(craft, craftIds[craft.Identity])));
-        LuaTable craftSeries = RebuildCraftSeries(crafts, characterIds);
-        LuaTable reagentSeries = RebuildReagentSeries(crafts, characterIds);
-        LuaTable resourcefulnessSets = RebuildResourcefulnessSets(crafts, characterIds);
+        LuaTable craftSeries = RebuildCraftSeries(crafts, characterIds, craftConfigurationKeys, craftConfigurationFields);
+        LuaTable reagentSeries = RebuildReagentSeries(crafts, characterIds, craftConfigurationKeys, craftConfigurationFields);
+        LuaTable resourcefulnessSets = RebuildResourcefulnessSets(crafts, characterIds, craftConfigurationKeys, craftConfigurationFields);
         LuaTable recipeOutputs = RebuildRecipeOutputs(crafts);
 
         LuaTable database = new();
@@ -631,11 +628,40 @@ public static class SavedVariablesWriter
         }
     }
 
+    private static string ConfigurationGrainKey(
+        CraftIdentity identity,
+        IReadOnlyDictionary<CraftIdentity, long?> configurationKeys,
+        IReadOnlyDictionary<CraftIdentity, LuaTable> configurationFields)
+    {
+        LuaTable grain = new();
+        if (configurationKeys.TryGetValue(identity, out long? configurationKey) && configurationKey is long key)
+            Put(grain, "configurationKey", key);
+        if (configurationFields.TryGetValue(identity, out LuaTable? fields))
+            foreach ((object field, object? value) in fields)
+                if (field is string name) Put(grain, name, Clone(value));
+        return LuaDataParser.Serialize(new(new Dictionary<string, object?> { ["grain"] = grain }, null));
+    }
+
+    private static void AddConfigurationGrain(
+        LuaTable row,
+        CraftIdentity identity,
+        IReadOnlyDictionary<CraftIdentity, long?> configurationKeys,
+        IReadOnlyDictionary<CraftIdentity, LuaTable> configurationFields)
+    {
+        if (configurationKeys.TryGetValue(identity, out long? configurationKey) && configurationKey is long key)
+            Put(row, "configurationKey", key);
+        if (configurationFields.TryGetValue(identity, out LuaTable? fields))
+            foreach ((object field, object? value) in fields)
+                if (field is string name) Put(row, name, Clone(value));
+    }
+
     private static LuaTable RebuildCraftSeries(
         IEnumerable<CraftObservation> crafts,
-        IReadOnlyDictionary<string, long> characterIds)
+        IReadOnlyDictionary<string, long> characterIds,
+        IReadOnlyDictionary<CraftIdentity, long?> configurationKeys,
+        IReadOnlyDictionary<CraftIdentity, LuaTable> configurationFields)
     {
-        Dictionary<(long Day, long CharacterId, int? RecipeId), LuaTable> groups = [];
+        Dictionary<(long Day, long CharacterId, int? RecipeId, string Configuration), LuaTable> groups = [];
         string[] metrics =
         [
             "outputQuantity", "multicraftBonus", "concentrationSpent", "ingenuityProcCount",
@@ -647,13 +673,15 @@ public static class SavedVariablesWriter
             long day = Math.DivRem(craft.RecordedAt.ToUnixTimeSeconds(), 86400, out long remainder);
             if (remainder < 0) day--;
             day *= 86400;
-            var key = (day, characterIds[craft.Character.Key], craft.RecipeId);
+            var key = (Day: day, CharacterId: characterIds[craft.Character.Key], RecipeId: craft.RecipeId,
+                Configuration: ConfigurationGrainKey(craft.Identity, configurationKeys, configurationFields));
             if (!groups.TryGetValue(key, out LuaTable? row))
             {
-                row = Table(("bucketStart", day), ("characterDimensionId", key.Item2),
+                row = Table(("bucketStart", day), ("characterDimensionId", key.CharacterId),
                     ("recipeId", craft.RecipeId), ("craftCount", 0L),
                     ("quoteObservedCount", 0L), ("inputCompleteCount", 0L),
                     ("matchedCraftCount", 0L), ("grossRequirementsCompleteCount", 0L));
+                AddConfigurationGrain(row, craft.Identity, configurationKeys, configurationFields);
                 foreach (string metric in metrics)
                 {
                     Put(row, metric + "ObservedCount", 0L);
@@ -682,14 +710,17 @@ public static class SavedVariablesWriter
                     ? craft.HasResourcefulnessProc == true ? 1 : 0 : null);
         }
         return Sequence(groups.OrderBy(g => g.Key.Day).ThenBy(g => g.Key.CharacterId)
-            .ThenBy(g => g.Key.RecipeId).Select(g => g.Value));
+            .ThenBy(g => g.Key.RecipeId).ThenBy(g => g.Key.Configuration, StringComparer.Ordinal)
+            .Select(g => g.Value));
     }
 
     private static LuaTable RebuildReagentSeries(
         IEnumerable<CraftObservation> crafts,
-        IReadOnlyDictionary<string, long> characterIds)
+        IReadOnlyDictionary<string, long> characterIds,
+        IReadOnlyDictionary<CraftIdentity, long?> configurationKeys,
+        IReadOnlyDictionary<CraftIdentity, LuaTable> configurationFields)
     {
-        Dictionary<(long Day, long CharacterId, int? RecipeId, int ItemId), LuaTable> groups = [];
+        Dictionary<(long Day, long CharacterId, int? RecipeId, int ItemId, string Configuration), LuaTable> groups = [];
         foreach (CraftObservation craft in crafts)
         {
             long timestamp = craft.RecordedAt.ToUnixTimeSeconds();
@@ -699,11 +730,13 @@ public static class SavedVariablesWriter
             {
                 if (reagent.AllocatedQuantity is not > 0 && reagent.ReturnedQuantity is not > 0)
                     continue;
-                var key = (day, characterIds[craft.Character.Key], craft.RecipeId, reagent.ItemId);
+                var key = (Day: day, CharacterId: characterIds[craft.Character.Key], RecipeId: craft.RecipeId,
+                    ItemId: reagent.ItemId, Configuration: ConfigurationGrainKey(craft.Identity, configurationKeys, configurationFields));
                 if (!groups.TryGetValue(key, out LuaTable? row))
                 {
-                    row = Table(("bucketStart", day), ("characterDimensionId", key.Item2),
+                    row = Table(("bucketStart", day), ("characterDimensionId", key.CharacterId),
                         ("recipeId", craft.RecipeId), ("itemId", reagent.ItemId));
+                    AddConfigurationGrain(row, craft.Identity, configurationKeys, configurationFields);
                     groups.Add(key, row);
                 }
                 if (reagent.AllocatedQuantity is > 0 and long allocation)
@@ -716,14 +749,17 @@ public static class SavedVariablesWriter
             }
         }
         return Sequence(groups.OrderBy(g => g.Key.Day).ThenBy(g => g.Key.CharacterId)
-            .ThenBy(g => g.Key.RecipeId).ThenBy(g => g.Key.ItemId).Select(g => g.Value));
+            .ThenBy(g => g.Key.RecipeId).ThenBy(g => g.Key.ItemId)
+            .ThenBy(g => g.Key.Configuration, StringComparer.Ordinal).Select(g => g.Value));
     }
 
     private static LuaTable RebuildResourcefulnessSets(
         IEnumerable<CraftObservation> crafts,
-        IReadOnlyDictionary<string, long> characterIds)
+        IReadOnlyDictionary<string, long> characterIds,
+        IReadOnlyDictionary<CraftIdentity, long?> configurationKeys,
+        IReadOnlyDictionary<CraftIdentity, LuaTable> configurationFields)
     {
-        Dictionary<(long Day, long CharacterId, int? RecipeId, string Items), LuaTable> groups = [];
+        Dictionary<(long Day, long CharacterId, int? RecipeId, string Items, string Configuration), LuaTable> groups = [];
         foreach (CraftObservation craft in crafts.Where(c => c.ResourcefulnessComplete == true &&
             c.HasResourcefulnessProc == true))
         {
@@ -732,12 +768,14 @@ public static class SavedVariablesWriter
             if (remainder < 0) day -= 86400;
             string items = string.Join(',', craft.Reagents!.Where(r => r.ReturnedQuantity is > 0)
                 .Select(r => r.ItemId).Order());
-            var key = (day, characterIds[craft.Character.Key], craft.RecipeId, items);
+            var key = (Day: day, CharacterId: characterIds[craft.Character.Key], RecipeId: craft.RecipeId,
+                Items: items, Configuration: ConfigurationGrainKey(craft.Identity, configurationKeys, configurationFields));
             if (!groups.TryGetValue(key, out LuaTable? row))
             {
-                row = Table(("bucketStart", day), ("characterDimensionId", key.Item2),
+                row = Table(("bucketStart", day), ("characterDimensionId", key.CharacterId),
                     ("recipeId", craft.RecipeId), ("returnedItemSet", items),
                     ("craftCount", 0L));
+                AddConfigurationGrain(row, craft.Identity, configurationKeys, configurationFields);
                 groups.Add(key, row);
             }
             AddCount(row, "craftCount", 1);
@@ -746,6 +784,7 @@ public static class SavedVariablesWriter
         }
         return Sequence(groups.OrderBy(g => g.Key.Day).ThenBy(g => g.Key.CharacterId)
             .ThenBy(g => g.Key.RecipeId).ThenBy(g => g.Key.Items, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.Configuration, StringComparer.Ordinal)
             .Select(g => g.Value));
     }
 
