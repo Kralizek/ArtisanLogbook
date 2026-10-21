@@ -1,6 +1,6 @@
 namespace ArtisanLogbook.History;
 
-/// <summary>A single completed craft attempt. Null measurements mean unobserved, not zero.</summary>
+/// <summary>A single completed craft attempt. Null measurements mean unobserved, not zero; recorder evidence is not a canonical fact.</summary>
 public sealed record CraftObservation(
     CraftIdentity Identity,
     GameContext Game,
@@ -20,7 +20,9 @@ public sealed record CraftObservation(
     CraftProvenance? Provenance = null,
     bool? InputsComplete = null,
     bool? ResourcefulnessComplete = null,
-    IReadOnlyList<CraftOutputObservation>? OutputObservations = null)
+    bool? OutputsComplete = null,
+    IReadOnlyList<CraftOutputEvidence>? OutputEvidence = null,
+    IReadOnlyList<CraftConfigurationEvidence>? ConfigurationEvidence = null)
 {
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
@@ -42,12 +44,11 @@ public sealed record CraftObservation(
             && MulticraftBonus == other.MulticraftBonus
             && InputsComplete == other.InputsComplete
             && ResourcefulnessComplete == other.ResourcefulnessComplete
+            && OutputsComplete == other.OutputsComplete
             && Game == other.Game
             && Provenance == other.Provenance
             && EqualCollections(Reagents, other.Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity))
-            && EqualCollections(Outputs, other.Outputs, o => (o.ItemId, o.Quality, o.Quantity))
-            && (OutputObservations is null ? other.OutputObservations is null :
-                other.OutputObservations is not null && OutputObservations.SequenceEqual(other.OutputObservations));
+            && EqualCollections(Outputs, other.Outputs, o => (o.ItemId, o.Quality, o.Quantity));
     }
 
     public override int GetHashCode()
@@ -68,11 +69,10 @@ public sealed record CraftObservation(
         hash.Add(MulticraftBonus);
         hash.Add(InputsComplete);
         hash.Add(ResourcefulnessComplete);
+        hash.Add(OutputsComplete);
         hash.Add(Provenance);
         AddCollectionHash(ref hash, Reagents, r => (r.ItemId, r.AllocatedQuantity, r.ReturnedQuantity));
         AddCollectionHash(ref hash, Outputs, o => (o.ItemId, o.Quality, o.Quantity));
-        hash.Add(OutputObservations is not null);
-        foreach (CraftOutputObservation observation in OutputObservations ?? []) hash.Add(observation);
         return hash.ToHashCode();
     }
 
@@ -120,8 +120,30 @@ public sealed record CraftProvenance(
 /// <summary>Craft × reagent item grain. Allocated and returned quantities are independently nullable.</summary>
 public sealed record CraftReagent(int ItemId, long? AllocatedQuantity, decimal? ReturnedQuantity);
 
-/// <summary>Craft × output item × quality grain. Quality may be unavailable.</summary>
-public sealed record CraftOutput(int ItemId, int? Quality, long Quantity);
+/// <summary>Craft × output item × quality grain. Quality or exact quantity may be unavailable.</summary>
+public sealed record CraftOutput(int ItemId, int? Quality, long? Quantity);
+
+/// <summary>Recorder evidence attached to a craft but excluded from canonical fact equality.</summary>
+public sealed record CraftOutputEvidence(
+    string SourceId,
+    IReadOnlyList<CraftOutputObservation> Callbacks,
+    bool? Complete = null)
+{
+    public bool Equals(CraftOutputEvidence? other) => other is not null &&
+        SourceId == other.SourceId && Complete == other.Complete && Callbacks.SequenceEqual(other.Callbacks);
+
+    public override int GetHashCode()
+    {
+        HashCode hash = new();
+        hash.Add(SourceId);
+        hash.Add(Complete);
+        foreach (CraftOutputObservation callback in Callbacks) hash.Add(callback);
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>Opaque adapter-owned configuration snapshot attached to its craft, not a canonical analytical value.</summary>
+public sealed record CraftConfigurationEvidence(string SourceId, long? LocalKey, string Payload);
 
 public sealed record CraftResultMeasurements(
     int? MulticraftBonus = null,
@@ -130,7 +152,7 @@ public sealed record CraftResultMeasurements(
     bool? HasIngenuityProc = null,
     int? IngenuityRefund = null);
 
-/// <summary>An ordered callback observation, not an additional attempt or a guaranteed distinct output.</summary>
+/// <summary>A callback retained as recorder evidence, not an additional canonical attempt.</summary>
 public sealed record CraftOutputObservation(
     CraftOutput Output,
     DateTimeOffset ObservedAt,

@@ -169,6 +169,17 @@ public static class SavedVariablesWriter
         if (crafts.Any(c => c.RecipeId is null && c.InputsComplete == true))
             return Failure("unsupported-unknown-recipe-restoration", "crafts.RecipeId",
                 "Unknown-recipe crafts with complete companion-only inputs cannot yet be safely repaired by the addon. Reconcile a verified recipe first.");
+        if (crafts.Any(c => c.Outputs?.Any(output => output.Quantity is null) == true &&
+            FindSerializableOutputEvidence(c) is null))
+            return Failure("unrepresentable-output-quantity", "crafts.Outputs",
+                "An ambiguous output quantity requires compatible source callback evidence; no callback was fabricated.");
+        int unexportedEvidenceCount = crafts.Sum(craft =>
+            (craft.OutputEvidence ?? []).Count(evidence => evidence != FindSerializableOutputEvidence(craft)) +
+            (craft.ConfigurationEvidence ?? []).Count(evidence => evidence != FindConfigurationEvidence(craft)));
+        if (unexportedEvidenceCount > 0)
+            diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "source-output-evidence-not-exported",
+                "crafts.OutputEvidence",
+                $"{unexportedEvidenceCount} alternate or output-incompatible callback evidence set(s) remain attached to Companion history but cannot be represented by the single native callback list. Canonical-only output rows are marked as synthetic where needed."));
 
         DateTimeOffset now = options.Now ?? DateTimeOffset.UtcNow;
         DateTimeOffset cutoff = now.AddDays(-options.RetentionDays);
@@ -268,6 +279,44 @@ public static class SavedVariablesWriter
             ("recipes", recipes),
             ("items", items));
 
+        LuaTable configurationRows = existingLedger?.Get("configurations") is LuaTable existingConfigurations
+            ? Clone(existingConfigurations) as LuaTable ?? new()
+            : new();
+        Dictionary<string, long> configurationIds = [];
+        foreach ((object key, object? value) in configurationRows.OrderBy(entry => Convert.ToDouble(entry.Key, CultureInfo.InvariantCulture)))
+            if (Long(key) is long configurationId && value is LuaTable conditions)
+                configurationIds.TryAdd(SerializeConfigurationValue(conditions), configurationId);
+        Dictionary<CraftIdentity, long?> craftConfigurationKeys = [];
+        Dictionary<CraftIdentity, LuaTable> craftConfigurationFields = [];
+        long nextConfigurationKey = NextConfigurationKey(configurationRows);
+        foreach (CraftObservation craft in detailedCrafts)
+        {
+            CraftConfigurationEvidence? evidence = FindConfigurationEvidence(craft);
+            if (evidence is null) continue;
+            if (!TryReadConfigurationSnapshot(evidence, out LuaTable? conditions, out LuaTable craftFields))
+                return Failure("invalid-configuration-evidence", "crafts.ConfigurationEvidence",
+                    "A configuration evidence payload is malformed or unsupported; no content was generated.");
+            craftConfigurationFields[craft.Identity] = craftFields;
+            if (conditions is null)
+            {
+                if (evidence.LocalKey is not null)
+                    return Failure("invalid-configuration-evidence", "crafts.ConfigurationEvidence",
+                        "A local configuration key has no corresponding configuration snapshot.");
+                continue;
+            }
+            string signature = SerializeConfigurationValue(conditions);
+            if (!configurationIds.TryGetValue(signature, out long configurationId))
+            {
+                configurationId = evidence.LocalKey is long localKey &&
+                    configurationRows.Get((double)localKey) is null
+                        ? localKey
+                        : nextConfigurationKey++;
+                Put(configurationRows, configurationId, Clone(conditions));
+                configurationIds.Add(signature, configurationId);
+            }
+            craftConfigurationKeys[craft.Identity] = configurationId;
+        }
+
         Dictionary<CraftIdentity, long> craftIds = new();
         long nextCraftId = 1;
         foreach (CraftObservation craft in detailedCrafts)
@@ -276,7 +325,9 @@ public static class SavedVariablesWriter
             nextCraftId++;
         }
         LuaTable detailRows = Sequence(detailedCrafts.SelectMany(craft =>
-            MakeCraftRows(craft, craftIds[craft.Identity], sessionIds[craft.Character.Key])));
+            MakeCraftRows(craft, craftIds[craft.Identity], sessionIds[craft.Character.Key],
+                craftConfigurationKeys.GetValueOrDefault(craft.Identity),
+                craftConfigurationFields.GetValueOrDefault(craft.Identity))));
         LuaTable reagentRows = Sequence(detailedCrafts.SelectMany(craft =>
             MakeReagentRows(craft, craftIds[craft.Identity])));
         LuaTable craftSeries = RebuildCraftSeries(crafts, characterIds);
@@ -298,14 +349,14 @@ public static class SavedVariablesWriter
         Put(database, "schemaIdentity", "ArtisanLogbookLedger");
         Put(database, "nextCraftId", nextCraftId);
         Put(database, "nextRequestId", 1);
-        Put(database, "nextConfigurationKey", NextConfigurationKey(database.Get("configurations")));
+        Put(database, "nextConfigurationKey", NextConfigurationKey(configurationRows));
         Put(database, "crafts", detailRows);
         Put(database, "craftSeries", craftSeries);
         Put(database, "resourcefulnessSets", resourcefulnessSets);
         Put(database, "reagentSeries", reagentSeries);
         Put(database, "reagentRequirementSeries", Sequence(Array.Empty<LuaTable>()));
         Put(database, "firstCraftRewards", Sequence(Array.Empty<LuaTable>()));
-        Put(database, "configurations", database.Get("configurations") as LuaTable ?? new());
+        Put(database, "configurations", configurationRows);
         Put(database, "recipeOutputs", recipeOutputs);
         Put(database, "requests", Sequence(Array.Empty<LuaTable>()));
         Put(database, "reagents", reagentRows);
@@ -332,7 +383,11 @@ public static class SavedVariablesWriter
         string content = LuaDataParser.Serialize(new(assignments, null));
         SavedVariablesImportResult roundTrip = SavedVariablesReader.Parse(content);
         if (!roundTrip.IsSuccessful ||
-            !detailedCrafts.ToHashSet().SetEquals(roundTrip.History!.Crafts))
+            !detailedCrafts.ToHashSet().SetEquals(roundTrip.History!.Crafts) ||
+            detailedCrafts.Any(craft => FindSerializableOutputEvidence(craft) is CraftOutputEvidence expectedEvidence &&
+                roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).OutputEvidence?.Contains(expectedEvidence) != true) ||
+            detailedCrafts.Any(craft => FindConfigurationEvidence(craft) is CraftConfigurationEvidence expectedConfiguration &&
+                roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).ConfigurationEvidence?.Contains(expectedConfiguration) != true))
             return Failure("unrepresentable-craft-observations", "history",
                 "Generated content cannot retain the supplied detailed observations exactly within the supported Lua representation. No content was returned. " +
                 string.Join(" ", roundTrip.Diagnostics.Where(d => d.Severity == SavedVariablesDiagnosticSeverity.Error)
@@ -340,9 +395,11 @@ public static class SavedVariablesWriter
         return new(content, diagnostics, detailRows.Count, crafts.Length);
     }
 
-    private static IEnumerable<LuaTable> MakeCraftRows(CraftObservation craft, long id, long sessionId)
+    private static IEnumerable<LuaTable> MakeCraftRows(
+        CraftObservation craft, long id, long sessionId, long? configurationKey, LuaTable? configurationFields)
     {
         IReadOnlyList<CraftOutput>? outputs = craft.Outputs;
+        CraftOutputEvidence? outputEvidence = FindSerializableOutputEvidence(craft);
         string outputGroup = Convert.ToBase64String(Encoding.UTF8.GetBytes(
             $"{craft.Identity.Origin.Length}:{craft.Identity.Origin}{craft.Identity.Observation}"));
         for (int index = 0; index < 1; index++)
@@ -359,6 +416,17 @@ public static class SavedVariablesWriter
                 ("companionProfession", craft.ProfessionId),
                 ("companionProfessionExpansionKey", craft.ProfessionExpansionKey),
                 ("companionReagentsObserved", craft.Reagents is not null));
+            if (configurationKey is long restoredConfigurationKey)
+                Put(row, "configurationKey", restoredConfigurationKey);
+            foreach ((object field, object? value) in configurationFields ?? new())
+                if (field is string name) Put(row, name, Clone(value));
+            if (FindConfigurationEvidence(craft) is CraftConfigurationEvidence configurationEvidence)
+            {
+                Put(row, "companionConfigurationEvidenceSource", configurationEvidence.SourceId);
+                Put(row, "companionSourceConfigurationSpecified", configurationEvidence.LocalKey is not null);
+                if (configurationEvidence.LocalKey is long originalConfigurationKey)
+                    Put(row, "companionSourceConfigurationKey", originalConfigurationKey.ToString(CultureInfo.InvariantCulture));
+            }
             if (craft.Provenance?.SourceId is string sourceId)
             {
                 Put(row, "companionProvenanceSource", sourceId);
@@ -418,12 +486,19 @@ public static class SavedVariablesWriter
             Put(row, "companionCompletenessPresent", true);
             if (craft.InputsComplete is bool inputsComplete)
                 Put(row, "companionInputsComplete", inputsComplete);
-            if (craft.OutputObservations is not null || outputs is { Count: > 1 })
+            if (craft.OutputsComplete is bool outputsComplete)
+                Put(row, "companionOutputsComplete", outputsComplete);
+            if (outputEvidence is not null || outputs is { Count: > 1 })
             {
-                IReadOnlyList<CraftOutputObservation> observations = craft.OutputObservations ?? outputs!.Select(output =>
+                IReadOnlyList<CraftOutputObservation> observations = outputEvidence?.Callbacks ?? outputs!.Select(output =>
                     new CraftOutputObservation(output, craft.RecordedAt, new(), [])).ToArray();
                 Put(row, "attemptKind", "restored-operation");
-                Put(row, "companionOutputObservationsPresent", craft.OutputObservations is not null);
+                Put(row, "companionOutputObservationsPresent", outputEvidence is not null);
+                if (outputEvidence is not null)
+                {
+                    Put(row, "companionOutputEvidenceSource", outputEvidence.SourceId);
+                    Put(row, "companionOutputEvidenceComplete", outputEvidence.Complete);
+                }
                 Put(row, "outputs", Sequence(observations.Select(observation => Table(
                     ("itemId", observation.Output.ItemId), ("quantity", observation.Output.Quantity),
                     ("quality", observation.Output.Quality), ("itemLevel", observation.ItemLevel),
@@ -440,7 +515,7 @@ public static class SavedVariablesWriter
                         Table(("itemId", returned.ItemId), ("returnedQuantity", returned.ReturnedQuantity)))))))));
                 bool ambiguous = observations.Any(observation => observation.QuantityAmbiguous);
                 Put(row, "outputAmbiguous", ambiguous ? true : null);
-                Put(row, "outputQuantity", ambiguous ? null : observations.Sum(observation => observation.Output.Quantity));
+                Put(row, "outputQuantity", ambiguous ? null : observations.Sum(observation => observation.Output.Quantity!.Value));
                 if (observations.Count == 1)
                 {
                     Put(row, "outputItemId", observations[0].Output.ItemId);
@@ -458,7 +533,7 @@ public static class SavedVariablesWriter
             {
                 CraftOutput output = outputs[index];
                 Put(row, "outputItemId", output.ItemId);
-                Put(row, "outputQuantity", output.Quantity);
+                Put(row, "outputQuantity", output.Quantity!.Value);
                 if (output.Quality is int quality) Put(row, "outputQuality", quality);
             }
             if (craft.MulticraftBonus is int multicraftBonus)
@@ -466,6 +541,77 @@ public static class SavedVariablesWriter
             yield return row;
         }
     }
+
+    private static CraftOutputEvidence? FindSerializableOutputEvidence(CraftObservation craft)
+    {
+        if (craft.OutputEvidence is null) return null;
+        return craft.OutputEvidence
+            .Where(evidence => OutputFactsMatch(craft.Outputs, evidence.Callbacks))
+            .OrderBy(evidence => evidence.SourceId == craft.Provenance?.SourceId ? 0 : 1)
+            .ThenBy(evidence => evidence.SourceId, StringComparer.Ordinal)
+            .ThenBy(evidence => System.Text.Json.JsonSerializer.Serialize(evidence), StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static bool OutputFactsMatch(
+        IReadOnlyList<CraftOutput>? outputs, IReadOnlyList<CraftOutputObservation> callbacks)
+    {
+        if (outputs is null) return false;
+        CraftOutput[] projected = callbacks.GroupBy(callback =>
+                (callback.Output.ItemId, callback.Output.Quality))
+            .Select(group => new CraftOutput(group.Key.ItemId, group.Key.Quality,
+                group.Any(callback => callback.QuantityAmbiguous)
+                    ? null
+                    : group.Sum(callback => callback.Output.Quantity!.Value)))
+            .OrderBy(output => output.ItemId).ThenBy(output => output.Quality).ThenBy(output => output.Quantity)
+            .ToArray();
+        CraftOutput[] canonical = outputs.OrderBy(output => output.ItemId)
+            .ThenBy(output => output.Quality).ThenBy(output => output.Quantity).ToArray();
+        return canonical.SequenceEqual(projected);
+    }
+
+    private static CraftConfigurationEvidence? FindConfigurationEvidence(CraftObservation craft)
+    {
+        if (craft.ConfigurationEvidence is null) return null;
+        return craft.ConfigurationEvidence
+            .OrderBy(evidence => evidence.SourceId == craft.Provenance?.SourceId ? 0 : 1)
+            .ThenBy(evidence => evidence.SourceId, StringComparer.Ordinal)
+            .ThenBy(evidence => evidence.LocalKey)
+            .ThenBy(evidence => evidence.Payload, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static bool TryReadConfigurationSnapshot(
+        CraftConfigurationEvidence evidence, out LuaTable? conditions, out LuaTable craftFields)
+    {
+        conditions = null;
+        craftFields = new();
+        try
+        {
+            LuaDocument document = LuaDataParser.Parse(evidence.Payload);
+            if (!document.Assignments.TryGetValue("CraftConfigurationEvidence", out object? value) ||
+                value is not LuaTable snapshot ||
+                snapshot.Keys.Any(key => key is not string field || field is not ("conditions" or "craftFields")) ||
+                snapshot.Get("conditions") is object rawConditions && rawConditions is not LuaTable ||
+                snapshot.Get("craftFields") is object rawCraftFields && rawCraftFields is not LuaTable)
+                return false;
+            conditions = snapshot.Get("conditions") as LuaTable;
+            craftFields = snapshot.Get("craftFields") as LuaTable ?? new();
+            string[] supportedCraftFields =
+            [
+                "configurationScope", "statsCoverage", "equipmentCoverage", "buffsCoverage",
+                "finishingCoverage", "buffListVersion", "configurationUnavailableReason"
+            ];
+            return craftFields.Keys.All(key => key is string field && supportedCraftFields.Contains(field, StringComparer.Ordinal));
+        }
+        catch (Exception exception) when (exception is ArgumentException or FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static string SerializeConfigurationValue(object value) => LuaDataParser.Serialize(new(
+        new Dictionary<string, object?> { ["value"] = value }, null));
 
     private static IEnumerable<LuaTable> MakeReagentRows(CraftObservation craft, long craftId)
     {
@@ -517,9 +663,9 @@ public static class SavedVariablesWriter
             }
             AddCount(row, "craftCount", 1);
             if (craft.InputsComplete == true) AddCount(row, "inputCompleteCount", 1);
-            AddMetric(row, "outputQuantity",
-                craft.OutputObservations?.Any(observation => observation.QuantityAmbiguous) == true
-                    ? null : craft.Outputs?.Sum(output => (double)output.Quantity));
+            AddMetric(row, "outputQuantity", craft.OutputsComplete == false ||
+                craft.Outputs?.Any(output => output.Quantity is null) == true
+                ? null : craft.Outputs?.Sum(output => (double)output.Quantity!.Value));
             AddMetric(row, "multicraftBonus", craft.MulticraftBonus);
             AddMetric(row, "concentrationSpent", craft.ConcentrationSpent);
             AddMetric(row, "ingenuityProcCount", craft.HasIngenuityProc is bool ingenuity ? ingenuity ? 1 : 0 : null);
@@ -638,7 +784,7 @@ public static class SavedVariablesWriter
             foreach (CraftOutput output in craft.Outputs ?? [])
                 if (!items.ContainsKey((double)output.ItemId))
                     Put(items, output.ItemId, Table(("id", output.ItemId)));
-            foreach (CraftOutputObservation observation in craft.OutputObservations ?? [])
+            foreach (CraftOutputObservation observation in craft.OutputEvidence?.SelectMany(evidence => evidence.Callbacks) ?? [])
             {
                 if (!items.ContainsKey((double)observation.Output.ItemId))
                     Put(items, observation.Output.ItemId, Table(("id", observation.Output.ItemId)));

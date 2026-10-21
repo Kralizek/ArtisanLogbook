@@ -1,5 +1,7 @@
 namespace ArtisanLogbook.History;
 
+using System.Text.Json;
+
 public sealed record HistoryConflict(CraftIdentity Identity, string Field, string Description);
 
 public sealed record HistoryMergeResult(
@@ -125,21 +127,48 @@ public static class HistoryReconciler
         {
             if (a.Outputs is null) return b.Outputs;
             if (b.Outputs is null) return a.Outputs;
-            static string Key(CraftOutput o) => $"{o.ItemId}:{o.Quality?.ToString() ?? "unknown"}:{o.Quantity}";
-            string[] left = a.Outputs.Select(Key).OrderBy(x => x, StringComparer.Ordinal).ToArray();
-            string[] right = b.Outputs.Select(Key).OrderBy(x => x, StringComparer.Ordinal).ToArray();
-            if (!left.SequenceEqual(right))
-                conflicts.Add(new(identity, nameof(a.Outputs), "Two different observed output collections."));
-            return a.Outputs.OrderBy(x => x.ItemId).ThenBy(x => x.Quality).ThenBy(x => x.Quantity).ToArray();
+            Dictionary<(int ItemId, int? Quality), CraftOutput> left = a.Outputs
+                .ToDictionary(output => (output.ItemId, output.Quality));
+            Dictionary<(int ItemId, int? Quality), CraftOutput> right = b.Outputs
+                .ToDictionary(output => (output.ItemId, output.Quality));
+            if (!left.Keys.ToHashSet().SetEquals(right.Keys))
+            {
+                conflicts.Add(new(identity, nameof(a.Outputs), "Observed output item and quality sets differ."));
+                return a.Outputs.OrderBy(x => x.ItemId).ThenBy(x => x.Quality).ThenBy(x => x.Quantity).ToArray();
+            }
+            return left.OrderBy(entry => entry.Key.ItemId).ThenBy(entry => entry.Key.Quality)
+                .Select(entry =>
+                {
+                    CraftOutput other = right[entry.Key];
+                    long? firstQuantity = entry.Value.Quantity;
+                    long? secondQuantity = other.Quantity;
+                    if (firstQuantity is not null && secondQuantity is not null && firstQuantity != secondQuantity)
+                        conflicts.Add(new(identity, nameof(a.Outputs), "Two different known output quantities."));
+                    return entry.Value with { Quantity = firstQuantity ?? secondQuantity };
+                }).ToArray();
         }
 
-        IReadOnlyList<CraftOutputObservation>? MergeOutputObservations()
+        IReadOnlyList<CraftOutputEvidence>? MergeOutputEvidence()
         {
-            if (a.OutputObservations is null) return b.OutputObservations;
-            if (b.OutputObservations is null) return a.OutputObservations;
-            if (!a.OutputObservations.SequenceEqual(b.OutputObservations))
-                conflicts.Add(new(identity, nameof(a.OutputObservations), "Two different ordered callback observation collections."));
-            return a.OutputObservations;
+            if (a.OutputEvidence is null) return b.OutputEvidence;
+            if (b.OutputEvidence is null) return a.OutputEvidence;
+            return a.OutputEvidence.Concat(b.OutputEvidence)
+                .Distinct()
+                .OrderBy(evidence => evidence.SourceId, StringComparer.Ordinal)
+                .ThenBy(evidence => JsonSerializer.Serialize(evidence), StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        IReadOnlyList<CraftConfigurationEvidence>? MergeConfigurationEvidence()
+        {
+            if (a.ConfigurationEvidence is null) return b.ConfigurationEvidence;
+            if (b.ConfigurationEvidence is null) return a.ConfigurationEvidence;
+            return a.ConfigurationEvidence.Concat(b.ConfigurationEvidence)
+                .Distinct()
+                .OrderBy(evidence => evidence.SourceId, StringComparer.Ordinal)
+                .ThenBy(evidence => evidence.LocalKey)
+                .ThenBy(evidence => evidence.Payload, StringComparer.Ordinal)
+                .ToArray();
         }
 
         return a with
@@ -155,9 +184,11 @@ public static class HistoryReconciler
             MulticraftBonus = Optional(nameof(a.MulticraftBonus), a.MulticraftBonus, b.MulticraftBonus),
             InputsComplete = Optional(nameof(a.InputsComplete), a.InputsComplete, b.InputsComplete),
             ResourcefulnessComplete = Optional(nameof(a.ResourcefulnessComplete), a.ResourcefulnessComplete, b.ResourcefulnessComplete),
+            OutputsComplete = Optional(nameof(a.OutputsComplete), a.OutputsComplete, b.OutputsComplete),
             Reagents = MergeReagents(),
             Outputs = MergeOutputs(),
-            OutputObservations = MergeOutputObservations(),
+            OutputEvidence = MergeOutputEvidence(),
+            ConfigurationEvidence = MergeConfigurationEvidence(),
             Provenance = MergeProvenance()
         };
     }

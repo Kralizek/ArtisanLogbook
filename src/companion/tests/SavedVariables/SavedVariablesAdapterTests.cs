@@ -56,14 +56,14 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
-    public void SchemaFiveImportsOneAttemptWithMultipleOutputObservations()
+    public void SchemaFiveSeparatesCanonicalOutputsFromPartialCallbackEvidence()
     {
         SavedVariablesImportResult result = SavedVariablesReader.Parse("""
                         ArtisanLogbookDB = {
                             schemaVersion = 5, schemaIdentity = "ArtisanLogbookLedger",
                             crafts = { { id = 1, sessionId = 1, timestamp = 1800000000, recipeId = 1231127,
                                 gameOperationId = 3533599395, attemptKind = "salvage-operation", outputQuantity = 2,
-                                outcomeSource = "unverified", outputs = {
+                                outcomeSource = "unverified", companionOutputEvidenceComplete = false, outputs = {
                                     { itemId = 900001, quantity = 1, timestamp = 1800000000, measurements = {}, returns = {} },
                                     { itemId = 900002, quantity = 1, timestamp = 1800000000, measurements = {}, returns = {} }
                                 } } },
@@ -79,6 +79,10 @@ public class SavedVariablesAdapterTests
         CraftObservation craft = result.History!.Crafts.Single();
         Assert.That(craft.Outputs, Is.EquivalentTo(new[] { new CraftOutput(900001, null, 1), new CraftOutput(900002, null, 1) }));
         Assert.That(craft.Provenance!.GameOperationId, Is.EqualTo(3533599395));
+        Assert.That(craft.OutputEvidence, Has.Count.EqualTo(1));
+        Assert.That(craft.OutputEvidence![0].Callbacks, Has.Count.EqualTo(2));
+        Assert.That(craft.OutputEvidence[0].Complete, Is.False);
+        Assert.That(craft.OutputsComplete, Is.Null);
     }
 
     [Test]
@@ -336,6 +340,60 @@ public class SavedVariablesAdapterTests
             Assert.That(result.ConcentrationSpent, Is.Zero);
             Assert.That(result.HasIngenuityProc, Is.False);
         });
+    }
+
+    [Test]
+    public void CanonicalOnlyMultiOutputExportDoesNotClaimSyntheticCallbacksAsEvidence()
+    {
+        CraftObservation craft = MakeCraft("canonical", "multi", Retail, 123, 90) with
+        {
+            Outputs = [new(90, 1, 2), new(91, 1, 3)]
+        };
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(History(craft), options: new(Now));
+
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        LuaTable ledger = (LuaTable)LuaDataParser.Parse(written.Content!).Assignments["ArtisanLogbookDB"]!;
+        LuaTable row = ((LuaTable)ledger.Get("crafts")!).Values.OfType<LuaTable>().Single();
+        Assert.That(row.Get("companionOutputObservationsPresent"), Is.False);
+        CraftObservation restored = SavedVariablesReader.Parse(written.Content!).History!.Crafts.Single();
+        Assert.That(restored.OutputEvidence, Is.Null);
+        Assert.That(restored.Outputs, Is.EquivalentTo(craft.Outputs));
+        AssertLoaderAccepts(written);
+    }
+
+    [Test]
+    public void CanonicalAmbiguousOutputWithoutSourceCallbacksCannotBeFabricated()
+    {
+        CraftObservation craft = MakeCraft("canonical", "ambiguous", Retail, 123, 90) with
+        {
+            Outputs = [new(90, 1, null)],
+            OutputsComplete = false
+        };
+
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(History(craft), options: new(Now));
+
+        Assert.That(written.IsSuccessful, Is.False);
+        Assert.That(written.Content, Is.Null);
+        Assert.That(written.Diagnostics.Single().Code, Is.EqualTo("unrepresentable-output-quantity"));
+    }
+
+    [Test]
+    public void MismatchingCallbackEvidenceIsNotExportedAsCanonicalOutputFacts()
+    {
+        CraftObservation craft = MakeCraft("canonical", "corrected", Retail, 123, 90) with
+        {
+            Outputs = [new(90, 1, 2)],
+            OutputEvidence = [new("capture-original", [new(
+                new(90, 1, 1), Now, new(), [])], Complete: true)]
+        };
+
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(History(craft), options: new(Now));
+
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        Assert.That(written.Diagnostics.Any(d => d.Code == "source-output-evidence-not-exported"), Is.True);
+        CraftObservation roundTrip = SavedVariablesReader.Parse(written.Content!).History!.Crafts.Single();
+        Assert.That(roundTrip.Outputs, Is.EquivalentTo(new[] { new CraftOutput(90, 1, 2) }));
+        Assert.That(roundTrip.OutputEvidence, Is.Null);
     }
 
     [Test]
@@ -975,16 +1033,33 @@ public class SavedVariablesAdapterTests
         SavedVariablesImportResult imported = SavedVariablesReader.Parse(source);
         Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
         Assert.That(imported.History!.Crafts, Has.Count.EqualTo(6));
-        Assert.That(imported.History.Crafts.Sum(craft => craft.OutputObservations!.Count), Is.EqualTo(repeatedDelivery ? 9 : 8));
+        Assert.That(imported.History.Crafts.Sum(craft => craft.OutputEvidence!.Sum(evidence => evidence.Callbacks.Count)), Is.EqualTo(repeatedDelivery ? 9 : 8));
         Assert.That(imported.History.Crafts.Sum(craft => craft.Reagents!.Sum(reagent => reagent.AllocatedQuantity)), Is.EqualTo(30));
+        Assert.That(imported.History.Crafts.All(craft => craft.ConfigurationEvidence?.Single().LocalKey == 197), Is.True);
+        Assert.That(imported.History.Crafts.All(craft => craft.OutputEvidence?.Single().Complete == true), Is.True);
+        Assert.That(imported.History.Crafts.SelectMany(craft => craft.Outputs ?? [])
+            .Any(output => output.Quantity is null), Is.EqualTo(repeatedDelivery));
+        if (repeatedDelivery)
+            Assert.That(imported.History.Crafts.Single(craft => craft.Outputs?.Any(output => output.Quantity is null) == true)
+                .OutputsComplete, Is.False);
         SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(imported.History, options: new(Now));
         Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
         Assert.That(written.DetailedCraftCount, Is.EqualTo(6));
-        Assert.That(SavedVariablesReader.Parse(written.Content!).History!.Crafts, Is.EquivalentTo(imported.History.Crafts));
+        SavedVariablesImportResult roundTrip = SavedVariablesReader.Parse(written.Content!);
+        Assert.That(roundTrip.History!.Crafts, Is.EquivalentTo(imported.History.Crafts));
+        foreach (CraftObservation craft in imported.History.Crafts)
+        {
+            Assert.That(roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).OutputEvidence,
+                Is.EquivalentTo(craft.OutputEvidence!));
+            Assert.That(roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).ConfigurationEvidence,
+                Is.EquivalentTo(craft.ConfigurationEvidence!));
+        }
         string coverage = repeatedDelivery ? "5" : "6";
         AssertLoaderAccepts(written, "assert(#ledger.database.crafts==6); " +
             "local row=ledger.database.craftSeries[1]; assert(row.craftCount==6); " +
-            $"assert(row.outputQuantityObservedCount=={coverage}); assert(ledger.database.reagentSeries[1].allocatedQuantity==30)");
+            $"assert(row.outputQuantityObservedCount=={coverage}); assert(ledger.database.reagentSeries[1].allocatedQuantity==30); " +
+            "assert(ledger.database.crafts[1].configurationKey==197 and ledger.database.configurations[197])",
+            imported.History.Crafts);
     }
 
     private static string CaptureProspecting(bool repeatedDelivery)

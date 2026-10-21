@@ -46,6 +46,9 @@ public static class HistoryValidator
             if (craft.InputsComplete == true && craft.Reagents is not null &&
                 craft.Reagents.Any(r => r.AllocatedQuantity is null))
                 errors.Add(new(craft.Identity, "InputsComplete", "Complete input evidence requires every reagent allocation to be known."));
+            if (craft.OutputsComplete == true &&
+                (craft.Outputs is null || craft.Outputs.Any(output => output.Quantity is null)))
+                errors.Add(new(craft.Identity, "OutputsComplete", "Complete output evidence requires an observed collection with known quantities."));
             if (craft.ResourcefulnessComplete == true && craft.HasResourcefulnessProc is null)
                 errors.Add(new(craft.Identity, "ResourcefulnessComplete", "Complete Resourcefulness evidence requires an observed proc outcome."));
             HashSet<int> reagentItems = [];
@@ -71,19 +74,29 @@ public static class HistoryValidator
                 if (!outputItems.Add((output.ItemId, output.Quality)))
                     errors.Add(new(craft.Identity, "Outputs", "Output rows must be aggregated at craft × item × quality grain."));
             }
-            foreach (CraftOutputObservation observation in craft.OutputObservations ?? [])
+            if (craft.OutputEvidence is { Count: 0 })
+                errors.Add(new(craft.Identity, "OutputEvidence", "An evidence collection cannot be empty."));
+            foreach (CraftOutputEvidence evidence in craft.OutputEvidence ?? [])
             {
-                if (observation.Output.ItemId <= 0 || observation.Output.Quantity <= 0 ||
-                    observation.Output.Quality is < 0 || observation.ItemLevel is < 0 || observation.LegacyCraftId is <= 0 ||
-                    observation.Measurements.ConcentrationSpent is < 0 || observation.Measurements.IngenuityRefund is < 0 ||
-                    observation.Measurements.MulticraftBonus is < 0 || observation.Measurements.ConcentrationCurrencyId is < 0)
-                    errors.Add(new(craft.Identity, "OutputObservations", "Callback observations require positive output identities/quantities and nonnegative measurements."));
-                if (observation.Returns.Any(row => row.ItemId <= 0 || row.AllocatedQuantity is not null || row.ReturnedQuantity is not > 0) ||
-                    observation.Returns.Select(row => row.ItemId).Distinct().Count() != observation.Returns.Count)
-                    errors.Add(new(craft.Identity, "OutputObservations", "Callback returns require distinct item identities and positive observed returns only."));
+                if (string.IsNullOrWhiteSpace(evidence.SourceId) || evidence.Callbacks.Count == 0)
+                    errors.Add(new(craft.Identity, "OutputEvidence", "Output evidence requires a source identity and callback observations."));
+                foreach (CraftOutputObservation callback in evidence.Callbacks)
+                {
+                    if (callback.Output.ItemId <= 0 || callback.Output.Quantity is not > 0 ||
+                        callback.Output.Quality is < 0 || callback.ItemLevel is < 0 || callback.LegacyCraftId is <= 0 ||
+                        callback.Measurements.ConcentrationSpent is < 0 || callback.Measurements.IngenuityRefund is < 0 ||
+                        callback.Measurements.MulticraftBonus is < 0 || callback.Measurements.ConcentrationCurrencyId is < 0)
+                        errors.Add(new(craft.Identity, "OutputEvidence", "Callbacks require positive output identities/quantities and nonnegative measurements."));
+                    if (callback.Returns.Any(row => row.ItemId <= 0 || row.AllocatedQuantity is not null || row.ReturnedQuantity is not > 0) ||
+                        callback.Returns.Select(row => row.ItemId).Distinct().Count() != callback.Returns.Count)
+                        errors.Add(new(craft.Identity, "OutputEvidence", "Callback returns require distinct item identities and positive observed returns only."));
+                }
             }
-            if (craft.OutputObservations is { Count: 0 })
-                errors.Add(new(craft.Identity, "OutputObservations", "An observed callback collection cannot be empty."));
+            if (craft.ConfigurationEvidence is { Count: 0 })
+                errors.Add(new(craft.Identity, "ConfigurationEvidence", "A configuration evidence collection cannot be empty."));
+            foreach (CraftConfigurationEvidence evidence in craft.ConfigurationEvidence ?? [])
+                if (string.IsNullOrWhiteSpace(evidence.SourceId) || evidence.LocalKey is <= 0 || string.IsNullOrWhiteSpace(evidence.Payload))
+                    errors.Add(new(craft.Identity, "ConfigurationEvidence", "Configuration evidence requires a source identity, valid optional local key, and payload."));
         }
         return errors;
     }
