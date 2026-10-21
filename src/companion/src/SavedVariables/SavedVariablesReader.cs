@@ -32,7 +32,7 @@ public sealed record SavedVariablesImportResult(
 /// <summary>Maps supported ArtisanLogbook Core ledgers to canonical craft observations.</summary>
 public static class SavedVariablesReader
 {
-    private static readonly HashSet<int> SupportedSchemas = [1, 2, 3, 4];
+    private static readonly HashSet<int> SupportedSchemas = [1, 2, 3, 4, 5];
 
     public static SavedVariablesImportResult Parse(string source, string sourceName = "<memory>")
     {
@@ -90,7 +90,7 @@ public static class SavedVariablesReader
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "unsupported-schema",
                 "ArtisanLogbookDB.schemaVersion", schemaVersion is null
                     ? "Ledger schemaVersion is missing or invalid."
-                    : $"Ledger schema version {schemaVersion.Value} is not supported; supported versions are 1 through 4."));
+                    : $"Ledger schema version {schemaVersion.Value} is not supported; supported versions are 1 through 5."));
             return new(schemaVersion, null, diagnostics, new(0, false));
         }
         if (!string.Equals(ledger.Get("schemaIdentity") as string, "ArtisanLogbookLedger", StringComparison.Ordinal))
@@ -131,12 +131,13 @@ public static class SavedVariablesReader
         IReadOnlyList<LuaTable> itemRows = Rows(dimensions.Get("items"));
         IReadOnlyList<LuaTable> requestRows = Rows(ledger.Get("requests"));
         IReadOnlyList<LuaTable> reagentRows = Rows(ledger.Get("reagents"));
+        LuaTable configurations = ledger.Get("configurations") as LuaTable ?? new();
         HashSet<long> craftIds = [];
         foreach (LuaTable craft in craftRows)
         {
             foreach (string field in new[]
             {
-                "id", "sessionId", "requestId", "gameOperationId", "recipeId", "professionId",
+                "id", "sessionId", "requestId", "configurationKey", "gameOperationId", "recipeId", "professionId",
                 "outputItemId", "outputQuantity", "outputQuality", "concentrationSpent",
                 "concentrationCurrencyId", "ingenuityRefund", "multicraftBonus"
             })
@@ -146,11 +147,17 @@ public static class SavedVariablesReader
                         "A known identifier/measurement must be an exact supported integer, not silently treated as unknown."));
             foreach (string field in new[]
             {
-                "hasIngenuityProc", "hasResourcefulnessProc", "resourcefulnessComplete", "inputComplete"
+                "hasIngenuityProc", "hasResourcefulnessProc", "resourcefulnessComplete", "inputComplete",
+                "companionInputsComplete"
             })
                 if (craft.ContainsKey(field) && Boolean(craft.Get(field)) is null)
                     diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-craft-measurement",
                         $"ArtisanLogbookDB.crafts.{field}", "A known outcome/completeness value must be a boolean."));
+            if (craft.ContainsKey("companionInputsComplete") &&
+                (schemaVersion.Value < 5 || craft.ContainsKey("requestId") || craft.ContainsKey("inputComplete")))
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-companion-input-completeness",
+                    $"ArtisanLogbookDB.crafts[id={Long(craft.Get("id"))}].companionInputsComplete",
+                    "Companion input completeness is schema-5-only and cannot coexist with native request evidence."));
             long? id = Long(craft.Get("id"));
             if (id is not null && !craftIds.Add(id.Value))
                 diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "duplicate-craft-id",
@@ -348,8 +355,20 @@ public static class SavedVariablesReader
                 expansionKey = row.Get("companionProfessionExpansionKey") as string;
 
             List<CraftOutput> outputs = [];
+            List<CraftOutputObservation>? outputEvidenceCallbacks = null;
             foreach (LuaTable outputRow in group)
             {
+                if (outputRow.ContainsKey("outputs"))
+                {
+                    IReadOnlyList<CraftOutputObservation> observations = ReadOutputObservations(outputRow, schemaVersion.Value, diagnostics, location);
+                    outputs.AddRange(FoldOutputObservations(observations));
+                    if (Boolean(outputRow.Get("companionOutputObservationsPresent")) != false)
+                    {
+                        outputEvidenceCallbacks ??= [];
+                        outputEvidenceCallbacks.AddRange(observations);
+                    }
+                    continue;
+                }
                 int? itemId = Integer(outputRow.Get("outputItemId"));
                 long? quantity = Long(outputRow.Get("outputQuantity"));
                 if (itemId is null && quantity is null) continue;
@@ -366,6 +385,14 @@ public static class SavedVariablesReader
                 : group.Any(c => Boolean(c.Get("companionOutputsObserved")) == true)
                     ? []
                     : null;
+            if (row.ContainsKey("companionOutputsComplete") && Boolean(row.Get("companionOutputsComplete")) is null)
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-output-completeness",
+                    location + ".companionOutputsComplete", "Output completeness must be boolean."));
+                continue;
+            }
+            bool? outputsComplete = Boolean(row.Get("companionOutputsComplete")) ??
+                (observedOutputs?.Any(output => output.Quantity is null) == true ? false : null);
 
             Dictionary<int, (long? Allocated, decimal? Returned, bool AllocatedSeen, bool ReturnedSeen)> reagentFacts = [];
             foreach (LuaTable groupCraft in group)
@@ -418,6 +445,95 @@ public static class SavedVariablesReader
 
             string sourceId = row.Get("companionProvenanceSource") as string ??
                 SourceId(projectId.Value, identity.Key, sessionId.Value, session);
+            CraftOutputEvidence? outputEvidence = null;
+            if (outputEvidenceCallbacks is not null)
+            {
+                string evidenceSourceId = row.Get("companionOutputEvidenceSource") as string ?? sourceId;
+                if (row.ContainsKey("companionOutputEvidenceSource") &&
+                    (row.Get("companionOutputEvidenceSource") is not string || string.IsNullOrWhiteSpace(evidenceSourceId)))
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-output-evidence-source",
+                        location + ".companionOutputEvidenceSource", "Output evidence source identity must be a nonblank string."));
+                    continue;
+                }
+                bool? evidenceComplete = row.ContainsKey("companionOutputEvidenceComplete")
+                    ? Boolean(row.Get("companionOutputEvidenceComplete")) : true;
+                if (evidenceComplete is null)
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-output-evidence-completeness",
+                        location + ".companionOutputEvidenceComplete", "Output evidence completeness must be boolean."));
+                    continue;
+                }
+                outputEvidence = new(evidenceSourceId, outputEvidenceCallbacks, evidenceComplete);
+            }
+            CraftConfigurationEvidence? configurationEvidence = null;
+            long? configurationKey = Long(row.Get("configurationKey"));
+            if (row.ContainsKey("configurationKey") && configurationKey is not > 0)
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-configuration-reference",
+                    location + ".configurationKey", "A configuration reference must be a positive local key."));
+                continue;
+            }
+            LuaTable? configuration = configurationKey is long configurationIdValue
+                ? configurations.Get((double)configurationIdValue) as LuaTable
+                : null;
+            if (configurationKey is not null && configuration is null)
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "missing-configuration",
+                    location + ".configurationKey", "The craft's configuration snapshot cannot be resolved."));
+                continue;
+            }
+            string configurationSourceId = row.Get("companionConfigurationEvidenceSource") as string ?? sourceId;
+            if (row.ContainsKey("companionConfigurationEvidenceSource") &&
+                (row.Get("companionConfigurationEvidenceSource") is not string || string.IsNullOrWhiteSpace(configurationSourceId)))
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-configuration-evidence-source",
+                    location + ".companionConfigurationEvidenceSource", "Configuration evidence source identity must be a nonblank string."));
+                continue;
+            }
+            bool? sourceConfigurationSpecified = Boolean(row.Get("companionSourceConfigurationSpecified"));
+            if (row.ContainsKey("companionSourceConfigurationSpecified") && sourceConfigurationSpecified is null)
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-configuration-reference",
+                    location + ".companionSourceConfigurationSpecified", "Configuration provenance presence must be boolean."));
+                continue;
+            }
+            if (row.ContainsKey("companionSourceConfigurationKey") &&
+                LongString(row.Get("companionSourceConfigurationKey")) is null)
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-configuration-reference",
+                    location + ".companionSourceConfigurationKey", "Original configuration key must be a safe integer string."));
+                continue;
+            }
+            long? originalConfigurationKey = sourceConfigurationSpecified switch
+            {
+                true => LongString(row.Get("companionSourceConfigurationKey")),
+                false => null,
+                null => configurationKey
+            };
+            if (sourceConfigurationSpecified == true && originalConfigurationKey is null)
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-configuration-reference",
+                    location + ".companionSourceConfigurationKey", "A specified original configuration key is missing."));
+                continue;
+            }
+            string[] configurationFields =
+            [
+                "configurationScope", "statsCoverage", "equipmentCoverage", "buffsCoverage",
+                "finishingCoverage", "buffListVersion", "configurationUnavailableReason"
+            ];
+            LuaTable configurationSnapshot = new();
+            if (configuration is not null) configurationSnapshot["conditions"] = configuration;
+            LuaTable craftConfigurationFields = new();
+            foreach (string field in configurationFields)
+                if (row.ContainsKey(field)) craftConfigurationFields[field] = row.Get(field);
+            if (craftConfigurationFields.Count > 0) configurationSnapshot["craftFields"] = craftConfigurationFields;
+            if (configurationSnapshot.Count > 0)
+            {
+                string payload = LuaDataParser.Serialize(new(
+                    new Dictionary<string, object?> { ["CraftConfigurationEvidence"] = configurationSnapshot }, null));
+                configurationEvidence = new(configurationSourceId, originalConfigurationKey, payload);
+            }
             if (crafts.Count == 0)
                 diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "legacy-identity-lineage",
                     "ArtisanLogbookDB", "This ledger has no durable source-lineage identifier. Local craft IDs provide replay stability only; independently diverged cloned ledgers may collide."));
@@ -449,6 +565,12 @@ public static class SavedVariablesReader
                 AddItemDimension(game, reagent.ItemId, itemRows, itemDimensions, seenItems);
             foreach (CraftOutput output in observedOutputs ?? [])
                 AddItemDimension(game, output.ItemId, itemRows, itemDimensions, seenItems);
+            foreach (CraftOutputObservation observation in outputEvidenceCallbacks ?? [])
+            {
+                AddItemDimension(game, observation.Output.ItemId, itemRows, itemDimensions, seenItems);
+                foreach (CraftReagent returned in observation.Returns)
+                    AddItemDimension(game, returned.ItemId, itemRows, itemDimensions, seenItems);
+            }
             if (recipeId is > 0)
                 AddRecipeDimension(game, recipeId.Value, recipe, recipeProfessionId, recipeExpansionKey,
                     recipeDimensions, seenRecipes);
@@ -559,7 +681,10 @@ public static class SavedVariablesReader
                 observedOutputs,
                 provenance,
                 inputsComplete,
-                resourcefulnessComplete));
+                resourcefulnessComplete,
+                outputsComplete,
+                outputEvidence is null ? null : [outputEvidence],
+                configurationEvidence is null ? null : [configurationEvidence]));
         }
 
         long aggregateOnlyCount = CountAggregateOnly(ledger, sessions);
@@ -580,9 +705,80 @@ public static class SavedVariablesReader
             new(aggregateOnlyCount, aggregateOnlyCount > 0));
     }
 
+    private static IReadOnlyList<CraftOutputObservation> ReadOutputObservations(
+        LuaTable craft, int schemaVersion, ICollection<SavedVariablesDiagnostic> diagnostics, string location)
+    {
+        void Invalid(string message) => diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error,
+            "invalid-output-observation", location + ".outputs", message));
+        CheckCollection(craft, "outputs", diagnostics, location);
+        IReadOnlyList<LuaTable> rows = Rows(craft.Get("outputs"));
+        if (schemaVersion < 5 || craft.Get("attemptKind") is not ("salvage-operation" or "restored-operation") || rows.Count == 0)
+            Invalid("Nested outputs require a schema-5 logical attempt and a nonempty observation collection.");
+        List<CraftOutputObservation> observations = [];
+        foreach (LuaTable row in rows)
+        {
+            int? itemId = Integer(row.Get("itemId"));
+            long? quantity = Long(row.Get("quantity"));
+            double? timestamp = Number(row.Get("timestamp"));
+            if (itemId is not > 0 || quantity is not > 0 || timestamp is null || !TryTimestamp(timestamp.Value, out DateTimeOffset observedAt) ||
+                row.Get("measurements") is not LuaTable measurements || row.Get("returns") is not LuaTable)
+            {
+                Invalid("Callback observations require an item, positive integer quantity, timestamp, measurements and returns.");
+                continue;
+            }
+            if (row.Get("companionObservedAt") is string preciseTimestamp)
+            {
+                if (!DateTimeOffset.TryParseExact(preciseTimestamp, "O", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out DateTimeOffset precise) || precise.ToUnixTimeSeconds() != observedAt.ToUnixTimeSeconds())
+                    Invalid("Precise callback timestamps must agree with their native timestamp.");
+                else observedAt = precise;
+            }
+            foreach (string field in new[] { "quality", "itemLevel", "legacyCraftId" })
+                if (row.ContainsKey(field) && Long(row.Get(field)) is null) Invalid($"Invalid {field} measurement.");
+            if (row.ContainsKey("quantityAmbiguous") && Boolean(row.Get("quantityAmbiguous")) is null)
+                Invalid("Callback quantity ambiguity must be boolean.");
+            foreach (string field in new[] { "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" })
+                if (measurements.ContainsKey(field) && Integer(measurements.Get(field)) is null) Invalid($"Invalid {field} measurement.");
+            if (measurements.ContainsKey("hasIngenuityProc") && Boolean(measurements.Get("hasIngenuityProc")) is null)
+                Invalid("Callback Ingenuity outcomes must be boolean.");
+            CheckCollection(row, "returns", diagnostics, location + ".outputs");
+            List<CraftReagent> returns = [];
+            foreach (LuaTable returned in Rows(row.Get("returns")))
+            {
+                if (Integer(returned.Get("itemId")) is not > 0 || Decimal(returned.Get("returnedQuantity")) is not > 0)
+                    Invalid("Callback returns require an item and positive measured quantity.");
+                else returns.Add(new(Integer(returned.Get("itemId"))!.Value, null, Decimal(returned.Get("returnedQuantity"))));
+            }
+            observations.Add(new(new(itemId.Value, Integer(row.Get("quality")), quantity.Value), observedAt,
+                new(Integer(measurements.Get("multicraftBonus")), Integer(measurements.Get("concentrationSpent")),
+                    Integer(measurements.Get("concentrationCurrencyId")), Boolean(measurements.Get("hasIngenuityProc")),
+                    Integer(measurements.Get("ingenuityRefund"))), returns,
+                Integer(row.Get("itemLevel")), Boolean(row.Get("quantityAmbiguous")) == true,
+                LongString(row.Get("companionLegacyCraftId")) ?? Long(row.Get("legacyCraftId"))));
+        }
+        foreach (IGrouping<(int, int?, int?), CraftOutputObservation> group in observations.GroupBy(observation =>
+            (observation.Output.ItemId, observation.Output.Quality, observation.ItemLevel)))
+            if (group.Any(observation => observation.QuantityAmbiguous != (group.Count() > 1)))
+                Invalid("Repeated indistinguishable item observations must retain quantity ambiguity.");
+        bool ambiguous = observations.Any(observation => observation.QuantityAmbiguous);
+        if (Boolean(craft.Get("outputAmbiguous")) == true != ambiguous ||
+            (ambiguous ? craft.ContainsKey("outputQuantity") : Long(craft.Get("outputQuantity")) != observations.Sum(observation => observation.Output.Quantity)))
+            Invalid("The attempt output summary disagrees with its callback observations.");
+        return observations;
+    }
+
+    private static IReadOnlyList<CraftOutput> FoldOutputObservations(IEnumerable<CraftOutputObservation> observations) =>
+        observations.GroupBy(observation => (observation.Output.ItemId, observation.Output.Quality))
+            .Select(group => new CraftOutput(group.Key.ItemId, group.Key.Quality,
+                group.Any(observation => observation.QuantityAmbiguous)
+                    ? null
+                    : group.Sum(observation => observation.Output.Quantity!.Value)))
+            .OrderBy(output => output.ItemId).ThenBy(output => output.Quality).ToArray();
+
     private static IReadOnlyList<CraftOutput> FoldOutputs(IEnumerable<CraftOutput> outputs) =>
         outputs.GroupBy(x => (x.ItemId, x.Quality))
-            .Select(g => new CraftOutput(g.Key.ItemId, g.Key.Quality, g.Sum(x => x.Quantity)))
+            .Select(g => new CraftOutput(g.Key.ItemId, g.Key.Quality,
+                g.Any(output => output.Quantity is null) ? null : g.Sum(output => output.Quantity!.Value)))
             .OrderBy(x => x.ItemId).ThenBy(x => x.Quality).ToArray();
 
     private static void AddReagent(

@@ -244,7 +244,12 @@ function UI.CraftTooltip(owner, craft)
   Tooltip.Row("Concentration", craft.concentrationSpent ~= nil and UI.Number(craft.concentrationSpent, true) or "Not recorded",
     craft.concentrationSpent ~= nil and "value" or "muted")
   Tooltip.Section("Results")
-  if not (craft.outputItem and craft.outputItem.name and craft.recipe and craft.recipe.name and
+  if craft.outputs and #craft.outputs > 1 then
+    for _, output in ipairs(craft.outputs) do
+      Tooltip.Row(UI.Name(output.item), UI.Number(output.quantity, true) ..
+        (output.quantityAmbiguous and " observed; quantity uncertain" or ""), "value")
+    end
+  elseif not (craft.outputItem and craft.outputItem.name and craft.recipe and craft.recipe.name and
       craft.outputItem.name == craft.recipe.name) then
     Tooltip.Row("Output", UI.Name(craft.outputItem, "Item not recorded"), craft.outputItem and "value" or "muted")
   end

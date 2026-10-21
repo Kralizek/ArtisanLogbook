@@ -124,7 +124,8 @@ local function projectCraft(ledger, craft)
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
     "hasIngenuityProc", "ingenuityRefund", "hasResourcefulnessProc", "resourcefulnessComplete",
     "outcomeSource", "quoteObserved", "inputComplete", "grossRequirementsComplete",
-    "materialsSavingsEligible", "requirementObservation", "requestCorrelationReason" })
+    "materialsSavingsEligible", "requirementObservation", "requestCorrelationReason", "attemptKind",
+    "outputAmbiguous", "lastObservedAt" })
   local rows = related(ledger, craft)
   projectObservation(ledger, craft, result)
   result.character = character(ledger, rows.characters)
@@ -133,6 +134,19 @@ local function projectCraft(ledger, craft)
   result.recipe = recipe(ledger, rows.recipes)
   result.expansion = expansion(ledger, rows.expansions)
   result.outputItem = item(ledger, craft.outputItemId)
+  if craft.outputs then
+    result.outputs = {}
+    for _, output in ipairs(craft.outputs) do
+      local projected = fields(output, { "quantity", "quality", "itemLevel", "timestamp", "legacyCraftId", "quantityAmbiguous" })
+      projected.item = item(ledger, output.itemId)
+      projected.measurements = ledger.CopyObservation(output.measurements)
+      projected.returns = {}
+      for _, returned in ipairs(output.returns) do
+        projected.returns[#projected.returns + 1] = allocation(ledger, returned)
+      end
+      result.outputs[#result.outputs + 1] = projected
+    end
+  end
   result.reagents = {}
   for _, row in ipairs(ledger.reagentsByCraftId[craft.id] or {}) do
     result.reagents[#result.reagents + 1] = allocation(ledger, row)

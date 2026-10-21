@@ -226,9 +226,11 @@ publication. Do not execute trace files received from others.
   For `CraftRecipe` calls with a supplied reagent table and explicit
   concentration boolean, this attempts `GetCraftingOperationInfo` (or
   `GetCraftingOperationInfoForOrder` for a supplied order ID) with the
-  submitted arguments. `CraftEnchant` and `CraftSalvage` remain `unavailable`
-  here until target-item GUID conversion is verified, to avoid capturing a
-  misleading quote for the wrong target. The observation includes query status
+  submitted arguments. `CraftEnchant` and `CraftSalvage` diagnostic request probes
+  remain `unavailable` here. Independently of tracing, passive salvage capture
+  can now query a verified target GUID and store a request-scope configuration;
+  that snapshot is not added to diagnostic retention or substituted into the
+  legacy probe. The observation includes query status
   (`ok`, `nil`, `error`, `unavailable`, or `not-queried`) and the nullable
   `info`. Per-entry `reagentQuality` is queried by selected item ID when the
   API is present; nil quality is not zero quality. For an order ID,

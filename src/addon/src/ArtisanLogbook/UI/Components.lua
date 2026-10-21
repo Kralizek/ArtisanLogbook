@@ -467,10 +467,12 @@ function UI.HistoryColumns(width, context)
       value = function(row) return UI.Name(row.recipe) end }
   end
   columns[#columns + 1] = { title = "Result", width = unit * 1.05,
-    value = function(row) return UI.Name(row.outputItem) .. (row.outputQuality and " (quality " .. row.outputQuality .. ")" or "") end,
+    value = function(row) return row.outputs and UI.CraftOutput(row) or
+      (UI.Name(row.outputItem) .. (row.outputQuality and " (quality " .. row.outputQuality .. ")" or "")) end,
     create = function(parent, left) return UI.ItemCell(parent, left, unit * 1.05) end,
     update = function(cell, row)
       cell:Update(row.outputItem, UI.QualityAtlas(row.recipe and row.recipe.id, row.outputQuality, row.recipe and row.recipe.maxQuality))
+      if row.outputs and #row.outputs > 1 then cell.label:SetText(UI.Elide(UI.CraftOutput(row), math.max(4, math.floor((unit * 1.05 - 34) / 6)))) end
     end }
   if context ~= "Character" then
     columns[#columns + 1] = { title = "Character", width = unit * .65,
@@ -1371,11 +1373,16 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
   local columns = {
     { title = "Recipe", width = available * .22, value = function(row) return UI.Name(row.recipe) end,
       icon = function(row) return UI.RecipeIcon(row.recipe) end },
-    { title = "Latest result", width = available * .22, value = function(row) return UI.Name(row.result and row.result.outputItem) end,
+    { title = "Latest result", width = available * .22, value = function(row)
+      return row.result and row.result.outputs and UI.CraftOutput(row.result) or UI.Name(row.result and row.result.outputItem)
+    end,
       create = function(owner, left) return UI.ItemCell(owner, left, available * .22) end,
       update = function(cell, row)
         local craft = row.result
         cell:Update(craft and craft.outputItem, craft and UI.QualityAtlas(row.recipe.id, craft.outputQuality, row.recipe.maxQuality))
+        if craft and craft.outputs and #craft.outputs > 1 then
+          cell.label:SetText(UI.Elide(UI.CraftOutput(craft), math.max(4, math.floor((available * .22 - 34) / 6))))
+        end
       end },
     { title = "Crafts", width = available * .08, value = function(row) return UI.Number(row.craftCount) end,
       exact = function(row) return UI.Value(row.craftCount) end },
@@ -1460,6 +1467,14 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
 end
 
 function UI.CraftOutput(craft)
+  if craft.outputs and #craft.outputs > 1 then
+    local names = {}
+    for _, output in ipairs(craft.outputs) do
+      names[#names + 1] = UI.Name(output.item) .. " x" .. UI.Number(output.quantity) ..
+        (output.quantityAmbiguous and " (uncertain)" or "")
+    end
+    return table.concat(names, ", ")
+  end
   local output = UI.Name(craft.outputItem, "")
   if craft.recipe and craft.recipe.name and craft.recipe.name == output then return "" end
   return output

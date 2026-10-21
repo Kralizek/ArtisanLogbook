@@ -16,6 +16,36 @@ These remain read-only API v1 catalogue queries; capture and storage are unchang
 
 ## Pages and navigation
 
+Owned multi-output salvage appears as one history/detail craft. Result detail,
+history tooltips and quality populations include every observed output. Repeated
+indistinguishable output observations are labeled quantity-uncertain, not silently
+summed; unavailable totals remain a dash. Ingredients and configuration belong to
+the parent attempt. Delayed outputs refresh its existing ID instead of adding a
+second logical craft. Legacy unproven rows remain legacy observations.
+
+### Schema-5 Live Validation
+
+1. Back up SavedVariables with WoW closed; install both Core and UI from the same
+  bundle. Keep the PR unmerged during controlled testing.
+2. Prospect recipe 1231127 once, then five times. Compare operation IDs and result
+  observations with six history attempts, all observed items/quantities, six
+  five-ore input contributions and unchanged request-scope configuration.
+3. Repeat with Crushing, Milling, and Recycling, then same/different recipe
+  batches. Check delayed sibling output updates the original craft and does not
+  consume the new batch or replace its setup. Verify one ID per actual operation
+  in each family; the original four-operation Prospecting reproduction is covered
+  by the sanitized ledger regression fixture.
+4. Cancel/intercept an unfinished batch and close/reopen professions. Unseen
+  uncertain IDs must stay unowned; known siblings retain their original parent.
+5. Compare totals, per-measurement coverage, ingredients and outputs before/after
+  reload. In-flight cross-reload callbacks may remain unverified; no timestamp
+  or output-name guess should hide that uncertainty.
+6. Confirm ordinary crafting, enchanting, Patron/public/personal orders,
+  recrafts and first-craft rewards retain their existing capture behavior.
+7. Check multi-output detail at short/tall window sizes, item metadata arriving
+  late, and any observed identical same-item callbacks. Uncertain quantity must
+  remain labeled, with original observations inspectable through Core API.
+
 Each page owns its active **Craft type** and **Period** filters. Craft type defaults
 to All crafts; Period retains that page's existing default. Personal crafting,
 Crafting orders and Patron orders use the same shared choices and query semantics,

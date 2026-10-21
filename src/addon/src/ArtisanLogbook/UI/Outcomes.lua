@@ -235,20 +235,29 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       if not page then worker:SetScript("OnUpdate", nil); qualityStatus:SetText(reason or "Output quality unavailable"); return end
       for _, craft in ipairs(page.crafts) do
         crafts = crafts + 1
-        local quality = craft.outputQuality
-        local key = tostring(quality or "unknown") .. ":" .. tostring(craft.outputItem and craft.outputItem.id or "unknown")
-        local group = groups[key] or { quality = quality, item = craft.outputItem, complete = true,
-          craftCount = 0, concentrationSpent = 0, concentrationObservedCount = 0 }
-        groups[key] = group
-        group.craftCount = group.craftCount + 1
-        if quality ~= nil then qualities[quality] = true end
-        if quality ~= nil and craft.outputQuantity ~= nil then splitCrafts = splitCrafts + 1 end
-        if craft.outputQuantity ~= nil then group.quantity = (group.quantity or 0) + craft.outputQuantity
-        else group.complete = false end
-        if craft.concentrationSpent ~= nil then
-          group.concentrationSpent = group.concentrationSpent + craft.concentrationSpent
-          group.concentrationObservedCount = group.concentrationObservedCount + 1
+        local outputs = craft.outputs or { { quality = craft.outputQuality, item = craft.outputItem,
+          quantity = craft.outputQuantity } }
+        local seenGroups, complete = {}, true
+        for _, output in ipairs(outputs) do
+          local quality = output.quality
+          local key = tostring(quality or "unknown") .. ":" .. tostring(output.item and output.item.id or "unknown")
+          local group = groups[key] or { quality = quality, item = output.item, complete = true,
+            craftCount = 0, concentrationSpent = 0, concentrationObservedCount = 0 }
+          groups[key] = group
+          if not seenGroups[key] then
+            group.craftCount = group.craftCount + 1
+            if craft.concentrationSpent ~= nil then
+              group.concentrationSpent = group.concentrationSpent + craft.concentrationSpent
+              group.concentrationObservedCount = group.concentrationObservedCount + 1
+            end
+          end
+          seenGroups[key] = true
+          if quality ~= nil then qualities[quality] = true else complete = false end
+          if output.quantity ~= nil and not output.quantityAmbiguous then
+            group.quantity = (group.quantity or 0) + output.quantity
+          else group.complete, complete = false, false end
         end
+        if complete then splitCrafts = splitCrafts + 1 end
       end
       cursor = page.nextCursor
       if cursor then return end

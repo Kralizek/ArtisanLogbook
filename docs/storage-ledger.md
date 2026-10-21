@@ -5,12 +5,16 @@ personal-craft request capture added by issue #12, durable outcomes from #17, an
 the schema-2 authoritative outcome and reagent measurement model from #24. The raw
 capture tracer remains a separate diagnostic store and is not imported into the ledger.
 
-Final schema 4 adds an independent observed-conditions dictionary without admission
+Schema 4 added an independent observed-conditions dictionary without admission
 limits, fact-local context/evidence and reference-based snapshot collection to the schema-v3
 measurement model. See [crafting observations](crafting-observations.md) for its
 lifecycle, partitions, migration, garbage collection and cardinality benchmarks. The schema-v3
 gross reagent requirement and candidate-set model is documented below. The stable consumer-facing Lua API is documented separately in
 [lua-api.md](lua-api.md).
+
+Schema 5 adds explicit logical salvage attempts and child output observations.
+See [logical attempts](crafting-observations.md#logical-salvage-attempts-schema-5)
+for correlation, ambiguity, migration, measurement coverage and retention.
 
 ## SavedVariables and Versions
 
@@ -26,8 +30,8 @@ of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
 
-**Schema 4 is the current persistence contract**, identified by both
-`schemaVersion = 4` and `schemaIdentity = "ArtisanLogbookLedger"`. Schemas 1, 2 and 3
+**Schema 5 is the current persistence contract**, identified by both
+`schemaVersion = 5` and `schemaIdentity = "ArtisanLogbookLedger"`. Schemas 1, 2, 3 and 4
 with this identity are supported upgrade sources and migrate automatically and
 conservatively at startup. **Schema 1** (`schemaVersion = 1` with the same identity,
 in every `outcomeVersion` variant described below) is upgraded through the
@@ -38,8 +42,11 @@ coverage as unknown; schema 2 did not retain the craft-time alternative set.
 Schema 3 to 4 leaves context/configuration unknown without replaying facts and
 initializes a sparse `configurations` map plus `nextConfigurationKey`. Normal pruning
 collects only conditions without retained fact, request or durable aggregate
-references. No reset or purge is required for released schemas. Older Core builds
-refuse the final schema 4 with the usual unsupported-schema diagnostic.
+references. Schema 4 to 5 preserves these configuration keys and only corrects
+proven retained salvage groups; unresolved historical aggregates stay unchanged.
+No reset or purge is required for supported schemas. Older Core builds refuse
+schema 5 with the usual unsupported-schema diagnostic. The companion reads 1-5
+and writes 5, including logical restored rows and explicit callback evidence.
 
 Configuration keys are immutable surrogate identities, not unique hashes of their
 conditions. Numeric persistence can make previously distinct condition snapshots
@@ -85,7 +92,16 @@ experimental history; the independent diagnostic trace is not imported.
 
 The supported schema contains:
 
-- `crafts` stores one row per observed Retail primary result callback, with a monotonic
+- `crafts` stores one row per owned salvage operation in schema 5. Such rows have
+  `attemptKind = "salvage-operation"` and ordered `outputs` with `itemId`,
+  `quantity`, optional `quality`/`itemLevel`, `timestamp`, per-callback
+  `measurements`, and positive `returns`. Repeated indistinguishable output
+  identities retain `quantityAmbiguous = true`; the parent has `outputAmbiguous`
+  and no exact quantity. `lastObservedAt` retains delayed child observations.
+  Companion exports use `attemptKind = "restored-operation"` with explicit
+  `companionCraftOrigin`/`companionCraftObservation`, not live salvage tokens.
+  Older/unproven history and other crafting paths retain their existing callback
+  grain. Every craft has a monotonic
   local `id`, timestamp, optional request ID, session ID and WoW recipe/output
   item IDs, raw game
   `gameOperationId` (the raw `operationID`), observed output quality/item level/quantity,
@@ -204,22 +220,25 @@ anything is staged:
   invalidation of a live request, a contradictory begin, or transition away from
   any outstanding nonpersonal call leaves operation ownership uncertain. Enchant,
   recraft, order and salvage contexts are tracked independently of personal
-  `pendingRequest`; its absence does not establish completion. A result alone
-  does not retire a nonpersonal context because no drain/attempt-count contract
-  has been established. Close, direct personal replacement and another
+  `pendingRequest`; its absence does not establish completion. Call-backed
+  salvage retires only after the submitted count of distinct operation IDs,
+  not after each output callback. Other unsupported nonpersonal contexts have
+  no verified completion boundary. Close of unfinished work, direct personal replacement and another
   nonpersonal hook therefore apply the same conservative rule. Known stale IDs do not consume
   a new batch. An unseen ID in that uncertain state stays unowned/unverified and
   conservatively invalidates the pending batch. Another hook cannot clear this
   uncertainty: it lasts until a new runtime session. This deliberately sacrifices
   fresh authoritative/input coverage after such a transition; shape alone cannot
   identify the actual new craft. Clearing history does not reset this guard.
-  Salvage may
-  emit several callbacks for one operation. These remain craft facts, not
-  authoritative attempt counts. Ordering across replaced operations still
+  Salvage may emit several callbacks for one operation. Schema 5 retains them
+  as observations on an explicitly owned attempt; unsupported or cross-session
+  callbacks never receive guessed ownership. Ordering across replaced operations still
   requires in-game validation; a matching last call is not a server identity token.
+  Call-backed salvage recipe attribution uses a separate bounded identity cache;
+  see [the build-70448 investigation](crafting-observations.md#recycling-build-70448-investigation).
   The runtime ID registry is not persisted or capped and is reset when a new
-  runtime session is created. It does not alter schema-1 migration or previously
-  committed aggregates. Live evidence is needed before implementing any less
+  runtime session is created. Legacy aggregate-only history is not reconstructed.
+  Live evidence is needed before implementing any less
   conservative recovery rule, or claiming continuity across a reload/login while
   callbacks are still in flight.
 3. For a validated primary result, `resourcesReturned == nil` and `{}` are
@@ -300,12 +319,25 @@ reconstructed. Enchant, salvage and recraft calls do not receive guessed recipe
 inputs. Order `CraftRecipe` snapshots use their submitted selections and
 schematic, without assigning ownership to either the crafter or customer.
 
+Call-backed salvage can instead snapshot its actual submitted target and
+positive reagent selections. The target quantity comes from a matching Salvage
+schematic's `quantityMax`; unavailable target data is not reconstructed. Existing
+reagent rows attach those partial allocations only to the first attributable
+output per distinct operation, with `inputTotalComplete = false`. There is no
+personal request, complete-input claim, or matched savings contribution.
+Existing configuration rows store a request-scope batch snapshot, including a
+target-GUID quote when readable. The bounded recent-operation cache keeps this
+snapshot with recipe identity for delayed outputs; it never duplicates their
+input rows or replaces an old snapshot with a newer submission's setup. No
+attempt-start configuration is implied. Schema 5 changes craft/output grain
+without upgrading partial input or outcome evidence.
+
 ### Ordinary capture and independent expectations
 
 The Retail adapter normalizes omitted `CraftRecipe` count/concentration arguments
 to one cast and no concentration. It does not turn missing reagent selections
 into exact allocations. Identical repeated begin events are idempotent only while
-the same clean personal request is pending. Conflicting begins, replaced unfinished
+the same clean personal request or call-backed salvage batch is pending. Conflicting begins, replaced unfinished
 batches and interrupted operations still refuse request ownership; a reload resets
 runtime quarantine, not historical outcome provenance.
 

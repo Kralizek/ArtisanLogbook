@@ -1,12 +1,13 @@
 local _, addon = ...
 
 local Ledger = {}
-Ledger.schemaVersion = 4
+Ledger.schemaVersion = 5
 Ledger.schemaIdentity = "ArtisanLogbookLedger"
 Ledger.retentionDays = 60
 Ledger.recentOperationLimit = 64
 
 local maxInteger = 9007199254740991
+local validateAttempt
 local legacySeriesMetrics = { "outputQuantity", "multicraftBonus", "concentrationSpent",
   "ingenuityProcCount", "ingenuityRefund", "multicraftProcCount", "resourcefulnessProcCount",
   "resourcefulnessCompleteProcCount" }
@@ -405,7 +406,9 @@ end
 
 local function seriesCount(craft, field)
   if field == "quoteObservedCount" then return craft.quoteObserved == true and 1 or 0 end
-  if field == "inputCompleteCount" then return craft.inputComplete == true and 1 or 0 end
+  if field == "inputCompleteCount" then
+    return (craft.inputComplete == true or craft.companionInputsComplete == true) and 1 or 0
+  end
   if field == "grossRequirementsCompleteCount" then return craft.grossRequirementsComplete == true and 1 or 0 end
   return isMatched(craft) and 1 or 0
 end
@@ -474,7 +477,7 @@ local function stageSeries(index, sessions, craft)
   local group = bucket and bucket[characterId or 0]
   local key = grainKey(craft.recipeId, craft)
   local existing = group and group[key]
-  if existing and (not isInteger(existing.craftCount) or existing.craftCount >= maxInteger) then
+  if existing and (not isCount(existing.craftCount) or existing.craftCount >= maxInteger) then
     return nil, "craft series count overflow"
   end
   local row = {
@@ -585,6 +588,30 @@ local function validateDatabase(data, version)
         craft.sessionId == nil then
       return nil, "craft facts contain an invalid or duplicate ID"
     end
+    if craft.outputs ~= nil then
+        if version < 5 or (craft.attemptKind ~= "salvage-operation" and craft.attemptKind ~= "restored-operation") or
+          (craft.attemptKind == "salvage-operation" and not isInteger(craft.gameOperationId)) or
+          not isArray(craft.outputs) or #craft.outputs == 0 then
+        return nil, "invalid logical attempt outputs"
+      end
+      for _, output in ipairs(craft.outputs) do
+        if not isInteger(output.itemId) or not data.dimensions.items[output.itemId] or
+            not isInteger(output.quantity) or not isFinite(output.timestamp) or
+            type(output.measurements) ~= "table" or not isArray(output.returns) then
+          return nil, "invalid output observation"
+        end
+        for _, returned in ipairs(output.returns) do
+          if not isInteger(returned.itemId) or not data.dimensions.items[returned.itemId] or
+              not isFinite(returned.returnedQuantity) or returned.returnedQuantity <= 0 then
+            return nil, "invalid output return observation"
+          end
+        end
+      end
+      local valid, reason = validateAttempt(craft, data.nextCraftId)
+      if not valid then return nil, reason end
+    elseif craft.attemptKind ~= nil then
+      return nil, "logical attempt requires output observations"
+    end
     for _, field in ipairs({ "gameOperationId", "outputQuality", "outputItemLevel", "outputQuantity",
       "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "ingenuityRefund" }) do
       if craft[field] ~= nil and not isFinite(craft[field]) then
@@ -664,6 +691,10 @@ local function validateDatabase(data, version)
       if craft[field] ~= nil and (craft[field] ~= true or craft.requestId == nil) then
         return nil, "craft input observation requires a request"
       end
+    end
+    if craft.companionInputsComplete ~= nil and (version < 5 or type(craft.companionInputsComplete) ~= "boolean" or
+        craft.inputComplete ~= nil or craft.requestId ~= nil) then
+      return nil, "Companion input completeness must be separate from native request evidence"
     end
     ids.craft[craft.id] = true
   end
@@ -1439,6 +1470,16 @@ local function appendIdentity(index, identity, craftId)
   ids[#ids + 1] = craftId
 end
 
+local function outputIdentities(craft)
+  local result = {}
+  if craft.outputs then
+    for _, output in ipairs(craft.outputs) do result[output.itemId] = true end
+  elseif craft.outputItemId ~= nil then
+    result[craft.outputItemId] = true
+  end
+  return result
+end
+
 local function indexCraftDimensions(ledger, craft)
   local rows = ledger.dimensionRows
   local session = rows.session[craft.sessionId]
@@ -1531,6 +1572,7 @@ function Ledger:RebuildIndexes()
   end
   table.sort(self.seriesDays)
   self.craftById, self.requestById, self.reagentsByCraftId = {}, {}, {}
+  self.attemptsByOperation = {}
   self.craftIds, self.craftIdsByTime, self.operationIndex = {}, {}, {}
   self.unknownRecipeCount = 0
   self.unknownRecipeCraftIds, self.unknownCraftIdsByOutput = {}, {}
@@ -1539,16 +1581,22 @@ function Ledger:RebuildIndexes()
     if craft.recipeId == nil then
       self.unknownRecipeCount = self.unknownRecipeCount + 1
       self.unknownRecipeCraftIds[#self.unknownRecipeCraftIds + 1] = craft.id
-      if craft.outputItemId ~= nil then
-        local craftIds = self.unknownCraftIdsByOutput[craft.outputItemId]
+      for itemId in pairs(outputIdentities(craft)) do
+        local craftIds = self.unknownCraftIdsByOutput[itemId]
         if not craftIds then
           craftIds = {}
-          self.unknownCraftIdsByOutput[craft.outputItemId] = craftIds
+          self.unknownCraftIdsByOutput[itemId] = craftIds
         end
         craftIds[#craftIds + 1] = craft.id
       end
     end
     self.craftById[craft.id] = craft
+    if craft.attemptKind == "salvage-operation" then
+      local attempts = self.attemptsByOperation[craft.sessionId] or {}
+      self.attemptsByOperation[craft.sessionId] = attempts
+      if attempts[craft.gameOperationId] then error("duplicate logical operation identity") end
+      attempts[craft.gameOperationId] = craft
+    end
     self.reagentsByCraftId[craft.id] = {}
     self.craftIds[#self.craftIds + 1] = craft.id
     self.craftIdsByTime[#self.craftIdsByTime + 1] = craft.id
@@ -1565,14 +1613,19 @@ end
 
 local function appendCraftIndexes(ledger, craft, reagents)
   ledger.craftById[craft.id] = craft
+  if craft.attemptKind == "salvage-operation" then
+    local attempts = ledger.attemptsByOperation[craft.sessionId] or {}
+    ledger.attemptsByOperation[craft.sessionId] = attempts
+    attempts[craft.gameOperationId] = craft
+  end
   if craft.recipeId == nil then
     ledger.unknownRecipeCount = ledger.unknownRecipeCount + 1
     ledger.unknownRecipeCraftIds[#ledger.unknownRecipeCraftIds + 1] = craft.id
-    if craft.outputItemId ~= nil then
-      local craftIds = ledger.unknownCraftIdsByOutput[craft.outputItemId]
+    for itemId in pairs(outputIdentities(craft)) do
+      local craftIds = ledger.unknownCraftIdsByOutput[itemId]
       if not craftIds then
         craftIds = {}
-        ledger.unknownCraftIdsByOutput[craft.outputItemId] = craftIds
+        ledger.unknownCraftIdsByOutput[itemId] = craftIds
       end
       craftIds[#craftIds + 1] = craft.id
     end
@@ -1671,7 +1724,7 @@ local function openDatabase(database, clock, options)
     data = copyValue(database)
   end
   if data.schemaIdentity ~= Ledger.schemaIdentity or
-      (data.schemaVersion ~= 1 and data.schemaVersion ~= 2 and data.schemaVersion ~= 3 and
+      (data.schemaVersion ~= 1 and data.schemaVersion ~= 2 and data.schemaVersion ~= 3 and data.schemaVersion ~= 4 and
         data.schemaVersion ~= Ledger.schemaVersion) then
     return nil, "ledger data refused: unsupported ledger schema"
   end
@@ -1704,6 +1757,14 @@ local function openDatabase(database, clock, options)
     migration = migration or { fromSchemaVersion = 3 }
     migration.toSchemaVersion = 4
   end
+  if data.schemaVersion == 4 then
+    local valid, reason = validateDatabase(data, 4)
+    if valid then valid, reason = validateOutcomes(data, 4) end
+    if not valid then return nil, "ledger data refused: schema 4 migration failed: " .. tostring(reason) end
+    data.schemaVersion = 5
+    migration = migration or { fromSchemaVersion = 4 }
+    migration.toSchemaVersion = 5
+  end
   local valid, reason = validateDatabase(data)
   if not valid then
     return nil, "ledger data refused: " .. reason
@@ -1726,11 +1787,23 @@ local function openDatabase(database, clock, options)
     wall = nowFunction(clock),
     migration = migration,
     observedOperationIds = {},
+    salvageOperations = {},
+    salvageOperationOrder = {},
   }, {
     __index = Ledger,
   })
+  if migration and migration.fromSchemaVersion <= 4 then
+    self:RebuildIndexes()
+    local corrected, correctionReason = self:MigrateLegacyAttempts()
+    if not corrected then return nil, "ledger data refused: attempt migration failed: " .. tostring(correctionReason) end
+    migration.correctedAttemptCount = corrected.attempts
+    migration.mergedOutputCount = corrected.outputs
+    local checked, checkReason = validateDatabase(data)
+    if checked then checked, checkReason = validateOutcomes(data) end
+    if not checked then return nil, "ledger data refused: attempt migration failed: " .. tostring(checkReason) end
+  end
   self:Prune(self.wall())
-  self:RebuildIndexes()
+  if not self.craftById then self:RebuildIndexes() end
   return self
 end
 
@@ -1903,6 +1976,8 @@ local function createSession(self, metadata)
   self.observedOperationIds = {}
   self.operationOwnershipUncertain = nil
   self.recentOperations, self.recentOperationOrder = {}, {}
+  self.pendingSalvage = nil
+  self.salvageOperations, self.salvageOperationOrder = {}, {}
   return sessionId
 end
 
@@ -1913,6 +1988,12 @@ function Ledger:CreateSession(metadata)
 end
 
 function Ledger:BeginCraft(recipeId)
+  if self.pendingSalvage then
+    if isInteger(recipeId) and recipeId ~= self.pendingSalvage.recipeId then
+      self.operationOwnershipUncertain = true
+    end
+    return
+  end
   if self.ambiguousRecipe then
     return
   end
@@ -2112,6 +2193,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   self.requestById[request.id] = request
   if self.pendingRequest or self.nonpersonalOperationOutstanding then self.operationOwnershipUncertain = true end
   self.nonpersonalOperationOutstanding = nil
+  self.pendingSalvage = nil
   self.pendingRecipeId = nil
   self.ambiguousRecipe = nil
   self.operationKind = "CraftRecipe"
@@ -2134,6 +2216,7 @@ function Ledger:CancelCraft()
     self.operationOwnershipUncertain = true
   end
   self.nonpersonalOperationOutstanding = nil
+  self.pendingSalvage = nil
   self.pendingRequest = nil
   self.pendingOrderRequest = nil
   self.requestAmbiguous = nil
@@ -2162,6 +2245,38 @@ function Ledger:InvalidateCraft(operationKind, observation)
   self.operationKind = type(operationKind) == "string" and operationKind or nil
   self.operationObservation = observation and validateObservation(observation) and copyValue(observation) or nil
   self.nonpersonalOperationOutstanding = self.operationKind ~= nil or nil
+  self.pendingSalvage = nil
+end
+
+function Ledger:SubmitSalvage(recipeId, requestedCount, capture)
+  if not self.currentSessionId or not isInteger(recipeId) or not isInteger(requestedCount) then
+    return nil, "salvage submission is incomplete"
+  end
+  local copied, snapshot = pcall(copyValue, capture or {})
+  if not copied or type(snapshot) ~= "table" or
+      (snapshot.observation ~= nil and not validateObservation(snapshot.observation)) or
+      (snapshot.allocations ~= nil and not isArray(snapshot.allocations)) then
+    return nil, "salvage snapshot is invalid"
+  end
+  local staged = dimensionStage(self)
+  local id, reason = stageDimension(staged, "recipe", recipeId)
+  if not id then return nil, reason end
+  for _, allocation in ipairs(snapshot.allocations or {}) do
+    if type(allocation) ~= "table" or not isInteger(allocation.itemId) or
+        not isInteger(allocation.allocatedQuantity) or
+        (allocation.dataSlotIndex ~= nil and not isInteger(allocation.dataSlotIndex)) then
+      return nil, "salvage allocation is invalid"
+    end
+    local itemId
+    itemId, reason = stageDimension(staged, "item", allocation.itemId)
+    if not itemId then return nil, reason end
+  end
+  commitDimensions(self, staged)
+  self:InvalidateCraft("CraftSalvage")
+  self.pendingRecipeId, self.ambiguousRecipe = nil, nil
+  self.pendingSalvage = { recipeId = id, remaining = requestedCount,
+    allocations = snapshot.allocations, observation = snapshot.observation }
+  return true
 end
 
 local function operationIdSeen(ledger, operationId)
@@ -2225,6 +2340,7 @@ local function rememberOperation(ledger, craft)
     recent, order = {}, {}
     ledger.recentOperations, ledger.recentOperationOrder = recent, order
   end
+  if recent[operationId] == craft.id then return end
   if recent[operationId] ~= nil then
     recent[operationId] = false
     return
@@ -2259,6 +2375,326 @@ local function recordReward(ledger, result, timestamp)
     recipeId = parent and parent.recipeId, parentCraftId = parent and parent.id }, "first-craft-reward"
 end
 
+local attemptMeasurements = { "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
+  "hasIngenuityProc", "ingenuityRefund" }
+
+local function outputObservation(craft, returns)
+  local output = { itemId = craft.outputItemId, quantity = craft.outputQuantity,
+    quality = craft.outputQuality, itemLevel = craft.outputItemLevel, timestamp = craft.timestamp,
+    measurements = {}, returns = {} }
+  for _, field in ipairs(attemptMeasurements) do output.measurements[field] = craft[field] end
+  for itemId, quantity in pairs(returns.quantities) do
+    output.returns[#output.returns + 1] = { itemId = itemId, returnedQuantity = quantity }
+  end
+  table.sort(output.returns, function(left, right) return left.itemId < right.itemId end)
+  return output
+end
+
+local function summarizeAttempt(craft, allocationFacts)
+  local outputsByItem, returnedByItem, conflicts = {}, {}, {}
+  local quantity = 0
+  craft.outputAmbiguous = nil
+  for _, field in ipairs(attemptMeasurements) do craft[field] = nil end
+  for _, output in ipairs(craft.outputs) do
+    local key = encodeObservation({ output.itemId, output.quality or false, output.itemLevel or false })
+    output.quantityAmbiguous = nil
+    if outputsByItem[key] then
+      craft.outputAmbiguous = true
+      outputsByItem[key].quantityAmbiguous, output.quantityAmbiguous = true, true
+    end
+    outputsByItem[key] = output
+    quantity = quantity + output.quantity
+    if not isCount(quantity) then return nil, "attempt output quantity overflow" end
+    for _, field in ipairs(attemptMeasurements) do
+      local value = output.measurements[field]
+      if value ~= nil then
+        if craft[field] ~= nil and craft[field] ~= value then conflicts[field] = true end
+        craft[field] = value
+      end
+    end
+    for _, returned in ipairs(output.returns) do
+      local previous = returnedByItem[returned.itemId]
+      if previous ~= nil and previous ~= returned.returnedQuantity then conflicts[returned.itemId] = true end
+      returnedByItem[returned.itemId] = returned.returnedQuantity
+    end
+  end
+  for _, field in ipairs(attemptMeasurements) do
+    if conflicts[field] then craft[field] = nil end
+  end
+  craft.outputQuantity = not craft.outputAmbiguous and quantity or nil
+  local first = craft.outputs[1]
+  craft.outputItemId = #craft.outputs == 1 and first.itemId or nil
+  craft.outputQuality = #craft.outputs == 1 and first.quality or nil
+  craft.outputItemLevel = #craft.outputs == 1 and first.itemLevel or nil
+  craft.outcomeSource, craft.resourcefulnessComplete = "unverified", nil
+  craft.hasResourcefulnessProc = next(returnedByItem) and true or nil
+  local facts = {}
+  for _, fact in ipairs(allocationFacts) do
+    if fact.allocatedQuantity then
+      local allocation = copyValue(fact)
+      allocation.returnedQuantity = nil
+      facts[#facts + 1] = allocation
+    end
+  end
+  for itemId, returned in pairs(returnedByItem) do
+    if not conflicts[itemId] then
+      facts[#facts + 1] = { craftId = craft.id, itemId = itemId, returnedQuantity = returned }
+    end
+  end
+  return facts
+end
+
+validateAttempt = function(craft, nextCraftId)
+  local shape = { itemId = "id", quantity = "id", quality = "number", itemLevel = "number",
+    timestamp = "number", legacyCraftId = "id", quantityAmbiguous = "boolean",
+    companionObservedAt = "string", companionLegacyCraftId = "string",
+    measurements = { multicraftBonus = "number", concentrationSpent = "number", concentrationCurrencyId = "number",
+      hasIngenuityProc = "boolean", ingenuityRefund = "number" },
+    returns = { list = { itemId = "id", returnedQuantity = "number" }, key = "itemId" } }
+  local lastObservedAt = craft.timestamp
+  for _, output in ipairs(craft.outputs) do
+    if not matchesShape(output, shape) or (output.legacyCraftId and output.legacyCraftId >= nextCraftId) then
+      return nil, "invalid logical output fields or identity"
+    end
+    lastObservedAt = math.max(lastObservedAt, output.timestamp)
+  end
+  if craft.outputs[1].timestamp ~= craft.timestamp or
+      (craft.lastObservedAt ~= nil and craft.lastObservedAt ~= lastObservedAt) then
+    return nil, "invalid logical attempt timestamps"
+  end
+  local expected = copyValue(craft)
+  local facts, reason = summarizeAttempt(expected, {})
+  if not facts then return nil, reason end
+  for _, field in ipairs({ "outputItemId", "outputQuantity", "outputQuality", "outputItemLevel", "outputAmbiguous",
+      "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "hasIngenuityProc", "ingenuityRefund",
+      "outcomeSource", "resourcefulnessComplete", "hasResourcefulnessProc" }) do
+    local outputField = field:match("^output") ~= nil
+    if (craft.attemptKind == "salvage-operation" or outputField) and craft[field] ~= expected[field] then
+      return nil, "inconsistent logical attempt summary: " .. field
+    end
+  end
+  for index, output in ipairs(craft.outputs) do
+    if output.quantityAmbiguous ~= expected.outputs[index].quantityAmbiguous then
+      return nil, "inconsistent output ambiguity"
+    end
+  end
+  if craft.attemptKind == "restored-operation" and
+      (type(craft.companionCraftOrigin) ~= "string" or craft.companionCraftOrigin == "" or
+       type(craft.companionCraftObservation) ~= "string" or craft.companionCraftObservation == "") then
+    return nil, "restored attempt requires explicit companion identity"
+  end
+  return true
+end
+
+local function subtractMeasures(row, delta)
+  for field, amount in pairs(delta) do
+    if not isFinite(row[field]) or row[field] < amount then return nil, "missing attempt contribution: " .. field end
+    row[field] = row[field] - amount
+  end
+  return true
+end
+
+local function stageAttemptReplacement(ledger, previous, craft, oldFacts, facts)
+  local session = ledger.dimensionRows.session[craft.sessionId]
+  local characterId = session and session.characterDimensionId
+  local day, key = dayOf(craft.timestamp), grainKey(craft.recipeId, craft)
+  local existing = ledger.seriesByKey[day][characterId or 0][key]
+  local base = copyValue(existing)
+  base.craftCount = base.craftCount - 1
+  for _, metric in ipairs(seriesMetrics) do
+    local value = seriesMeasurement(previous, metric)
+    if value ~= nil then
+      local coverage = metric .. "ObservedCount"
+      if base[coverage] < 1 then return nil, "missing attempt coverage: " .. metric end
+      base[coverage] = base[coverage] - 1
+      base[metric] = base[coverage] > 0 and (base[metric] - value) or nil
+    end
+  end
+  for _, field in ipairs(seriesCounts) do base[field] = base[field] - seriesCount(previous, field) end
+  local index = { [day] = { [characterId or 0] = { [key] = base } } }
+  local series, reason = stageSeries(index, ledger.dimensionRows.session, craft)
+  if not series then return nil, reason end
+  series.existing = existing
+  local oldItems, newItems = craftItems(oldFacts), craftItems(facts)
+  if not oldItems or not newItems then return nil, "invalid attempt reagent totals" end
+  local oldDeltas, newDeltas = craftDeltas(previous, oldItems), craftDeltas(craft, newItems)
+  if not oldDeltas or not newDeltas then return nil, "invalid attempt outcome totals" end
+  local changes = {}
+  for _, spec in ipairs({
+    { name = "reagentSeries", index = ledger.reagentIndex, field = "itemId", old = oldDeltas.reagents, new = newDeltas.reagents },
+    { name = "resourcefulnessSets", index = ledger.returnSetIndex, field = "returnedItemSet",
+      old = oldDeltas.set and { oldDeltas.set } or {}, new = newDeltas.set and { newDeltas.set } or {} },
+    { name = "reagentRequirementSeries", index = ledger.requirementIndex, field = "candidateKey",
+      old = oldDeltas.requirements, new = newDeltas.requirements },
+  }) do
+    local byKey = {}
+    for _, entry in ipairs(spec.old) do byKey[entry.itemId or entry.key] = { old = entry.delta } end
+    for _, entry in ipairs(spec.new) do
+      local entryKey = entry.itemId or entry.key
+      byKey[entryKey] = byKey[entryKey] or {}
+      byKey[entryKey].new = entry.delta
+    end
+    for entryKey, delta in pairs(byKey) do
+      local bucket = spec.index[day]
+      local recipes = bucket and bucket[characterId or 0]
+      local group = recipes and recipes[key]
+      local original = group and group[entryKey]
+      local row = original and copyValue(original) or copyObservation(craft, {
+        bucketStart = day, characterDimensionId = characterId, recipeId = craft.recipeId, [spec.field] = entryKey })
+      if delta.old then
+        local ok
+        ok, reason = subtractMeasures(row, delta.old)
+        if not ok then return nil, reason end
+      end
+      if delta.new then
+        local ok
+        ok, reason = addMeasures(row, delta.new)
+        if not ok then return nil, reason end
+      end
+      if row.returnedQuantity == 0 then row.returnedQuantity = nil end
+      if row.allocationCount == 0 then row.allocationCount, row.allocatedQuantity = nil, nil end
+      if row.matchedCraftCount == 0 then
+        row.matchedCraftCount, row.matchedAllocatedQuantity = nil, nil
+        row.matchedReturnedQuantity, row.matchedReturnCount = nil, nil
+      end
+      if row.authoritativeCraftCount == 0 then row.authoritativeCraftCount = nil end
+      local remove = spec.field == "itemId" and not row.returnedQuantity and not row.allocationCount or
+        spec.field == "returnedItemSet" and row.craftCount == 0 or
+        spec.field == "candidateKey" and row.requirementCraftCount == 0
+      changes[#changes + 1] = { spec = spec, original = original, row = row, remove = remove }
+    end
+  end
+  return { series = series, changes = changes }
+end
+
+local function commitAttemptReplacement(ledger, staged)
+  if staged.series.row.craftCount == 0 then
+    local series = staged.series
+    ledger.seriesByKey[series.bucketStart][series.characterDimensionId or 0][series.key] = nil
+    for position, row in ipairs(ledger.database.craftSeries) do
+      if row == series.existing then table.remove(ledger.database.craftSeries, position); break end
+    end
+  else
+    commitStagedSeries(ledger.database, ledger.seriesByKey, ledger.seriesDays, staged.series)
+  end
+  for _, change in ipairs(staged.changes) do
+    local spec, row = change.spec, change.row
+    local group = returnGroup(spec.index, row.bucketStart, row.characterDimensionId, row.recipeId, row)
+    if change.remove then
+      group[row[spec.field]] = nil
+      for position, existing in ipairs(ledger.database[spec.name]) do
+        if existing == change.original then table.remove(ledger.database[spec.name], position); break end
+      end
+    elseif change.original then
+      for field in pairs(change.original) do change.original[field] = nil end
+      for field, value in pairs(row) do change.original[field] = value end
+    else
+      ledger.database[spec.name][#ledger.database[spec.name] + 1] = row
+      group[row[spec.field]] = row
+    end
+  end
+end
+
+local function amendAttempt(ledger, parent, output, stagedDimensions, retainedFacts)
+  local craft = copyValue(parent)
+  craft.outputs[#craft.outputs + 1] = output
+  craft.lastObservedAt = math.max(craft.lastObservedAt or craft.timestamp, output.timestamp)
+  local oldFacts = ledger.reagentsByCraftId[parent.id] or retainedFacts or {}
+  local facts, reason = summarizeAttempt(craft, oldFacts)
+  if not facts then return nil, reason end
+  local staged
+  staged, reason = stageAttemptReplacement(ledger, parent, craft, oldFacts, facts)
+  if not staged then return nil, reason end
+  commitDimensions(ledger, stagedDimensions)
+  commitAttemptReplacement(ledger, staged)
+  for field in pairs(parent) do parent[field] = nil end
+  for field, value in pairs(craft) do parent[field] = value end
+  local reagents = {}
+  for _, fact in ipairs(ledger.database.reagents) do
+    if fact.craftId ~= parent.id then reagents[#reagents + 1] = fact end
+  end
+  for _, fact in ipairs(facts) do reagents[#reagents + 1] = fact end
+  ledger.database.reagents, ledger.reagentsByCraftId[parent.id] = reagents, facts
+  if not ledger.craftById[parent.id] then
+    ledger.database.crafts[#ledger.database.crafts + 1] = parent
+    appendCraftIndexes(ledger, parent, facts)
+  end
+  if ledger.onCraftCommitted then pcall(ledger.onCraftCommitted, ledger, parent) end
+  return parent
+end
+
+function Ledger:MigrateLegacyAttempts()
+  local groups, report = {}, { attempts = 0, outputs = 0 }
+  local function sharedFacts(craft)
+    local shared = copyValue(craft)
+    for _, field in ipairs({ "id", "timestamp", "outputItemId", "outputQuantity", "outputQuality", "outputItemLevel",
+        "multicraftBonus", "concentrationSpent", "concentrationCurrencyId", "hasIngenuityProc", "ingenuityRefund",
+        "hasResourcefulnessProc" }) do shared[field] = nil end
+    return encodeObservation(shared)
+  end
+  for _, craft in ipairs(self.database.crafts) do
+    if not craft.outputs and isInteger(craft.gameOperationId) then
+      local key = encodeObservation({ craft.sessionId, craft.gameOperationId })
+      groups[key] = groups[key] or {}
+      groups[key][#groups[key] + 1] = craft
+    end
+  end
+  for _, group in pairs(groups) do
+    local parent, ownerCount, eligible = group[1], 0, #group > 1
+    for index, craft in ipairs(group) do
+      if craft.requestId or craft.outcomeSource ~= "unverified" or
+          craft.craftType ~= "personal" or craft.contextSource ~= "submitted-call" or
+          craft.configurationScope ~= "request" or craft.recipeId ~= parent.recipeId or
+          sharedFacts(craft) ~= sharedFacts(parent) or
+          not isInteger(craft.outputItemId) or not isInteger(craft.outputQuantity) or
+          craft.reagentRequirements and #craft.reagentRequirements > 0 then eligible = false end
+      local ownsInputs = false
+      for _, fact in ipairs(self.reagentsByCraftId[craft.id]) do
+        if fact.allocatedQuantity then
+          ownsInputs = true
+          if fact.inputTotalComplete ~= false then eligible = false end
+        end
+      end
+      if ownsInputs then
+        ownerCount = ownerCount + 1
+        if index ~= 1 then eligible = false end
+      end
+    end
+    if eligible and ownerCount == 1 then
+      parent.attemptKind = "salvage-operation"
+      parent.outputs = { outputObservation(parent, { quantities = quantitiesFromFacts(self.reagentsByCraftId[parent.id]) }) }
+      parent.outputs[1].legacyCraftId = parent.id
+      for index = 2, #group do
+        local child = group[index]
+        local facts = self.reagentsByCraftId[child.id]
+        local output = outputObservation(child, { quantities = quantitiesFromFacts(facts) })
+        output.legacyCraftId = child.id
+        local empty = copyObservation(child, { timestamp = child.timestamp, sessionId = child.sessionId,
+          recipeId = child.recipeId, outcomeSource = "unverified" })
+        local staged, reason = stageAttemptReplacement(self, child, empty, facts, {})
+        if not staged then return nil, reason end
+        staged.series.row.craftCount = staged.series.row.craftCount - 1
+        commitAttemptReplacement(self, staged)
+        local merged
+        merged, reason = amendAttempt(self, parent, output, dimensionStage(self))
+        if not merged then return nil, reason end
+        for position, craft in ipairs(self.database.crafts) do
+          if craft.id == child.id then table.remove(self.database.crafts, position); break end
+        end
+        local retained = {}
+        for _, fact in ipairs(self.database.reagents) do
+          if fact.craftId ~= child.id then retained[#retained + 1] = fact end
+        end
+        self.database.reagents = retained
+        report.outputs = report.outputs + 1
+      end
+      report.attempts = report.attempts + 1
+      self:RebuildIndexes()
+    end
+  end
+  return report
+end
+
 function Ledger:RecordResult(result, expectedRequirements)
   if type(result) ~= "table" then
     return nil, "craft result must be a table"
@@ -2273,8 +2709,6 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
   result = snapshot
   if result.firstCraftReward == true then return recordReward(self, result, timestamp) end
-  if not canAllocate(self.database.nextCraftId) then return nil, "craft ID capacity exhausted" end
-
   local data = self.database
   local stagedDimensions = dimensionStage(self)
   local craft = {
@@ -2295,6 +2729,25 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
   local primaryKinds = { CraftRecipe = true, CraftEnchant = true, RecraftRecipe = true, RecraftRecipeForOrder = true }
   local observation = result.operationID and self.observedOperationIds[result.operationID]
+  local salvage = self.pendingSalvage
+  local salvageOperation
+  local salvageRecipeId, newSalvageOperation, unexpectedSalvageOperation
+  if isInteger(result.operationID) and isInteger(result.itemID) and isInteger(result.quantity) then
+    salvageOperation = self.salvageOperations[result.operationID]
+    local attempts = self.attemptsByOperation[self.currentSessionId]
+    local retained = attempts and attempts[result.operationID]
+    if retained then
+      salvageOperation = { recipeId = retained.recipeId, craftId = retained.id, craft = retained,
+        observation = storedObservation(data, retained) }
+    end
+    salvageRecipeId = salvageOperation and salvageOperation.recipeId
+    if not salvageRecipeId and salvage and not observation and not self.operationOwnershipUncertain and
+        not self.requestAmbiguous then
+      salvageRecipeId, newSalvageOperation = salvage.recipeId, true
+    elseif not salvageRecipeId and not observation and not salvage and self.operationKind == "CraftSalvage" then
+      unexpectedSalvageOperation = true
+    end
+  end
   local pendingOwnerState = self.pendingRequest or self.pendingOrderRequest
   local pendingOwner = pendingOwnerState and self.requestById[pendingOwnerState.id]
   local seen = observation and (observation.consumed or not pendingOwner or observation.requestId ~= pendingOwner.id)
@@ -2303,7 +2756,8 @@ function Ledger:RecordResult(result, expectedRequirements)
     isGameId(result.itemID) and result.itemID > 0 and isGameId(result.quantity) and result.quantity > 0 and
     result.bonusCraft ~= true
   local eligible = validPrimary and not seen and not self.requestAmbiguous and not self.ambiguousRecipe and
-    not self.operationOwnershipUncertain and not contradictoryBegin
+    not self.operationOwnershipUncertain and not contradictoryBegin and
+    self.operationKind ~= "CraftSalvage" and not salvageRecipeId
   local primary = eligible and primaryKinds[self.operationKind] == true
   local returns, returnReason = normalizeReturns(result.resourcesReturned, primary)
   if not returns then return nil, returnReason end
@@ -2332,6 +2786,10 @@ function Ledger:RecordResult(result, expectedRequirements)
   local recipeId = self.pendingRecipeId
   local ambiguousRecipe = self.ambiguousRecipe
   local reason
+  if salvageRecipeId then
+    craft.recipeId, reason = stageDimension(stagedDimensions, "recipe", salvageRecipeId)
+    if not craft.recipeId then return nil, reason end
+  end
   if not craft.recipeId and eligible and not self.requestAmbiguous and
       recipeId and not ambiguousRecipe and
       craft.gameOperationId and craft.gameOperationId > 0 and
@@ -2388,7 +2846,30 @@ function Ledger:RecordResult(result, expectedRequirements)
     if not craft.outputItemId then return nil, reason end
   end
 
+  if salvageOperation and salvageOperation.craftId and
+      (self.craftById[salvageOperation.craftId] or salvageOperation.craft) then
+    for itemId in pairs(returns.quantities) do
+      local item, itemReason = stageDimension(stagedDimensions, "item", itemId)
+      if not item then return nil, itemReason end
+    end
+    return amendAttempt(self, self.craftById[salvageOperation.craftId] or salvageOperation.craft,
+      outputObservation(craft, returns), stagedDimensions, salvageOperation.facts)
+  end
+  if not canAllocate(data.nextCraftId) then return nil, "craft ID capacity exhausted" end
+  if newSalvageOperation then
+    craft.attemptKind = "salvage-operation"
+    craft.outputs = { outputObservation(craft, returns) }
+  end
+
   local reagentFacts, slotCounts = {}, {}
+  if newSalvageOperation then
+    for _, allocation in ipairs(salvage.allocations or {}) do
+      reagentFacts[#reagentFacts + 1] = { craftId = craft.id, itemId = allocation.itemId,
+        dataSlotIndex = allocation.dataSlotIndex, allocatedQuantity = allocation.allocatedQuantity,
+        inputTotalComplete = false }
+      slotCounts[allocation.itemId] = (slotCounts[allocation.itemId] or 0) + 1
+    end
+  end
   for _, allocation in ipairs(request and request.allocations or {}) do
     reagentFacts[#reagentFacts + 1] = {
       craftId = craft.id,
@@ -2434,7 +2915,9 @@ function Ledger:RecordResult(result, expectedRequirements)
   craft.quoteObserved = request ~= nil and #(request.allocations or {}) > 0 or nil
   craft.inputComplete = inputComplete or nil
 
-  local craftObservation = primary and (request and storedObservation(data, request) or self.operationObservation) or nil
+  local craftObservation = newSalvageOperation and salvage.observation or
+    (salvageOperation and salvageOperation.observation) or
+    (primary and (request and storedObservation(data, request) or self.operationObservation) or nil)
   if craftObservation and request then
     local attempt = self.attemptObservation
     if attempt and attempt.requestId == request.id and attempt.remaining == pending.remaining then
@@ -2477,6 +2960,21 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
   data.nextCraftId = craft.id + 1
   data.crafts[#data.crafts + 1] = craft
+  if newSalvageOperation then
+    -- Count operations, not output callbacks. Keep positive identity bounded; the
+    -- existing seen-ID registry still rejects stale IDs after cache eviction.
+    self.salvageOperations[result.operationID] = { recipeId = salvageRecipeId, observation = salvage.observation,
+      craftId = craft.id, craft = craft, facts = reagentFacts }
+    local order = self.salvageOperationOrder
+    order[#order + 1] = result.operationID
+    if #order > Ledger.recentOperationLimit then self.salvageOperations[table.remove(order, 1)] = nil end
+    salvage.remaining = salvage.remaining - 1
+    if salvage.remaining == 0 then
+      self.pendingSalvage = nil
+      self.nonpersonalOperationOutstanding = nil
+    end
+  end
+  if unexpectedSalvageOperation then self.operationOwnershipUncertain = true end
   if pending and request then
     self.attemptObservation, self.configurationChanged = nil, nil
     pending.remaining = pending.remaining - 1
@@ -2532,10 +3030,14 @@ function Ledger:AnalyzeUnknownRecipeRepair(outputFilter)
   if outputFilter ~= nil then
     if type(outputFilter) ~= "table" then return nil, "invalid-output-filter" end
     candidateCraftIds = {}
+    local seen = {}
     for outputItemId in pairs(outputFilter) do
       if not isGameId(outputItemId) then return nil, "invalid-output-filter" end
       for _, craftId in ipairs(self.unknownCraftIdsByOutput[outputItemId] or {}) do
-        candidateCraftIds[#candidateCraftIds + 1] = craftId
+        if not seen[craftId] then
+          candidateCraftIds[#candidateCraftIds + 1] = craftId
+          seen[craftId] = true
+        end
       end
     end
     table.sort(candidateCraftIds)
@@ -2543,10 +3045,23 @@ function Ledger:AnalyzeUnknownRecipeRepair(outputFilter)
   for _, craftId in ipairs(candidateCraftIds) do
     local craft = self.craftById[craftId]
     if craft.recipeId == nil then
-      if craft.outputItemId == nil then
+      local outputs = outputIdentities(craft)
+      if not next(outputs) then
         analysis.missingOutputCount = analysis.missingOutputCount + 1
       else
-        local recipes = self.recipeIdsByOutputItemId[craft.outputItemId]
+        local recipes, hasEvidence
+        for itemId in pairs(outputs) do
+          local observed = self.recipeIdsByOutputItemId[itemId]
+          if observed then
+            if not hasEvidence then
+              recipes, hasEvidence = copyValue(observed), true
+            else
+              for recipeId in pairs(recipes) do
+                if not observed[recipeId] then recipes[recipeId] = nil end
+              end
+            end
+          end
+        end
         local candidates, candidateCount = {}, 0
         for recipeId in pairs(recipes or {}) do
           candidateCount = candidateCount + 1
@@ -2795,7 +3310,9 @@ function Ledger:Prune(now)
   local removed = {}
   local retained = {}
   for _, craft in ipairs(data.crafts) do
-    if type(craft.timestamp) == "number" and craft.timestamp < cutoff then
+    if type(craft.timestamp) == "number" and (craft.lastObservedAt or craft.timestamp) < cutoff then
+      local cached = self.salvageOperations and self.salvageOperations[craft.gameOperationId]
+      if cached and cached.craftId == craft.id then cached.facts = self.reagentsByCraftId[craft.id] end
       removed[craft.id] = true
     else
       retained[#retained + 1] = craft
@@ -2844,6 +3361,7 @@ end
 
 function Ledger:ClearHistory()
   self:CancelCraft()
+  self.salvageOperations, self.salvageOperationOrder = {}, {}
   self.database.crafts = {}
   self.database.requests = {}
   self.database.reagents = {}
@@ -2881,6 +3399,7 @@ function Ledger:Purge()
   self:RebuildIndexes()
   self.currentSessionId = sessionId
   self:CancelCraft()
+  self.salvageOperations, self.salvageOperationOrder = {}, {}
   for _, observation in pairs(self.observedOperationIds) do observation.consumed = true end
   return true
 end

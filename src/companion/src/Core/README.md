@@ -6,7 +6,9 @@ Core owns **C01 Craft History Model** and **C02 History Reconciliation** from th
 
 - `CraftObservation`: **one completed crafting attempt**, not necessarily one output callback, request, or crafting session.
 - `CraftReagent`: **craft × item ID**. Input allocation and Resourcefulness returns are separately nullable. Allocations are integer quantities; returned quantities use `decimal` to retain legacy fractional SavedVariables observations. Duplicate item slots must be folded by the SavedVariables adapter, with missing measurements preserved as unknown.
-- `CraftOutput`: **craft × output item ID × quality**, with a nullable quality and positive quantity. Supports operations generating multiple output items.
+- `CraftOutput`: **craft × output item ID × quality**, with nullable quality and quantity. A null quantity is an observed output whose exact amount is unknown; `OutputsComplete` is nullable and never inferred from a callback count.
+- `CraftOutputEvidence`: source-specific ordered callbacks attached to the craft for native-format reconstruction. It is not a canonical fact: evidence variants are preserved idempotently but do not affect craft equality or produce callback-order conflicts.
+- `CraftConfigurationEvidence`: an adapter-owned configuration snapshot attached to the craft for supported SavedVariables round trips. It is not an analytical craft fact and is reconciled as source evidence.
 - `CraftDimensions`: metadata keyed by stable WoW item/recipe/profession IDs and profession expansion keys and the addon's project/region/realm/GUID character key. Display names are enrichment, not identities.
 
 `null` measurements mean *not observed*. `false` or `0` mean explicitly observed negatives or zeros. Likewise, a null reagent/output collection means its complete contents were not observed, while an empty collection means it was explicitly observed empty. We do not store historical addon aggregates in Core.
@@ -39,7 +41,8 @@ Adding durable source-assigned IDs to the WoW addon is a likely future contract 
 - Same identity + compatible partial observations: retain known fields and enrich unknown ones.
 - Same identity + contradictory known values (including changed recipe, source provenance, timestamp or outputs): record conflicts.
 - Reagents are matched by item; independently unknown input and return quantities can be enriched. Different observed reagent-item sets are conflicts unless a set is wholly unknown (`null`).
-- Outputs are matched as a complete observed set (item, quality, quantity). We do **not** union output sets from separate observations of uncertain completeness.
+- Outputs are matched by item and quality. Unknown quantity can be enriched by an exact quantity; contradictory known quantities or differing item/quality sets conflict. We do **not** union output sets from separate observations of uncertain completeness.
+- Recorder callback evidence is unioned by value as attached source evidence. Different compatible callback order, timing or source-only metadata does not conflict with canonical facts; known canonical output disagreements still do.
 - Dimension metadata is reconciled by stable ID; optional display labels are chosen deterministically; contradictory known semantic relationships (e.g. recipe → profession) are conflicts.
 - **Never persist a failed merge.** `CraftHistoryReconciler.Merge` returns `History = null` when it cannot produce an unambiguous combined history.
 - Never merge or sum addon `craftSeries`, `resourcefulnessSets`, `returnedReagents`, or other precomputed rollups. The SavedVariables adapter derives supported rollups from craft observations after reconciliation.
@@ -53,6 +56,8 @@ Use `CraftHistoryValidator` before import and after reconciliation. Dimension la
 A companion can regenerate rollups from **crafts it has actually recorded**. If the addon pruned a craft *before it was ever imported*, aggregate-only evidence cannot reproduce the missing individual observation. Core will not fabricate it.
 
 The separate SavedVariables project will own format-specific migrations, parsing, serialization, and generation of the addon's bounded detailed ledger and historical rollups; Storage will own authoritative OLAP persistence.
+
+The authoritative history object carries callback and request-configuration evidence alongside its craft so persistence and exchange can retain it with the same observation. Analytics and craft-fact equality use only canonical fields. The C04 writer emits original callbacks only when they agree with the canonical output facts; canonical-only multi-output crafts use explicitly marked synthetic loader rows, and an ambiguous quantity without compatible callback evidence is not exportable. Configuration snapshots are restored from attached evidence without promoting them to canonical analytics.
 
 ## Tests
 

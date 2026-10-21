@@ -27,9 +27,8 @@ pruning and orphan collection; paging does not limit retention. Configuration
 summary rows keep context/evidence populations separate even when their keys match.
 Queries can select `contextSource` and `configurationObservation` independently.
 
-Versioning is relative to target `master`: its API is v1 and these additions keep
-that contract version. Its ledger is schema 3; this PR adds final schema 4 directly,
-without preserving migrations for intermediate review-only layouts.
+API version 1 remains stable. PR #43 adds schema 5 over target schema 4;
+supported older persistence schemas migrate without changing API version.
 
 UI and addon consumers use the global `ArtisanLogbookAPI`, not SavedVariables,
 dimension rows, or the private Core addon namespace. The API is loaded before
@@ -131,6 +130,16 @@ retained reagent facts, not proof of no reagent consumption. `request` is absent
 without a correlated submission; `request.allocations` is absent without a
 captured selection. No context, order/customer data, or source is fabricated.
 Request quotes remain separate from observed result measurements.
+Logical attempts add `attemptKind`, `outputs`, optional `lastObservedAt` and
+`outputAmbiguous`. Each detached output has resolved `item`, `quantity`, optional
+`quality`/`itemLevel`, `timestamp`, `measurements`, positive `returns`, optional
+`legacyCraftId` and `quantityAmbiguous`. These are ordered observations, not extra
+attempts. Repeated indistinguishable identities must not be summed as guaranteed
+additional items. `outputQuantity` sums distinct observed outputs only while
+unambiguous, with once-per-attempt coverage; uncertain quantities remain absent.
+Single-item aliases are absent for multiple observations. Inputs/configuration
+belong to the parent, not duplicated children. `CRAFT_COMMITTED` may publish an
+updated existing ID when a sibling arrives; consumers refresh/upsert by ID.
 `hasResourcefulnessProc` is present only when a return outcome was captured;
 `resourcefulnessComplete` is true only when the callback's returned-item list was
 complete and valid. A positive item fact can establish a proc even when the full
@@ -170,7 +179,7 @@ request. A correctly associated primary with a malformed return list can retain
 complete inputs while its outcome remains partial.
 
 Interrupted/replaced requests and transitions away from outstanding nonpersonal
-calls (salvage, enchant, recraft and orders) leave identity
+calls (salvage, enchant, recraft and orders) leave new operation identity
 uncertain. Known stale IDs cannot acquire the new request; unseen IDs in this
 state are unverified/unowned and invalidate pending batch correlation. This guard
 lasts until a new runtime session, not merely until another craft hook. Therefore
@@ -178,6 +187,31 @@ even the actual new craft can lose coverage after an uncertain transition. No
 incorrect output relationship is learned from those callbacks. The ID registry
 survives detail pruning in memory but is not persisted across runtime sessions;
 reload/login ordering with in-flight callbacks remains a live-validation boundary.
+
+Call-backed `CraftSalvage` results can carry recipe identity without a personal
+request or authoritative outcome. Runtime correlation counts distinct operation
+IDs against the submitted batch count; multiple outputs amend one persisted
+attempt without consuming extra positions. Explicit retained attempts are indexed
+by session/operation, supplemented by a 64-ID parent cache after pruning. This
+bounds pruned-parent recovery, not batch size. Eviction retains the existing
+session-long seen-ID rejection, so an evicted ID cannot acquire a new recipe.
+Completing the submitted count retires outstanding salvage state; an unexpected
+complete unseen result before the next submission quarantines future unseen
+operations. Count-based completion assumes one distinct operation ID per counted
+operation. An unseen external result first arriving during a clean new batch
+cannot be distinguished from that batch's own result using the available payload;
+quarantine does not guarantee rejection without an observable uncertain boundary.
+Salvage results do not teach output-to-recipe
+relationships or repair history. See the
+[Recycling evidence and limitations](crafting-observations.md#recycling-build-70448-investigation).
+The first attributable output per operation can carry partial `reagents`
+allocations from the submitted target/schematic quantity and supplied selections.
+They do not set input completeness or matched savings. A target-GUID operation
+quote and independently observed equipment/buffs can populate `configuration`
+with `configurationObservation.scope = "request"`: the batch submission snapshot,
+not a fresh observation of every cast. Cached additional outputs can share that
+configuration but never duplicate the allocations. Missing APIs retain explicit
+unavailable coverage; no historical setup is reconstructed.
 Nonpersonal outstanding context is runtime-only and independent of personal
 requests. Closing or replacing it does not prove all callbacks have arrived.
 Successful purge retains observed IDs but retires every old same-request

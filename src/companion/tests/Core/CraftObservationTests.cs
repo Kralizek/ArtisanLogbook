@@ -12,6 +12,65 @@ public class CraftObservationTests
     private static readonly CharacterIdentity Character = new("project:1:region:3:realm:1309:guid:Player-1309-12345678");
 
     [Test]
+    public void CallbackEvidenceIsSeparateFromCanonicalFactsAndCompatibleVariantsReconcile()
+    {
+        CraftOutputObservation observation = new(new(10, 1, 2), DateTimeOffset.UnixEpoch,
+            new(ConcentrationSpent: 0), [new(20, null, 1)], QuantityAmbiguous: true);
+        CraftObservation first = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
+            Outputs: [new(10, 1, null)], OutputsComplete: false,
+            OutputEvidence: [new("capture-a", [observation, observation], Complete: true)],
+            ConfigurationEvidence: [new("capture-a", 197, "configuration snapshot")]);
+        CraftObservation copy = first with
+        {
+            OutputEvidence = [new("capture-a",
+                [observation with { Returns = [new(20, null, 1)] }, observation with { Returns = [new(20, null, 1)] }],
+                Complete: true)]
+        };
+        Assert.That(first, Is.EqualTo(copy));
+        Assert.That(first.GetHashCode(), Is.EqualTo(copy.GetHashCode()));
+        Assert.That(HistoryValidator.Validate([first]), Is.Empty);
+        Assert.That(HistoryReconciler.Merge([first], [copy]).Observations!.Single().OutputEvidence, Has.Count.EqualTo(1));
+
+        CraftObservation alternate = first with
+        {
+            OutputEvidence = [new("capture-b", [observation with { ObservedAt = DateTimeOffset.UnixEpoch.AddSeconds(1) }], Complete: false)],
+            ConfigurationEvidence = [new("capture-b", 8, "alternate configuration snapshot")]
+        };
+        HistoryMergeResult compatible = HistoryReconciler.Merge([first], [alternate]);
+        Assert.That(compatible.IsSuccessful, Is.True);
+        Assert.That(compatible.Observations!.Single().OutputEvidence, Has.Count.EqualTo(2));
+        Assert.That(compatible.Observations!.Single().ConfigurationEvidence, Has.Count.EqualTo(2));
+        Assert.That(HistoryReconciler.Merge(
+            [first with { Outputs = [new(10, 1, 2)] }],
+            [first with { Outputs = [new(10, 1, 3)] }]).IsSuccessful, Is.False);
+    }
+
+    [Test]
+    public void CompleteOutputFactsRequireKnownQuantities()
+    {
+        CraftObservation craft = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
+            Outputs: [new(10, 1, null)], OutputsComplete: true);
+        Assert.That(HistoryValidator.Validate([craft]).Select(error => error.Field), Does.Contain("OutputsComplete"));
+    }
+
+    [Test]
+    public void UnknownOutputQuantityCanBeEnrichedWithoutInventingZero()
+    {
+        CraftObservation unknown = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,
+            Outputs: [new(10, 1, null)], OutputsComplete: false);
+        CraftObservation observed = unknown with
+        {
+            Outputs = [new(10, 1, 2)],
+            OutputsComplete = null
+        };
+
+        HistoryMergeResult merge = HistoryReconciler.Merge([unknown], [observed]);
+
+        Assert.That(merge.IsSuccessful, Is.True);
+        Assert.That(merge.Observations!.Single().Outputs!.Single().Quantity, Is.EqualTo(2));
+    }
+
+    [Test]
     public void ObservedCollectionsCompareByContentsRatherThanArrayIdentityOrOrder()
     {
         CraftObservation first = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character,

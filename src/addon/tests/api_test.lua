@@ -39,6 +39,24 @@ local function inputEvidence(itemIds, fixed)
   for _, itemId in ipairs(itemIds) do inputs.completeItemIDs[#inputs.completeItemIDs + 1] = { itemID = itemId } end
   return inputs
 end
+test("salvage attempt API exposes detached output observations and one contribution", function()
+  local ledger, api = newLedger()
+  session(ledger, "A", 1)
+  assert(ledger:SubmitSalvage(1231127, 1))
+  local first = assert(ledger:RecordResult({ operationID = 3533599395, itemID = 500, quantity = 1 }))
+  assert(ledger:RecordResult({ operationID = 3533599395, itemID = 501, quantity = 2 }).id == first.id)
+  local craft = assert(api.GetCraft(first.id))
+  assert(craft.attemptKind == "salvage-operation" and #craft.outputs == 2)
+  assert(craft.outputItem == nil and craft.outputQuantity == 3)
+  assert(craft.outputs[1].item.id == 500 and craft.outputs[2].quantity == 2)
+  craft.outputs[1].item.id = 999
+  craft.outputs[2].measurements.concentrationSpent = 999
+  assert(api.GetCraft(first.id).outputs[1].item.id == 500)
+  assert(api.GetCraft(first.id).outputs[2].measurements.concentrationSpent == nil)
+  assert(#api.GetCrafts().crafts == 1)
+  local totals = assert(api.GetRecipeOutcomes(1231127)).totals
+  assert(totals.craftCount == 1 and totals.outputQuantity == 3 and totals.outputQuantityObservedCount == 1)
+end)
 local completeInputs = inputEvidence({ 8, 9 })
 
 local function primaryResult(ledger, result)
@@ -715,7 +733,7 @@ test("direct master migration preserves API v1 and leaves historical configurati
   assert(api.GetCraft(1).configuration == nil and api.GetCraft(1).configurationCoverage == "unavailable")
   local page = assert(api.GetRecipeConfigurations(101))
   assert(page.coverage.configurationObservedCount == 0 and page.coverage.contextObservedCount == 0)
-  assert(api.GetVersion() == 1 and addon.ledger.database.schemaVersion == 4)
+  assert(api.GetVersion() == 1 and addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
   assert(page.configurations[1].configurationCoverage == "unavailable")
 end)
 
