@@ -1,0 +1,3 @@
+[submodule "tools/wow-api"]
+	path = tools/wow-api
+	url = https://github.com/JBurlison/WoWAddonAPIAgents.git
