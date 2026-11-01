@@ -1,0 +1,21 @@
+{
+  "chat.agentSkillsLocations": {
+    "tools/wow-api/skills": true
+  },
+  "workbench.colorCustomizations": {
+    "titleBar.activeBackground": "#754329",
+    "titleBar.activeForeground": "#FFF4E7",
+    "titleBar.inactiveBackground": "#503B30",
+    "titleBar.inactiveForeground": "#C7B4A2",
+    "activityBar.background": "#9A5D37",
+    "activityBar.foreground": "#FFFFFF",
+    "activityBar.inactiveForeground": "#E8C7A0",
+    "activityBarBadge.background": "#E8C7A0",
+    "activityBarBadge.foreground": "#352318",
+    "statusBar.background": "#754329",
+    "statusBar.foreground": "#FFF4E7",
+    "statusBar.debuggingBackground": "#C79561",
+    "statusBar.debuggingForeground": "#352318",
+    "focusBorder": "#C79561"
+  }
+}
