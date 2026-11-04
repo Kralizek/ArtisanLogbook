@@ -58,6 +58,8 @@ local function createRetailAdapter(api, handleEvent, submitCraft, invalidateCraf
   local adapter = { capabilities = capabilities }
   capabilities.flavor = "retail"
   capabilities.secretValueDetection = type(api.issecretvalue) == "function"
+  capabilities.operationInfo = type(api.C_TradeSkillUI) == "table" and
+    type(api.C_TradeSkillUI.GetCraftingOperationInfo) == "function"
 
   local function dispatch(event, ...)
     if type(handleEvent) ~= "function" then return end

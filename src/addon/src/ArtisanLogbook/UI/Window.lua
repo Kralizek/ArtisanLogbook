@@ -231,6 +231,86 @@ function addon.CreateProductionWindow()
     addon.Notify(ok and "Craft history setting updated." or reason)
     settings:Open()
   end)
+  UI.Section(settings, "Maintenance", 0, -184, inner)
+  local repairStatus = UI.Text(settings, 0, -224, inner, 126)
+  repairStatus:SetJustifyH("LEFT")
+  local repairButton
+  local repairAnalysis
+  local function analyzeUnknownRecipes()
+    local ok, analysis, reason = pcall(management.AnalyzeUnknownRecipeRepair)
+    if not ok then
+      repairAnalysis = nil
+      repairStatus:SetText("Recipe analysis failed: " .. tostring(analysis))
+      repairButton:Hide()
+      return
+    end
+    if not analysis then
+      repairAnalysis = nil
+      repairStatus:SetText("Recipe analysis unavailable: " .. tostring(reason))
+      repairButton:Hide()
+      return
+    end
+    repairAnalysis = analysis
+    repairStatus:SetText(string.format(
+      "Unattributed crafts: %d\nUniquely repairable: %d\nAmbiguous: %d\nInsufficient evidence: %d\nMissing output evidence: %d\nUnsupported crafts remain unchanged.",
+      analysis.unattributedCount, analysis.repairableCount, analysis.ambiguousCount,
+      analysis.insufficientEvidenceCount, analysis.missingOutputCount or 0))
+    repairButton:SetShown(analysis.repairableCount > 0)
+  end
+  UI.Button(settings, "Analyze unknown recipes", 0, -364, 190, analyzeUnknownRecipes)
+  repairButton = UI.Button(settings, "Repair unique matches", 202, -364, 178, function()
+    if not repairAnalysis or repairAnalysis.repairableCount < 1 then return end
+    StaticPopup_Show("ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES")
+  end)
+  repairButton:Hide()
+  StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES = {
+    text = "Repair only crafts with a unique, supported recipe match? Ambiguous and unsupported crafts will remain unchanged.",
+    button1 = "Repair",
+    button2 = "Cancel",
+    OnAccept = function()
+      local ok, result, reason = pcall(management.RepairUnknownRecipes)
+      if not ok then
+        addon.Notify("Recipe repair failed: " .. tostring(result))
+      elseif not result then
+        addon.Notify("Recipe repair failed: " .. tostring(reason))
+      else
+        addon.Notify(string.format("Recipe repair completed: %d craft(s) repaired.",
+          result.repairedCount or 0))
+        repairAnalysis = nil
+        analyzeUnknownRecipes()
+      end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+  }
+  UI.Section(settings, "Permanent data deletion", 0, -412, inner)
+  local purgeWarning = UI.Text(settings, 0, -454, inner, 42)
+  purgeWarning:SetText("Purging permanently deletes all Logbook history and learned data. It does not clear Tracer recordings.")
+  purgeWarning:SetJustifyH("LEFT")
+  UI.Button(settings, "Purge Logbook DB", 0, -504, 150, function()
+    StaticPopup_Show("ARTISANLOGBOOK_PURGE_LOGBOOK")
+  end)
+  StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK = {
+    text = "Permanently delete all Artisan Logbook history and learned data? This cannot be undone. Tracer recordings are not affected.",
+    button1 = "Purge",
+    button2 = "Cancel",
+    OnAccept = function()
+      local ok, result, reason = pcall(management.PurgeLogbookDB)
+      if not ok then
+        addon.Notify("Logbook DB purge failed: " .. tostring(result))
+      elseif not result then
+        addon.Notify("Logbook DB purge failed: " .. tostring(reason))
+      else
+        addon.Notify("Logbook database purged.")
+      end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+  }
   function settings:Open()
     local status, reason = management.Status()
     if not status then settingsStatus:SetText(reason or "Unavailable"); return end
@@ -269,6 +349,15 @@ function addon.CreateProductionWindow()
   end
   management.OnUnknownRecipesRepaired = function()
     window:Invalidate()
+    if window:IsShown() then window:Refresh() end
+  end
+  management.OnLogbookPurged = function()
+    window.dataSignature = nil
+    window:Invalidate()
+    repairAnalysis = nil
+    repairStatus:SetText("Analyze unknown recipes to inspect retained crafts.")
+    repairButton:Hide()
+    if window.openCraftId then closeCraft() end
     if window:IsShown() then window:Refresh() end
   end
   UI.RegisterHiddenRecipeCallback(function()

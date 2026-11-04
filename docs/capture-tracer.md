@@ -51,6 +51,22 @@ Mark, paged Export, Diagnostics, page arrows, and confirmed Clear. Closing the
 window does not stop capture. It does not alter the crafting UI or trigger
 crafts. Tracer never reads or changes Core's private ledger.
 
+Diagnostics separates Tracer recording state and its event/hook capabilities
+from Core's runtime capture capabilities, capture health, correlation warnings,
+and cached recipe-output/recovery status. The Core portion comes from the
+detached `ArtisanLogbookAPI.GetDiagnostics()` snapshot. Opening the view does
+not scan retained crafts, discover recipes, or run maintenance analysis.
+Successful Core observations omit `reason` unless an actual explanatory reason
+was returned; rejection details and protected-call errors are preserved.
+
+Production maintenance is available in Artisan Logbook's **Settings** page:
+**Analyze unknown recipes** displays unattributed, uniquely repairable,
+ambiguous, and insufficient-evidence counts. Only uniquely repairable crafts
+can be submitted for confirmed repair. Unsupported and ambiguous crafts remain
+unchanged. **Purge Logbook DB** is a separately confirmed permanent deletion
+of Logbook history and learned data; it does not clear Tracer data. **Clear
+Trace** only clears Tracer recordings and does not affect the Logbook.
+
 When the count or estimated-byte limit is reached, recording stops, preserves
 all existing evidence, and displays an explicit FULL state. Starting again
 requires stopping and clearing the trace; clearing is the only operation that

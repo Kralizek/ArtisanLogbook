@@ -1316,9 +1316,63 @@ function API.GetCapabilities()
   local result = { flavor = capabilities.flavor }
   result.craftResults = capabilities.events.TRADE_SKILL_ITEM_CRAFTED_RESULT == true
   result.personalRequests = result.craftResults and capabilities.hooks.CraftRecipe == true
-  result.reagentAllocations = result.personalRequests and capabilities.quoteHooks ~= nil and
-    capabilities.quoteHooks.GetCraftingOperationInfo == true
+  result.reagentAllocations = result.personalRequests and capabilities.operationInfo == true
   return result
+end
+
+local function copyDiagnosticFields(source, fields)
+  if type(source) ~= "table" then return nil end
+  local copy = {}
+  for _, field in ipairs(fields) do
+    local value = source[field]
+    local kind = type(value)
+    if kind == "string" or kind == "boolean" or
+        (kind == "number" and value == value and value ~= math.huge and value ~= -math.huge) then
+      copy[field] = value
+    end
+  end
+  return copy
+end
+
+function API.GetDiagnostics()
+  local ledger, adapter = addon.ledger, addon.adapter
+  if not ledger or not adapter then return nil, "not-ready" end
+  local capabilities = API.GetCapabilities()
+  local recovery = addon.lastRecoverySummary
+  local analysis = addon.lastRecipeRepairAnalysis
+  return {
+    capabilities = capabilities,
+    captureHealth = {
+      captureError = addon.ledgerCaptureError == true or adapter.capabilities.captureError == true,
+      diagnosticObserverError = addon.diagnosticObserverError == true,
+    },
+    correlation = {
+      operationOwnershipUncertain = ledger.operationOwnershipUncertain == true,
+      requestAmbiguous = ledger.requestAmbiguous == true,
+      ambiguousRecipe = ledger.ambiguousRecipe == true,
+      authoritativeCaptureSuspended = ledger.operationOwnershipUncertain == true or
+        ledger.requestAmbiguous == true or ledger.ambiguousRecipe == true,
+      pendingRecipeId = ledger.pendingRecipeId,
+      pendingRequestId = ledger.pendingRequest and ledger.pendingRequest.id,
+      pendingOrderRequestId = ledger.pendingOrderRequest and ledger.pendingOrderRequest.id,
+      pendingSalvageRecipeId = ledger.pendingSalvage and ledger.pendingSalvage.recipeId,
+    },
+    recipeOutputs = {
+      relationshipCount = ledger.recipeOutputCount or 0,
+      unattributedCraftCount = ledger.unknownRecipeCount or 0,
+      lastAnalysis = copyDiagnosticFields(analysis, {
+        "unattributedCount", "repairableCount", "ambiguousCount",
+        "insufficientEvidenceCount", "missingOutputCount",
+      }),
+      recovery = copyDiagnosticFields(recovery, {
+        "unknownCount", "candidateCount", "verifiedCount", "unavailableCount",
+        "unconfirmedCount", "learnedCount",
+      }),
+      recoveryDiagnostic = addon.lastRecoveryDiagnostic,
+      knowledgeDiagnostic = addon.lastRecipeOutputDiagnostic,
+      maintenanceDiagnostic = addon.lastMaintenanceDiagnostic,
+    },
+  }
 end
 
 function API.RegisterCallback(event, callback)

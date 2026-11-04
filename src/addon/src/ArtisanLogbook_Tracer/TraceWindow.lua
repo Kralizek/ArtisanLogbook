@@ -112,9 +112,26 @@ function addon.CreateTraceWindow()
       "Quote and probe capture disabled.")
   end, 108)
   button("Diagnostics", 296, -72, function()
-    local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
-    local payload = capabilities and addon.Trace.Serialize(capabilities) or tostring(reason)
-    text:SetText("Tracer capabilities\n\n" .. payload)
+    local core, reason
+    if type(ArtisanLogbookAPI) == "table" and type(ArtisanLogbookAPI.GetDiagnostics) == "function" then
+      local ok
+      ok, core, reason = pcall(ArtisanLogbookAPI.GetDiagnostics)
+      if not ok then reason, core = tostring(core), nil end
+    else
+      reason = "Core diagnostics are unavailable."
+    end
+    local coreDiagnostics = core and { available = true, snapshot = core } or
+      { available = false, reason = reason or "Core diagnostics are unavailable." }
+    local payload = addon.Trace.Serialize({
+      tracer = {
+        recording = addon.recorder.recording == true,
+        verbose = addon.verbose == true,
+        events = addon.capabilities.events,
+        hooks = addon.capabilities.hooks,
+      },
+      core = coreDiagnostics,
+    })
+    text:SetText("Tracer and Core diagnostics\n\n" .. payload)
     text:SetCursorPosition(0)
     text:ClearFocus()
     scroll:SetVerticalScroll(0)

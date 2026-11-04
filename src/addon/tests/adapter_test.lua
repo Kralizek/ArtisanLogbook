@@ -2,6 +2,7 @@ local root = arg[1] or "src/ArtisanLogbook_Core"
 local addon = {}
 assert(loadfile(root .. "/Flavors/Registry.lua"))("ArtisanLogbook", addon)
 assert(loadfile(root .. "/Flavors/Retail/Adapter.lua"))("ArtisanLogbook", addon)
+assert(loadfile(root .. "/Core/API.lua"))("ArtisanLogbook", addon)
 local passed = 0
 
 local function test(name, callback)
@@ -38,6 +39,30 @@ test("Retail registers player-only unit events and reports unsupported events", 
   local received = {}
   local adapter = addon.CreateFlavorAdapter(api, function(event, ...)
     received[#received + 1] = { event = event, n = select("#", ...), ... }
+  end)
+
+  test("public capability reports derive from the initialized production adapter", function()
+    local api = environment()
+    api.C_TradeSkillUI.GetCraftingOperationInfo = function() return { concentrationCost = 12 } end
+    local adapter = addon.CreateFlavorAdapter(api, function() end, function() end, function() end)
+    addon.adapter = adapter
+    local capabilities = ArtisanLogbookAPI.GetCapabilities()
+    assert(capabilities.flavor == "retail" and capabilities.craftResults and
+      capabilities.personalRequests and capabilities.reagentAllocations)
+
+    api.C_TradeSkillUI.GetCraftingOperationInfo = nil
+    adapter = addon.CreateFlavorAdapter(api, function() end, function() end, function() end)
+    addon.adapter = adapter
+    capabilities = ArtisanLogbookAPI.GetCapabilities()
+    assert(capabilities.flavor == "retail" and capabilities.personalRequests and
+      not capabilities.reagentAllocations)
+
+    api.WOW_PROJECT_ID = 999
+    adapter = addon.CreateFlavorAdapter(api, function() end, function() end, function() end)
+    addon.adapter = adapter
+    capabilities = ArtisanLogbookAPI.GetCapabilities()
+    assert(capabilities.flavor == "other" and not capabilities.craftResults and
+      not capabilities.personalRequests and not capabilities.reagentAllocations)
   end)
   assert(adapter.capabilities.flavor == "retail")
   assert(frame.units.UNIT_SPELLCAST_SUCCEEDED == "player")

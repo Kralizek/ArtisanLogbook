@@ -926,7 +926,11 @@ retains its retained-detail-only semantics.
 `{ flavor = "...", craftResults = boolean, personalRequests = boolean, reagentAllocations = boolean }`.
 `craftResults` reports successful registration of the authoritative result event;
 `personalRequests` additionally requires the personal `CraftRecipe` hook;
-`reagentAllocations` additionally requires the personal operation quote hook.
+`reagentAllocations` additionally requires the production adapter's
+`GetCraftingOperationInfo` query capability. This is a runtime capability for the
+selected reagent allocation/quote capture path, not proof that any individual
+craft supplied a readable quote or complete allocation measurements. Tracer's
+diagnostic hooks do not affect these values.
 Unsupported adapters report false for these capture paths. True means the path
 is available, **not** that every craft will contain every related measurement or
 that every event's semantics have been verified. Optional fields still depend on
@@ -937,6 +941,30 @@ Capabilities describe the current adapter, not the session stored with a craft.
 Historical facets/measurements are never hidden or reclassified when runtime
 capabilities differ. Internal tracer hook maps and events are not included in
 the public capability fields or the `"CRAFT_COMMITTED"` event.
+
+### Core diagnostic snapshot
+
+`GetDiagnostics()` returns a detached, read-only snapshot of current Core
+capture capabilities and health, correlation state, and cached recipe-output
+recovery/repair diagnostics. It returns `nil, "not-ready"` before Core's ledger
+and adapter are ready. The snapshot contains scalar values and copied nested
+tables only; callers may modify it without changing Core state. It does not scan
+the retained ledger, discover recipes, or run repair analysis. Analysis requiring
+a ledger scan is available as the explicit
+`ArtisanLogbookManagement.AnalyzeUnknownRecipeRepair()` operation.
+
+Capture observation `accepted` fields describe whether the Core operation was
+accepted. `reason` is present only when Core supplied an explanatory rejection
+or a protected call failed; successful calls without a reason omit it.
+`correlationReason` carries an observed correlation decision when available.
+Neither field is synthesized from successful return values or Lua object
+identities.
+
+Production UI Settings includes an explicit read-only unknown-recipe analysis,
+confirmed repair of uniquely supported matches, and a separately confirmed
+permanent database purge. Ambiguous or unsupported crafts are never repaired
+automatically by this control. Purging does not clear Tracer data; Clear Trace
+does not affect the Logbook.
 
 ### Optional diagnostic observer
 

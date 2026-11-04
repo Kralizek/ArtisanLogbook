@@ -24,7 +24,7 @@ local function newLedger(options)
   addon.ledger.onCraftCommitted = addon.PublishCraftCommitted
   addon.adapter = { capabilities = { flavor = "retail",
     events = { TRADE_SKILL_ITEM_CRAFTED_RESULT = true },
-    hooks = { CraftRecipe = true }, quoteHooks = { GetCraftingOperationInfo = true } } }
+    hooks = { CraftRecipe = true }, operationInfo = true } }
   return addon.ledger, ArtisanLogbookAPI, clock, addon
 end
 
@@ -1064,13 +1064,22 @@ test("capabilities describe runtime support, not retained history", function()
   local _, api, _, addon = fixture()
   equal(api.GetCapabilities(), { flavor = "retail", craftResults = true,
     personalRequests = true, reagentAllocations = true })
+  addon.adapter.capabilities.operationInfo = false
+  assert(api.GetCapabilities().reagentAllocations == false)
+  addon.adapter.capabilities.operationInfo = true
   local history = api.GetFacets()
-  addon.adapter.capabilities = { flavor = "classic", events = {}, hooks = {}, measurements = {} }
+  addon.adapter.capabilities = { flavor = "classic", events = {}, hooks = {}, measurements = {},
+    operationInfo = false }
   local capabilities = api.GetCapabilities()
   equal(capabilities, { flavor = "classic", craftResults = false, personalRequests = false, reagentAllocations = false })
   capabilities.flavor = "Changed"
   equal(api.GetFacets(), history)
   assert(api.GetCapabilities().flavor == "classic" and api.GetCraft(1).hasIngenuityProc == false)
+  local adapter = addon.adapter
+  addon.adapter = nil
+  local diagnostics, reason = api.GetDiagnostics()
+  errorIs("not-ready", diagnostics, reason)
+  addon.adapter = adapter
 end)
 
 test("callbacks isolate failures and mutations, deliver one projection per commit, and unsubscribe", function()

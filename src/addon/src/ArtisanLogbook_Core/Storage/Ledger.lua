@@ -2021,12 +2021,16 @@ end
 function Ledger:ObserveAttempt(recipeId, observation)
   local pending = self.pendingRequest or self.pendingOrderRequest
   local request = pending and self.requestById[pending.id]
-  if not request or request.recipeId ~= recipeId or self.operationOwnershipUncertain or
-      self.requestAmbiguous or self.ambiguousRecipe or not validateObservation(observation) then return end
+  if not request then return false, "no-pending-request" end
+  if request.recipeId ~= recipeId then return false, "recipe-mismatch" end
+  if self.operationOwnershipUncertain then return false, "ownership-uncertain" end
+  if self.requestAmbiguous or self.ambiguousRecipe then return false, "ambiguous-context" end
+  if not validateObservation(observation) then return false, "invalid-observation" end
   if self.attemptObservation and self.attemptObservation.requestId == request.id and
-      self.attemptObservation.remaining == pending.remaining then return end
+      self.attemptObservation.remaining == pending.remaining then return true end
   self.attemptObservation = { requestId = request.id, remaining = pending.remaining, observation = copyValue(observation) }
   self.configurationChanged = nil
+  return true
 end
 
 function Ledger:ConfigurationChanged(observation)

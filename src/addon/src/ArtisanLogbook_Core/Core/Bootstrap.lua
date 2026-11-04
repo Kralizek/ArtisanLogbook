@@ -4,6 +4,10 @@ local loginStartedAt = GetServerTime()
 local professionRecipeListSignature
 local professionRecipeListSettled = false
 
+local function diagnosticMessage(value)
+  return type(value) == "string" and value or nil
+end
+
 function addon.ObserveDiagnostic(event, context)
   local observer = addon.diagnosticObserver
   if type(observer) ~= "function" then return end
@@ -283,7 +287,7 @@ function addon.HandleRetailEvent(event, ...)
   if addon.ledger then
     if event == "TRADE_SKILL_CRAFT_BEGIN" then
       local recipeId = select(1, ...)
-      local ok = pcall(addon.ledger.BeginCraft, addon.ledger, recipeId)
+      local ok, err = pcall(addon.ledger.BeginCraft, addon.ledger, recipeId)
       if not ok then addon.ledgerCaptureError = true end
       addon.ObserveDiagnostic("craft-begin", {
         recipeId = recipeId,
@@ -291,18 +295,19 @@ function addon.HandleRetailEvent(event, ...)
         correlationReason = addon.ledger.pendingSalvage and "pending-salvage" or
           addon.ledger.ambiguousRecipe and "ambiguous-begin" or
           addon.ledger.operationOwnershipUncertain and "ownership-uncertain" or nil,
+        reason = not ok and diagnosticMessage(err) or nil,
       })
       tryEnrich(addon.EnrichRecipe, select(1, ...))
     elseif event == "CRAFT_ATTEMPT_OBSERVATION" then
       local recipeId, observation = ...
-      local previous = addon.ledger.attemptObservation
-      local ok = pcall(addon.ledger.ObserveAttempt, addon.ledger, recipeId, observation)
+      local ok, accepted, reason = pcall(addon.ledger.ObserveAttempt, addon.ledger, recipeId, observation)
       if not ok then addon.ledgerCaptureError = true end
       local attempt = addon.ledger.attemptObservation
       addon.ObserveDiagnostic("attempt-observation", {
         recipeId = recipeId,
-        accepted = ok and attempt ~= previous,
-        requestId = attempt and attempt.requestId,
+        accepted = ok and accepted == true,
+        requestId = ok and accepted == true and attempt and attempt.requestId or nil,
+        reason = ok and diagnosticMessage(reason) or not ok and diagnosticMessage(accepted) or nil,
       })
     elseif event == "CRAFT_CONFIGURATION_CHECK" then
       local ok = pcall(addon.ledger.ConfigurationChanged, addon.ledger, select(1, ...))
@@ -351,7 +356,8 @@ function addon.HandleRetailEvent(event, ...)
         craftId = type(fact) == "table" and fact.id or nil,
         recipeId = type(fact) == "table" and fact.recipeId or nil,
         correlationReason = type(fact) == "table" and fact.requestCorrelationReason or nil,
-        reason = ok and reason or tostring(fact),
+        attribution = type(fact) == "table" and (fact.recipeId and "attributed" or "unknown") or nil,
+        reason = ok and diagnosticMessage(reason) or not ok and diagnosticMessage(fact) or nil,
       })
       if fact and fact.firstCraftReward then
         tryEnrich(addon.EnrichItem, fact.itemId)
@@ -382,7 +388,7 @@ function addon.SubmitCraft(recipeId, count, concentration, quote, selections, in
   if addon.ledger then
     local ok, request, reason = pcall(addon.ledger.SubmitCraft, addon.ledger,
       recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible, observation)
-    if not ok then reason, request = tostring(request), nil end
+    if not ok then reason, request = diagnosticMessage(request), nil end
     if not ok or not request then
       addon.ledgerCaptureError = true
       addon.ledger:InvalidateCraft()
@@ -393,7 +399,7 @@ function addon.SubmitCraft(recipeId, count, concentration, quote, selections, in
       count = count,
       accepted = ok and request ~= nil,
       requestId = type(request) == "table" and request.id or nil,
-      reason = reason,
+      reason = diagnosticMessage(reason),
     })
     if request then
       tryEnrich(addon.EnrichRecipe, recipeId)
@@ -421,11 +427,19 @@ function addon.InvalidateCraft(operationKind, observation, recipeId, count, capt
       recipeId = recipeId,
       count = count,
       accepted = ok and submitted == true,
-      reason = ok and reason or tostring(submitted),
+      reason = ok and diagnosticMessage(reason) or not ok and diagnosticMessage(submitted) or
+        submitted == false and diagnosticMessage(reason) or nil,
     })
   else
-    addon.ledger:InvalidateCraft(operationKind, observation)
-    addon.ObserveDiagnostic("craft-submission", { operation = operationKind, accepted = true })
+    local ok, err = pcall(addon.ledger.InvalidateCraft, addon.ledger, operationKind, observation)
+    if not ok then addon.ledgerCaptureError = true end
+    addon.ObserveDiagnostic("craft-submission", {
+      operation = operationKind,
+      recipeId = recipeId,
+      count = count,
+      accepted = ok,
+      reason = not ok and diagnosticMessage(err) or nil,
+    })
   end
 end
 

@@ -7,6 +7,16 @@ function addon.Notify(message)
   DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook Tracer: " .. tostring(message))
 end
 
+local function coreDiagnostics()
+  if type(ArtisanLogbookAPI) ~= "table" or type(ArtisanLogbookAPI.GetDiagnostics) ~= "function" then
+    return { available = false, reason = "Core diagnostics are unavailable." }
+  end
+  local ok, snapshot, reason = pcall(ArtisanLogbookAPI.GetDiagnostics)
+  if not ok then return { available = false, reason = "Core diagnostics failed: " .. tostring(snapshot) } end
+  if not snapshot then return { available = false, reason = reason or "Core diagnostics are unavailable." } end
+  return { available = true, snapshot = snapshot }
+end
+
 function addon.Emit(event, ...)
   if not addon.recorder or not addon.recorder.recording then return false end
   local ok, captured, reason = pcall(addon.recorder.Capture, addon.recorder, event, ...)
@@ -44,6 +54,7 @@ function addon.Start(verbose)
     loginUptime = loginUptime,
     verbose = addon.verbose == true,
     capabilities = addon.capabilities,
+    coreDiagnostics = coreDiagnostics(),
   })
   addon.recorder.verbose = addon.verbose == true
   addon.Notify(ok and "Recording raw events." or reason)
