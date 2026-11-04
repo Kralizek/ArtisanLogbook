@@ -6,6 +6,14 @@ function API.GetVersion()
   return 1
 end
 
+function API.SetDiagnosticObserver(observer)
+  if observer ~= nil and type(observer) ~= "function" then
+    return nil, "invalid-callback"
+  end
+  addon.diagnosticObserver = observer
+  return true
+end
+
 local facets = { "characters", "realms", "expansions", "professions", "recipes" }
 local filterFields = { time = true, characters = true, realms = true, expansions = true,
   professions = true, recipes = true, craftType = true, isRecraft = true, configuration = true,

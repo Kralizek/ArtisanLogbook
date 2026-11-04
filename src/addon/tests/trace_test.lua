@@ -1,7 +1,7 @@
-local root = arg[1] or "src/ArtisanLogbook"
+local root = arg[1] or "src/ArtisanLogbook_Tracer"
 local testsRoot = arg[2] or "tests"
 local addon = {}
-assert(loadfile(root .. "/Capture/Trace.lua"))("ArtisanLogbook", addon)
+assert(loadfile(root .. "/Capture/Trace.lua"))("ArtisanLogbook_Tracer", addon)
 local Trace = addon.Trace
 local elapsed = 0
 local clock = {
@@ -54,45 +54,50 @@ test("callbacks remain separate and snapshots do not mutate", function()
   end
 end)
 
-test("capacity lets the current trace finish but blocks a new one until cleared", function()
+test("hard record limit stops capture without discarding evidence and restarts after clear", function()
   local original = Trace.maxRecords
-  Trace.maxRecords = 2
+  Trace.maxRecords = 3
   local recorder = assert(Trace.New(nil, clock))
   assert(recorder:Start({}))
-  assert(recorder:Capture("ONE") and recorder:Capture("TWO"))
-  assert(recorder.recording and #recorder.database.records == 3)
-  recorder:Stop()
+  assert(recorder:Capture("ONE") and recorder:Capture("TWO") == true)
+  assert(not recorder.recording and #recorder.database.records == Trace.maxRecords)
+  local accepted, reason = recorder:Capture("THREE")
+  assert(not accepted and reason and #recorder.database.records == Trace.maxRecords)
+  assert(recorder.database.stoppedReason == "capacity")
   local ok, reason = recorder:Start({})
   assert(not ok and reason and not recorder.recording)
-  assert(#recorder.database.records == 4 and recorder.database.stoppedReason == "capacity")
-  assert(recorder.database.nextSequence == 5)
+  assert(#recorder.database.records == Trace.maxRecords)
+  assert(recorder.database.nextSequence == Trace.maxRecords + 1)
   local reloaded = assert(Trace.New(recorder.database, clock))
-  assert(not reloaded:Start({}) and #reloaded.database.records == 4)
+  assert(not reloaded:Start({}) and #reloaded.database.records == Trace.maxRecords)
   assert(recorder:Clear() and recorder:Start({}))
   Trace.maxRecords = original
 end)
 
-test("previous record limit can resume after reload without clearing evidence", function()
+test("existing evidence below record limit can resume after reload", function()
   assert(Trace.maxRecords == 10000)
   local records = {}
-  for sequence = 1, 2000 do
-    records[sequence] = { sequence = sequence, event = "QUOTE_PROBE", payload = "{}" }
+  for sequence = 1, 2 do
+    records[sequence] = { sequence = sequence, event = "NORMAL_EVENT", payload = "{}" }
   end
   local database = { traceSchemaVersion = Trace.schemaVersion,
-    traceExportVersion = Trace.exportVersion, nextSequence = 2001,
-    records = records, bytes = 1958110, stoppedReason = "capacity" }
+    traceExportVersion = Trace.exportVersion, nextSequence = 3,
+    records = records, bytes = 1024 }
   local recorder = assert(Trace.New(database, clock))
   assert(not recorder.recording and recorder:Start({ character = "mock" }))
-  assert(database.stoppedReason == nil and #database.records == 2001)
-  assert(database.records[1] == records[1] and database.records[2001].sequence == 2001)
+  assert(database.stoppedReason == nil and #database.records == 3)
+  assert(database.records[1] == records[1] and database.records[3].sequence == 3)
 end)
 
-test("recording continues past the old total byte limit", function()
+test("estimated byte limit stops recording and preserves prior records", function()
   local recorder = assert(Trace.New(nil, clock))
-  recorder.database.bytes = 12 * 1024 * 1024 - 100
-  assert(recorder:Start({}) and recorder:Capture("EVENT"))
-  assert(recorder.recording and #recorder.database.records == 2)
-  assert(recorder.database.bytes > 12 * 1024 * 1024)
+  assert(recorder:Start({}))
+  recorder.database.bytes = Trace.maxBytes - 100
+  local count = #recorder.database.records
+  local accepted, reason = recorder:Capture("EVENT")
+  assert(not accepted and reason and not recorder.recording)
+  assert(#recorder.database.records == count and recorder.database.bytes == Trace.maxBytes - 100)
+  assert(recorder.database.stoppedReason == "capacity-bytes")
 end)
 
 test("large payloads still count toward the estimated byte total", function()
@@ -185,7 +190,11 @@ test("sanitized Retail build 69933 evidence replays without identity inference",
     for _, observedEvent in ipairs(scenario.events) do
       recorder:Capture(observedEvent.name, unpack(observedEvent.arguments, 1, observedEvent.arguments.n))
     end
-    local records = decode(recorder:Export(2, #scenario.events)).records
+    local records = {}
+    for first = 2, #scenario.events + 1, Trace.maxExportRecords do
+      local page = decode(recorder:Export(first, Trace.maxExportRecords)).records
+      for _, record in ipairs(page) do records[#records + 1] = record end
+    end
     assert(#records == #scenario.events)
     for index, observedEvent in ipairs(scenario.events) do
       assert(records[index].event == observedEvent.name)

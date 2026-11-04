@@ -1,4 +1,4 @@
-local root = arg[1] or "src/ArtisanLogbook"
+local root = arg[1] or "src/ArtisanLogbook_Core"
 local testsRoot = arg[2] or "tests"
 local passed = 0
 local function test(name, callback)

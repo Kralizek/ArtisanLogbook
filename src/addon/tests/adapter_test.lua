@@ -1,4 +1,4 @@
-local root = arg[1] or "src/ArtisanLogbook"
+local root = arg[1] or "src/ArtisanLogbook_Core"
 local addon = {}
 assert(loadfile(root .. "/Flavors/Registry.lua"))("ArtisanLogbook", addon)
 assert(loadfile(root .. "/Flavors/Retail/Adapter.lua"))("ArtisanLogbook", addon)
@@ -48,7 +48,7 @@ test("Retail registers player-only unit events and reports unsupported events", 
   assert(received[1].n == 4 and received[1][2] == "Cast-1")
 end)
 
-test("post-hooks preserve batch arguments and do not replace craft functions", function()
+test("production hooks leave diagnostic call recording to Tracer", function()
   local api, _, hooks = environment()
   local original = api.C_TradeSkillUI.CraftRecipe
   local received = {}
@@ -58,114 +58,23 @@ test("post-hooks preserve batch arguments and do not replace craft functions", f
   hooks.CraftRecipe(456, 3, { { itemID = 123, quantity = 2 } }, nil, nil, true)
   hooks.CraftEnchant(789, 1, nil, nil, false)
   assert(api.C_TradeSkillUI.CraftRecipe == original)
-  assert(received[1].event == "CALL_POST:C_TradeSkillUI.CraftRecipe")
-  assert(received[1].n == 6 and received[1][2] == 3 and received[1][6] == true)
-  assert(received[2].event == "CALL_POST:C_TradeSkillUI.CraftEnchant")
+  assert(#received == 0)
+  assert(adapter.capabilities.quoteHooks == nil)
+  assert(hooks.GetCraftingOperationInfo == nil)
   assert(adapter.capabilities.hooks.CraftSalvage == false)
 end)
 
-test("opt-in post-call probes preserve allocations, quality and operation quote separately from results", function()
+test("Core adapter leaves diagnostic calls and quote probes to Tracer", function()
   local api, frame, hooks = environment()
-  local received, queries = {}, {}
-  api.C_TradeSkillUI.GetItemReagentQualityByItemInfo = function(itemID)
-    return itemID == 101 and 2 or nil
-  end
-  api.C_TradeSkillUI.GetCraftingOperationInfo = function(...)
-    queries[#queries + 1] = { n = select("#", ...), ... }
-    return { baseSkill = 120, baseDifficulty = 200, concentrationCost = 80, craftingQuality = 3 }
-  end
-  local recording = false
+  local received = {}
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function() return { baseSkill = 120 } end
   addon.CreateFlavorAdapter(api, function(event, ...)
     received[#received + 1] = { event = event, ... }
-  end, function() return recording end)
-  local reagents = { { reagent = { itemID = 101 }, dataSlotIndex = 1, quantity = 3 },
-    { reagent = { itemID = 102 }, dataSlotIndex = 1, quantity = 2 } }
-  hooks.CraftRecipe(456, 2, reagents, nil, nil, true)
-  assert(#received == 1 and #queries == 0)
-  recording = true
-  hooks.CraftRecipe(456, 2, reagents, nil, nil, true)
+  end)
+  hooks.CraftRecipe(456, 2, {}, nil, nil, true)
   frame.onEvent(frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9 })
-  assert(received[2].event == "CALL_POST:C_TradeSkillUI.CraftRecipe")
-  assert(received[2][3] == reagents and received[2][2] == 2)
-  assert(received[3].event == "REQUEST_PROBE:C_TradeSkillUI.CraftRecipe")
-  assert(received[3][1].operation == "ok" and received[3][1].info.concentrationCost == 80)
-  assert(received[3][1].reagentQuality[1].quality == 2)
-  assert(received[3][1].reagentQuality[2].quality == nil)
-  assert(queries[1].n == 4 and queries[1][3] == nil and queries[1][4] == true)
-  assert(received[4].event == "TRADE_SKILL_ITEM_CRAFTED_RESULT")
-end)
-
-test("order queries and recraft gaps remain diagnostic, without guessed values", function()
-  local api, _, hooks = environment()
-  local received = {}
-  api.C_TradeSkillUI.RecraftRecipeForOrder = function() end
-  api.C_CraftingOrders = { GetClaimedOrder = function()
-    return {
-      orderID = 77,
-      customerName = "other-player",
-      customerNotes = "secret",
-      minQuality = 3,
-      tipAmount = 500,
-      crafterGuid = "Player-1",
-      reagents = {
-        {
-          source = 1,
-          slotIndex = 2,
-          isBasicReagent = true,
-          reagentInfo = { dataSlotIndex = 5, quantity = 3, reagent = { itemID = 190311 } },
-        },
-      },
-    }
-  end }
-  api.C_TradeSkillUI.GetCraftingOperationInfoForOrder = function(recipe, reagents, order, concentrate)
-    assert(recipe == 456 and order == 77 and concentrate == false)
-    return { concentrationCost = 0 }
-  end
-  addon.CreateFlavorAdapter(api, function(event, ...)
-    received[#received + 1] = { event = event, ... }
-  end, function() return true end)
-  hooks.CraftRecipe(456, 1, {}, nil, 77, false)
-  assert(received[2][1].operation == "ok" and received[2][1].info.concentrationCost == 0)
-  assert(received[2][1].claimedOrderStatus == "matched")
-  assert(received[2][1].claimedOrder.minQuality == 3)
-  assert(received[2][1].claimedOrder.tipAmount == 500)
-  assert(received[2][1].claimedOrder.customerName == nil and received[2][1].claimedOrder.customerNotes == nil)
-  assert(received[2][1].claimedOrder.crafterGuid == nil)
-  assert(received[2][1].claimedOrder.reagents[1].source == 1)
-  assert(received[2][1].claimedOrder.reagents[1].reagentInfo.reagent.itemID == 190311)
-  hooks.CraftRecipe(456, 1, {}, nil, nil, nil)
-  assert(received[4][1].operation == "not-queried" and received[4][1].info == nil)
-  hooks.RecraftRecipeForOrder(77, "private-guid", {}, nil, true)
-  assert(received[6][1].operation == "no-recipe-id-in-call")
-  assert(received[6][1].claimedOrderStatus == "matched")
-end)
-
-test("UI quote arguments are observed separately before batch request and results", function()
-  local api, frame, hooks = environment()
-  api.C_TradeSkillUI.GetCraftingOperationInfo = function()
-    return { baseSkill = 122, concentrationCost = 60 }
-  end
-  local received = {}
-  local adapter = addon.CreateFlavorAdapter(api, function(event, ...)
-    received[#received + 1] = { event = event, n = select("#", ...), ... }
-  end, function() return true end)
-  assert(adapter.capabilities.quoteHooks.GetCraftingOperationInfo)
-  assert(adapter.capabilities.quoteHooks.GetCraftingOperationInfoForOrder == false)
-  local reagents = { { reagent = { itemID = 101 }, dataSlotIndex = 2, quantity = 4 } }
-  hooks.GetCraftingOperationInfo(456, reagents, nil, true)
-  hooks.CraftRecipe(456, 2, reagents, nil, nil, true)
-  frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
-  frame.onEvent(frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 9 })
-  frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
-  frame.onEvent(frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 10 })
-  assert(received[1].event == "QUOTE_CALL_POST:C_TradeSkillUI.GetCraftingOperationInfo")
-  assert(received[1].n == 4 and received[1][2] == reagents and received[1][4] == true)
-  assert(received[2].event == "QUOTE_PROBE:C_TradeSkillUI.GetCraftingOperationInfo")
-  assert(received[2][1].status == "ok" and received[2][1].info.baseSkill == 122)
-  assert(received[3].event == "CALL_POST:C_TradeSkillUI.CraftRecipe")
-  assert(received[4].event == "REQUEST_PROBE:C_TradeSkillUI.CraftRecipe")
-  assert(received[5].event == "TRADE_SKILL_CRAFT_BEGIN" and received[6].event == "TRADE_SKILL_ITEM_CRAFTED_RESULT")
-  assert(received[8][1].operationID == 10)
+  assert(#received == 1 and received[1].event == "TRADE_SKILL_ITEM_CRAFTED_RESULT")
+  assert(hooks.GetCraftingOperationInfo == nil and hooks.CraftRecipe ~= nil)
 end)
 
 test("personal and order submissions freeze selections with separate savings eligibility", function()
@@ -176,13 +85,12 @@ test("personal and order submissions freeze selections with separate savings eli
     assert(reagents[1].reagent.itemID == 101)
     return { concentrationCost = 81, baseSkill = 120 }
   end
-  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+  addon.CreateFlavorAdapter(api, function() end,
     function(recipe, count, concentration, quote, selections, inputs, savingsEligible)
       submissions[#submissions + 1] = { recipe, count, concentration, quote, selections, inputs, savingsEligible }
     end, function(kind) invalidations = invalidations + 1; kinds[invalidations] = kind end)
   local selected = { { dataSlotIndex = 2, quantity = 3, reagent = { itemID = 101 } },
     { dataSlotIndex = 2, quantity = 0, reagent = { itemID = 102 } } }
-  hooks.GetCraftingOperationInfo(456, selected, nil, true)
   hooks.CraftRecipe(456, 3, selected, nil, nil, true)
   selected[1].quantity = 99
   assert(#submissions == 1 and submissions[1][2] == 3)
@@ -201,7 +109,7 @@ test("submitted context distinguishes orders without leaking unrelated claimed m
   local order = { orderID = 77, orderType = 3, isRecraft = true, customerName = "not-recorded" }
   api.C_CraftingOrders = { GetClaimedOrder = function() return order end }
   local observed
-  addon.CreateFlavorAdapter(api, function() end, nil,
+  addon.CreateFlavorAdapter(api, function() end,
     function(_, _, _, _, _, _, _, observation) observed = observation end)
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
   assert(observed.context.kind == "personal" and observed.context.isRecraft == false)
@@ -246,7 +154,7 @@ test("configuration keeps exact localized quote stats and equipment instances wi
     if spellId == 432306 then return { spellId = spellId, applications = 1, expirationTime = 9999 } end
   end }
   local observed
-  addon.CreateFlavorAdapter(api, function() end, nil,
+  addon.CreateFlavorAdapter(api, function() end,
     function(_, _, _, _, _, _, _, observation) observed = observation.configuration end)
   hooks.CraftRecipe(456, 2, {}, nil, nil, true)
   assert(observed.scope == "request" and observed.useConcentration == true)
@@ -284,7 +192,7 @@ test("finishing observations consolidate selections and distinguish empty from a
   }
   api.C_TradeSkillUI.GetRecipeSchematic = function() return { recipeID = 456, reagentSlotSchematics = slots } end
   local captured
-  addon.CreateFlavorAdapter(api, function() end, nil,
+  addon.CreateFlavorAdapter(api, function() end,
     function(_, _, _, _, _, _, _, observation) captured = observation.configuration end)
   hooks.CraftRecipe(456, 1, { { dataSlotIndex = 1, reagent = { itemID = 222 }, quantity = 2 },
     { dataSlotIndex = 2, reagent = { itemID = 222 }, quantity = 1 } }, nil, nil, false)
@@ -316,7 +224,7 @@ test("begin observations refresh equipment and buffs but never sample unrelated 
   addon.CreateFlavorAdapter(api, function(event, recipeId, observation)
     if event == "CRAFT_ATTEMPT_OBSERVATION" then observations[#observations + 1] = observation end
     if event == "CRAFT_CONFIGURATION_CHECK" then checks[#checks + 1] = recipeId end
-  end, nil, function() end)
+  end, function() end, function() end)
   hooks.CraftRecipe(456, 3, {}, nil, nil, false)
   frame.onEvent(frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
   assert(#observations == 1 and #observations[1].configuration.buffs == 1 and
@@ -360,7 +268,7 @@ test("schematic snapshots preserve required basic quality families without assig
     end
     if configure then configure(api) end
     local submitted
-    addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    addon.CreateFlavorAdapter(api, function() end,
       function(_, _, _, _, _, inputs) submitted = inputs end, function() end)
     hooks.CraftRecipe(456, 1, selections or {}, 3, nil, false)
     return submitted, levels
@@ -462,7 +370,7 @@ test("fixed and modified slot indices are separate while customer-provided choic
   api.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
     return { recipeID = recipeId, reagentSlotSchematics = slots }
   end
-  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+  addon.CreateFlavorAdapter(api, function() end,
     function(_, _, _, _, _, snapshot) inputs = snapshot end, function() end)
   local selections = { { dataSlotIndex = 1, quantity = 5, reagent = { itemID = 240991 } } }
   for _, ordered in ipairs({ { fixed, modified }, { modified, fixed } }) do
@@ -503,7 +411,7 @@ test("automatic crafting captures ModifiedReagent basic quality families like Li
     return { recipeID = recipeId, reagentSlotSchematics = lightsPotentialSlots }
   end
   local submitted
-  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+  addon.CreateFlavorAdapter(api, function() end,
     function(_, _, _, _, _, inputs) submitted = inputs end, function() end)
 
   -- Automatic crafting: only the selected finishing reagent is in selections
@@ -522,124 +430,46 @@ test("automatic crafting captures ModifiedReagent basic quality families like Li
   assert(submitted == nil)
 end)
 
-test("empty and invalid quotes cannot resurrect removed submitted selections", function()
+test("Core queries production quotes only for the submitted craft", function()
   local api, _, hooks = environment()
-  local submissions = {}
-  api.C_TradeSkillUI.GetCraftingOperationInfo = function()
+  local submissions, quoteCalls = {}, 0
+  api.C_TradeSkillUI.GetCraftingOperationInfo = function(recipe, selections, order, concentration)
+    quoteCalls = quoteCalls + 1
+    assert(recipe == 456 and order == nil and concentration == false)
+    assert(selections[1].reagent.itemID == 102)
     return { concentrationCost = 80 }
   end
-  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+  addon.CreateFlavorAdapter(api, function() end,
     function(recipe, count, concentration, quote, selections)
       submissions[#submissions + 1] = { recipe = recipe, quote = quote, selections = selections }
     end)
-  local first = { { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 101 } } }
   local newer = { { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 102 } } }
-  hooks.GetCraftingOperationInfo(456, first, nil, false)
-  hooks.GetCraftingOperationInfo(456, {}, nil, false)
-  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 0,
-    reagent = { itemID = 103 } } }, nil, false)
-  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 0, quantity = 1,
-    reagent = { itemID = 106 } } }, nil, false)
-  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 1,
-    reagent = { itemID = 0 } } }, nil, false)
-  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 4,
-    reagent = { itemID = 104 } } }, 77, false)
-  hooks.GetCraftingOperationInfo(456, { { quantity = 1, reagent = { itemID = 105 } } }, nil, false)
-  hooks.GetCraftingOperationInfo(789, newer, nil, false)
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
-  assert(#submissions[1].selections == 0)
-  hooks.GetCraftingOperationInfo(456, first, nil, false)
-  hooks.GetCraftingOperationInfo(456, newer, nil, false)
+  assert(quoteCalls == 1 and #submissions == 1 and submissions[1].selections[1] == nil)
   hooks.CraftRecipe(456, 1, newer, nil, nil, false)
+  assert(quoteCalls == 2 and submissions[2].quote.concentrationCost == 80)
   assert(submissions[2].selections[1].reagent.itemID == 102)
+  assert(hooks.GetCraftingOperationInfo == nil)
 end)
 
-test("submissions never inherit quotes from another level, concentration or prior batch", function()
-  local api, frame, hooks = environment()
-  local submissions = {}
-  api.C_TradeSkillUI.GetCraftingOperationInfo = function() return {} end
-  addon.CreateFlavorAdapter(api, function() end, function() return false end,
-    function(recipe, count, concentration, quote, selections)
-      submissions[#submissions + 1] = { recipe = recipe, concentration = concentration,
-        selections = selections }
-    end)
-  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 1,
-    reagent = { itemID = 101 } } }, nil, false)
-  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 2,
-    reagent = { itemID = 102 } } }, nil, true)
-  hooks.GetCraftingOperationInfo(789, { { dataSlotIndex = 1, quantity = 3,
-    reagent = { itemID = 103 } } }, nil, false)
-  hooks.CraftRecipe(456, 1, {}, nil, nil, true)
-  hooks.CraftRecipe(456, 1, {}, nil, nil, true)
-  hooks.CraftRecipe(789, 1, {}, nil, nil, false)
-  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
-  for index = 1, 4 do assert(#submissions[index].selections == 0) end
-  hooks.GetCraftingOperationInfo(456, {}, nil, false)
-  hooks.CraftRecipe(456, 1, { { dataSlotIndex = 1, quantity = 7,
-    reagent = { itemID = 999 } } }, nil, nil, false)
-  assert(submissions[5].selections[1].reagent.itemID == 999)
-  hooks.GetCraftingOperationInfo(456, { { dataSlotIndex = 1, quantity = 2,
-    reagent = { itemID = 101 } } }, nil, false)
-  frame.onEvent(frame, "TRADE_SKILL_CLOSE")
-  hooks.CraftRecipe(456, 1, {}, nil, nil, false)
-  assert(#submissions[6].selections == 0)
-end)
-
-test("quote probe suppresses its own nested hook and stays idle while paused", function()
-  local api, _, hooks = environment()
-  local received, calls = {}, 0
-  api.C_TradeSkillUI.GetCraftingOperationInfo = function(...)
-    calls = calls + 1
-    hooks.GetCraftingOperationInfo(...)
-    return nil
-  end
-  local recording = false
-  addon.CreateFlavorAdapter(api, function(event, ...)
-    received[#received + 1] = { event = event, ... }
-  end, function() return recording end)
-  hooks.GetCraftingOperationInfo(456, {}, nil, false)
-  assert(calls == 0 and #received == 0)
-  recording = true
-  hooks.GetCraftingOperationInfo(456, {}, nil, false)
-  assert(calls == 1 and #received == 2)
-  assert(received[2][1].status == "nil" and received[2][1].info == nil)
-end)
-
-test("query failures do not prevent later craft results", function()
+test("production quote query failures do not prevent later craft results", function()
   local api, frame, hooks = environment()
   local received = {}
   api.C_TradeSkillUI.GetCraftingOperationInfo = function() error("unavailable") end
-  addon.CreateFlavorAdapter(api, function(event, ...)
+  local adapter = addon.CreateFlavorAdapter(api, function(event, ...)
     received[#received + 1] = { event = event, ... }
-  end, function() return true end)
+  end, function() end)
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
   frame.onEvent(frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 22 })
-  assert(received[2][1].operation == "error" and received[2][1].info == nil)
-  assert(received[3].event == "TRADE_SKILL_ITEM_CRAFTED_RESULT")
-end)
-
-test("target-dependent quotes stay unavailable and quote hook errors stay contained", function()
-  local api, _, hooks = environment()
-  local received = {}
-  api.C_TradeSkillUI.CraftSalvage = function() end
-  api.C_TradeSkillUI.CraftEnchant = function() end
-  api.C_TradeSkillUI.GetCraftingOperationInfo = function() error("should not query target-dependent quote") end
-  addon.CreateFlavorAdapter(api, function(event, ...)
-    received[#received + 1] = { event = event, ... }
-  end, function() return true end)
-  hooks.CraftEnchant(456, 1, { { quantity = 2 } }, "target", false)
-  assert(received[2][1].operation == "unavailable")
-  hooks.CraftSalvage(456, 1, "target", { { quantity = 1 } }, false)
-  assert(received[4][1].operation == "unavailable")
-  hooks.GetCraftingOperationInfo(456, {}, nil, false)
-  assert(received[6][1].status == "error")
+  assert(adapter.capabilities.captureError ~= true)
+  assert(#received == 1 and received[1].event == "TRADE_SKILL_ITEM_CRAFTED_RESULT")
 end)
 
 test("salvage submits recipe and batch identity even with diagnostic recording off", function()
   local api, _, hooks = environment()
   api.C_TradeSkillUI.CraftSalvage = function() end
   local submitted = {}
-  local adapter = addon.CreateFlavorAdapter(api, function() end, function() return false end, nil,
+  local adapter = addon.CreateFlavorAdapter(api, function() end, nil,
     function(kind, observation, recipeId, count)
       submitted[#submitted + 1] = { kind, observation, recipeId, count }
     end)
@@ -669,7 +499,7 @@ test("salvage captures submitted target inputs and target-GUID configuration wit
     return { recipeID = recipeId, baseSkill = 100, bonusStats = {} }
   end
   local capture
-  addon.CreateFlavorAdapter(api, function() end, function() return false end, nil,
+  addon.CreateFlavorAdapter(api, function() end, nil,
     function(_, _, _, _, snapshot) capture = snapshot end)
   local selections = { { reagent = { itemID = 700 }, quantity = 1, dataSlotIndex = 2 } }
   hooks.CraftSalvage(1229930, 184, target, selections, false)
@@ -752,11 +582,9 @@ test("review F1-F3 reconcile submitted slots through ledger API reload and repai
     local clock = { wall = function() return 1800000000 end }
     core.ledger = assert(core.Ledger.New(nil, clock))
     assert(core.ledger:CreateSession({}))
-    addon.CreateFlavorAdapter(api, function() end, function() return false end,
+    addon.CreateFlavorAdapter(api, function() end,
       function(...) return assert(core.ledger:SubmitCraft(...)) end,
       function(kind) core.ledger:InvalidateCraft(kind) end)
-    hooks.GetCraftingOperationInfo(456, quoted or {}, nil, false)
-    hooks.GetCraftingOperationInfo(456, {}, nil, false)
     hooks.CraftRecipe(456, count or 1, submitted, 3, nil, false)
     for index = 1, count or 1 do
       assert(core.ledger:RecordResult({ operationID = index, itemID = 900, quantity = 1,
@@ -850,7 +678,7 @@ test("review F4 unknown cleared failed and malformed primary contexts fail close
   ledger:InvalidateCraft("CraftEnchant")
   assert(ledger:RecordResult(result).outcomeSource == "native")
   local api, _, hooks = environment()
-  addon.CreateFlavorAdapter(api, function() end, function() return false end,
+  addon.CreateFlavorAdapter(api, function() end,
     function() error("failed submission") end, function(kind) ledger:InvalidateCraft(kind) end)
   hooks.CraftRecipe(456, 1, {}, nil, nil, false)
   assert(ledger:RecordResult(result).outcomeSource == "unverified")

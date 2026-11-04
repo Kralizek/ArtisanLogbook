@@ -6,6 +6,8 @@ addon.Trace = Trace
 Trace.schemaVersion = 2
 Trace.exportVersion = 2
 Trace.maxRecords = 10000
+Trace.maxBytes = 12 * 1024 * 1024
+Trace.maxExportRecords = 10
 Trace.maxPayloadBytes = 16384
 
 function Trace.Serialize(value, isSecret)
@@ -87,6 +89,14 @@ function Trace.Serialize(value, isSecret)
 end
 
 function Trace.New(database, clock, isSecret)
+  local function isNonnegativeFinite(value)
+    return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge and value >= 0
+  end
+  local function stopForCapacity(recorder, reason)
+    recorder.recording = false
+    database.stoppedReason = reason
+  end
+
   if database == nil then
     database = {
       traceSchemaVersion = Trace.schemaVersion,
@@ -107,7 +117,9 @@ function Trace.New(database, clock, isSecret)
   end
   if type(database) ~= "table" or database.traceSchemaVersion ~= Trace.schemaVersion or
       database.traceExportVersion ~= Trace.exportVersion or type(database.records) ~= "table" or
-      type(database.nextSequence) ~= "number" or type(database.bytes) ~= "number" then
+      type(database.nextSequence) ~= "number" or database.nextSequence < 1 or
+      database.nextSequence % 1 ~= 0 or not isNonnegativeFinite(database.bytes) or
+      database.bytes % 1 ~= 0 then
     return nil, "Unsupported or invalid trace database; existing data was left untouched."
   end
 
@@ -115,7 +127,11 @@ function Trace.New(database, clock, isSecret)
 
   function recorder:Capture(event, ...)
     if not self.recording then
-      return false
+      return false, database.stoppedReason
+    end
+    if #database.records >= Trace.maxRecords then
+      stopForCapacity(self, "capacity")
+      return false, "Trace record limit reached; export and clear before recording more."
     end
     local arguments = { n = select("#", ...), ... }
     local payload, warnings = Trace.Serialize(arguments, isSecret)
@@ -130,9 +146,16 @@ function Trace.New(database, clock, isSecret)
       record.warnings = warnings
     end
     local byteCount = #payload + #event + #warnings + 512
+    if database.bytes + byteCount > Trace.maxBytes then
+      stopForCapacity(self, "capacity-bytes")
+      return false, "Trace byte limit reached; export and clear before recording more."
+    end
     database.records[#database.records + 1] = record
     database.bytes = database.bytes + byteCount
     database.nextSequence = database.nextSequence + 1
+    if #database.records >= Trace.maxRecords then
+      stopForCapacity(self, "capacity")
+    end
     return true
   end
 
@@ -141,17 +164,22 @@ function Trace.New(database, clock, isSecret)
       return false, "Already recording."
     end
     if #database.records >= Trace.maxRecords then
-      database.stoppedReason = "capacity"
-      return false, "Trace capacity reached; export and clear before recording more."
+      stopForCapacity(self, "capacity")
+      return false, "Trace record limit reached; export and clear before recording more."
+    end
+    if database.bytes >= Trace.maxBytes then
+      stopForCapacity(self, "capacity-bytes")
+      return false, "Trace byte limit reached; export and clear before recording more."
     end
     self.recording = true
+    database.stoppedReason = nil
     local captured, reason = self:Capture("TRACE_START", metadata)
-    if captured then database.stoppedReason = nil end
+    if not captured then self.recording = false end
     return captured, reason
   end
 
   function recorder:Stop()
-    self:Capture("TRACE_STOP")
+    if self.recording then self:Capture("TRACE_STOP") end
     self.recording = false
   end
 
@@ -166,6 +194,13 @@ function Trace.New(database, clock, isSecret)
   end
 
   function recorder:Export(first, count)
+    first = first or 1
+    count = count or Trace.maxExportRecords
+    if type(first) ~= "number" or first ~= first or first < 1 or first % 1 ~= 0 or
+        type(count) ~= "number" or count ~= count or count < 0 or count % 1 ~= 0 then
+      return nil, "Invalid trace export page."
+    end
+    count = math.min(count, Trace.maxExportRecords)
     local lines = {
       "return {",
       "traceSchemaVersion=" .. Trace.schemaVersion .. ",",
@@ -175,6 +210,12 @@ function Trace.New(database, clock, isSecret)
     }
     for index = first, math.min(first + count - 1, #database.records) do
       local record = database.records[index]
+      if type(record) ~= "table" or type(record.sequence) ~= "number" or
+          type(record.timestamp) ~= "number" or type(record.elapsed) ~= "number" or
+          type(record.event) ~= "string" or type(record.payload) ~= "string" or
+          (record.warnings ~= nil and type(record.warnings) ~= "string") then
+        return nil, "Invalid trace record at index " .. index .. "."
+      end
       lines[#lines + 1] = string.format(
         "{sequence=%d,timestamp=%.17g,elapsed=%.17g,event=%q,arguments=%s,warnings=%s},",
         record.sequence, record.timestamp, record.elapsed, record.event, record.payload,

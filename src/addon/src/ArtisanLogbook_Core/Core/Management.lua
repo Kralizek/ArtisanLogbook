@@ -18,6 +18,7 @@ function management.Status()
     addonVersion = session and session.addonVersion,
     wowBuild = session and session.wowBuild,
     captureError = addon.ledgerCaptureError == true,
+    diagnosticObserverError = addon.diagnosticObserverError == true,
     operationOwnershipUncertain = ledger.operationOwnershipUncertain == true,
     authoritativeCaptureSuspended = ledger.operationOwnershipUncertain == true or
       ledger.requestAmbiguous == true or ledger.ambiguousRecipe == true,
