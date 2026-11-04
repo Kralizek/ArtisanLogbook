@@ -796,6 +796,18 @@ do
   assert(analysis.repairableCount == 0 and analysis.insufficientEvidenceCount == 1)
   assert(tracer.Trace.Serialize(manual.ledger.database) == beforeManual)
   assert(manual.recorder == nil and not manual.ledgerError and #notices == noticeCount)
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId, isRecraft)
+    queries = queries + 1
+    assert(recipeId == 1236472 and isRecraft == false)
+    return { recipeID = recipeId, outputItemID = 243807 }
+  end
+  local discovery = assert(environment.ArtisanLogbookManagement.DiscoverRecipeOutputs())
+  assert(queries == 1 and discovery.candidateCount == 1 and discovery.verifiedCount == 1 and
+    discovery.learnedCount == 1)
+  assert(manual.ledger.database.recipeOutputs[1236472][243807])
+  assert(manual.ledger.craftById[1].recipeId == nil and manual.ledger.unknownRecipeCount == 1)
+  analysis = assert(environment.ArtisanLogbookManagement.AnalyzeUnknownRecipeRepair())
+  assert(analysis.repairableCount == 1 and manual.ledger.craftById[1].recipeId == nil)
   print("PASS Core repair analysis is read-only and Tracer-independent")
 
   noticeCount = #notices
@@ -1049,14 +1061,19 @@ do
   assert(tracer.Trace.Serialize(database) == beforeAnalysis and actualAnalysis.repairableCount == 0)
 
   local originalAnalyze = management.AnalyzeUnknownRecipeRepair
+  local originalDiscover = management.DiscoverRecipeOutputs
   local originalRepair = management.RepairUnknownRecipes
   local originalPurge = management.PurgeLogbookDB
   local analysis = { unattributedCount = 3, repairableCount = 1, ambiguousCount = 1,
     insufficientEvidenceCount = 1, missingOutputCount = 0 }
-  local analysisCalls, repairCalls, purgeCalls = 0, 0, 0
+  local analysisCalls, discoveryCalls, repairCalls, purgeCalls = 0, 0, 0, 0
   management.AnalyzeUnknownRecipeRepair = function()
     analysisCalls = analysisCalls + 1
     return analysis
+  end
+  management.DiscoverRecipeOutputs = function()
+    discoveryCalls = discoveryCalls + 1
+    return { candidateCount = 2, verifiedCount = 1, learnedCount = 1 }
   end
   management.RepairUnknownRecipes = function()
     repairCalls = repairCalls + 1
@@ -1093,6 +1110,32 @@ do
   assert(analysisText and analysisText:find("Uniquely repairable: 1", 1, true) and
     analysisText:find("Ambiguous: 1", 1, true) and
     analysisText:find("Insufficient evidence: 1", 1, true))
+  clickSettings("Discover recipe outputs")
+  assert(discoveryCalls == 1 and analysisCalls == 2)
+  local discoveryText
+  for _, frame in ipairs(frames) do
+    if frame.parent == uiWindow.pages.Settings and
+        frame:GetText():find("Discovery: 2 candidate", 1, true) then discoveryText = frame:GetText() end
+  end
+  assert(discoveryText and discoveryText:find("Uniquely repairable: 1", 1, true))
+  management.DiscoverRecipeOutputs = function()
+    discoveryCalls = discoveryCalls + 1
+    return nil, "injected discovery failure"
+  end
+  clickSettings("Discover recipe outputs")
+  local discoveryFailure
+  for _, frame in ipairs(frames) do
+    if frame.parent == uiWindow.pages.Settings and
+        frame:GetText():find("injected discovery failure", 1, true) then
+      discoveryFailure = frame:GetText()
+    end
+  end
+  assert(discoveryCalls == 2 and analysisCalls == 2 and discoveryFailure)
+  management.DiscoverRecipeOutputs = function()
+    discoveryCalls = discoveryCalls + 1
+    return { candidateCount = 2, verifiedCount = 1, learnedCount = 1 }
+  end
+  clickSettings("Analyze unknown recipes")
   clickSettings("Repair unique matches")
   assert(environment.popup == "ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES" and repairCalls == 0)
   environment.popup = nil
@@ -1147,6 +1190,7 @@ do
   assert(tracer.recorder.database == traceDatabase and #traceDatabase.records == traceCount)
 
   management.AnalyzeUnknownRecipeRepair = originalAnalyze
+  management.DiscoverRecipeOutputs = originalDiscover
   management.RepairUnknownRecipes = originalRepair
   management.PurgeLogbookDB = originalPurge
   uiWindow:Activate("Overview")

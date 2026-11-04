@@ -86,6 +86,21 @@ function management.AnalyzeUnknownRecipeRepair()
   return analysis
 end
 
+function management.DiscoverRecipeOutputs()
+  if not addon.ledger then return nil, addon.ledgerError or "not-ready" end
+  local ok, summary, reason = pcall(addon.RecoverUnknownRecipeOutputs, true)
+  if not ok then
+    addon.lastRecoveryDiagnostic = "recipe-output discovery success=false error=" .. tostring(summary)
+    return nil, tostring(summary)
+  end
+  if not summary then
+    addon.lastRecoveryDiagnostic = "recipe-output discovery success=false reason=" .. tostring(reason)
+    return nil, reason or "recipe-output discovery unavailable"
+  end
+  ArtisanLogbookDB = addon.ledger.database
+  return summary
+end
+
 local function performUnknownRecipeRepair(mode, outputFilter)
   local ledger = addon.ledger
   if not ledger then return nil, addon.ledgerError or "not-ready" end

@@ -952,6 +952,11 @@ tables only; callers may modify it without changing Core state. It does not scan
 the retained ledger, discover recipes, or run repair analysis. Analysis requiring
 a ledger scan is available as the explicit
 `ArtisanLogbookManagement.AnalyzeUnknownRecipeRepair()` operation.
+Recipe/output metadata discovery is a separate explicit
+`ArtisanLogbookManagement.DiscoverRecipeOutputs()` operation. It uses Core's
+existing best-effort recovery queries and may add verified relationships to
+Core's durable knowledge; it defers repair so callers can inspect refreshed
+analysis and confirm any uniquely supported repair separately.
 
 Capture observation `accepted` fields describe whether the Core operation was
 accepted. `reason` is present only when Core supplied an explanatory rejection
@@ -960,11 +965,13 @@ or a protected call failed; successful calls without a reason omit it.
 Neither field is synthesized from successful return values or Lua object
 identities.
 
-Production UI Settings includes an explicit read-only unknown-recipe analysis,
-confirmed repair of uniquely supported matches, and a separately confirmed
-permanent database purge. Ambiguous or unsupported crafts are never repaired
-automatically by this control. Purging does not clear Tracer data; Clear Trace
-does not affect the Logbook.
+Production UI Settings separates read-only unknown-recipe analysis from
+explicit recipe-output discovery. Discovery records verified relationships
+without repairing crafts and refreshes the analysis. It also offers confirmed
+repair of uniquely supported matches and a separately confirmed permanent
+database purge. Ambiguous or unsupported crafts are not repaired by these
+controls. Purging does not clear Tracer data; Clear Trace does not affect the
+Logbook.
 
 ### Optional diagnostic observer
 

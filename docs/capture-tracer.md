@@ -60,10 +60,12 @@ Successful Core observations omit `reason` unless an actual explanatory reason
 was returned; rejection details and protected-call errors are preserved.
 
 Production maintenance is available in Artisan Logbook's **Settings** page:
-**Analyze unknown recipes** displays unattributed, uniquely repairable,
-ambiguous, and insufficient-evidence counts. Only uniquely repairable crafts
-can be submitted for confirmed repair. Unsupported and ambiguous crafts remain
-unchanged. **Purge Logbook DB** is a separately confirmed permanent deletion
+**Analyze unknown recipes** is a read-only check of currently known evidence.
+**Discover recipe outputs** explicitly queries available recipe metadata for
+matching retained unknown outputs, records verified relationships without
+repairing crafts, and refreshes the analysis. Only uniquely repairable crafts
+can then be submitted for confirmed repair. Unsupported and ambiguous crafts
+remain unchanged. **Purge Logbook DB** is a separately confirmed permanent deletion
 of Logbook history and learned data; it does not clear Tracer data. **Clear
 Trace** only clears Tracer recordings and does not affect the Logbook.
 

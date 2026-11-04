@@ -236,29 +236,46 @@ function addon.CreateProductionWindow()
   repairStatus:SetJustifyH("LEFT")
   local repairButton
   local repairAnalysis
-  local function analyzeUnknownRecipes()
+  local function analyzeUnknownRecipes(discovery)
     local ok, analysis, reason = pcall(management.AnalyzeUnknownRecipeRepair)
     if not ok then
       repairAnalysis = nil
-      repairStatus:SetText("Recipe analysis failed: " .. tostring(analysis))
+      repairStatus:SetText((discovery and "Discovery completed, but " or "") ..
+        "recipe analysis failed: " .. tostring(analysis))
       repairButton:Hide()
       return
     end
     if not analysis then
       repairAnalysis = nil
-      repairStatus:SetText("Recipe analysis unavailable: " .. tostring(reason))
+      repairStatus:SetText((discovery and "Discovery completed, but " or "") ..
+        "recipe analysis unavailable: " .. tostring(reason))
       repairButton:Hide()
       return
     end
     repairAnalysis = analysis
     repairStatus:SetText(string.format(
-      "Unattributed crafts: %d\nUniquely repairable: %d\nAmbiguous: %d\nInsufficient evidence: %d\nMissing output evidence: %d\nUnsupported crafts remain unchanged.",
+      "%sUnattributed crafts: %d\nUniquely repairable: %d\nAmbiguous: %d\nInsufficient evidence: %d\nMissing output evidence: %d\nUnsupported crafts remain unchanged.",
+      discovery and string.format("Discovery: %d candidate(s), %d verified, %d relationships learned.\n",
+        discovery.candidateCount, discovery.verifiedCount, discovery.learnedCount) or "",
       analysis.unattributedCount, analysis.repairableCount, analysis.ambiguousCount,
       analysis.insufficientEvidenceCount, analysis.missingOutputCount or 0))
     repairButton:SetShown(analysis.repairableCount > 0)
   end
-  UI.Button(settings, "Analyze unknown recipes", 0, -364, 190, analyzeUnknownRecipes)
-  repairButton = UI.Button(settings, "Repair unique matches", 202, -364, 178, function()
+  UI.Button(settings, "Analyze unknown recipes", 0, -364, 190, function()
+    analyzeUnknownRecipes()
+  end)
+  UI.Button(settings, "Discover recipe outputs", 202, -364, 178, function()
+    local ok, discovery, reason = pcall(management.DiscoverRecipeOutputs)
+    if not ok or not discovery then
+      repairAnalysis = nil
+      repairButton:Hide()
+      repairStatus:SetText("Recipe output discovery failed: " ..
+        tostring(ok and reason or discovery))
+      return
+    end
+    analyzeUnknownRecipes(discovery)
+  end)
+  repairButton = UI.Button(settings, "Repair unique matches", 0, -400, 178, function()
     if not repairAnalysis or repairAnalysis.repairableCount < 1 then return end
     StaticPopup_Show("ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES")
   end)
@@ -285,11 +302,11 @@ function addon.CreateProductionWindow()
     hideOnEscape = true,
     preferredIndex = 3,
   }
-  UI.Section(settings, "Permanent data deletion", 0, -412, inner)
-  local purgeWarning = UI.Text(settings, 0, -454, inner, 42)
+  UI.Section(settings, "Permanent data deletion", 0, -440, inner)
+  local purgeWarning = UI.Text(settings, 0, -482, inner, 42)
   purgeWarning:SetText("Purging permanently deletes all Logbook history and learned data. It does not clear Tracer recordings.")
   purgeWarning:SetJustifyH("LEFT")
-  UI.Button(settings, "Purge Logbook DB", 0, -504, 150, function()
+  UI.Button(settings, "Purge Logbook DB", 0, -532, 150, function()
     StaticPopup_Show("ARTISANLOGBOOK_PURGE_LOGBOOK")
   end)
   StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK = {

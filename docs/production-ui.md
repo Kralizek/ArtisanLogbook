@@ -114,7 +114,7 @@ existing current-entry highlight without replacing the primary selection.
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
 | Reagent | First-class identity page with filters, summary, Overview, Used in Recipes and Craft History tabs. Ignore classification is synchronized with catalogue and Recipe reagent checkboxes. |
-| Settings | Craft-history count, addon version, and Keep craft history (days). Saving applies pruning at the next startup. |
+| Settings | Craft-history count, addon version, and Keep craft history (days). Saving applies pruning at the next startup. Read-only unknown-recipe analysis is separate from explicit recipe-output discovery; discovery stores verified relationships and refreshes the analysis without repairing crafts. Unique matches require confirmation before repair. Purge Logbook DB is separately confirmed and does not clear Tracer data. |
 
 All entity pages follow Header, Filters, Summary, Tabs. Headers and filters stay
 fixed; lists scroll inside bounded regions. Recipe Statistics has a bounded local
