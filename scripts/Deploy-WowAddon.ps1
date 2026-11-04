@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Both", "UI", "Core")]
+    [ValidateSet("Both", "UI", "Core", "Tracer")]
     [string]$Addon = "Both",
 
     [string]$WowPath
@@ -228,8 +228,9 @@ $wowRoot = Resolve-WowPath $WowPath
 $addonsDirectory = Join-Path $wowRoot "_retail_\Interface\AddOns"
 
 $archivePrefix = switch ($Addon) {
-    "UI"   { "ArtisanLogbook" }
-    "Core" { "ArtisanLogbook_Core" }
+    "UI"     { "ArtisanLogbook" }
+    "Core"   { "ArtisanLogbook_Core" }
+    "Tracer" { "ArtisanLogbook_Tracer" }
     default { "ArtisanLogbook-Bundle" }
 }
 $release = Find-ReleasePackage -Sha $sha -ArchivePrefix $archivePrefix
@@ -285,8 +286,9 @@ try {
         Write-Host "Downloading CI artifact from run $runId..."
         Invoke-Gh run download $runId --repo $Repository --name $ArtifactName --dir $temp
         $archiveName = switch ($Addon) {
-            "UI"   { "ArtisanLogbook.zip" }
-            "Core" { "ArtisanLogbook_Core.zip" }
+            "UI"     { "ArtisanLogbook.zip" }
+            "Core"   { "ArtisanLogbook_Core.zip" }
+            "Tracer" { "ArtisanLogbook_Tracer.zip" }
             default { "ArtisanLogbook-Bundle.zip" }
         }
         $archive = Join-Path $temp $archiveName
@@ -299,9 +301,10 @@ try {
     Expand-Archive -Path $archive -DestinationPath $expanded -Force
 
     $directories = switch ($Addon) {
-        "UI"   { @("ArtisanLogbook") }
-        "Core" { @("ArtisanLogbook_Core") }
-        default { @("ArtisanLogbook_Core", "ArtisanLogbook") }
+        "UI"     { @("ArtisanLogbook") }
+        "Core"   { @("ArtisanLogbook_Core") }
+        "Tracer" { @("ArtisanLogbook_Tracer") }
+        default  { @("ArtisanLogbook_Core", "ArtisanLogbook", "ArtisanLogbook_Tracer") }
     }
 
     $interfaces = @()
@@ -323,7 +326,7 @@ try {
     }
 
     if (@($interfaces | Select-Object -Unique).Count -ne 1) {
-        throw "The UI and Core packages target different WoW interfaces."
+        throw "The selected addon packages target different WoW interfaces."
     }
     Write-Host "Validated WoW interface $($interfaces[0])."
 

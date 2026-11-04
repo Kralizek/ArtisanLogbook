@@ -935,8 +935,26 @@ ownership remain unsupported in this slice.
 
 Capabilities describe the current adapter, not the session stored with a craft.
 Historical facets/measurements are never hidden or reclassified when runtime
-capabilities differ. Internal tracer events/hook maps and diagnostic errors are
-not public capability fields or public callback events.
+capabilities differ. Internal tracer hook maps and events are not included in
+the public capability fields or the `"CRAFT_COMMITTED"` event.
+
+### Optional diagnostic observer
+
+`SetDiagnosticObserver(callback)` installs one optional Core observation
+callback; pass `nil` to remove it. It returns `true` when updated, or
+`nil, "invalid-callback"` for a non-function value. A callback receives
+`(event, context)` for
+`"craft-begin"`, `"attempt-observation"`, `"craft-result"`, and
+`"craft-submission"` decisions. `context` is a new table of primitive values
+only; event-specific IDs, accepted/rejected state, reasons, operation type and
+counts may be absent when unavailable. It never exposes a ledger table or
+controls capture, correlation, or persistence. This is a narrow diagnostic
+interface, not a general event bus.
+
+Observer errors are isolated from production capture and disable that observer.
+`ArtisanLogbookManagement.Status().diagnosticObserverError` reports that a
+failure occurred. Keep observers short and non-yielding; they may be called on
+the capture path.
 
 ### Callbacks
 

@@ -31,7 +31,10 @@ jobs:
         shell: bash
         run: |
           version="0.0.0-dev-$(git rev-parse --short=7 HEAD)"
-          for toc in src/addon/src/ArtisanLogbook/ArtisanLogbook.toc src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc; do
+          for toc in \
+            src/addon/src/ArtisanLogbook/ArtisanLogbook.toc \
+            src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc \
+            src/addon/src/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc; do
             test "$(grep -c '^## Version:' "$toc")" -eq 1
             sed -i "s/^## Version: .*/## Version: $version/" "$toc"
             grep -Fx "## Version: $version" "$toc"
