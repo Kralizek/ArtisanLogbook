@@ -7,7 +7,11 @@ asset_present() {
   gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
     grep -Fxq "$1"
 }
-toc_paths=(src/addon/src/ArtisanLogbook/ArtisanLogbook.toc src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc)
+toc_paths=(
+  src/addon/src/ArtisanLogbook/ArtisanLogbook.toc
+  src/addon/src/ArtisanLogbook_Core/ArtisanLogbook_Core.toc
+  src/addon/src/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc
+)
 
 case "${1:-}" in
   require-master)
@@ -57,7 +61,7 @@ case "${1:-}" in
     bundle="authoritative/$ASSET"
     [[ -s "$bundle" ]] || die "Missing bundle $ASSET"
     unzip -tq "$bundle"
-    for addon in ArtisanLogbook ArtisanLogbook_Core; do
+    for addon in ArtisanLogbook ArtisanLogbook_Core ArtisanLogbook_Tracer; do
       unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## X-Release-Tag: $TAG"
       unzip -p "$bundle" "$addon/$addon.toc" | grep -Fx "## Interface: $INTERFACE"
     done

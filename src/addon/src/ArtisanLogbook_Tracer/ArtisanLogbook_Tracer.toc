@@ -1,0 +1,12 @@
+## Title: Artisan Logbook Tracer
+## Notes: Optional diagnostic capture and inspection.
+## Version: 0.0.0-dev
+## X-Release-Tag: dev
+## DefaultState: disabled
+## RequiredDeps: ArtisanLogbook_Core
+## SavedVariables: ArtisanLogbookTraceDB
+
+Capture/Trace.lua
+Capture/Probes.lua
+TraceWindow.lua
+Bootstrap.lua

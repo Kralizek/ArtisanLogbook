@@ -18,6 +18,7 @@ function management.Status()
     addonVersion = session and session.addonVersion,
     wowBuild = session and session.wowBuild,
     captureError = addon.ledgerCaptureError == true,
+    diagnosticObserverError = addon.diagnosticObserverError == true,
     operationOwnershipUncertain = ledger.operationOwnershipUncertain == true,
     authoritativeCaptureSuspended = ledger.operationOwnershipUncertain == true or
       ledger.requestAmbiguous == true or ledger.ambiguousRecipe == true,
@@ -72,22 +73,32 @@ end
 
 function management.AnalyzeUnknownRecipeRepair()
   if not addon.ledger then return nil, addon.ledgerError or "not-ready" end
-  local recoveryOk, recovery = pcall(addon.RecoverUnknownRecipeOutputs, true)
-  if not recoveryOk or not recovery then
-    addon.lastRecoveryDiagnostic = "unknown-recipe discovery manual unavailable"
-    recovery = nil
-  end
   local analysis, reason = addon.ledger:AnalyzeUnknownRecipeRepair()
   if not analysis then
     addon.lastMaintenanceDiagnostic = "unknown-recipe-repair analysis success=false"
     return nil, reason
   end
+  addon.lastRecipeRepairAnalysis = analysis
   addon.lastMaintenanceDiagnostic = string.format(
     "unknown-recipe-repair analysis unattributed=%d repairable=%d ambiguous=%d insufficient=%d missing-output=%d",
     analysis.unattributedCount, analysis.repairableCount, analysis.ambiguousCount,
     analysis.insufficientEvidenceCount, analysis.missingOutputCount)
-  analysis.recovery = recovery
   return analysis
+end
+
+function management.DiscoverRecipeOutputs()
+  if not addon.ledger then return nil, addon.ledgerError or "not-ready" end
+  local ok, summary, reason = pcall(addon.RecoverUnknownRecipeOutputs, true)
+  if not ok then
+    addon.lastRecoveryDiagnostic = "recipe-output discovery success=false error=" .. tostring(summary)
+    return nil, tostring(summary)
+  end
+  if not summary then
+    addon.lastRecoveryDiagnostic = "recipe-output discovery success=false reason=" .. tostring(reason)
+    return nil, reason or "recipe-output discovery unavailable"
+  end
+  ArtisanLogbookDB = addon.ledger.database
+  return summary
 end
 
 local function performUnknownRecipeRepair(mode, outputFilter)
@@ -97,10 +108,12 @@ local function performUnknownRecipeRepair(mode, outputFilter)
   if mode == "automatic" and unknownCount == 0 then
     addon.lastMaintenanceDiagnostic =
       "unknown-recipe-repair automatic unknown=0 repairable=0 repaired=0 ambiguous=0 insufficient=0 success=true"
-    return { repairedCount = 0, analysis = {
+    local analysis = {
       unattributedCount = 0, repairableCount = 0, ambiguousCount = 0,
       insufficientEvidenceCount = 0, missingOutputCount = 0,
-    } }
+    }
+    addon.lastRecipeRepairAnalysis = analysis
+    return { repairedCount = 0, analysis = analysis }
   end
 
   local analysis, reason = ledger:AnalyzeUnknownRecipeRepair(outputFilter)
@@ -111,6 +124,7 @@ local function performUnknownRecipeRepair(mode, outputFilter)
     return nil, reason
   end
   local result = { analysis = analysis, repairedCount = 0 }
+  addon.lastRecipeRepairAnalysis = analysis
   if analysis.repairableCount > 0 then
     addon.lastMaintenanceDiagnostic = string.format(
       "unknown-recipe-repair %s started unknown=%d repairable=%d",
@@ -185,9 +199,17 @@ function addon.PurgeLogbookDB()
     ArtisanLogbookDB = addon.ledger.database
     addon.ledgerCaptureError = nil
     addon.ledgerError = nil
+    addon.lastRecipeRepairAnalysis = nil
+    if type(management.OnLogbookPurged) == "function" then
+      pcall(management.OnLogbookPurged)
+    end
   else
     reason = "Logbook DB purge failed: " .. tostring(reason or "ledger initialization unavailable")
     addon.ledgerError = reason
   end
   return ok, reason
+end
+
+function management.PurgeLogbookDB()
+  return addon.PurgeLogbookDB()
 end

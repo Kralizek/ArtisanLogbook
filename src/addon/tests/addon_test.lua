@@ -221,9 +221,13 @@ api.RegisterCallback("CRAFT_COMMITTED", function(craft) committed[#committed + 1
 lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "OtherAddon")
 assert(addon.recorder == nil)
 lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Core")
-assert(addon.recorder and not addon.recorder.recording)
-assert(environment.ArtisanLogbookTraceDB == addon.recorder.database)
+assert(addon.recorder == nil and addon.window == nil and environment.SLASH_ARTISANLOGBOOKTRACE1 == nil)
+assert(environment.ArtisanLogbookTraceDB == nil)
 assert(addon.ledger and environment.ArtisanLogbookDB == addon.ledger.database)
+api.SetDiagnosticObserver(function() error("diagnostic callback failure") end)
+assert(pcall(addon.ObserveDiagnostic, "callback-failure", { accepted = true }))
+assert(addon.diagnosticObserver == nil and addon.diagnosticObserverError)
+assert(environment.ArtisanLogbookManagement.Status().diagnosticObserverError)
 assert(addon.ledger.database.schemaVersion == addon.Ledger.schemaVersion)
 assert(addon.ledger.database.schemaVersion == 5)
 assert(addon.ledger.database.schemaIdentity == "ArtisanLogbookLedger")
@@ -231,16 +235,44 @@ assert(#addon.ledger.database.dimensions.sessions == 1)
 assert(addon.ledger.database.dimensions.realms[1].key == "project:1:region:3:realm:12")
 assert(addon.ledger.database.dimensions.characters[1].classFile == "MAGE")
 assert(api.GetCharacters()[1] == nil)
-assert(addon.window and not addon.window:IsShown())
+environment.capabilitiesWithoutTracer = api.GetCapabilities()
+assert(environment.capabilitiesWithoutTracer.flavor == "retail" and
+  environment.capabilitiesWithoutTracer.craftResults and
+  environment.capabilitiesWithoutTracer.personalRequests and
+  environment.capabilitiesWithoutTracer.reagentAllocations)
+addon.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 456)
+assert(addon.ledger.pendingRecipeId == 456 and addon.diagnosticObserver == nil)
+addon.HandleRetailEvent("TRADE_SKILL_CLOSE")
+assert(addon.ledger.pendingRecipeId == nil)
+do
+  local frameStart = #frames
+  environment.testTracer = load(arg[3] or "src/ArtisanLogbook_Tracer", "ArtisanLogbook_Tracer")
+  tracer = environment.testTracer
+  lifecycle = frames[frameStart + 1]
+  lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  assert(tracer.recorder and not tracer.recorder.recording)
+  assert(environment.ArtisanLogbookTraceDB == tracer.recorder.database)
+end
+assert(tracer.window and not tracer.window:IsShown())
 assert(not addon.productionWindow and not environment.SLASH_ARTISANLOGBOOK1)
 assert(environment.SLASH_ARTISANLOGBOOKTRACE1 == "/al_trace")
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
-assert(addon.window:IsShown())
-addon.Start()
-addon.Mark("basic craft")
-assert(notices[#notices] == "Artisan Logbook: Marker: basic craft")
+assert(tracer.window:IsShown())
+tracer.Start()
+tracer.Mark("basic craft")
+assert(notices[#notices] == "Artisan Logbook Tracer: Marker: basic craft")
+do
+  local capabilitiesWithTracer = api.GetCapabilities()
+  assert(capabilitiesWithTracer.flavor == environment.capabilitiesWithoutTracer.flavor and
+    capabilitiesWithTracer.craftResults == environment.capabilitiesWithoutTracer.craftResults and
+    capabilitiesWithTracer.personalRequests == environment.capabilitiesWithoutTracer.personalRequests and
+    capabilitiesWithTracer.reagentAllocations == environment.capabilitiesWithoutTracer.reagentAllocations)
+end
 addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_CRAFT_BEGIN", 456)
 addon.adapter.frame.scripts.OnEvent(addon.adapter.frame, "TRADE_SKILL_ITEM_CRAFTED_RESULT",
+  { operationID = 1, itemID = 900000, quantity = 1 })
+tracer.eventFrame.scripts.OnEvent(tracer.eventFrame, "TRADE_SKILL_CRAFT_BEGIN", 456)
+tracer.eventFrame.scripts.OnEvent(tracer.eventFrame, "TRADE_SKILL_ITEM_CRAFTED_RESULT",
   { operationID = 1, itemID = 900000, quantity = 1 })
 assert(#addon.ledger.database.crafts == 1)
 assert(addon.ledger.database.crafts[1].gameOperationId == 1)
@@ -250,18 +282,112 @@ assert(api.GetCraft(1).recipe.id == 456 and api.GetCrafts().crafts[1].id == 1)
 assert(api.GetCraftSeries().series[1].craftCount == 1)
 assert(api.GetCraftSeries().series[1].recipe.id == 456)
 assert(addon.ledger.database.retentionDays == 60)
+do
+  local diagnosticSnapshot = assert(api.GetDiagnostics())
+  local diagnosticSnapshotAgain = assert(api.GetDiagnostics())
+  assert(diagnosticSnapshot.recipeOutputs.relationshipCount == diagnosticSnapshotAgain.recipeOutputs.relationshipCount)
+  diagnosticSnapshot.capabilities.reagentAllocations = false
+  diagnosticSnapshot.correlation.pendingRecipeId = -1
+  diagnosticSnapshot.recipeOutputs.relationshipCount = -1
+  diagnosticSnapshotAgain = assert(api.GetDiagnostics())
+  assert(diagnosticSnapshotAgain.capabilities.reagentAllocations == true and
+    diagnosticSnapshotAgain.recipeOutputs.relationshipCount >= 0 and
+    diagnosticSnapshotAgain.correlation.pendingRecipeId == nil)
+  assert(addon.ledger.database.crafts[1].recipeId == 456)
+end
+do
+  local rawBegin, rawResult, beginDecision, resultDecision = 0, 0, 0, 0
+  for _, record in ipairs(tracer.recorder.database.records) do
+    if record.event == "TRADE_SKILL_CRAFT_BEGIN" then rawBegin = rawBegin + 1 end
+    if record.event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then rawResult = rawResult + 1 end
+    if record.event == "CORE_CAPTURE_DECISION" then
+      local observation = assert(loadstring("return " .. record.payload))()
+      local eventName, context = observation[1], observation[2]
+      if eventName == "craft-begin" then
+        beginDecision = beginDecision + 1
+        assert(context.recipeId == 456 and context.accepted == true)
+      elseif eventName == "craft-result" then
+        resultDecision = resultDecision + 1
+        assert(context.operationID == 1 and context.accepted == true and context.recipeId == 456)
+        assert(context.reason == nil)
+      end
+    end
+  end
+  assert(rawBegin == 1 and rawResult == 1 and beginDecision == 1 and resultDecision == 1)
+end
 local recipeFacets = api.GetFacets(nil, { facets = { "recipes" } })
 assert(recipeFacets.recipes[1].value == 456 and recipeFacets.characters == nil)
 assert(api.GetCapabilities().personalRequests == true)
 assert(not addon.ledgerCaptureError and not addon.adapter.capabilities.captureError)
 committed[1].recipe.id = 999
 assert(api.GetCraft(1).recipe.id == 456)
-addon.Stop()
-assert(#addon.recorder.database.records == 5)
-assert(addon.recorder.database.records[2].event == "TRACE_MARK")
-assert(not addon.recorder.recording)
+do
+local function lastDiagnosticContext(name)
+  for index = #tracer.recorder.database.records, 1, -1 do
+    local record = tracer.recorder.database.records[index]
+    if record.event == "CORE_CAPTURE_DECISION" then
+      local observation = assert(loadstring("return " .. record.payload))()
+      if observation[1] == name then return observation[2] end
+    end
+  end
+  error("Missing diagnostic observation: " .. name)
+end
+local originalRecordResult = addon.ledger.RecordResult
+addon.ledger.RecordResult = function() return nil, "rejected evidence" end
+addon.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+  { operationID = 2, itemID = 900001, quantity = 1 })
+addon.ledger.RecordResult = originalRecordResult
+local rejectedResult = lastDiagnosticContext("craft-result")
+assert(rejectedResult.accepted == false and rejectedResult.reason == "rejected evidence")
+addon.ledger.RecordResult = function() error("record result exception") end
+addon.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+  { operationID = 3, itemID = 900001, quantity = 1 })
+addon.ledger.RecordResult = originalRecordResult
+local thrownResult = lastDiagnosticContext("craft-result")
+assert(thrownResult.accepted == false and thrownResult.reason:find("record result exception", 1, true))
+local originalSubmitSalvage = addon.ledger.SubmitSalvage
+addon.InvalidateCraft("CraftSalvage", nil, 700, 1, { allocations = {} })
+local acceptedSalvage = lastDiagnosticContext("craft-submission")
+assert(acceptedSalvage.operation == "CraftSalvage" and acceptedSalvage.accepted == true and
+  acceptedSalvage.reason == nil)
+addon.ledger:CancelCraft()
+addon.ledger.SubmitSalvage = function() return nil, "salvage rejected" end
+addon.InvalidateCraft("CraftSalvage", nil, 701, 1, {})
+local rejectedSalvage = lastDiagnosticContext("craft-submission")
+assert(rejectedSalvage.accepted == false and rejectedSalvage.reason == "salvage rejected")
+addon.ledger.SubmitSalvage = originalSubmitSalvage
+local originalObserveAttempt = addon.ledger.ObserveAttempt
+addon.ledger.ObserveAttempt = function() return true end
+addon.HandleRetailEvent("CRAFT_ATTEMPT_OBSERVATION", 456, {})
+local acceptedAttempt = lastDiagnosticContext("attempt-observation")
+assert(acceptedAttempt.accepted == true and acceptedAttempt.reason == nil)
+addon.ledger.ObserveAttempt = function() return false, "ambiguous-context" end
+addon.HandleRetailEvent("CRAFT_ATTEMPT_OBSERVATION", 456, {})
+local rejectedAttempt = lastDiagnosticContext("attempt-observation")
+assert(rejectedAttempt.accepted == false and rejectedAttempt.reason == "ambiguous-context")
+addon.ledger.ObserveAttempt = originalObserveAttempt
+local originalInvalidateCraft = addon.ledger.InvalidateCraft
+addon.ledger.InvalidateCraft = function() error("invalidation exception") end
+addon.InvalidateCraft("RecraftRecipe", nil, 456, 1)
+addon.ledger.InvalidateCraft = originalInvalidateCraft
+local failedInvalidation = lastDiagnosticContext("craft-submission")
+assert(failedInvalidation.accepted == false and
+  failedInvalidation.reason:find("invalidation exception", 1, true))
+addon.ledger.RecordResult = function() return { id = 1, requestCorrelationReason = "ambiguous-evidence" } end
+addon.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+  { operationID = 4, itemID = 900001, quantity = 1 })
+addon.ledger.RecordResult = originalRecordResult
+local unknownAttribution = lastDiagnosticContext("craft-result")
+assert(unknownAttribution.accepted == true and unknownAttribution.attribution == "unknown" and
+  unknownAttribution.correlationReason == "ambiguous-evidence" and unknownAttribution.reason == nil)
+addon.ledgerCaptureError = nil
+end
+tracer.Stop()
+assert(#tracer.recorder.database.records == 15)
+assert(tracer.recorder.database.records[2].event == "TRACE_MARK")
+assert(not tracer.recorder.recording)
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("export")
-assert(addon.window:IsShown())
+assert(tracer.window:IsShown())
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("status")
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark from slash")
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
@@ -275,15 +401,40 @@ local function click(text)
   end
   error("Missing button: " .. text)
 end
+local ledgerBeforeDiagnostics = tracer.Trace.Serialize(addon.ledger.database)
+local repairAnalysisBeforeDiagnostics = addon.lastRecipeRepairAnalysis
 click("Diagnostics")
+assert(tracer.Trace.Serialize(addon.ledger.database) == ledgerBeforeDiagnostics and
+  addon.lastRecipeRepairAnalysis == repairAnalysisBeforeDiagnostics)
+do
+  local diagnosticText
+  for _, frame in ipairs(frames) do
+    if frame.kind == "EditBox" and frame.parent and frame.parent.kind == "ScrollFrame" then
+      diagnosticText = frame:GetText()
+    end
+  end
+  assert(diagnosticText and diagnosticText:find("captureHealth", 1, true) and
+    diagnosticText:find("recipeOutputs", 1, true))
+  local savedAPI = environment.ArtisanLogbookAPI
+  environment.ArtisanLogbookAPI = nil
+  click("Diagnostics")
+  local unavailableDiagnostics
+  for _, frame in ipairs(frames) do
+    if frame.kind == "EditBox" and frame.parent and frame.parent.kind == "ScrollFrame" then
+      unavailableDiagnostics = frame:GetText()
+    end
+  end
+  assert(unavailableDiagnostics and unavailableDiagnostics:find("Core diagnostics are unavailable", 1, true))
+  environment.ArtisanLogbookAPI = savedAPI
+end
 click("Export")
 click(">")
 click("<")
 click("Clear Trace")
 assert(environment.popup == "ARTISANLOGBOOK_CLEAR_TRACE")
-assert(#addon.recorder.database.records == 5)
+assert(#tracer.recorder.database.records == 15)
 environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE.OnAccept()
-assert(#addon.recorder.database.records == 0)
+assert(#tracer.recorder.database.records == 0)
 assert(#addon.ledger.database.crafts == 1)
 local textEditBox, scrollFrame
 for _, frame in ipairs(frames) do
@@ -291,13 +442,13 @@ for _, frame in ipairs(frames) do
   if frame.kind == "ScrollFrame" then scrollFrame = frame end
 end
 assert(textEditBox and scrollFrame)
-local savedRecords = addon.recorder.database.records
+local savedRecords = tracer.recorder.database.records
 local exportRecords = {}
 for index = 1, 25 do
   exportRecords[index] = { sequence = index, timestamp = 1800000000, elapsed = index,
     event = "TRACE_MARK", payload = "{}" }
 end
-addon.recorder.database.records = exportRecords
+tracer.recorder.database.records = exportRecords
 local function displayedExport()
   return assert(loadstring(textEditBox:GetText()))()
 end
@@ -312,7 +463,7 @@ click(">")
 assert(#displayedExport().records == 10 and displayedExport().records[1].sequence == 11)
 click("Export")
 assert(#displayedExport().records == 5 and displayedExport().records[1].sequence == 21)
-addon.recorder.database.records = savedRecords
+tracer.recorder.database.records = savedRecords
 click("Export")
 assert(#displayedExport().records == 0)
 print("PASS bounded trace export with latest-page default and pagination")
@@ -323,18 +474,18 @@ textEditBox:SetText("short export")
 textEditBox:SetText(string.rep("long line\n", 100))
 click("Start")
 click("Clear Trace")
-assert(#addon.recorder.database.records == 1)
+assert(#tracer.recorder.database.records == 1)
 click("Stop")
-assert(addon.recorder.database.records[1].sequence == 6)
-addon.window.scripts.OnUpdate(addon.window, 0.6)
+assert(tracer.recorder.database.records[1].sequence == 16)
+tracer.window.scripts.OnUpdate(tracer.window, 0.6)
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("start")
-assert(addon.recorder.recording)
+assert(tracer.recorder.recording)
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark from slash")
-assert(addon.recorder.database.records[#addon.recorder.database.records].event == "TRACE_MARK")
+assert(tracer.recorder.database.records[#tracer.recorder.database.records].event == "TRACE_MARK")
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("status")
-assert(notices[#notices] == "Artisan Logbook: Recording.")
+assert(notices[#notices] == "Artisan Logbook Tracer: Recording.")
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
-assert(not addon.recorder.recording)
+assert(not tracer.recorder.recording)
 print("PASS Core-only TOC, lifecycle, tracer slash commands and debug UI controls (mocked)")
 
 local function reload(database, afterFile)
@@ -371,30 +522,17 @@ maintenance.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 9901)
 maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 9902, quantity = 1 })
 maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2, itemID = 9902, quantity = 1 })
 local maintenanceDatabase = maintenance.ledger.database
-local repairButton
-for _, frame in ipairs(frames) do
-  if frame.parent == maintenance.window and frame.kind == "Button" and
-      frame.text == "Repair unknown recipes" then repairButton = frame end
-end
-assert(repairButton and maintenance.ledger.database.crafts[2].recipeId == nil)
-repairButton.scripts.OnClick(repairButton)
-assert(environment.popup == "ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES")
-assert(maintenance.ledger.database == maintenanceDatabase and
-  maintenance.ledger.database.crafts[2].recipeId == nil)
-local repairDialog = environment.StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES
-assert(repairDialog.text:find("1 can be uniquely attributed", 1, true))
-assert(repairDialog.button1 == "Repair 1 crafts")
-repairDialog.OnAccept()
+assert(maintenance.window == nil and maintenance.ledger.database.crafts[2].recipeId == nil)
+local repairResult = assert(environment.ArtisanLogbookManagement.RepairUnknownRecipes())
+assert(repairResult.repairedCount == 1)
 assert(maintenance.ledger.database ~= maintenanceDatabase)
 assert(environment.ArtisanLogbookDB == maintenance.ledger.database)
 assert(maintenance.ledger.database.crafts[2].recipeId == 9901)
 assert(maintenance.lastMaintenanceDiagnostic:find("success=true", 1, true))
-assert(notices[#notices]:find("Repaired 1 crafts and reconciled affected aggregates. 0 ambiguous and 0 without sufficient evidence remain.", 1, true))
 maintenance.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 3, itemID = 9903, quantity = 1 })
 maintenanceDatabase = maintenance.ledger.database
 environment.popup = nil
-repairButton.scripts.OnClick(repairButton)
-assert(environment.popup == nil and maintenance.ledger.database == maintenanceDatabase)
+assert(maintenance.ledger.database == maintenanceDatabase)
 assert(maintenance.ledger:AddDimension("recipe", 9903, { name = "Recovered recipe" }))
 assert(maintenance.ledger:AddDimension("item", 9903, { name = "Recovered recipe" }))
 assert(maintenance.ledger:LearnRecipeOutput(9903, 9903))
@@ -540,7 +678,7 @@ assert(failingAutomatic.ledger.database == failureDatabaseAtRepair and
   environment.ArtisanLogbookDB == failureDatabaseAtRepair)
 assert(failingAutomatic.ledger.database.crafts[2].recipeId == nil)
 assert(failingAutomatic.lastMaintenanceDiagnostic:find("automatic success=false error=", 1, true))
-assert(failingAutomatic.recorder)
+assert(failingAutomatic.recorder == nil and environment.ArtisanLogbookTraceDB == tracer.recorder.database)
 print("PASS automatic repair failure leaves Core and original loaded ledger available")
 
 do
@@ -651,34 +789,26 @@ do
     error("metadata unavailable")
   end
   local manual = reload(candidateDatabase())
-  local beforeManual = manual.Trace.Serialize(manual.ledger.database)
+  local beforeManual = tracer.Trace.Serialize(manual.ledger.database)
+  queries = 0
   local analysis = assert(environment.ArtisanLogbookManagement.AnalyzeUnknownRecipeRepair())
-  assert(queries == 2 and analysis.recovery.candidateCount == 1 and analysis.recovery.unavailableCount == 1)
+  assert(queries == 0)
   assert(analysis.repairableCount == 0 and analysis.insufficientEvidenceCount == 1)
-  assert(manual.Trace.Serialize(manual.ledger.database) == beforeManual)
-  assert(manual.recorder and not manual.ledgerError and #notices == noticeCount)
-  local manualButton
-  for _, frame in ipairs(frames) do
-    if frame.parent == manual.window and frame.text == "Repair unknown recipes" then manualButton = frame end
-  end
-  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
+  assert(tracer.Trace.Serialize(manual.ledger.database) == beforeManual)
+  assert(manual.recorder == nil and not manual.ledgerError and #notices == noticeCount)
+  environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId, isRecraft)
     queries = queries + 1
+    assert(recipeId == 1236472 and isRecraft == false)
     return { recipeID = recipeId, outputItemID = 243807 }
   end
-  environment.popup = nil
-  manualButton.scripts.OnClick()
-  assert(environment.popup == "ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES" and queries == 3)
-  assert(manual.ledger.craftById[1].recipeId == nil and manual.ledger.unknownRecipeCount == 1)
+  local discovery = assert(environment.ArtisanLogbookManagement.DiscoverRecipeOutputs())
+  assert(queries == 1 and discovery.candidateCount == 1 and discovery.verifiedCount == 1 and
+    discovery.learnedCount == 1)
   assert(manual.ledger.database.recipeOutputs[1236472][243807])
-  local canceledDatabase = manual.ledger.database
-  local diagnostics = assert(environment.ArtisanLogbookManagement.RecipeOutputDiagnostics())
-  assert(diagnostics.recovery.verifiedCount == 1 and diagnostics.verifiedRelationshipCount == 1)
-  environment.StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES.OnAccept()
-  assert(manual.ledger.craftById[1].recipeId == 1236472 and queries == 3)
-  assert(canceledDatabase.crafts[1].recipeId == nil)
-  local canceledReload = reload(canceledDatabase)
-  assert(canceledReload.ledger.craftById[1].recipeId == 1236472 and queries == 3)
-  print("PASS manual verification previews before repair; unresolved is read-only; canceled knowledge survives reload")
+  assert(manual.ledger.craftById[1].recipeId == nil and manual.ledger.unknownRecipeCount == 1)
+  analysis = assert(environment.ArtisanLogbookManagement.AnalyzeUnknownRecipeRepair())
+  assert(analysis.repairableCount == 1 and manual.ledger.craftById[1].recipeId == nil)
+  print("PASS Core repair analysis is read-only and Tracer-independent")
 
   noticeCount = #notices
   local metadataReady = false
@@ -741,7 +871,7 @@ do
   environment.C_TradeSkillUI.GetRecipeSchematic = nil
   local absentApi = reload(candidateDatabase())
   assert(absentApi.ledger.unknownRecipeCount == 1 and absentApi.lastRecoverySummary.unavailableCount == 1)
-  assert(absentApi.recorder and environment.ArtisanLogbookAPI.GetCraft(1))
+  assert(absentApi.recorder == nil and environment.ArtisanLogbookAPI.GetCraft(1))
   local previousSecret, previousAccessible = environment.issecretvalue, environment.canaccesstable
   environment.issecretvalue = function(value) return value == 243807 end
   environment.C_TradeSkillUI.GetRecipeSchematic = function(recipeId)
@@ -801,7 +931,7 @@ end
 
 local saved = addon.ledger.database
 local reloaded = reload(saved)
-assert(reloaded.ledger and not reloaded.recorder.recording)
+assert(reloaded.ledger and reloaded.recorder == nil)
 assert(#reloaded.ledger.database.dimensions.sessions == 2)
 assert(#reloaded.ledger.database.dimensions.realms == 1)
 assert(#reloaded.ledger.database.dimensions.characters == 1)
@@ -843,13 +973,10 @@ environment.ArtisanLogbookAPI.RegisterCallback("CRAFT_COMMITTED", function(craft
 end)
 print("PASS passive ledger capture, reload, identity fallback, and SavedVariables failure safety")
 
-hooks.GetCraftingOperationInfo(456, {
-  { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
-}, nil, true)
 hooks.CraftRecipe(456, 2, {
   { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
 }, nil, nil, true)
-assert(not unknown.recorder.recording and #unknown.ledger.database.requests == 1)
+assert(unknown.recorder == nil and #unknown.ledger.database.requests == 1)
 unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 900000, quantity = 1,
   concentrationSpent = 80, resourcesReturned = { { reagent = { itemID = 101 }, quantity = 1 } } })
 unknown.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 2, itemID = 900000, quantity = 1,
@@ -871,9 +998,6 @@ batchPayloads[1].request.allocations[1].allocatedQuantity = 999
 assert(batchPayloads[2].request.allocations[1].allocatedQuantity == 2)
 print("PASS passive personal request capture and shared batch allocation")
 
-hooks.GetCraftingOperationInfo(456, {
-  { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
-}, nil, true)
 hooks.CraftRecipe(456, 3, {
   { dataSlotIndex = 1, quantity = 2, reagent = { itemID = 101 } },
 }, nil, nil, true)
@@ -894,19 +1018,13 @@ assert(unknown.ledger.pendingRequest == nil and #unknown.ledger.database.crafts 
 assert(partialRequest.requestedCount == 3 and unknown.ledger.database.crafts[3].requestId == partialRequest.id)
 
 local durableDatabase = unknown.ledger.database
-unknown.Start()
-unknown.Mark("stored")
-assert(notices[#notices] == "Artisan Logbook: Marker: stored")
-local capture = unknown.recorder.Capture
-unknown.recorder.Capture = function() return nil, "capacity reached" end
-unknown.Mark("not stored")
-assert(notices[#notices] ~= "Artisan Logbook: Marker: not stored")
-unknown.recorder.Capture = capture
-unknown.Stop()
-environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE.OnAccept()
-assert(#unknown.recorder.database.records == 0)
+tracer.Start()
+tracer.Mark("stored")
+assert(notices[#notices] == "Artisan Logbook Tracer: Marker: stored")
+tracer.Stop()
+assert(tracer.recorder:Clear())
 assert(unknown.ledger.database == durableDatabase and #durableDatabase.crafts == 4)
-print("PASS unrelated spell failures, partial batch, trace mark echo and clear isolation")
+print("PASS unrelated spell failures, partial batch and independent Tracer clear")
 
 environment.GetCurrentRegion = function() return 3 end
 environment.GetRealmID = function() return 12 end
@@ -935,6 +1053,149 @@ local uiAddon = loadUI()
 assert(not uiAddon.ledger and not uiAddon.recorder and not uiAddon.Ledger and not uiAddon.Trace)
 local uiWindow = uiAddon.productionWindow
 local UI = uiAddon.UI
+do
+  local management = environment.ArtisanLogbookManagement
+  local database = uiCore.ledger.database
+  local beforeAnalysis = tracer.Trace.Serialize(database)
+  local actualAnalysis = assert(management.AnalyzeUnknownRecipeRepair())
+  assert(tracer.Trace.Serialize(database) == beforeAnalysis and actualAnalysis.repairableCount == 0)
+
+  local originalAnalyze = management.AnalyzeUnknownRecipeRepair
+  local originalDiscover = management.DiscoverRecipeOutputs
+  local originalRepair = management.RepairUnknownRecipes
+  local originalPurge = management.PurgeLogbookDB
+  local analysis = { unattributedCount = 3, repairableCount = 1, ambiguousCount = 1,
+    insufficientEvidenceCount = 1, missingOutputCount = 0 }
+  local analysisCalls, discoveryCalls, repairCalls, purgeCalls = 0, 0, 0, 0
+  management.AnalyzeUnknownRecipeRepair = function()
+    analysisCalls = analysisCalls + 1
+    return analysis
+  end
+  management.DiscoverRecipeOutputs = function()
+    discoveryCalls = discoveryCalls + 1
+    return { candidateCount = 2, verifiedCount = 1, learnedCount = 1 }
+  end
+  management.RepairUnknownRecipes = function()
+    repairCalls = repairCalls + 1
+    return nil, "injected repair failure"
+  end
+  management.PurgeLogbookDB = function()
+    purgeCalls = purgeCalls + 1
+    return nil, "injected purge failure"
+  end
+  local function clickSettings(text)
+    for _, frame in ipairs(frames) do
+      if frame.parent == uiWindow.pages.Settings and frame.kind == "Button" and frame.text == text then
+        frame.scripts.OnClick(frame)
+        return
+      end
+    end
+    error("Missing Settings button: " .. text)
+  end
+  uiWindow:Show()
+  uiWindow:Activate("Settings")
+  clickSettings("Analyze unknown recipes")
+  assert(analysisCalls == 1 and uiWindow.pages.Settings:IsShown())
+  local repairButton
+  for _, frame in ipairs(frames) do
+    if frame.parent == uiWindow.pages.Settings and frame.kind == "Button" and
+        frame.text == "Repair unique matches" then repairButton = frame end
+  end
+  assert(repairButton and repairButton:IsShown())
+  local analysisText
+  for _, frame in ipairs(frames) do
+    if frame.parent == uiWindow.pages.Settings and
+        frame:GetText():find("Unattributed crafts:", 1, true) then analysisText = frame:GetText() end
+  end
+  assert(analysisText and analysisText:find("Uniquely repairable: 1", 1, true) and
+    analysisText:find("Ambiguous: 1", 1, true) and
+    analysisText:find("Insufficient evidence: 1", 1, true))
+  clickSettings("Discover recipe outputs")
+  assert(discoveryCalls == 1 and analysisCalls == 2)
+  local discoveryText
+  for _, frame in ipairs(frames) do
+    if frame.parent == uiWindow.pages.Settings and
+        frame:GetText():find("Discovery: 2 candidate", 1, true) then discoveryText = frame:GetText() end
+  end
+  assert(discoveryText and discoveryText:find("Uniquely repairable: 1", 1, true))
+  management.DiscoverRecipeOutputs = function()
+    discoveryCalls = discoveryCalls + 1
+    return nil, "injected discovery failure"
+  end
+  clickSettings("Discover recipe outputs")
+  local discoveryFailure
+  for _, frame in ipairs(frames) do
+    if frame.parent == uiWindow.pages.Settings and
+        frame:GetText():find("injected discovery failure", 1, true) then
+      discoveryFailure = frame:GetText()
+    end
+  end
+  assert(discoveryCalls == 2 and analysisCalls == 2 and discoveryFailure)
+  management.DiscoverRecipeOutputs = function()
+    discoveryCalls = discoveryCalls + 1
+    return { candidateCount = 2, verifiedCount = 1, learnedCount = 1 }
+  end
+  clickSettings("Analyze unknown recipes")
+  clickSettings("Repair unique matches")
+  assert(environment.popup == "ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES" and repairCalls == 0)
+  environment.popup = nil
+  analysis.repairableCount = 0
+  clickSettings("Analyze unknown recipes")
+  clickSettings("Repair unique matches")
+  assert(environment.popup == nil and repairCalls == 0)
+  analysis.repairableCount = 1
+  clickSettings("Analyze unknown recipes")
+  local beforeFailedRepair = tracer.Trace.Serialize(database)
+  clickSettings("Repair unique matches")
+  environment.StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES.OnAccept()
+  assert(repairCalls == 1 and tracer.Trace.Serialize(database) == beforeFailedRepair)
+  assert(notices[#notices]:find("injected repair failure", 1, true))
+  management.RepairUnknownRecipes = function()
+    repairCalls = repairCalls + 1
+    management.OnUnknownRecipesRepaired(1)
+    return { repairedCount = 1 }
+  end
+  click("Repair unique matches")
+  local revisionBeforeRepair = uiWindow.pages.Settings.revision
+  environment.StaticPopupDialogs.ARTISANLOGBOOK_REPAIR_UNKNOWN_RECIPES.OnAccept()
+  assert(repairCalls == 2 and uiWindow.pages.Settings.revision > revisionBeforeRepair)
+  assert(notices[#notices]:find("1 craft", 1, true))
+
+  local traceDatabase = tracer.recorder.database
+  local traceCount = #traceDatabase.records
+  clickSettings("Purge Logbook DB")
+  assert(environment.popup == "ARTISANLOGBOOK_PURGE_LOGBOOK" and purgeCalls == 0)
+  environment.popup = nil
+  local beforeFailedPurge = tracer.Trace.Serialize(database)
+  environment.StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK.OnAccept()
+  assert(purgeCalls == 1 and tracer.Trace.Serialize(database) == beforeFailedPurge)
+  assert(notices[#notices]:find("injected purge failure", 1, true))
+  management.PurgeLogbookDB = function()
+    purgeCalls = purgeCalls + 1
+    management.OnLogbookPurged()
+    return true
+  end
+  local revisionBeforePurge = uiWindow.pages.Settings.revision
+  environment.StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK.OnAccept()
+  assert(purgeCalls == 2 and uiWindow.pages.Settings.revision > revisionBeforePurge)
+  assert(notices[#notices]:find("Logbook database purged.", 1, true))
+  local resetAnalysis = false
+  for _, frame in ipairs(frames) do
+    if frame.parent == uiWindow.pages.Settings and
+        frame:GetText() == "Analyze unknown recipes to inspect retained crafts." then
+      resetAnalysis = true
+    end
+  end
+  assert(not repairButton:IsShown() and resetAnalysis)
+  assert(tracer.recorder.database == traceDatabase and #traceDatabase.records == traceCount)
+
+  management.AnalyzeUnknownRecipeRepair = originalAnalyze
+  management.DiscoverRecipeOutputs = originalDiscover
+  management.RepairUnknownRecipes = originalRepair
+  management.PurgeLogbookDB = originalPurge
+  uiWindow:Activate("Overview")
+  uiWindow:Hide()
+end
 local paperProbe = environment.CreateFrame("Frame", nil, environment.UIParent)
 environment.ArtisanLogbookUISettings.hideUnknownCrafts = nil
 environment.ArtisanLogbookUISettings.showUnknownCrafts = nil
@@ -1390,10 +1651,10 @@ local function displayedRow(parent, predicate)
   end
 end
 
-assert(not uiWindow:IsShown() and not uiCore.window:IsShown())
+assert(not uiWindow:IsShown() and uiCore.window == nil)
 assert(environment.SLASH_ARTISANLOGBOOK2 == "/artisanlogbook")
 environment.SlashCmdList.ARTISANLOGBOOK("anything")
-assert(uiWindow:IsShown() and uiWindow.activeTab == "Overview" and not uiCore.window:IsShown())
+assert(uiWindow:IsShown() and uiWindow.activeTab == "Overview" and uiCore.window == nil)
 assert(uiWindow.pages.Logbook and uiWindow.pages.Recipes and uiWindow.pages.Settings)
 assert(uiWindow.pages.Overview and uiWindow.pages.Character and uiWindow.pages.Profession and uiWindow.pages.Recipe)
 uiWindow:Hide()
@@ -1455,12 +1716,12 @@ dropdown(logbook, "30 days"):Choose(30)
 assert(#history.items == 1 and history.scroll:GetVerticalScroll() == 0)
 uiWindow:Hide()
 environment.SlashCmdList.ARTISANLOGBOOK("anything")
-assert(uiWindow:IsShown() and not uiCore.window:IsShown())
+assert(uiWindow:IsShown() and uiCore.window == nil)
 environment.SlashCmdList.ARTISANLOGBOOK("debug")
-assert(not uiCore.window:IsShown() and uiWindow:IsShown())
+assert(uiCore.window == nil and uiWindow:IsShown())
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
-assert(uiCore.window:IsShown())
-uiCore.window:Hide()
+assert(tracer.window:IsShown())
+tracer.window:Hide()
 local recentFirst = displayedRow(logbook, function(item) return item.id == 14 end)
 assert(recentFirst)
 recentFirst.scripts.OnClick(recentFirst)
@@ -2516,8 +2777,8 @@ do
     queries = queries + 1
     return savedSummaries(options)
   end
-  local savedSettings = core.Trace.Serialize(environment.ArtisanLogbookUISettings)
-  local savedFacts = core.Trace.Serialize(ledger.database)
+  local savedSettings = tracer.Trace.Serialize(environment.ArtisanLogbookUISettings)
+  local savedFacts = tracer.Trace.Serialize(ledger.database)
   window:Show(); window:Activate("Reagents")
   local function cell(itemId)
     for _, row in ipairs(list.rows) do
@@ -2579,8 +2840,8 @@ do
   page.searchInput:SetText("")
   page.searchInput.scripts.OnTextChanged(page.searchInput); page.searchInput.scripts.OnUpdate(page.searchInput, .3)
   assert(cell(5103).quality.atlas == "Quality-5103" and qualityCalls[5103] == 2)
-  assert(core.Trace.Serialize(environment.ArtisanLogbookUISettings) == savedSettings)
-  assert(core.Trace.Serialize(ledger.database) == savedFacts)
+  assert(tracer.Trace.Serialize(environment.ArtisanLogbookUISettings) == savedSettings)
+  assert(tracer.Trace.Serialize(ledger.database) == savedFacts)
   environment.GetItemIcon, environment.C_TradeSkillUI.GetItemReagentQualityInfo, environment.C_Item =
     savedIcon, savedQuality, savedItemApi
   api.GetReagentSummaries = savedSummaries
@@ -3609,26 +3870,18 @@ do
 end
 restored = reload(restored.ledger.database)
 
-local traceDatabase = restored.recorder.database
-restored.recorder:Start({})
-restored.recorder:Capture("TRACE_MARK", "keep")
-restored.recorder:Stop()
+local traceDatabase = tracer.recorder.database
+environment.ArtisanLogbookTraceDB = traceDatabase
+tracer.recorder:Start({})
+tracer.recorder:Capture("TRACE_MARK", "keep")
+tracer.recorder:Stop()
 local traceCount = #traceDatabase.records
-local function traceButton(text)
-  for _, frame in ipairs(frames) do
-    if frame.parent == restored.window and frame.kind == "Button" and frame.text == text then
-      return frame
-    end
-  end
-  error("Missing trace button: " .. text)
+assert(restored.recorder == nil and restored.window == nil)
+for _, frame in ipairs(frames) do
+  assert(not (frame.parent == tracer.window and frame.kind == "Button" and frame.text == "Purge Logbook DB"))
 end
-traceButton("Purge Logbook DB").scripts.OnClick()
-assert(environment.popup == "ARTISANLOGBOOK_PURGE_LOGBOOK_DB")
 assert(#restored.ledger.database.crafts == 3)
-local popup = environment.StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK_DB
-assert(popup.button2 == "Cancel" and popup.text:find("cannot be undone", 1, true))
-assert(#restored.ledger.database.crafts == 3)
-popup.OnAccept()
+assert(restored.PurgeLogbookDB())
 local clean = restored.ledger.database
 assert(environment.ArtisanLogbookDB == clean)
 for _, collection in ipairs({ "crafts", "requests", "reagents", "craftSeries" }) do
@@ -3651,7 +3904,7 @@ restored.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 10
 assert(#clean.crafts == 1 and clean.crafts[1].id == 1)
 assert(clean.crafts[1].sessionId == clean.dimensions.sessions[1].id)
 assert(#environment.ArtisanLogbookAPI.GetCrafts({ professions = { 171 } }).crafts == 1)
-print("PASS confirmed full ledger purge preserves trace and supports immediate recapture")
+print("PASS Core ledger purge is independent of Tracer storage and supports immediate recapture")
 
 local reagentRuntime = reload(data)
 local reagentApi = environment.ArtisanLogbookAPI
@@ -3708,21 +3961,20 @@ local refusedData = { schemaVersion = 1, schemaIdentity = "ArtisanLogbookLedger"
 local refusedRuntime = reload(refusedData)
 local preservedTrace = environment.ArtisanLogbookTraceDB
 assert(not refusedRuntime.ledger and refusedRuntime.ledgerError)
-assert(environment.ArtisanLogbookDB == refusedData and refusedRuntime.recorder.database == preservedTrace)
+assert(environment.ArtisanLogbookDB == refusedData and refusedRuntime.recorder == nil and
+  environment.ArtisanLogbookTraceDB == preservedTrace)
 local refusedApi = environment.ArtisanLogbookAPI
 assert(refusedApi.GetCrafts() == nil and environment.ArtisanLogbookManagement.Status() == nil)
 local savedBuildInfo = environment.GetBuildInfo
 environment.GetBuildInfo = function() error("runtime build unavailable") end
-local purgeDialog = environment.StaticPopupDialogs.ARTISANLOGBOOK_PURGE_LOGBOOK_DB
-assert(purgeDialog.button2 == "Cancel")
-purgeDialog.OnAccept()
+local purged, purgeReason = refusedRuntime.PurgeLogbookDB()
+assert(not purged and purgeReason)
 assert(not refusedRuntime.ledger and refusedRuntime.ledgerError:find("runtime build unavailable", 1, true))
 assert(environment.ArtisanLogbookDB == refusedData and environment.ArtisanLogbookTraceDB == preservedTrace)
-assert(notices[#notices]:find("Logbook DB purge failed:", 1, true))
 environment.GetBuildInfo = savedBuildInfo
 local savedWall = environment.GetServerTime
 environment.GetServerTime = function() return 1800000123 end
-purgeDialog.OnAccept()
+assert(refusedRuntime.PurgeLogbookDB())
 environment.GetServerTime = savedWall
 assert(refusedRuntime.ledger and not refusedRuntime.ledgerError and not refusedRuntime.ledgerCaptureError)
 assert(environment.ArtisanLogbookDB == refusedRuntime.ledger.database and
@@ -3738,7 +3990,7 @@ refusedRuntime.HandleRetailEvent("TRADE_SKILL_CRAFT_BEGIN", 1230869)
 refusedRuntime.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 302, itemID = 212345, quantity = 1 })
 assert(#refusedApi.GetCrafts().crafts == 1 and not refusedRuntime.ledgerCaptureError)
 assert(environment.ArtisanLogbookTraceDB == preservedTrace)
-print("PASS confirmed debug purge recovers refused schema without touching trace")
+print("PASS Core purge recovers refused schema without touching trace")
 
 local oldData = data
 oldData.dimensions.characters[1].classFile = nil
@@ -4221,7 +4473,6 @@ end)()
   end
   local core = reload(nil)
   core.ledger.database.nextCraftId, core.ledger.database.nextRequestId = 889, 238
-  core.Start()
   local function event(name, ...)
     core.adapter.frame.scripts.OnEvent(core.adapter.frame, name, ...)
   end
@@ -4230,10 +4481,7 @@ end)()
       reagents = recipeId == 1230869 and { { source = 0, isBasicReagent = true, slotIndex = 4,
         reagentInfo = selected(3, 236777, 3) } } or nil }
     event("TRADE_SKILL_CRAFT_BEGIN", recipeId)
-    for quoteIndex = 1, 5 do
-      hooks.GetCraftingOperationInfoForOrder(recipeId, quoteIndex <= 3 and {} or zeros, orderId, false)
-      assert(not core.ledger.operationOwnershipUncertain and core.ledger.pendingRecipeId == recipeId)
-    end
+    assert(core.ledger.pendingRecipeId == recipeId)
     hooks.CraftRecipe(recipeId, 1, selections, nil, orderId, false)
     assert(not core.ledger.operationOwnershipUncertain and core.ledger.pendingOrderRequest)
     local cast = "synthetic-" .. recipeId
@@ -4601,7 +4849,7 @@ end)()
   initialSettings.craftType = "orders"
   local consumer = loadUI()
   local ui, window = consumer.UI, consumer.productionWindow
-  local settingsBeforeFilters = core.Trace.Serialize(environment.ArtisanLogbookUISettings)
+  local settingsBeforeFilters = tracer.Trace.Serialize(environment.ArtisanLogbookUISettings)
   assert(ui.DefaultCraftType() == false)
   window:Show(); window:Activate("Overview")
   local overview = window.pages.Overview
@@ -4647,7 +4895,7 @@ end)()
   window:Activate("Overview")
   window:Activate("Reagent", { id = 8, name = "Bloom" })
   assert(reagentDetail.filters.craftType.value == "personal" and reagentDetail:Filter().craftType == "personal")
-  assert(core.Trace.Serialize(environment.ArtisanLogbookUISettings) == settingsBeforeFilters,
+  assert(tracer.Trace.Serialize(environment.ArtisanLogbookUISettings) == settingsBeforeFilters,
     "active page filters must not write SavedVariables")
   local detail = ui.CraftDetail(environment.CreateFrame("Frame"), 800, 640, function() end)
   detail:ShowCraft(1)
@@ -4813,7 +5061,7 @@ end)()
   window:Activate("Overview")
   assert(overview.filters.craftType.value == "personal" and overview.filters.period.state.days == 7)
   assert(environment.ArtisanLogbookUISettings.craftType == "orders" and
-    core.Trace.Serialize(environment.ArtisanLogbookUISettings) == settingsBeforeFilters)
+    tracer.Trace.Serialize(environment.ArtisanLogbookUISettings) == settingsBeforeFilters)
   window:Hide()
 
   assert(ui.ContextText({ context = { kind = "personal-order", isRecraft = true } }) == "Personal order (recraft)")
@@ -4939,7 +5187,7 @@ end)()
   end
   event("TRADE_SKILL_ITEM_CRAFTED_RESULT", { operationID = 1, itemID = 243581, quantity = 1 })
   local historical = core.ledger.database.crafts[1]
-  assert(historical.recipeId == nil and not core.recorder.recording)
+  assert(historical.recipeId == nil and core.recorder == nil)
   for _, record in ipairs(fixture.events) do
     local arguments = record.arguments
     if record.name == "CALL_POST:C_TradeSkillUI.CraftSalvage" then

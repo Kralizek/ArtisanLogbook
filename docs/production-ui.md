@@ -3,13 +3,16 @@
 `/al` and `/artisanlogbook` open Artisan Logbook. The draggable minimap book
 toggles the same window. Its angle, recipe pins, and trivial-reagent preferences
 belong to `ArtisanLogbookUISettings`, never Core. Core owns the separate
-`/al_trace` diagnostic tracer; its raw export is not a portable craft export.
+capture and public API; the optional, default-disabled Tracer addon provides
+`/al_trace`. Its raw export is not a portable craft export.
 
 `ArtisanLogbook` requires `ArtisanLogbook_Core` and reads facts through
 `ArtisanLogbookAPI` v1. Retention uses `ArtisanLogbookManagement`. The production
 UI neither accesses Core's private namespace nor reads/writes its SavedVariables.
-Confirmed destructive maintenance stays in the debug tracer. Storage, retention,
-and the durable outcomes introduced by #21 are unchanged. Additive API changes
+Core and the UI work with Tracer absent or disabled; Tracer also requires Core
+and owns only its diagnostic SavedVariables. Confirmed destructive ledger
+maintenance is provided by Core's management API, never by Tracer. Storage,
+retention, and the durable outcomes introduced by #21 are unchanged. Additive API changes
 include recipe profession sorting/name search and reagent character/day filters
 with selection-wide totals. Recipe summaries also accept day-aligned time bounds.
 These remain read-only API v1 catalogue queries; capture and storage are unchanged.
@@ -25,8 +28,9 @@ second logical craft. Legacy unproven rows remain legacy observations.
 
 ### Schema-5 Live Validation
 
-1. Back up SavedVariables with WoW closed; install both Core and UI from the same
-  bundle. Keep the PR unmerged during controlled testing.
+1. Back up SavedVariables with WoW closed; install Core and UI from the same
+  bundle. Tracer is not required for these production UI checks. Keep the PR
+  unmerged during controlled testing.
 2. Prospect recipe 1231127 once, then five times. Compare operation IDs and result
   observations with six history attempts, all observed items/quantities, six
   five-ore input contributions and unchanged request-scope configuration.
@@ -110,7 +114,7 @@ existing current-entry highlight without replacing the primary selection.
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
 | Reagent | First-class identity page with filters, summary, Overview, Used in Recipes and Craft History tabs. Ignore classification is synchronized with catalogue and Recipe reagent checkboxes. |
-| Settings | Craft-history count, addon version, and Keep craft history (days). Saving applies pruning at the next startup. |
+| Settings | Craft-history count, addon version, and Keep craft history (days). Saving applies pruning at the next startup. Read-only unknown-recipe analysis is separate from explicit recipe-output discovery; discovery stores verified relationships and refreshes the analysis without repairing crafts. Unique matches require confirmation before repair. Purge Logbook DB is separately confirmed and does not clear Tracer data. |
 
 All entity pages follow Header, Filters, Summary, Tabs. Headers and filters stay
 fixed; lists scroll inside bounded regions. Recipe Statistics has a bounded local
@@ -560,7 +564,8 @@ is no WoW client in the development container. Capture actual screenshots of all
 pages and the modal while performing this checklist.
 
 - [ ] Open with `/al`, `/artisanlogbook`, and minimap; drag the minimap icon,
-  reload, and confirm its location. Disable the UI addon and check `/al_trace`.
+  reload, and confirm its location. With Tracer explicitly enabled, disable the
+  UI addon and check that `/al_trace` remains available.
 - [ ] Check 1280x720, 1920x1080, and 2560x1440 at 0.64, 0.8, and 1.0 UI scales.
   Inspect parchment, text contrast, dropdown labels, graph bars, native borders,
   and access to all controls without overlaps/clipped labels.
@@ -636,7 +641,7 @@ pages and the modal while performing this checklist.
   subsequent navigation without lost filters or fabricated values.
 - [ ] Change retention and reload/prune a copy of history. Durable totals, returned
   quantities and pins survive; expired factual crafts are not reconstructed. Clear
-  Core history via confirmed debug maintenance and verify UI preferences survive.
+  Core history through confirmed Core management and verify UI preferences survive.
 
 The pre-#21 migration replay caveat remains unchanged: the previously supplied
 untouched SavedVariables was content-audited, not fully replayed through
@@ -647,8 +652,9 @@ file remain outstanding; this UI redesign does not change migration rules.
 ## Automated validation
 
 From the repository root, run `bash src/addon/scripts/package.sh`. It runs all
-trace, adapter, ledger, API and UI integration tests, stages both addons, checks
-TOC/dependency/SavedVariables boundaries, builds three archives, and checks their
+trace, probe, adapter, ledger, API and addon integration tests, stages all three
+addons, checks TOC/dependency/SavedVariables boundaries, builds the three
+individual archives and the bundle, and checks their
 contents and integrity. For the focused UI suite:
 
 ```sh

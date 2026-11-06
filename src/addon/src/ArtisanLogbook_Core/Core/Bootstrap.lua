@@ -1,71 +1,31 @@
 local addonName, addon = ...
 local lifecycle = CreateFrame("Frame")
 local loginStartedAt = GetServerTime()
-local loginUptime = GetTimePreciseSec()
 local professionRecipeListSignature
 local professionRecipeListSettled = false
 
-function addon.Notify(message)
-  DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook: " .. message)
+local function diagnosticMessage(value)
+  return type(value) == "string" and value or nil
 end
 
-function addon.Start()
-  if not addon.recorder then
-    addon.Notify(addon.loadError or "Tracer is not initialized.")
-    return
+function addon.ObserveDiagnostic(event, context)
+  local observer = addon.diagnosticObserver
+  if type(observer) ~= "function" then return end
+  local snapshot = {}
+  if type(context) == "table" then
+    for key, value in pairs(context) do
+      local valueType = type(value)
+      if type(key) == "string" and
+          (valueType == "string" or valueType == "number" or valueType == "boolean") then
+        snapshot[key] = value
+      end
+    end
   end
-  local version, build, buildDate, interface = GetBuildInfo()
-  local ok, reason = addon.recorder:Start({
-    addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version"),
-    version = version,
-    build = build,
-    buildDate = buildDate,
-    interface = interface,
-    projectID = WOW_PROJECT_ID,
-    locale = GetLocale(),
-    character = UnitName("player"),
-    characterGUID = UnitGUID("player"),
-    realm = GetRealmName(),
-    loginStartedAt = loginStartedAt,
-    loginUptime = loginUptime,
-    capabilities = addon.adapter.capabilities,
-  })
-  addon.Notify(ok and "Recording raw events." or reason)
-end
-
-function addon.Stop()
-  if addon.recorder then
-    addon.recorder:Stop()
-    addon.Notify("Recording stopped.")
-  end
-end
-
-function addon.Mark(label)
-  if not addon.recorder or not addon.recorder.recording then
-    addon.Notify("Start recording before adding a marker.")
-    return
-  end
-  local marker = label:sub(1, 240)
-  if addon.Emit("TRACE_MARK", marker) then
-    addon.Notify("Marker: " .. marker)
-  end
-end
-
-function addon.Emit(event, ...)
-  if not addon.recorder or not addon.recorder.recording then
-    return false
-  end
-  local ok, captured, reason = pcall(addon.recorder.Capture, addon.recorder, event, ...)
+  local ok = pcall(observer, event, snapshot)
   if not ok then
-    addon.recorder.recording = false
-    addon.recorder.database.stoppedReason = "capture-error"
-    addon.Notify("Capture stopped after an error; earlier evidence is preserved.")
-    return false
-  elseif not captured then
-    if reason then addon.Notify(reason) end
-    return false
+    addon.diagnosticObserver = nil
+    addon.diagnosticObserverError = true
   end
-  return true
 end
 
 local function readable(value)
@@ -326,13 +286,32 @@ end
 function addon.HandleRetailEvent(event, ...)
   if addon.ledger then
     if event == "TRADE_SKILL_CRAFT_BEGIN" then
-      local ok = pcall(addon.ledger.BeginCraft, addon.ledger, select(1, ...))
+      local recipeId = select(1, ...)
+      local ok, err = pcall(addon.ledger.BeginCraft, addon.ledger, recipeId)
       if not ok then addon.ledgerCaptureError = true end
+      addon.ObserveDiagnostic("craft-begin", {
+        recipeId = recipeId,
+        accepted = ok and addon.ledger.pendingRecipeId == recipeId and not addon.ledger.ambiguousRecipe,
+        correlationReason = addon.ledger.pendingSalvage and "pending-salvage" or
+          addon.ledger.ambiguousRecipe and "ambiguous-begin" or
+          addon.ledger.operationOwnershipUncertain and "ownership-uncertain" or nil,
+        reason = not ok and diagnosticMessage(err) or nil,
+      })
       tryEnrich(addon.EnrichRecipe, select(1, ...))
     elseif event == "CRAFT_ATTEMPT_OBSERVATION" then
-      addon.ledger:ObserveAttempt(...)
+      local recipeId, observation = ...
+      local ok, accepted, reason = pcall(addon.ledger.ObserveAttempt, addon.ledger, recipeId, observation)
+      if not ok then addon.ledgerCaptureError = true end
+      local attempt = addon.ledger.attemptObservation
+      addon.ObserveDiagnostic("attempt-observation", {
+        recipeId = recipeId,
+        accepted = ok and accepted == true,
+        requestId = ok and accepted == true and attempt and attempt.requestId or nil,
+        reason = ok and diagnosticMessage(reason) or not ok and diagnosticMessage(accepted) or nil,
+      })
     elseif event == "CRAFT_CONFIGURATION_CHECK" then
-      addon.ledger:ConfigurationChanged(select(1, ...))
+      local ok = pcall(addon.ledger.ConfigurationChanged, addon.ledger, select(1, ...))
+      if not ok then addon.ledgerCaptureError = true end
     elseif event == "CRAFTING_DETAILS_UPDATE" then
       tryEnrich(addon.EnrichRecipe, addon.ledger.pendingRecipeId)
     elseif event == "UNIT_SPELLCAST_START" then
@@ -369,8 +348,17 @@ function addon.HandleRetailEvent(event, ...)
             { recipeId = onlyRecipe, requirements = {}, observation = "result" }
         end
       end
-      local ok, fact = pcall(addon.ledger.RecordResult, addon.ledger, result, expected)
+      local ok, fact, reason = pcall(addon.ledger.RecordResult, addon.ledger, result, expected)
       if not ok or not fact then addon.ledgerCaptureError = true end
+      addon.ObserveDiagnostic("craft-result", {
+        operationID = type(result) == "table" and result.operationID or nil,
+        accepted = ok and fact ~= nil,
+        craftId = type(fact) == "table" and fact.id or nil,
+        recipeId = type(fact) == "table" and fact.recipeId or nil,
+        correlationReason = type(fact) == "table" and fact.requestCorrelationReason or nil,
+        attribution = type(fact) == "table" and (fact.recipeId and "attributed" or "unknown") or nil,
+        reason = ok and diagnosticMessage(reason) or not ok and diagnosticMessage(fact) or nil,
+      })
       if fact and fact.firstCraftReward then
         tryEnrich(addon.EnrichItem, fact.itemId)
       elseif fact then
@@ -394,17 +382,25 @@ function addon.HandleRetailEvent(event, ...)
       addon.ledger:CancelCraft()
     end
   end
-  addon.Emit(event, ...)
 end
 
 function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible, observation)
   if addon.ledger then
-    local ok, request = pcall(addon.ledger.SubmitCraft, addon.ledger,
+    local ok, request, reason = pcall(addon.ledger.SubmitCraft, addon.ledger,
       recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible, observation)
+    if not ok then reason, request = diagnosticMessage(request), nil end
     if not ok or not request then
       addon.ledgerCaptureError = true
       addon.ledger:InvalidateCraft()
     end
+    addon.ObserveDiagnostic("craft-submission", {
+      operation = "CraftRecipe",
+      recipeId = recipeId,
+      count = count,
+      accepted = ok and request ~= nil,
+      requestId = type(request) == "table" and request.id or nil,
+      reason = diagnosticMessage(reason),
+    })
     if request then
       tryEnrich(addon.EnrichRecipe, recipeId)
       for _, allocation in ipairs(request.allocations or {}) do
@@ -421,13 +417,29 @@ function addon.InvalidateCraft(operationKind, observation, recipeId, count, capt
   if not addon.ledger then return end
   if operationKind == "CraftSalvage" then
     addon.craftCastGUID = nil
-    local ok, submitted = pcall(addon.ledger.SubmitSalvage, addon.ledger, recipeId, count, capture)
+    local ok, submitted, reason = pcall(addon.ledger.SubmitSalvage, addon.ledger, recipeId, count, capture)
     if not ok or not submitted then
       addon.ledgerCaptureError = true
       addon.ledger:InvalidateCraft(operationKind)
     end
+    addon.ObserveDiagnostic("craft-submission", {
+      operation = operationKind,
+      recipeId = recipeId,
+      count = count,
+      accepted = ok and submitted == true,
+      reason = ok and diagnosticMessage(reason) or not ok and diagnosticMessage(submitted) or
+        submitted == false and diagnosticMessage(reason) or nil,
+    })
   else
-    addon.ledger:InvalidateCraft(operationKind, observation)
+    local ok, err = pcall(addon.ledger.InvalidateCraft, addon.ledger, operationKind, observation)
+    if not ok then addon.ledgerCaptureError = true end
+    addon.ObserveDiagnostic("craft-submission", {
+      operation = operationKind,
+      recipeId = recipeId,
+      count = count,
+      accepted = ok,
+      reason = not ok and diagnosticMessage(err) or nil,
+    })
   end
 end
 
@@ -470,9 +482,8 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   addon.ledger, addon.ledgerError = addon.Ledger.New(ArtisanLogbookDB, {
     wall = GetServerTime,
   })
-  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent, function()
-    return addon.recorder ~= nil and addon.recorder.recording
-  end, addon.SubmitCraft, addon.InvalidateCraft)
+  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent,
+    addon.SubmitCraft, addon.InvalidateCraft)
   if addon.ledger then
     local ok, sessionId, reason = pcall(addon.CreateCurrentSession, addon.ledger, loginStartedAt)
     if ok and sessionId then
@@ -507,38 +518,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
       addon.ledger = nil
     end
   end
-  addon.recorder, addon.loadError = addon.Trace.New(ArtisanLogbookTraceDB, {
-    wall = GetServerTime,
-    elapsed = GetTimePreciseSec,
-  }, issecretvalue)
-  if not addon.recorder then
-    addon.Notify(addon.loadError)
-  else
-    ArtisanLogbookTraceDB = addon.recorder.database
-    addon.CreateTraceWindow()
-  end
   if addon.ledgerError then
-    addon.Notify("Ledger disabled: " .. addon.ledgerError)
+    DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook: Ledger disabled: " .. addon.ledgerError)
   end
 end)
-
-SLASH_ARTISANLOGBOOKTRACE1 = "/al_trace"
-SlashCmdList.ARTISANLOGBOOKTRACE = function(message)
-  local command, argument = message:match("^%s*(%S*)%s*(.-)%s*$")
-  command = command:lower()
-  if (command == "" or command == "open" or command == "export") and addon.window then
-    addon.window:Show()
-    addon.window:Refresh(command == "export" or argument == "export")
-  elseif command == "start" then
-    addon.Start()
-  elseif command == "stop" then
-    addon.Stop()
-  elseif command == "mark" then
-    addon.Mark(argument)
-  elseif command == "status" then
-    addon.Notify(addon.recorder and (addon.recorder.recording and "Recording." or "Not recording.") or
-      (addon.loadError or "Tracer unavailable."))
-  else
-    addon.Notify(addon.loadError or "Use /al_trace [open|start|stop|mark <label>|status|export].")
-  end
-end

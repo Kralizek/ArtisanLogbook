@@ -30,6 +30,12 @@ documentation can coexist. See
 [storage-ledger.md](storage-ledger.md) for the issue #4/#12 storage contract and
 [lua-api.md](lua-api.md) for the issue #5 public consumer contract.
 
+Current distribution (issue #47) separates production capture/storage/API in
+`ArtisanLogbook_Core`, the dependent production UI in `ArtisanLogbook`, and the
+optional default-disabled diagnostic capture addon in `ArtisanLogbook_Tracer`.
+All three ship together with one version and release; Core and UI do not depend
+on Tracer.
+
 ## Reviewable Slices
 
 1. **Tracer and capture contract:** raw event/call observations, bounded debug

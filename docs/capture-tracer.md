@@ -1,9 +1,9 @@
-# Retail Capture Evidence (PR #3)
+# Optional Tracer Addon and Retail Capture Evidence
 
 This document preserves the capture evidence verified in merged PR #3 against
 user-supplied live Retail traces from build 69933 (12.1.0). It is the historical
-tracer review record, not the durable storage contract. The issue #4 ledger
-implementation and its conservative correlation behavior are documented in
+evidence record as well as the current Tracer operator guide; it is not the
+durable storage contract. The issue #4 ledger implementation and its conservative correlation behavior are documented in
 [storage-ledger.md](storage-ledger.md). Other cases and universal correlation
 guarantees remain unverified.
 
@@ -15,19 +15,23 @@ From the repository root, with Lua 5.1, ZIP, and unzip available:
 bash src/addon/scripts/package.sh
 ```
 
-Addon CI stamps both TOC versions as `0.0.0-dev-<short commit SHA>` before
+Addon CI stamps all three TOC versions as `0.0.0-dev-<short commit SHA>` before
 packaging. The local deployment script copies these artifacts unchanged; release
 packaging retains its separately calculated release version. On successful UI
 initialization, chat announces that Artisan Logbook loaded and displays its TOC
 version.
 
-This runs the addon tests and produces Core-only `ArtisanLogbook_Core.zip`,
-UI-only `ArtisanLogbook.zip`, and `ArtisanLogbook-Bundle.zip` in `src/addon/dist/`.
-Extract the bundle's sibling `ArtisanLogbook_Core` and `ArtisanLogbook` folders
-into the live client's `_retail_/Interface/AddOns/`, or install both individual
-archives. Core's TOC must be at `Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc`;
-the UI requires Core. Restart the client after the first installation.
-Enable **Artisan Logbook** in the addon list.
+This runs the addon tests and produces individual Core, UI, and Tracer archives,
+plus `ArtisanLogbook-Bundle.zip`, in `src/addon/dist/`. Extract the bundle's
+sibling `ArtisanLogbook_Core`, `ArtisanLogbook`, and `ArtisanLogbook_Tracer`
+folders into the live client's `_retail_/Interface/AddOns/`, or install the
+individual archives. Core's TOC must be at
+`Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc`; the UI and
+Tracer both require Core. Restart the client after the first installation.
+Enable **Artisan Logbook** for production capture and UI. **Artisan Logbook
+Tracer** is optional and its TOC sets `DefaultState: disabled`; enable it
+explicitly in the AddOns list before using `/al_trace`. Core and the UI continue
+to work if Tracer is absent or disabled.
 
 Source TOCs have no interface value. Packaging requires a configured flavor in
 `.flavors.yml` (Retail by default) and injects the interface derived from the
@@ -37,21 +41,40 @@ Confirm the actual client using `/dump GetBuildInfo()`; the client is
 authoritative. Every recording start also stores the actual build, interface,
 locale, character, realm, and capabilities.
 
-Open the tracer with `/al_trace`. Recording starts **paused**
-on every load/reload. The native window provides Start, Stop, an editable scenario
-label with Mark, Export, Diagnostics, page arrows, and confirmed Clear. Closing
-the window does not stop capture. It does not alter the crafting UI or trigger
-crafts. No third-party libraries or addons are required.
+Open the tracer with `/al_trace`. Recording starts **paused** on every
+load/reload. Normal mode records craft-relevant events, submitted craft calls,
+and Core's optional read-only capture-decision context; quote and high-volume
+probe traffic is excluded. Toggle **Verbose: on** in the window to include quote
+and probe observations for the next recording. Turn it off again to return to
+normal mode. The window provides Start, Stop, an editable scenario label with
+Mark, paged Export, Diagnostics, page arrows, and confirmed Clear. Closing the
+window does not stop capture. It does not alter the crafting UI or trigger
+crafts. Tracer never reads or changes Core's private ledger.
 
-The debug window also provides **Repair unknown recipes** beside the database
-purge control. It first tries to verify remaining output-name candidates through
-Blizzard metadata, learns confirmed relationships, then previews repair counts.
-Historical craft/aggregate mutation still requires confirmation; canceling keeps
-any authoritative knowledge learned, not a pending repair. Ambiguous and
-unsupported crafts stay Unknown. This is a recovery tool, not a replacement for
-correct live capture. Startup and profession-event recovery are silent and
-best effort. Diagnostics show the last discovery's candidate, confirmed,
-unavailable and unconfirmed counts, and relationships learned this session.
+Diagnostics separates Tracer recording state and its event/hook capabilities
+from Core's runtime capture capabilities, capture health, correlation warnings,
+and cached recipe-output/recovery status. The Core portion comes from the
+detached `ArtisanLogbookAPI.GetDiagnostics()` snapshot. Opening the view does
+not scan retained crafts, discover recipes, or run maintenance analysis.
+Successful Core observations omit `reason` unless an actual explanatory reason
+was returned; rejection details and protected-call errors are preserved.
+
+Production maintenance is available in Artisan Logbook's **Settings** page:
+**Analyze unknown recipes** is a read-only check of currently known evidence.
+**Discover recipe outputs** explicitly queries available recipe metadata for
+matching retained unknown outputs, records verified relationships without
+repairing crafts, and refreshes the analysis. Only uniquely repairable crafts
+can then be submitted for confirmed repair. Unsupported and ambiguous crafts
+remain unchanged. **Purge Logbook DB** is a separately confirmed permanent deletion
+of Logbook history and learned data; it does not clear Tracer data. **Clear
+Trace** only clears Tracer recordings and does not affect the Logbook.
+
+When the count or estimated-byte limit is reached, recording stops, preserves
+all existing evidence, and displays an explicit FULL state. Starting again
+requires stopping and clearing the trace; clearing is the only operation that
+discards stored records. Exports and the UI are limited to ten records per page;
+use the page arrows to inspect or copy a large trace without placing the entire
+database in one EditBox. No third-party libraries or addons are required.
 
 ### Recipe metadata and recovery
 
@@ -134,15 +157,21 @@ Sources reviewed:
    [canaccesstable](https://warcraft.wiki.gg/wiki/API_canaccesstable).
 
 Live acceptance: load the existing schema-v1 DB without opening a profession,
-check Diagnostics, open a relevant profession and check again, then try manual
-Repair. Verify silence, readiness, ambiguous outputs remaining Unknown, cancel
-leaving craft facts untouched, and learned knowledge surviving reload. The
-actual 14-Unknown DB and a Retail/Forever client are not part of the Lua tests.
+inspect Core management status, open a relevant profession and check again, then
+exercise Core's `ArtisanLogbookManagement.RepairUnknownRecipes` only through a
+Core-side diagnostic harness if manual repair is required. Tracer Diagnostics
+reports Tracer capabilities, not Core ledger state. Verify silence, readiness,
+ambiguous outputs remaining Unknown, cancel leaving craft facts untouched, and
+learned knowledge surviving reload. The actual 14-Unknown DB and a
+Retail/Forever client are not part of the Lua tests.
 
 Optional commands:
 
 ```text
 /al_trace start
+/al_trace start normal
+/al_trace start verbose
+/al_trace verbose
 /al_trace mark basic-before
 /al_trace mark basic-after
 /al_trace stop
@@ -150,17 +179,18 @@ Optional commands:
 /al_trace export
 ```
 
-`/al` and `/artisanlogbook` open the separate production UI. The tracer window refreshes status twice per second while
-visible, but does not overwrite export text as events arrive. Export refreshes
-the displayed data with the complete trace in one copyable block. Click in the
-export text, select all, and copy. The page arrows switch to ten-record pages
-as a fallback for large traces; Export returns to the complete trace. Capture
-is bounded independently of rendering.
+`/al` and `/artisanlogbook` open the separate production UI. The tracer window
+refreshes status twice per second while visible, but does not
+overwrite export text as events arrive. Export refreshes the displayed data to
+the latest ten-record page. Click in the export text, select all, and copy.
+Use the page arrows to inspect and copy each page. Capture is bounded
+independently of rendering.
 
 ## Controlled Trace Collection
 
-1. Start with a clean, out-of-combat session on live Retail. Disable unrelated
-   addons for the first pass, including CraftSim and TSM. Open the profession.
+1. Start with a clean, out-of-combat session on live Retail. Enable Tracer,
+   leave it in normal mode for the first pass, and disable unrelated addons,
+   including CraftSim and TSM. Open the profession.
 2. Start recording, enter a unique label such as `basic-01-before`, and Mark.
    Also note recipe/profession, allocated reagent IDs/qualities/quantities, the
    selected batch size, and whether concentration is enabled. Screenshots of
@@ -172,10 +202,10 @@ is bounded independently of rendering.
 4. Stop, check `/al_trace status`, and inspect the export for `warnings`. Capacity
    stops and omitted payloads mean the affected evidence is incomplete, not
    evidence that the game omitted a field. Report these before proceeding.
-5. Copy the complete Export block, or preferably preserve the entire
-   account-wide SavedVariables file after `/reload` or a normal logout. If using
-   the paged fallback, export every page, including the first with `TRACE_START`.
-   Keep separate evidence copies for each controlled run before clearing.
+5. Copy every Export page, or preferably preserve the entire account-wide
+   SavedVariables file after `/reload` or a normal logout. Include the first
+   page with `TRACE_START`. Keep separate evidence copies for each controlled
+   run before clearing.
 6. Build 69933 traces now cover a basic result flow, concentration spend with
    `hasIngenuityProc = false`, Multicraft, and Resourcefulness (including
    multiple returned item IDs in one result). The newly verified Ogrim export
@@ -192,10 +222,21 @@ lose the current session; this addon cannot force a disk flush. Reload pauses
 capture and a new Start creates another metadata boundary. Do not use reload
 mid-scenario unless testing that boundary intentionally.
 
-The file is under
-`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Core.lua` and contains
-`ArtisanLogbookTraceDB`. This is account-wide, not a per-character file. Raw traces
-can include character names, GUIDs, targets, hyperlinks, and order identifiers.
+The current file is under
+`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Tracer.lua` and
+contains `ArtisanLogbookTraceDB`. This is account-wide, not a per-character
+file. Older versions declared this variable from Core and stored it in
+`ArtisanLogbook_Core.lua`; WoW loads and saves only variables declared in the
+owning addon's TOC. An undeclared variable left in the old file is not a
+migration and may be dropped when that file is next saved. Before updating an
+existing installation, close WoW and make a backup of both files. For a modest
+trace you want to keep, create or edit the Tracer SavedVariables file and copy
+the complete `ArtisanLogbookTraceDB = ...` assignment from the old Core file
+into it before launching WoW, retaining the original backup until the new trace
+is verified. See the [SavedVariables loading contract](https://warcraft.wiki.gg/wiki/SavedVariables).
+Do not import very large historical traces; archive the old file offline and
+start Tracer with a fresh trace instead. Never delete or edit the old ledger
+assignment. Raw traces can include character names, GUIDs, targets, hyperlinks, and order identifiers.
 The claimed-order probe stores only an allowlisted diagnostic snapshot, not
 full order names, GUIDs, notes, or hyperlinks. Review traces before sharing.
 Preserve originals privately; label any sanitized copy and keep ID substitutions
@@ -208,6 +249,10 @@ publication. Do not execute trace files received from others.
   `UPDATE_TRADESKILL_CAST_STOPPED`.
 - Player-only spellcast sent/start/success/stop/failure/interruption/delay and
   channel start/stop events. All supplied arguments are preserved by position.
+- `CORE_CAPTURE_DECISION` observations from Core's optional, read-only observer
+  include primitive craft context such as request IDs, operation IDs, accepted
+  or rejected decisions, and correlation reasons. Core does not depend on a
+  Tracer callback; observer errors are isolated and disable that observer.
 - Profession open/close, crafting-details updates, currency-display updates,
   UI errors, and logout. Some are unrelated noise; no causal claim is made.
 - Read-only `hooksecurefunc` post-hooks for `C_TradeSkillUI.CraftRecipe`,
@@ -215,14 +260,14 @@ publication. Do not execute trace files received from others.
   if available. `CALL_POST:` records contain arguments only, not return values.
   Hooks may run after synchronous events and are **not** pre-craft snapshots,
   success signals, or necessarily one invocation per individual batch operation.
-- While recording, `QUOTE_CALL_POST:` records the arguments to
+- In Verbose mode, `QUOTE_CALL_POST:` records the arguments to
   `GetCraftingOperationInfo` and `GetCraftingOperationInfoForOrder` when the
   client invokes them. `QUOTE_PROBE:` re-queries the same read-only API with
   those arguments immediately afterward, recording `status` (`ok`, `nil`, or
   `error`) and a nullable `info`. The secure post-hook cannot read the
   original return value. Re-querying may fail or differ from the UI's return;
   neither record proves which quote was displayed or accepted.
-- While recording, each craft post-hook also emits a `REQUEST_PROBE:` record.
+- In Verbose mode, each craft post-hook also emits a `REQUEST_PROBE:` record.
   For `CraftRecipe` calls with a supplied reagent table and explicit
   concentration boolean, this attempts `GetCraftingOperationInfo` (or
   `GetCraftingOperationInfoForOrder` for a supplied order ID) with the
@@ -346,12 +391,16 @@ direction. Unknown metadata remains absent until supported by game data and the
 schema review.
 
 Once 10,000 records are stored, a new trace cannot start until the evidence is
-exported and cleared. A trace already in progress continues until stopped, even
-if it exceeds that count; earlier evidence is never evicted. The displayed
-byte total is a payload-plus-overhead estimate, not a limit or an exact
-measurement of Lua heap or SavedVariables file size; long recordings increase
-SavedVariables size and load/save cost. Existing trace schema-2 databases below
-the count threshold can continue after reload and Start without clearing evidence.
+exported and cleared. The limit is enforced during every capture, not just at
+recording start; the recorder stops accepting records at the limit and preserves
+the existing trace. The estimated byte total also has a 12 MiB cap; it is a
+payload-plus-overhead estimate, not an exact measurement of Lua heap or
+SavedVariables file size. Either limit causes an explicit stopped/full state.
+The database has no eviction: records remain until the user clears them. Normal
+mode omits quote and high-volume probe observations; enable Verbose explicitly
+when investigating those paths. Existing trace schema-2 records are retained
+when loaded under the new Tracer owner if they are available to the loader; no
+automatic cross-addon SavedVariables migration is performed.
 Individual payloads have a 16 KiB serialized ceiling, 512 traversal-node budget,
 eight-level depth limit, and 2,048-byte per-string limit. Cycles, restricted
 values, unsupported types/keys, and limit violations are explicitly diagnosed
@@ -364,9 +413,10 @@ Trace schema 1 used the older `exportContractVersion` name. Schema 2 renames it 
 existing diagnostic records survive while the original SavedVariables table is
 left untouched until initialization succeeds. Unsupported schema/export versions
 or invalid top-level shapes are refused without overwriting the existing data.
-Export/back up the SavedVariables file outside the game before resetting an
-incompatible debug database. The durable ledger has its own versioned schema
-and load contract; debug records still do not silently become ledger entries.
+Export/back up the Tracer SavedVariables file outside the game before resetting
+an incompatible diagnostic database. The durable ledger has its own versioned
+schema and load contract; debug records still do not silently become ledger
+entries.
 
 ## Source Findings, Not Runtime Verification
 
@@ -487,18 +537,21 @@ requirements. The trace schema's own migration is independent and unchanged.
 
 ### Controlled live traces for remaining gaps
 
-Install the instrumented ZIP as above. Back up the raw SavedVariables
-privately, disable unrelated addons, work out of combat, and use a fresh
-recording **per scenario**. Open the recipe first, then `/al_trace start`, mark
+Install the instrumented ZIP as above and explicitly enable Tracer. Back up the
+raw SavedVariables privately, disable unrelated addons, work out of combat, and
+use a fresh recording **per scenario**. Enable Verbose before starting to capture
+quotes/probes; otherwise use normal mode, which excludes them. Open the recipe
+first, then `/al_trace start verbose` (or `start normal`), mark
 `scenario-before`, choose reagents and concentration, wait for the quote,
 mark `scenario-click`, craft normally, mark `scenario-after`, and `/al_trace stop`.
-If quote activity fills the 10,000-record limit, clear and restart
-immediately before selection; report any capacity or payload warnings.
-Preserve every export page or the raw SavedVariables after a normal logout,
-including `TRACE_START` and build information. Note the UI-displayed
-allocation/quality, concentration quote, batch count, result/procs, and
-the sequence ranges of `QUOTE_CALL_POST`, `QUOTE_PROBE`, `CALL_POST`,
-`REQUEST_PROBE`, craft begins, and individual results. Never share raw
+The 10,000-record and 12 MiB estimated-byte limits apply during capture in both
+modes. If either limit is reached, preserve the trace, export each page and
+clear only before a new scenario; report capacity or payload warnings. Preserve
+every export page or the raw SavedVariables after a normal logout, including
+`TRACE_START` and build information. Note the UI-displayed allocation/quality,
+concentration quote, batch count, result/procs, and the sequence ranges of
+`QUOTE_CALL_POST`, `QUOTE_PROBE`, `CALL_POST`, `REQUEST_PROBE`, craft begins,
+and individual results. Never share raw
 order names, item GUIDs, cast tokens, or hyperlinks publicly.
 The optional claimed-order probe stores only an allowlisted order snapshot
 (for example ID, minimum quality, commission, and reagent source/allocation),

@@ -19,16 +19,32 @@ for correlation, ambiguity, migration, measurement coverage and retention.
 ## SavedVariables and Versions
 
 `ArtisanLogbookDB` is account-wide SavedVariables for durable facts.
-`ArtisanLogbookTraceDB` remains the independent bounded debug trace database.
-Both belong to `ArtisanLogbook_Core`; their Lua tables are private persistence,
-not supported in-game consumer APIs. All addons, including the production UI,
-must use `ArtisanLogbookAPI` for factual reads. Offline exporters may have
+`ArtisanLogbook_Core` owns `ArtisanLogbookDB`; optional
+`ArtisanLogbook_Tracer` owns the independent bounded `ArtisanLogbookTraceDB`.
+The UI and Tracer require Core, but Core and the production UI do not require
+Tracer. These Lua tables are private persistence, not supported in-game
+consumer APIs. All addons, including the production UI, must use
+`ArtisanLogbookAPI` for factual reads. Offline exporters may have
 version-specific persistence readers without making these tables a public
 in-game API. The Core TOC addon version is recorded on each session;
 `schemaVersion` belongs to the ledger, and public API version 1 is independent
 of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
+
+Moving Tracer's SavedVariables declaration from Core to Tracer does not copy
+history between addon files. Before updating an existing installation, close
+WoW and back up the account's `ArtisanLogbook_Core.lua` and
+`ArtisanLogbook_Tracer.lua`. For a reasonably sized history, manually copy only
+the `ArtisanLogbookTraceDB = ...` assignment from the old Core file into the
+Tracer file before the next game launch, then verify the trace in game before
+retiring the backup. WoW only loads/saves variables declared by an addon's TOC;
+the undeclared old assignment is ignored and can be omitted from Core's file on
+the next save. See the [SavedVariables loading contract](https://warcraft.wiki.gg/wiki/SavedVariables).
+For a
+very large historical trace, keep the old file as an offline archive and start
+with a fresh Tracer database rather than loading or copying it automatically.
+Leave the `ArtisanLogbookDB` assignment and its ledger history untouched.
 
 **Schema 5 is the current persistence contract**, identified by both
 `schemaVersion = 5` and `schemaIdentity = "ArtisanLogbookLedger"`. Schemas 1, 2, 3 and 4
@@ -509,8 +525,9 @@ load used for every database:
 Any failure returns `ledger data refused: schema 1 migration failed (saved data
 unchanged): <reason>` (or the underlying validation reason). Core stays disabled,
 `ArtisanLogbookDB` remains the original table and is saved back unchanged, and the
-tracer is unaffected. A user can report the diagnostic and keep the backup; the
-confirmed debug purge remains an explicit, separate choice. The complete upgrade
+independent Tracer data is unaffected. A user can report the diagnostic and keep
+the backup; Core's confirmed ledger purge remains an explicit, separate choice.
+The complete upgrade
 is idempotent: the saved result is schema 3, so later loads never replay retained
 details into aggregates; reloading an unsaved schema-1 file repeats the same
 deterministic migration. `ArtisanLogbookManagement.Status()` reports `migratedFromSchemaVersion`
@@ -646,12 +663,13 @@ identities and rebuilds affected detailed
 craft filter indexes; durable series and character profession choices resolve
 the updated recipe association on read without rewriting history.
 
-The confirmed `/al_trace` **Purge Logbook DB** operation creates a fresh Core
+Core's confirmed ledger-purge operation creates a fresh Core
 ledger with a new active session and the same runtime character/realm context.
 It removes crafts, requests, reagents, aggregates, and all prior dimensions;
 only the new session, character, and realm dimensions remain. Core-owned counters and
 retention settings reset to clean-database defaults (including craft and
-request IDs starting at 1). Diagnostic `ArtisanLogbookTraceDB` is unaffected.
+request IDs starting at 1). The independent Tracer-owned
+`ArtisanLogbookTraceDB` is unaffected.
 Runtime operation IDs remain remembered. Only after successful purge, every old
 observation's same-request completion exception is retired, including malformed
 and bonus observations. Reusing numeric request ID 1 cannot make it the old
@@ -842,10 +860,11 @@ the configured age cutoff to detailed facts and rebuilds indexes, leaving daily
 series intact. Confirmed `Clear` deletes detailed crafts, requests, reagents and
 all daily totals while preserving dimensions, session identity, retention and
 monotonic ID counters. Capture can resume immediately afterward. This is distinct
-from the tracer's independent debug clear operation.
+from Tracer's independent trace-clear operation.
 
-The tracer also exposes **Repair unknown recipes** as a confirmed maintenance
-operation. Analysis derives `outputItemId -> recipeId set` from committed craft
+Core exposes unknown-recipe repair through its management API; Tracer does not
+offer ledger repair or mutation controls. Analysis derives
+`outputItemId -> recipeId set` from committed craft
 facts and authoritative Retail output metadata stored in `recipeOutputs`. A
 retained craft with no recipe is repairable only when its output has exactly
 one known recipe; ambiguous, missing-output, and unsupported outputs remain
