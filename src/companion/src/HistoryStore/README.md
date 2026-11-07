@@ -1,8 +1,8 @@
 # Companion History Store
 
-`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; a writer creates its parent directory and initializes schema v2 (migrating v1 in place). Dispose the store to close its connection. Calls on one store instance are serialized; callers should use a single writer per database because separate instances do not coordinate writes.
+`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; a writer creates its parent directory and initializes the complete schema v2 directly. Old C03 development databases are unsupported; select a new database path and reimport SavedVariables. Dispose the store to close its connection. Calls on one store instance are serialized; callers should use a single writer per database because separate instances do not coordinate writes.
 
-## Physical schema (version 1)
+## Physical schema (version 2)
 
 The initial schema persists every current `CraftDimensions` collection, canonical observations, and slot-level recipe requirements:
 
@@ -28,15 +28,18 @@ All dimension keys are scoped to `GameContext`. Dimension-to-context constraints
 
 `WriteBatch` validates one complete `CraftHistory`, reconciles its dimensions and every craft, then commits the whole batch in one transaction. Validation failures and C02 conflicts return typed results without committing any writes; database failures and cancellation roll back through transaction disposal. Calls on one store instance remain serialized, and the store does not add import checkpoints or source records.
 
-The internal `__HistoryStoreMigration` table tracks schema versions separately. Schema v1 is corrected before initial merge; no migration is supplied for the unshipped PR schema. Provenance, callback evidence, and configuration evidence retain their C01 typed payloads and versioned JSON representation.
+The internal `__HistoryStoreMigration` table records the initialized schema
+version. No compatibility migrations are provided for old development databases.
+Unsupported schemas are rejected, not deleted or overwritten. Provenance,
+callback evidence, and configuration evidence retain their C01 typed payloads
+and versioned JSON representation.
 
-Schema v2 adds nullable `Craft.RecipeSchematicEvidenceJson` in one additive
-migration. Existing v1 crafts/dimensions remain intact; their missing schematic
-sidecar remains unknown. All supplementary schematic variants are persisted,
+Schema v2 includes nullable `Craft.RecipeSchematicEvidenceJson` in its initial
+table definition. All supplementary schematic variants are persisted,
 reconciled idempotently, and survive reopening without changing canonical fact
 equality. `RecipeReagent` remains available for explicitly supplied dimensions;
 historical SavedVariables schematics are now craft evidence, not catalog rows.
-Status can read both v1 and v2 without migration.
+Status supports only the current schema; no old-schema read fallback is provided.
 
 ## Operational status
 

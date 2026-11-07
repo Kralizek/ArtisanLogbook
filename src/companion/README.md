@@ -60,7 +60,9 @@ expanded by your shell, not by the Companion.
 
 Linux ignores empty or relative `XDG_DATA_HOME`, as required by XDG conventions.
 `--database` completely overrides the default. Import creates parent directories
-and initializes schema v2 (or migrates v1 without losing history). Status uses DuckDB's read-only access mode, does not
+and initializes the complete schema v2 directly. Old C03 development databases
+are unsupported: use a new database path and reimport SavedVariables. No old
+database is migrated, deleted, or overwritten. Status uses DuckDB's read-only access mode, does not
 migrate schemas, and does not create a missing file or directory. Unrecognized
 or unsupported schemas fail explicitly. Defaults never use the executable
 directory; an unavailable user data directory requires an explicit override.
@@ -199,7 +201,7 @@ with original record references, timestamps and fields. Variance is reported;
 no winner, union of candidate sets, or inferred schematic is manufactured.
 Canonical craft conflicts and explicit catalog-dimension conflict checks remain
 strict. Regression tests cover cross-history and within-craft metadata variance,
-exact persistence, idempotent evidence enrichment, migration, round trips, and
+exact persistence, idempotent evidence enrichment, round trips, and
 continued canonical conflict rejection. The original file, identities, GUIDs,
 account identifiers, and raw diagnostic traces are not committed.
 

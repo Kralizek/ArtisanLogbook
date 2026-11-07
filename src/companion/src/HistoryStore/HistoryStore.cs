@@ -73,7 +73,6 @@ public sealed class HistoryStore : IDisposable
 
     private readonly object _gate = new();
     private readonly DuckDBConnection _connection;
-    private readonly bool _readOnly;
     private bool _disposed;
 
     public string DatabasePath { get; }
@@ -94,7 +93,6 @@ public sealed class HistoryStore : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         DatabasePath = Path.GetFullPath(databasePath);
-        _readOnly = readOnly;
         if (readOnly)
         {
             if (!File.Exists(DatabasePath))
@@ -326,7 +324,7 @@ public sealed class HistoryStore : IDisposable
                 WHERE table_schema = 'main' AND table_name = '__HistoryStoreMigration'
                 """), CultureInfo.InvariantCulture) > 0;
             int? version = hasMigration ? SchemaVersion : null;
-            if (version is null || version < 1 || version > CurrentSchemaVersion)
+            if (version != CurrentSchemaVersion)
                 throw new InvalidOperationException(
                     $"History schema version {version?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"} " +
                     $"cannot be read by this Companion (supported: {CurrentSchemaVersion}).");
@@ -391,29 +389,26 @@ public sealed class HistoryStore : IDisposable
             """);
 
         int version = SchemaVersion;
-        if (version > CurrentSchemaVersion)
+        if (version != 0 && version != CurrentSchemaVersion)
             throw new InvalidOperationException(
-                $"Database schema version {version} is newer than supported version {CurrentSchemaVersion}.");
+                $"Database schema version {version} is unsupported; expected {CurrentSchemaVersion}. " +
+                "Use a new database path and reimport SavedVariables. Old development databases are not migrated.");
 
-        while (version < CurrentSchemaVersion)
+        if (version == 0)
         {
-            int nextVersion = version + 1;
             using DbTransaction transaction = _connection.BeginTransaction();
-            foreach (string statement in MigrationStatements(nextVersion))
+            foreach (string statement in SchemaStatements())
                 ExecuteNonQuery(statement, transaction);
             ExecuteNonQuery(
                 "INSERT INTO __HistoryStoreMigration (Version, AppliedAt) VALUES (?, ?)",
                 transaction,
-                nextVersion,
+                CurrentSchemaVersion,
                 DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             transaction.Commit();
-            version = nextVersion;
         }
     }
 
-    private static IReadOnlyList<string> MigrationStatements(int version) => version switch
-    {
-        1 =>
+    private static IReadOnlyList<string> SchemaStatements() =>
         [
             """
             CREATE TABLE GameContext (
@@ -519,6 +514,7 @@ public sealed class HistoryStore : IDisposable
                 ProvenanceJson VARCHAR,
                 OutputEvidenceJson VARCHAR,
                 ConfigurationEvidenceJson VARCHAR,
+                RecipeSchematicEvidenceJson VARCHAR,
                 EvidenceFormatVersion INTEGER NOT NULL,
                 FOREIGN KEY (CraftKey) REFERENCES CraftIdentity(CraftKey),
                 FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
@@ -546,10 +542,7 @@ public sealed class HistoryStore : IDisposable
                 CHECK (QualityKey = COALESCE(Quality, -1))
             )
             """
-        ],
-        2 => ["ALTER TABLE Craft ADD COLUMN RecipeSchematicEvidenceJson VARCHAR"],
-        _ => throw new InvalidOperationException($"No migration is defined for schema version {version}.")
-    };
+        ];
 
     private CraftObservation? Read(CraftIdentity identity, DbTransaction? transaction)
     {
@@ -578,8 +571,7 @@ public sealed class HistoryStore : IDisposable
         string? recipeSchematicEvidenceJson;
         int evidenceFormatVersion;
 
-        string schematicColumn = _readOnly && SchemaVersion == 1 ? "NULL" : "Craft.RecipeSchematicEvidenceJson";
-        using (DuckDBCommand command = CreateCommand($"""
+        using (DuckDBCommand command = CreateCommand("""
             SELECT
                 Craft.CraftKey,
                 GameContext.ProjectId,
@@ -604,7 +596,7 @@ public sealed class HistoryStore : IDisposable
                 Craft.OutputEvidenceJson,
                 Craft.ConfigurationEvidenceJson,
                 Craft.EvidenceFormatVersion,
-                {schematicColumn}
+                Craft.RecipeSchematicEvidenceJson
             FROM Craft
             JOIN CraftIdentity USING (CraftKey)
             JOIN GameContext USING (ContextKey)

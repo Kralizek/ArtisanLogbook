@@ -45,28 +45,23 @@ public sealed class HistoricalSchematicPersistenceTests
     }
 
     [Test]
-    public void SchemaOneReadOnlyStatusRemainsReadOnlyAndWriterMigratesWithoutLosingCrafts()
+    public void OldDevelopmentDatabaseIsRejectedWithoutMigrationOrOverwrite()
     {
         using (Store store = new(_database)) store.Write(Craft());
         using (DuckDBConnection connection = new($"Data Source={_database}"))
         {
             connection.Open();
             using DuckDBCommand command = connection.CreateCommand();
-            command.CommandText = "ALTER TABLE Craft DROP COLUMN RecipeSchematicEvidenceJson; DELETE FROM __HistoryStoreMigration WHERE Version = 2";
+            command.CommandText = "ALTER TABLE Craft DROP COLUMN RecipeSchematicEvidenceJson; UPDATE __HistoryStoreMigration SET Version = 1";
             command.ExecuteNonQuery();
         }
+        byte[] before = File.ReadAllBytes(_database);
         using (Store reader = new(_database, readOnly: true))
         {
-            Assert.That(reader.ReadStatus().SchemaVersion, Is.EqualTo(1));
-            Assert.That(reader.ReadStatus().TotalCraftCount, Is.EqualTo(1));
-            Assert.That(reader.ReadAll().Single(), Is.EqualTo(Craft()));
+            Assert.That(() => reader.ReadStatus(), Throws.InvalidOperationException.With.Message.Contains("cannot be read"));
         }
-        using Store migrated = new(_database);
-        Assert.That(migrated.SchemaVersion, Is.EqualTo(2));
-        Assert.That(migrated.ReadAll().Single(), Is.EqualTo(Craft()));
-        Assert.That(migrated.ReadAll().Single().RecipeSchematicEvidence, Is.Null);
-        Assert.That(migrated.Write(Craft() with { RecipeSchematicEvidence = [new("source", "retained")] }).Status,
-            Is.EqualTo(CraftWriteStatus.Enriched));
+        Assert.That(() => new Store(_database), Throws.InvalidOperationException.With.Message.Contains("not migrated"));
+        Assert.That(File.ReadAllBytes(_database), Is.EqualTo(before));
     }
 
     private static CraftObservation Craft() => new(new("source", "one"), new(GameProject.Retail),
