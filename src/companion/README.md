@@ -182,7 +182,7 @@ historical schematic evidence boundary:
 |---|---|
 | Observed detailed crafts | 2,560 |
 | First import | Successful, exit 0; accepted/inserted 2,560, exclusions 0 |
-| C07 source diagnostics | 1 `legacy-identity-lineage` warning, 44 `unknown-recipe` warnings, 3 `historical-recipe-schematic-variation` warnings; errors 0 |
+| C07 source diagnostics | 1 `legacy-identity-lineage` warning, 44 `unknown-recipe` warnings, 3 informational `historical-recipe-schematic-variation` notices; errors 0 |
 | Dimension insertions/enrichments | 748 / 0 |
 | Status, then reimport | Canonical count 2,560; reimport exit 0, inserted 0, already-present 2,560, enriched 0, dimension changes 0 |
 | Reopened status | Schema 2, canonical count 2,560; Retail project 1, progression unspecified |

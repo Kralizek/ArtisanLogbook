@@ -238,7 +238,7 @@ public static class SavedVariablesReader
                     new CraftHistory([], CraftDimensions.Empty with { RecipeReagentSlots = [slot] }));
                 if (!merge.IsSuccessful)
                 {
-                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "historical-recipe-schematic-variation",
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Information, "historical-recipe-schematic-variation",
                         location, "Historical schematic observations differ for this recipe slot. All source snapshots remain attached to their crafts; no immutable catalog value was chosen."));
                     return;
                 }

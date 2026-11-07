@@ -162,7 +162,7 @@ public sealed class CompanionCommandAppTests
     }
 
     [Test]
-    public async Task HistoricalSchematicVariationPreservesCraftsAndWarnsWithoutCatalogPromotion()
+    public async Task HistoricalSchematicVariationPreservesCraftsAndInformsWithoutCatalogPromotion()
     {
         string source = Path.Combine(_directory, "schematic-conflict.lua");
         await File.WriteAllTextAsync(source, """

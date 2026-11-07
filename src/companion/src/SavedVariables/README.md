@@ -73,10 +73,22 @@ timestamps, and supplementary completeness/observation fields in a deterministic
 data-only Lua payload. Candidate rows retain all their source fields; absent
 data-slot type/UI index stays absent. Historical snapshots are not promoted
 into one immutable recipe-slot dimension. Different known required quantities
-or candidate sets produce `historical-recipe-schematic-variation` warnings while
+or candidate sets produce informational `historical-recipe-schematic-variation` notices while
 all snapshots survive. Malformed schematic lists still reject. Supplementary
 metadata disagreement does not override or excuse contradictory canonical
 craft inputs/outputs, identities, timestamps, or outcomes.
+
+Request-originated requirements retain a separate `request` section with its
+original request ID, timestamp and fields. The `craft` section retains the
+request association but does not acquire `reagentRequirements` when the source
+had none. Direct craft requirements stay in the `craft` section; no request
+association is manufactured. Explicitly empty direct lists remain empty even
+when the associated request contains requirements; absent lists remain absent.
+These origin distinctions survive persistence and
+every supported round trip, including distinct variants for the same craft.
+The sanitized `recipe-1236483-history.lua` regression fixture reproduces the
+October 12 versus October 19-20 quantities, candidate sets and timestamps
+without real character/session identities.
 
 Supported regeneration serializes every schematic evidence variant under
 `companionRecipeSchematicEvidence` on the detailed craft; it does not choose one
