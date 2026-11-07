@@ -46,6 +46,7 @@ local function environment(options)
   env.GetItemInfo = function(id) return "Item " .. id end
   env.C_AddOns = { GetAddOnMetadata = function() return "0.0.0-test" end }
   env.DEFAULT_CHAT_FRAME = { AddMessage = function() end }
+  env.SlashCmdList = {}
   env.Enum = {
     TradeskillRecipeType = { Item = 1, Salvage = 2, Enchant = 3, Gathering = 4 },
     TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2, Currency = 3 },

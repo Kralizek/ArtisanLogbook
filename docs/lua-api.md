@@ -46,6 +46,8 @@ All calls use **dot syntax**, not colon syntax:
 local version = ArtisanLogbookAPI.GetVersion() -- 1
 local craft, reason = ArtisanLogbookAPI.GetCraft(id)
 local page, reason = ArtisanLogbookAPI.GetCrafts(filter, options)
+local sessions, reason = ArtisanLogbookAPI.GetSessions({ limit = 20 })
+local session, reason = ArtisanLogbookAPI.GetSession(id)
 local series, reason = ArtisanLogbookAPI.GetCraftSeries(filter, options)
 local facets, reason = ArtisanLogbookAPI.GetFacets(filter, options)
 local capabilities, reason = ArtisanLogbookAPI.GetCapabilities()
@@ -77,7 +79,7 @@ Both craft queries and callback payloads use the same shape:
 
 ```lua
 {
-  id = 123, timestamp = 1800000000, -- local craft ID; observed server timestamp
+  id = 123, sessionId = 7, timestamp = 1800000000, -- local craft/session IDs; observed server timestamp
   character = { key = "...", name = "...", guid = "...", realm = realm },
   realm = realm,
   profession = profession,
@@ -923,11 +925,17 @@ retains its retained-detail-only semantics.
 ### Runtime capabilities
 
 `GetCapabilities()` returns a fresh
-`{ flavor = "...", craftResults = boolean, personalRequests = boolean, reagentAllocations = boolean }`.
+`{ flavor = "...", craftResults = boolean, personalRequests = boolean, reagentAllocations = boolean,
+events = {...}, hooks = {...}, measurements = {...} }`.
+The additive maps are detached copies of Core's declared boolean event
+registration, request hook and measurement flags. Missing entries mean
+undeclared, not supported. Optional `operationInfo`, `fixedReagents` and
+`secretValueDetection` flags are supplied when the adapter declares them.
 `craftResults` reports successful registration of the authoritative result event;
 `personalRequests` additionally requires the personal `CraftRecipe` hook;
 `reagentAllocations` additionally requires the production adapter's
-`GetCraftingOperationInfo` query capability. This is a runtime capability for the
+`GetCraftingOperationInfo` query capability, or Forever's fixed reagent snapshot
+capability. This is a runtime capability for the
 selected reagent allocation/quote capture path, not proof that any individual
 craft supplied a readable quote or complete allocation measurements. Tracer's
 diagnostic hooks do not affect these values.
@@ -939,8 +947,32 @@ ownership remain unsupported in this slice.
 
 Capabilities describe the current adapter, not the session stored with a craft.
 Historical facets/measurements are never hidden or reclassified when runtime
-capabilities differ. Internal tracer hook maps and events are not included in
-the public capability fields or the `"CRAFT_COMMITTED"` event.
+capabilities differ. Tracer hook maps and events are not included in
+the public capability fields or the `"CRAFT_COMMITTED"` event. Forever additionally
+declares `captureReady`, `support`, `resultCorrelation` and unavailable
+`craftingStats`, `qualities`, `orders`, `salvage`, `recrafts` flags.
+
+### Session projections
+
+`GetSession(id)` returns a detached session by positive local ID, or
+`nil, "invalid-id" / "not-found" / "not-ready"` using the same conventions as
+GetCraft. `GetSessions({ limit = 20, cursor = nil })` returns
+`{ sessions = {...}, currentSessionId = id, nextCursor = "..." }`. Sessions are
+ordered by descending local ID; the default limit is 20, maximum 200. Follow
+the opaque cursor for older pages. New sessions are excluded from an already
+started page sequence; a removed high-water session may invalidate the cursor.
+Invalid options/limits/cursors return the corresponding standard API error.
+
+Each session includes observed scalar fields when present: `id`, `key`,
+`startedAt`, `addonVersion`, `wowVersion`, `wowBuild`, `wowBuildDate`, `interface`,
+`projectId`, `locale`, plus detached `character`, `realm` and saved `capabilities`.
+The saved capabilities include flavor and event/hook/measurement declarations
+as observed at creation, not current capture health. Missing metadata is not
+fabricated. Craft projections expose `sessionId` so a consumer can retrieve the
+associated session without a parallel persistence reader. Neither query modifies
+the ledger or creates sessions; schema and API version remain unchanged.
+
+Core's [diagnostics inspector](diagnostics-window.md) uses these safe read APIs.
 
 ### Core diagnostic snapshot
 
