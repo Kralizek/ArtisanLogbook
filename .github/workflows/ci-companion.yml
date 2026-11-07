@@ -33,3 +33,11 @@ jobs:
       - run: dotnet test tests/HistoryStore/Tests.HistoryStore.csproj --no-build -c Release
       - run: dotnet test tests/ImportService/Tests.ImportService.csproj --no-build -c Release
       - run: dotnet test tests/SavedVariables/Tests.SavedVariables.csproj --no-build -c Release
+      - run: dotnet test tests/Cli/Tests.Cli.csproj --no-build -c Release
+      - run: dotnet run --project src/Cli/Cli.csproj --no-build -c Release -- --help
+      - run: dotnet run --project src/Cli/Cli.csproj --no-build -c Release -- --version
+      - run: dotnet pack src/Cli/Cli.csproj --no-build -c Release --output artifacts/packages
+      - run: dotnet tool install ArtisanLogbook.Companion --version 0.1.0 --add-source artifacts/packages --tool-path artifacts/tool
+      - run: ./artifacts/tool/artisanlogbook --version
+      - run: ./artifacts/tool/artisanlogbook import ../addon/tests/fixtures/legacy/v1-outcome1.lua --database artifacts/history.duckdb
+      - run: ./artifacts/tool/artisanlogbook status --database artifacts/history.duckdb

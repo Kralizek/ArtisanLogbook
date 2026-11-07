@@ -384,7 +384,9 @@ public static class SavedVariablesWriter
             detailedCrafts.Any(craft => FindSerializableOutputEvidence(craft) is CraftOutputEvidence expectedEvidence &&
                 roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).OutputEvidence?.Contains(expectedEvidence) != true) ||
             detailedCrafts.Any(craft => FindConfigurationEvidence(craft) is CraftConfigurationEvidence expectedConfiguration &&
-                roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).ConfigurationEvidence?.Contains(expectedConfiguration) != true))
+                roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).ConfigurationEvidence?.Contains(expectedConfiguration) != true) ||
+            detailedCrafts.Any(craft => craft.RecipeSchematicEvidence?.Any(evidence =>
+                roundTrip.History.Crafts.Single(result => result.Identity == craft.Identity).RecipeSchematicEvidence?.Contains(evidence) != true) == true))
             return Failure("unrepresentable-craft-observations", "history",
                 "Generated content cannot retain the supplied detailed observations exactly within the supported Lua representation. No content was returned. " +
                 string.Join(" ", roundTrip.Diagnostics.Where(d => d.Severity == SavedVariablesDiagnosticSeverity.Error)
@@ -423,6 +425,14 @@ public static class SavedVariablesWriter
                 Put(row, "companionSourceConfigurationSpecified", configurationEvidence.LocalKey is not null);
                 if (configurationEvidence.LocalKey is long originalConfigurationKey)
                     Put(row, "companionSourceConfigurationKey", originalConfigurationKey.ToString(CultureInfo.InvariantCulture));
+            }
+            if (craft.RecipeSchematicEvidence is not null)
+            {
+                LuaTable evidenceRows = new();
+                foreach (CraftRecipeSchematicEvidence schematicEvidence in craft.RecipeSchematicEvidence)
+                    evidenceRows[(double)evidenceRows.Count + 1] = Table(
+                        ("sourceId", schematicEvidence.SourceId), ("payload", schematicEvidence.Payload));
+                Put(row, "companionRecipeSchematicEvidence", evidenceRows);
             }
             if (craft.Provenance?.SourceId is string sourceId)
             {

@@ -315,21 +315,25 @@ public sealed class CompanionImportServiceIntegrationTests
     }
 
     [Test]
-    public async Task RecipeSlotsAreImportedOnlyFromSufficientSavedSchematicEvidence()
+    public async Task HistoricalRecipeSlotsArePreservedAsSourceEvidenceNotCatalogFacts()
     {
         string source = MakeImportableSchemaThreeSnapshot();
         CompanionImportResult imported = await Importer().ImportSavedVariablesAsync(source);
 
         Assert.That(imported.Outcome, Is.EqualTo(CompanionImportOutcome.Successful),
             string.Join(Environment.NewLine, imported.SourceDiagnostics));
-        RecipeReagentSlot slot = _store.ReadDimensions().RecipeReagentSlots.Single();
+        CraftRecipeSchematicEvidence evidence = _store.ReadAll().Single().RecipeSchematicEvidence!.Single();
+        LuaTable snapshot = (LuaTable)LuaDataParser.Parse(evidence.Payload).Assignments["CraftRecipeSchematicEvidence"]!;
+        LuaTable craft = (LuaTable)snapshot.Get("craft")!;
+        LuaTable slot = ((LuaTable)craft.Get("reagentRequirements")!).Values.OfType<LuaTable>().Single();
         Assert.Multiple(() =>
         {
-            Assert.That(slot.DataSlotIndex, Is.EqualTo(2));
-            Assert.That(slot.CandidateItemIds, Is.EquivalentTo(new[] { 9, 10 }));
-            Assert.That(slot.RequiredQuantity, Is.EqualTo(5));
-            Assert.That(slot.DataSlotType, Is.Null);
-            Assert.That(slot.SlotIndex, Is.Null);
+            Assert.That(_store.ReadDimensions().RecipeReagentSlots, Is.Empty);
+            Assert.That(slot.Get("dataSlotIndex"), Is.EqualTo(2d));
+            Assert.That(((LuaTable)slot.Get("candidateItemIDs")!).Values, Is.EquivalentTo(new[] { 9d, 10d }));
+            Assert.That(slot.Get("requiredQuantity"), Is.EqualTo(5d));
+            Assert.That(slot.ContainsKey("dataSlotType"), Is.False);
+            Assert.That(slot.ContainsKey("slotIndex"), Is.False);
         });
     }
 

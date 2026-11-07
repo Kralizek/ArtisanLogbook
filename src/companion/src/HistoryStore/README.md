@@ -1,6 +1,6 @@
 # Companion History Store
 
-`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; the project creates its parent directory and initializes schema v1 when opened. Dispose the store to close its connection. Calls on one store instance are serialized; callers should use a single writer per database because separate instances do not coordinate writes.
+`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; a writer creates its parent directory and initializes schema v2 (migrating v1 in place). Dispose the store to close its connection. Calls on one store instance are serialized; callers should use a single writer per database because separate instances do not coordinate writes.
 
 ## Physical schema (version 1)
 
@@ -30,17 +30,39 @@ All dimension keys are scoped to `GameContext`. Dimension-to-context constraints
 
 The internal `__HistoryStoreMigration` table tracks schema versions separately. Schema v1 is corrected before initial merge; no migration is supplied for the unshipped PR schema. Provenance, callback evidence, and configuration evidence retain their C01 typed payloads and versioned JSON representation.
 
+Schema v2 adds nullable `Craft.RecipeSchematicEvidenceJson` in one additive
+migration. Existing v1 crafts/dimensions remain intact; their missing schematic
+sidecar remains unknown. All supplementary schematic variants are persisted,
+reconciled idempotently, and survive reopening without changing canonical fact
+equality. `RecipeReagent` remains available for explicitly supplied dimensions;
+historical SavedVariables schematics are now craft evidence, not catalog rows.
+Status can read both v1 and v2 without migration.
+
+## Operational status
+
+`new HistoryStore(path, readOnly: true)` opens only an existing file using
+DuckDB's `READ_ONLY` access mode. It creates no parent directories or schema
+objects and runs no migrations. `ReadStatus()` returns schema version, canonical
+craft count, oldest/newest timestamps, and craft counts by project/progression
+track through aggregate SQL, without loading observation payloads or counting
+rollups. Timestamps are compared as instants, not lexicographically as stored
+offset strings. Unsupported or unavailable history schemas fail explicitly.
+This cross-context operational inventory does not replace context-scoped
+analytics. Dispose readers as well as writers; process-level locks can prevent
+opening a database owned by another writer.
+
 ## Recipe reagent evidence and limits
 
 `RecipeReagentSlot` models schematic slots rather than fixed recipe-to-item links. Multiple slots may contain the same item, and one slot may contain multiple candidate alternatives. `RequiredQuantity`, `IsRequired`, slot type, reagent type, and UI index remain nullable when the source did not preserve them. Historical craft inputs are stored separately and are never promoted to recipe requirements.
 
 Retail's pinned `CraftingReagentSlotSchematic` declaration (client build `12.1.5.70688`, source commit `d07eb00237d8891f153215db98a5df880a26cfe5`) includes `reagents`, `reagentType`, `variableQuantities`, `quantityRequired`, `dataSlotType`, `dataSlotIndex`, `slotIndex`, `required`, and `hiddenInCraftingForm`. `CraftingReagentType` distinguishes Basic, Modifying, Finishing, and Automatic slots; `TradeskillSlotDataType` distinguishes Reagent, ModifiedReagent, and Currency. The addon accesses `C_TradeSkillUI.GetRecipeSchematic` behind availability/readability checks in [Retail Adapter.lua](../../../addon/src/ArtisanLogbook_Core/Flavors/Retail/Adapter.lua).
 
-The SavedVariables adapter imports only recipe-slot facts actually retained by the addon:
+The SavedVariables adapter retains schematic observations as source snapshots,
+not as immutable `RecipeReagent` dimension rows:
 
-- `fixedReagents` contain known required basic reagent items and quantities, which become singleton candidate slots.
+- `fixedReagents` retain observed basic item and quantity metadata.
 - Schema-3 `requirements` and independent result `reagentRequirements` preserve candidate item IDs, slot index, and required quantity for schematic observations. Those rows do not preserve data-slot type or UI slot index, so the canonical values remain unknown rather than being inferred.
-- Optional/finishing/modifying slots, hidden-state, currency slots, and `variableQuantities` are not preserved as standalone recipe definitions by current SavedVariables. The adapter does not invent them. Nonempty variable-quantity schematics are marked unsupported by the addon capture path; the canonical slot model therefore stores only the single required quantity when that value is known.
+- Optional/finishing/modifying slots, hidden-state, currency slots, and `variableQuantities` are not preserved as standalone recipe definitions by current SavedVariables. The adapter does not invent them. Nonempty variable-quantity schematics are marked unsupported by the addon capture path.
 
 The API declaration describes available fields, not guaranteed runtime availability for every recipe. The addon guards schematic reads, and this repository has no live-client fixture establishing that every API slot is observable. Full recipe-catalog collection remains out of scope.
 

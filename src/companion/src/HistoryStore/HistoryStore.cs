@@ -65,7 +65,7 @@ public sealed record CraftHistoryBatchWriteResult(
 /// <summary>Persists canonical craft observations in a local DuckDB database.</summary>
 public sealed class HistoryStore : IDisposable
 {
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
     private const int EvidenceFormatVersion = 1;
     private const int UnknownDataSlotType = 0;
 
@@ -73,6 +73,7 @@ public sealed class HistoryStore : IDisposable
 
     private readonly object _gate = new();
     private readonly DuckDBConnection _connection;
+    private readonly bool _readOnly;
     private bool _disposed;
 
     public string DatabasePath { get; }
@@ -89,21 +90,33 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    public HistoryStore(string databasePath)
+    public HistoryStore(string databasePath, bool readOnly = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         DatabasePath = Path.GetFullPath(databasePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
+        _readOnly = readOnly;
+        if (readOnly)
+        {
+            if (!File.Exists(DatabasePath))
+                throw new FileNotFoundException("The history database does not exist.", DatabasePath);
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
+        }
 
         DbConnectionStringBuilder connectionString = new()
         {
             ["Data Source"] = DatabasePath
         };
+        if (readOnly)
+            connectionString["access_mode"] = "READ_ONLY";
         _connection = new DuckDBConnection(connectionString.ConnectionString);
         try
         {
             _connection.Open();
-            InitializeSchema();
+            if (!readOnly)
+                InitializeSchema();
         }
         catch
         {
@@ -302,6 +315,62 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
+    /// <summary>Returns operational counts without loading craft payloads or migrating the database.</summary>
+    public HistoryStoreStatus ReadStatus()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            bool hasMigration = Convert.ToInt64(ExecuteScalar("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema = 'main' AND table_name = '__HistoryStoreMigration'
+                """), CultureInfo.InvariantCulture) > 0;
+            int? version = hasMigration ? SchemaVersion : null;
+            if (version is null || version < 1 || version > CurrentSchemaVersion)
+                throw new InvalidOperationException(
+                    $"History schema version {version?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"} " +
+                    $"cannot be read by this Companion (supported: {CurrentSchemaVersion}).");
+
+            long total;
+            DateTimeOffset? oldest;
+            DateTimeOffset? newest;
+            using (DuckDBCommand command = _connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT COUNT(*),
+                        strftime(MIN(CAST(RecordedAt AS TIMESTAMPTZ)) AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S.%fZ'),
+                        strftime(MAX(CAST(RecordedAt AS TIMESTAMPTZ)) AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S.%fZ')
+                    FROM Craft
+                    """;
+                using DbDataReader reader = command.ExecuteReader();
+                reader.Read();
+                total = reader.GetInt64(0);
+                oldest = ReadTimestamp(reader, 1);
+                newest = ReadTimestamp(reader, 2);
+            }
+
+            List<GameContextCraftCount> contexts = [];
+            using (DuckDBCommand command = _connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT g.ProjectId, g.ProgressionTrack, COUNT(*)
+                    FROM Craft c JOIN GameContext g ON c.ContextKey = g.ContextKey
+                    GROUP BY g.ProjectId, g.ProgressionTrack
+                    ORDER BY g.ProjectId, g.ProgressionTrack NULLS FIRST
+                    """;
+                using DbDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                    contexts.Add(new(new GameContext((GameProject)reader.GetInt32(0),
+                        NullableString(reader, 1)), reader.GetInt64(2)));
+            }
+            return new(version.Value, total, oldest, newest, contexts);
+        }
+    }
+
+    private static DateTimeOffset? ReadTimestamp(DbDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : DateTimeOffset.Parse(
+            reader.GetString(ordinal), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
+
     public void Dispose()
     {
         lock (_gate)
@@ -478,6 +547,7 @@ public sealed class HistoryStore : IDisposable
             )
             """
         ],
+        2 => ["ALTER TABLE Craft ADD COLUMN RecipeSchematicEvidenceJson VARCHAR"],
         _ => throw new InvalidOperationException($"No migration is defined for schema version {version}.")
     };
 
@@ -505,9 +575,11 @@ public sealed class HistoryStore : IDisposable
         string? provenanceJson;
         string? outputEvidenceJson;
         string? configurationEvidenceJson;
+        string? recipeSchematicEvidenceJson;
         int evidenceFormatVersion;
 
-        using (DuckDBCommand command = CreateCommand("""
+        string schematicColumn = _readOnly && SchemaVersion == 1 ? "NULL" : "Craft.RecipeSchematicEvidenceJson";
+        using (DuckDBCommand command = CreateCommand($"""
             SELECT
                 Craft.CraftKey,
                 GameContext.ProjectId,
@@ -531,7 +603,8 @@ public sealed class HistoryStore : IDisposable
                 Craft.ProvenanceJson,
                 Craft.OutputEvidenceJson,
                 Craft.ConfigurationEvidenceJson,
-                Craft.EvidenceFormatVersion
+                Craft.EvidenceFormatVersion,
+                {schematicColumn}
             FROM Craft
             JOIN CraftIdentity USING (CraftKey)
             JOIN GameContext USING (ContextKey)
@@ -565,6 +638,7 @@ public sealed class HistoryStore : IDisposable
             outputEvidenceJson = NullableString(reader, 20);
             configurationEvidenceJson = NullableString(reader, 21);
             evidenceFormatVersion = reader.GetInt32(22);
+            recipeSchematicEvidenceJson = NullableString(reader, 23);
         }
 
         if (evidenceFormatVersion != EvidenceFormatVersion)
@@ -598,7 +672,8 @@ public sealed class HistoryStore : IDisposable
             resourcefulnessComplete,
             outputsComplete,
             Deserialize<IReadOnlyList<CraftOutputEvidence>>(outputEvidenceJson),
-            Deserialize<IReadOnlyList<CraftConfigurationEvidence>>(configurationEvidenceJson));
+            Deserialize<IReadOnlyList<CraftConfigurationEvidence>>(configurationEvidenceJson),
+            Deserialize<IReadOnlyList<CraftRecipeSchematicEvidence>>(recipeSchematicEvidenceJson));
     }
 
     private CraftWriteResult WriteObservation(CraftObservation observation, DbTransaction transaction)
@@ -740,7 +815,8 @@ public sealed class HistoryStore : IDisposable
                     ProvenanceJson = ?,
                     OutputEvidenceJson = ?,
                     ConfigurationEvidenceJson = ?,
-                    EvidenceFormatVersion = ?
+                    EvidenceFormatVersion = ?,
+                    RecipeSchematicEvidenceJson = ?
                 WHERE CraftKey = ?
                 """,
                 transaction,
@@ -763,8 +839,9 @@ public sealed class HistoryStore : IDisposable
                     RecipeId, ProfessionId, ProfessionExpansionKey, ConcentrationSpent, IngenuityRefund,
                     ConcentrationCurrencyId, HasIngenuityProc, HasResourcefulnessProc, MulticraftBonus,
                     InputsComplete, ResourcefulnessComplete, OutputsComplete, ReagentsObserved, OutputsObserved,
-                    ProvenanceJson, OutputEvidenceJson, ConfigurationEvidenceJson, EvidenceFormatVersion
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ProvenanceJson, OutputEvidenceJson, ConfigurationEvidenceJson, EvidenceFormatVersion,
+                    RecipeSchematicEvidenceJson
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 transaction,
                 new object?[]
@@ -1111,7 +1188,8 @@ public sealed class HistoryStore : IDisposable
         Serialize(observation.Provenance),
         Serialize(observation.OutputEvidence),
         Serialize(observation.ConfigurationEvidence),
-        EvidenceFormatVersion
+        EvidenceFormatVersion,
+        Serialize(observation.RecipeSchematicEvidence)
     ];
 
     private static string ContextKey(GameContext game) =>
@@ -1122,7 +1200,8 @@ public sealed class HistoryStore : IDisposable
     private static bool EquivalentIncludingEvidence(CraftObservation first, CraftObservation second) =>
         first == second
         && SequenceEqual(first.OutputEvidence, second.OutputEvidence)
-        && SequenceEqual(first.ConfigurationEvidence, second.ConfigurationEvidence);
+        && SequenceEqual(first.ConfigurationEvidence, second.ConfigurationEvidence)
+        && SequenceEqual(first.RecipeSchematicEvidence, second.RecipeSchematicEvidence);
 
     private static bool SequenceEqual<T>(IReadOnlyList<T>? first, IReadOnlyList<T>? second) =>
         first is null ? second is null : second is not null && first.SequenceEqual(second);

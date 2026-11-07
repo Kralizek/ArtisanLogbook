@@ -1,5 +1,10 @@
 # Artisan Logbook
 
+The first runnable [Companion CLI](src/companion/README.md) imports explicit
+SavedVariables snapshots into a shared DuckDB history database and reports
+read-only status. It is a separate cross-platform .NET executable, not the
+in-game browser.
+
 The native in-game browser opens with `/al` or `/artisanlogbook`. See
 [production UI](docs/production-ui.md) for the views, data controls and in-game
 validation checklist. Install the bundle, or install `ArtisanLogbook_Core` and

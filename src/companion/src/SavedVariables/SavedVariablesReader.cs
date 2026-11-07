@@ -225,8 +225,11 @@ public static class SavedVariablesReader
         Dictionary<(GameContext Game, int RecipeId, RecipeReagentDataSlotType? DataSlotType, int DataSlotIndex),
             RecipeReagentSlot> recipeReagentSlots = [];
 
+        // These comparisons only report variation; the complete craft-attached source snapshots are persisted.
         void AddRecipeReagentSlot(RecipeReagentSlot slot, string location)
         {
+            foreach (int candidateItemId in slot.CandidateItemIds ?? [])
+                AddItemDimension(slot.Game, candidateItemId, itemRows, itemDimensions, seenItems);
             var key = (slot.Game, slot.RecipeId, slot.DataSlotType, slot.DataSlotIndex);
             if (recipeReagentSlots.TryGetValue(key, out RecipeReagentSlot? existingSlot))
             {
@@ -235,8 +238,8 @@ public static class SavedVariablesReader
                     new CraftHistory([], CraftDimensions.Empty with { RecipeReagentSlots = [slot] }));
                 if (!merge.IsSuccessful)
                 {
-                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "conflicting-recipe-reagent-slot",
-                        location, "Repeated schematic evidence disagrees for the same recipe reagent slot."));
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "historical-recipe-schematic-variation",
+                        location, "Historical schematic observations differ for this recipe slot. All source snapshots remain attached to their crafts; no immutable catalog value was chosen."));
                     return;
                 }
                 recipeReagentSlots[key] = merge.History!.Dimensions.RecipeReagentSlots.Single();
@@ -246,8 +249,6 @@ public static class SavedVariablesReader
                 recipeReagentSlots.Add(key, slot);
             }
 
-            foreach (int candidateItemId in slot.CandidateItemIds ?? [])
-                AddItemDimension(slot.Game, candidateItemId, itemRows, itemDimensions, seenItems);
         }
 
         foreach (IGrouping<string, LuaTable> group in GroupCraftRows(craftRows))
@@ -605,14 +606,17 @@ public static class SavedVariablesReader
             {
                 AddRecipeDimension(game, recipeId.Value, recipe, recipeProfessionId, recipeExpansionKey,
                     recipeDimensions, seenRecipes);
-                AddSavedRecipeReagentSlots(row, game, recipeId.Value, requests, diagnostics, location,
-                    AddRecipeReagentSlot);
             }
-            else if (HasSavedRecipeReagentSlots(row, requests))
+            if (recipeId is null && HasSavedRecipeReagentSlots(row, requests))
             {
-                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "recipe-reagent-slot-without-recipe",
-                    location, "Schematic reagent requirements cannot be attributed without a recipe ID."));
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "recipe-reagent-slot-without-recipe",
+                    location, "Schematic source evidence has no known recipe ID; it is retained without catalog attribution."));
             }
+            LuaTable? sourceRequest = Long(row.Get("requestId")) is long sourceRequestId
+                ? requests.GetValueOrDefault(sourceRequestId) : null;
+            AddSavedRecipeReagentSlots(row, game, recipeId, sourceRequest, diagnostics, location, AddRecipeReagentSlot);
+            IReadOnlyList<CraftRecipeSchematicEvidence>? schematicEvidence = ReadRecipeSchematicEvidence(
+                row, sourceId, game, recipeId, sourceRequest, diagnostics, location, AddRecipeReagentSlot);
             if (professionId is > 0)
                 AddProfessionDimension(game, professionId.Value, professionRows,
                     professionDimensions, seenProfessions);
@@ -723,7 +727,8 @@ public static class SavedVariablesReader
                 resourcefulnessComplete,
                 outputsComplete,
                 outputEvidence is null ? null : [outputEvidence],
-                configurationEvidence is null ? null : [configurationEvidence]));
+                configurationEvidence is null ? null : [configurationEvidence],
+                schematicEvidence));
         }
 
         long aggregateOnlyCount = CountAggregateOnly(ledger, sessions);
@@ -734,14 +739,7 @@ public static class SavedVariablesReader
                 $"{aggregateOnlyCount} craft(s) are represented by historical rollups without individual detail. No craft observations were reconstructed from those totals."));
         }
         CraftDimensions canonicalDimensions = new(
-            characterDimensions, recipeDimensions, professionDimensions, itemDimensions, canonicalExpansions)
-        {
-            RecipeReagentSlots = recipeReagentSlots.Values
-                .OrderBy(x => x.RecipeId)
-                .ThenBy(x => x.DataSlotType)
-                .ThenBy(x => x.DataSlotIndex)
-                .ToArray()
-        };
+            characterDimensions, recipeDimensions, professionDimensions, itemDimensions, canonicalExpansions);
         CraftHistory history = new(crafts, canonicalDimensions);
         foreach (HistoryValidationError error in CraftHistoryValidator.Validate(history))
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-canonical-history",
@@ -890,14 +888,13 @@ public static class SavedVariablesReader
     private static void AddSavedRecipeReagentSlots(
         LuaTable craft,
         GameContext game,
-        int recipeId,
-        IReadOnlyDictionary<long, LuaTable> requests,
+        int? recipeId,
+        LuaTable? request,
         ICollection<SavedVariablesDiagnostic> diagnostics,
         string location,
         Action<RecipeReagentSlot, string> addSlot)
     {
-        if (Long(craft.Get("requestId")) is long requestId &&
-            requests.TryGetValue(requestId, out LuaTable? request))
+        if (request is not null)
         {
             foreach (LuaTable fixedReagent in Rows(request.Get("fixedReagents")))
             {
@@ -911,9 +908,10 @@ public static class SavedVariablesReader
                         "A fixed reagent without complete slot, item, and quantity metadata cannot become a recipe dimension."));
                     continue;
                 }
-                addSlot(new(game, recipeId, RecipeReagentDataSlotType.Reagent, dataSlotIndex.Value,
-                    ReagentType: RecipeReagentType.Basic, IsRequired: true, RequiredQuantity: quantity,
-                    CandidateItemIds: [itemId.Value]), location + ".request.fixedReagents");
+                if (recipeId is int knownRecipe)
+                    addSlot(new(game, knownRecipe, RecipeReagentDataSlotType.Reagent, dataSlotIndex.Value,
+                        ReagentType: RecipeReagentType.Basic, IsRequired: true, RequiredQuantity: quantity,
+                        CandidateItemIds: [itemId.Value]), location + ".request.fixedReagents");
             }
 
             AddRequirements(request.Get("requirements"), dataSlotType: null,
@@ -966,11 +964,59 @@ public static class SavedVariablesReader
                     continue;
                 }
 
-                addSlot(new(game, recipeId, dataSlotType, dataSlotIndex.Value,
-                    ReagentType: RecipeReagentType.Basic, IsRequired: true, RequiredQuantity: quantity,
-                    CandidateItemIds: candidateItemIds), fieldLocation);
+                if (recipeId is int knownRecipe)
+                    addSlot(new(game, knownRecipe, dataSlotType, dataSlotIndex.Value,
+                        ReagentType: RecipeReagentType.Basic, IsRequired: true, RequiredQuantity: quantity,
+                        CandidateItemIds: candidateItemIds), fieldLocation);
             }
         }
+    }
+
+    private static IReadOnlyList<CraftRecipeSchematicEvidence>? ReadRecipeSchematicEvidence(
+        LuaTable craft, string sourceId, GameContext game, int? recipeId,
+        LuaTable? sourceRequest,
+        ICollection<SavedVariablesDiagnostic> diagnostics, string location,
+        Action<RecipeReagentSlot, string> observeSlot)
+    {
+        List<CraftRecipeSchematicEvidence> result = [];
+        CraftRecipeSchematicEvidence? captured = RecipeSchematicSnapshots.Capture(craft, sourceRequest, sourceId);
+        if (captured is not null) result.Add(captured);
+        if (craft.ContainsKey("companionRecipeSchematicEvidence"))
+        {
+            if (!TryReadDenseValues(craft.Get("companionRecipeSchematicEvidence"), out object?[] values) || values.Length == 0)
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-recipe-schematic-evidence",
+                    location, "Retained schematic evidence must be a nonempty dense list."));
+            }
+            else
+            {
+                foreach (object? value in values)
+                {
+                    if (value is not LuaTable entry || entry.Get("sourceId") is not string evidenceSource ||
+                        string.IsNullOrWhiteSpace(evidenceSource) || entry.Get("payload") is not string payload ||
+                        !RecipeSchematicSnapshots.TryRead(payload, out LuaTable snapshot))
+                    {
+                        diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-recipe-schematic-evidence",
+                            location, "Retained schematic evidence requires a source and supported data-only snapshot."));
+                        continue;
+                    }
+                    LuaTable sourceCraft = (LuaTable)snapshot.Get("craft")!;
+                    CheckCollection(sourceCraft, "reagentRequirements", diagnostics, location);
+                    LuaTable? request = snapshot.Get("request") as LuaTable;
+                    if (request is not null)
+                    {
+                        CheckCollection(request, "fixedReagents", diagnostics, location);
+                        CheckCollection(request, "requirements", diagnostics, location);
+                    }
+                    AddSavedRecipeReagentSlots(sourceCraft, game, recipeId, request,
+                        diagnostics, location + ".companionRecipeSchematicEvidence", observeSlot);
+                    result.Add(new(evidenceSource, payload));
+                }
+            }
+        }
+        return result.Count == 0 ? null : result.Distinct()
+            .OrderBy(evidence => evidence.SourceId, StringComparer.Ordinal)
+            .ThenBy(evidence => evidence.Payload, StringComparer.Ordinal).ToArray();
     }
 
     private static bool HasSavedRecipeReagentSlots(

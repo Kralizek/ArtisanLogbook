@@ -67,6 +67,24 @@ string convertedText = exported.Content!;
 
 `CraftObservation.OutputEvidence` and `ConfigurationEvidence` are attached source-evidence sidecars, independent of canonical craft facts and excluded from canonical fact equality. Output evidence preserves ordered callbacks, per-callback measurements/returns, original timestamps, ambiguity and legacy IDs; configuration evidence preserves the original local key, request-time snapshot and craft-level coverage metadata. Reconciliation idempotently retains distinct evidence variants without reporting callback-order differences as craft conflicts; canonical output item/quality/quantity conflicts remain conflicts. An ambiguous repeated callback produces a canonical output row with unknown quantity, never zero or a guessed sum. Output completeness stays explicit and unknown unless the source states otherwise. Source-only items remain dimensioned, and explicit zero measurements remain zero.
 
+`RecipeSchematicEvidence` separately retains original request/result
+`fixedReagents`, `requirements`, `reagentRequirements`, source record references,
+timestamps, and supplementary completeness/observation fields in a deterministic
+data-only Lua payload. Candidate rows retain all their source fields; absent
+data-slot type/UI index stays absent. Historical snapshots are not promoted
+into one immutable recipe-slot dimension. Different known required quantities
+or candidate sets produce `historical-recipe-schematic-variation` warnings while
+all snapshots survive. Malformed schematic lists still reject. Supplementary
+metadata disagreement does not override or excuse contradictory canonical
+craft inputs/outputs, identities, timestamps, or outcomes.
+
+Supported regeneration serializes every schematic evidence variant under
+`companionRecipeSchematicEvidence` on the detailed craft; it does not choose one
+variant to publish as a native recipe requirement. Reparse validates these
+payloads through the same schematic validation path and verifies exact evidence
+retention. Pruned detailed crafts still have the existing explicit retention
+warning; full evidence remains in authoritative Companion history.
+
 Craft/request links must agree on session and recipe before request-only input fallback is permitted; orphan reagent references and malformed collection members fail explicitly. That fallback includes both allocation slots and fixed reagents without inventing returns. Recipe dimension enrichment remains independent of per-craft classification, and profession parents use `companionParent` because the actual loader rejects native `parentId`/`professionId` fields on profession rows.
 
 The current source supplies `projectId` on each session, but has no trusted progression-track field. The adapter reads a `companionProgressionTrack` session extension only when it was explicitly serialized by this adapter; it never infers a track from the build, version, date, or profession expansion. Existing ledgers without `projectId` cannot be safely classified.

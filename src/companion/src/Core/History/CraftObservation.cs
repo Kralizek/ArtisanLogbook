@@ -22,7 +22,8 @@ public sealed record CraftObservation(
     bool? ResourcefulnessComplete = null,
     bool? OutputsComplete = null,
     IReadOnlyList<CraftOutputEvidence>? OutputEvidence = null,
-    IReadOnlyList<CraftConfigurationEvidence>? ConfigurationEvidence = null)
+    IReadOnlyList<CraftConfigurationEvidence>? ConfigurationEvidence = null,
+    IReadOnlyList<CraftRecipeSchematicEvidence>? RecipeSchematicEvidence = null)
 {
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
@@ -144,6 +145,9 @@ public sealed record CraftOutputEvidence(
 
 /// <summary>Opaque adapter-owned configuration snapshot attached to its craft, not a canonical analytical value.</summary>
 public sealed record CraftConfigurationEvidence(string SourceId, long? LocalKey, string Payload);
+
+/// <summary>Adapter-owned historical request/result schematics, not an immutable recipe catalog or canonical input facts.</summary>
+public sealed record CraftRecipeSchematicEvidence(string SourceId, string Payload);
 
 public sealed record CraftResultMeasurements(
     int? MulticraftBonus = null,

@@ -171,6 +171,17 @@ public static class HistoryReconciler
                 .ToArray();
         }
 
+        IReadOnlyList<CraftRecipeSchematicEvidence>? MergeRecipeSchematicEvidence()
+        {
+            if (a.RecipeSchematicEvidence is null) return b.RecipeSchematicEvidence;
+            if (b.RecipeSchematicEvidence is null) return a.RecipeSchematicEvidence;
+            return a.RecipeSchematicEvidence.Concat(b.RecipeSchematicEvidence)
+                .Distinct()
+                .OrderBy(evidence => evidence.SourceId, StringComparer.Ordinal)
+                .ThenBy(evidence => evidence.Payload, StringComparer.Ordinal)
+                .ToArray();
+        }
+
         return a with
         {
             RecipeId = Optional(nameof(a.RecipeId), a.RecipeId, b.RecipeId),
@@ -189,6 +200,7 @@ public static class HistoryReconciler
             Outputs = MergeOutputs(),
             OutputEvidence = MergeOutputEvidence(),
             ConfigurationEvidence = MergeConfigurationEvidence(),
+            RecipeSchematicEvidence = MergeRecipeSchematicEvidence(),
             Provenance = MergeProvenance()
         };
     }

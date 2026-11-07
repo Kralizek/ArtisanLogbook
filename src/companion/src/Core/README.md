@@ -13,6 +13,16 @@ Core owns **C01 Craft History Model** and **C02 History Reconciliation** from th
 
 `null` measurements mean *not observed*. `false` or `0` mean explicitly observed negatives or zeros. Likewise, a null reagent/output collection means its complete contents were not observed, while an empty collection means it was explicitly observed empty. We do not store historical addon aggregates in Core.
 
+`CraftRecipeSchematicEvidence` retains adapter-owned historical request/result
+schematic snapshots beside the craft. Like callback/configuration evidence, it
+is excluded from canonical fact equality and unions distinct variants
+idempotently. Historical required quantities and candidate sets may vary,
+including within one craft's supplementary evidence; no catalog winner is
+chosen. Source identity and a nonempty payload are required; C04 validates its
+data-only payload. Explicit `CraftDimensions.RecipeReagentSlots` reconciliation
+remains strict for caller-supplied dimension facts. SavedVariables observations
+are no longer promoted to those immutable dimensions.
+
 The recorder's current persisted crafts expose recipe/output IDs, output quantity/quality, timestamps, operation IDs, concentration spent/currency, ingenuity proc/refund, multicraft bonus, Resourcefulness outcome/completeness, and input completeness. `InputsComplete` and `ResourcefulnessComplete` preserve the addon's explicit completion distinctions; null is unknown and false means known incomplete. The source also contains request/allocation, reagent and dimension tables. The SavedVariables adapter resolves those links and collapses slot-level reagent detail to the agreed craft × item grain. These fields may be absent from individual records; not all crafts can have all measurements reconstructed.
 
 ## Game context and expansion classification
