@@ -748,7 +748,7 @@ test("GetCraft has an explicit denormalized shape and preserves zero and false",
   local recipe = { id = 101, name = "Potion", expansion = expansion, profession = profession }
   local reagentItem = { id = 202, name = "Reagent", expansion = oldExpansion }
   equal(craft, {
-    id = 1, timestamp = 1800000000, gameOperationId = 1,
+    id = 1, sessionId = craft.sessionId, timestamp = 1800000000, gameOperationId = 1,
     context = { kind = "unknown" }, configurationCoverage = "unavailable", configurationObservation = {},
     character = { key = realm.key .. ":guid:Player-A", name = "A", guid = "Player-A", realm = realm },
     realm = realm, profession = profession, recipe = recipe, expansion = expansion,
@@ -1063,7 +1063,8 @@ end)
 test("capabilities describe runtime support, not retained history", function()
   local _, api, _, addon = fixture()
   equal(api.GetCapabilities(), { flavor = "retail", craftResults = true,
-    personalRequests = true, reagentAllocations = true })
+    personalRequests = true, reagentAllocations = true, operationInfo = true,
+    events = { TRADE_SKILL_ITEM_CRAFTED_RESULT = true }, hooks = { CraftRecipe = true }, measurements = {} })
   addon.adapter.capabilities.operationInfo = false
   assert(api.GetCapabilities().reagentAllocations == false)
   addon.adapter.capabilities.operationInfo = true
@@ -1071,7 +1072,10 @@ test("capabilities describe runtime support, not retained history", function()
   addon.adapter.capabilities = { flavor = "classic", events = {}, hooks = {}, measurements = {},
     operationInfo = false }
   local capabilities = api.GetCapabilities()
-  equal(capabilities, { flavor = "classic", craftResults = false, personalRequests = false, reagentAllocations = false })
+  equal(capabilities, { flavor = "classic", craftResults = false, personalRequests = false, reagentAllocations = false,
+    operationInfo = false, events = {}, hooks = {}, measurements = {} })
+  capabilities.events.CHANGED = true
+  assert(api.GetCapabilities().events.CHANGED == nil)
   capabilities.flavor = "Changed"
   equal(api.GetFacets(), history)
   assert(api.GetCapabilities().flavor == "classic" and api.GetCraft(1).hasIngenuityProc == false)

@@ -47,6 +47,13 @@ class PackageTests(unittest.TestCase):
                                 self.assertIn("## OptionalDeps: ArtisanLogbook_Core", toc)
                                 self.assertNotIn("## RequiredDeps:", toc)
                                 self.assertIn("## DefaultState: disabled", toc)
+                            if addon == "ArtisanLogbook_Core":
+                                self.assertIn("Diagnostics/Format.lua", toc)
+                                self.assertIn("Diagnostics/Window.lua", toc)
+                                self.assertIn("## SavedVariables: ArtisanLogbookDB, ArtisanLogbookDebugSettings", toc)
+                                self.assertNotIn("## RequiredDeps:", toc)
+                                self.assertIn(f"{addon}/Diagnostics/Format.lua", archive.namelist())
+                                self.assertIn(f"{addon}/Diagnostics/Window.lua", archive.namelist())
 
     def test_wrong_suffix_and_unconfigured_flavor_are_rejected_without_overwriting(self):
         run = self.package("retail")

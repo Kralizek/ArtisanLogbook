@@ -2,7 +2,7 @@
 ## Notes: Captures and stores observed crafting facts.
 ## Version: 0.0.0-dev
 ## X-Release-Tag: dev
-## SavedVariables: ArtisanLogbookDB
+## SavedVariables: ArtisanLogbookDB, ArtisanLogbookDebugSettings
 
 Storage/Ledger.lua
 Flavors/Registry.lua
@@ -12,3 +12,5 @@ Flavors/Forever/Adapter.lua
 Core/API.lua
 Core/Management.lua
 Core/Bootstrap.lua
+Diagnostics/Format.lua
+Diagnostics/Window.lua
