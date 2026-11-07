@@ -1,6 +1,6 @@
 # Companion History Store
 
-`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; the project creates its parent directory and initializes schema v1 when opened. Dispose the store to close its connection. Calls on one store instance are serialized.
+`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; the project creates its parent directory and initializes schema v1 when opened. Dispose the store to close its connection. Calls on one store instance are serialized; callers should use a single writer per database because separate instances do not coordinate writes.
 
 ## Physical schema (version 1)
 
@@ -25,6 +25,8 @@ The initial schema persists every current `CraftDimensions` collection, canonica
 All dimension keys are scoped to `GameContext`. Dimension-to-context constraints are database-enforced. Craft-to-character/recipe, recipe-to-profession/expansion, profession-parent, and recipe-slot-to-recipe associations are ensured by the store transaction; candidate item IDs are checked by C01 and materialized as item dimensions, but remain in the slot's JSON array rather than separate FK rows. This avoids extra join tables and does not infer a recipe definition from observed `CraftReagent` rows.
 
 `WriteDimensions` and `ReadDimensions` accept/return the canonical C01 sidecar independently of craft observations, so metadata can arrive before or after a craft. Writes use C02 reconciliation: unknown values do not erase known metadata, names enrich deterministically, identical re-imports are idempotent, and contradictory known recipe/profession/slot facts return a typed conflict without persisting any part of the conflicting write. Craft observations also create minimal context-scoped identity rows for their known character, recipe, profession, expansion, and observed item IDs; richer dimension writes later enrich them.
+
+`WriteBatch` validates one complete `CraftHistory`, reconciles its dimensions and every craft, then commits the whole batch in one transaction. Validation failures and C02 conflicts return typed results without committing any writes; database failures and cancellation roll back through transaction disposal. Calls on one store instance remain serialized, and the store does not add import checkpoints or source records.
 
 The internal `__HistoryStoreMigration` table tracks schema versions separately. Schema v1 is corrected before initial merge; no migration is supplied for the unshipped PR schema. Provenance, callback evidence, and configuration evidence retain their C01 typed payloads and versioned JSON representation.
 
