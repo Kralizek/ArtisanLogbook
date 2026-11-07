@@ -21,6 +21,9 @@ for _, name in ipairs({
   "SetTextColor", "AddMaskTexture", "SetScale", "SetShadowOffset", "SetBlendMode",
   "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor",
   "SetPropagateMouseClicks", "SetClipsChildren",
+  "SetResizable", "SetResizeBounds", "SetTextInsets", "SetOrientation", "SetThumbTexture",
+  "SetValueStep", "SetMinMaxValues", "SetValue", "EnableMouseWheel",
+  "StartSizing", "SetFocus", "HighlightText",
 }) do
   methods[name] = function() end
 end
@@ -5517,6 +5520,29 @@ end)()
   environment.C_TradeSkillUI.GetProfessionInfoByRecipeID, environment.C_TradeSkillUI.GetProfessionSlots,
     environment.C_TradeSkillUI.CraftSalvage = saved.profession, saved.slots, saved.salvage
   print("PASS salvage target inputs, request configuration, output, API/UI projection and reload")
+end)()
+
+;(function()
+  environment.ArtisanLogbookTraceDB = nil
+  local core = reload(nil)
+  local frameStart = #frames
+  local capture = load(arg[3] or "src/ArtisanLogbook_Tracer", "ArtisanLogbook_Tracer")
+  local lifecycle = frames[frameStart + 1]
+  lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  local observer, records = core.diagnosticObserver, #capture.recorder.database.records
+  local database, pending = core.ledger.database, core.ledger.pendingRecipeId
+  environment.SlashCmdList.ARTISANLOGBOOKDEBUG()
+  assert(core.debugWindow:IsShown() and capture.window)
+  for _, section in ipairs({ "Capabilities", "Diagnostics", "Crafts", "Sessions" }) do
+    core.debugWindow:Section(section)
+  end
+  environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
+  assert(capture.window:IsShown() and core.debugWindow:IsShown())
+  assert(core.diagnosticObserver == observer and core.ledger.database == database)
+  assert(core.ledger.pendingRecipeId == pending and #capture.recorder.database.records == records)
+  core.debugWindow:Hide()
+  assert(capture.window:IsShown())
+  print("PASS Core inspector coexists with actual Tracer without replacing observers or affecting capture")
 end)()
 
 ;(function()
