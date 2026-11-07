@@ -59,6 +59,8 @@ function methods:GetScript(name) return self.scripts[name] end
 function methods:GetWidth() return self.width or 1024 end
 function methods:GetHeight() return self.height or (self.kind == "ScrollFrame" and 300 or 768) end
 function methods:GetCenter() return 500, 500 end
+function methods:SetFrameLevel(level) self.frameLevel = level end
+function methods:GetFrameLevel() return self.frameLevel or 1 end
 function methods:GetEffectiveScale() return 1 end
 function methods:GetNormalTexture() return object() end
 function methods:GetFontString() return self.fontString end
