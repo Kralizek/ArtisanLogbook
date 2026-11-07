@@ -25,12 +25,15 @@ public static class CraftHistoryValidator
         CheckUnique(dimensions.Items.Select(x => (x.Game, x.Id)), "ItemDimension");
         CheckUnique(dimensions.Professions.Select(x => (x.Game, x.Id)), "ProfessionDimension");
         CheckUnique(dimensions.Expansions.Select(x => (x.Game, x.Key)), "ExpansionDimension");
+        CheckUnique(dimensions.RecipeReagentSlots.Select(x =>
+            (x.Game, x.RecipeId, x.DataSlotType, x.DataSlotIndex)), "RecipeReagentSlot");
 
         foreach (GameContext game in dimensions.Characters.Select(x => x.Game)
             .Concat(dimensions.Recipes.Select(x => x.Game))
             .Concat(dimensions.Items.Select(x => x.Game))
             .Concat(dimensions.Professions.Select(x => x.Game))
-            .Concat(dimensions.Expansions.Select(x => x.Game)))
+            .Concat(dimensions.Expansions.Select(x => x.Game))
+            .Concat(dimensions.RecipeReagentSlots.Select(x => x.Game)))
             if (game is null)
                 errors.Add(new(null, "Game", "Every dimension requires a game context."));
 
@@ -48,6 +51,27 @@ public static class CraftHistoryValidator
         foreach (ExpansionDimension expansion in dimensions.Expansions)
             if (string.IsNullOrWhiteSpace(expansion.Key))
                 errors.Add(new(null, "ExpansionDimension", "Expansion skill-line key cannot be blank."));
+        foreach (RecipeReagentSlot slot in dimensions.RecipeReagentSlots)
+        {
+            if (slot.RecipeId <= 0 || slot.DataSlotIndex <= 0 || slot.SlotIndex is <= 0 ||
+                slot.RequiredQuantity is < 0)
+                errors.Add(new(null, "RecipeReagentSlot",
+                    "Known recipe and slot IDs must be positive and quantities nonnegative."));
+            if (slot.DataSlotType is not null && !Enum.IsDefined(slot.DataSlotType.Value))
+                errors.Add(new(null, "RecipeReagentSlot", "The data-slot type is not supported."));
+            if (slot.ReagentType is not null && !Enum.IsDefined(slot.ReagentType.Value))
+                errors.Add(new(null, "RecipeReagentSlot", "The reagent type is not supported."));
+            if (slot.CandidateItemIds is null) continue;
+
+            HashSet<int> candidateIds = [];
+            foreach (int itemId in slot.CandidateItemIds)
+            {
+                if (itemId <= 0)
+                    errors.Add(new(null, "RecipeReagentSlot", "Candidate item IDs must be positive."));
+                if (!candidateIds.Add(itemId))
+                    errors.Add(new(null, "RecipeReagentSlot", "Candidate item IDs must be unique within a slot."));
+            }
+        }
 
         return errors;
     }

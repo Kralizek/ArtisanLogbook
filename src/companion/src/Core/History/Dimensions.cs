@@ -12,6 +12,32 @@ public sealed record ProfessionDimension(GameContext Game, int Id, string? Name 
 /// <summary>Blizzard expansion identifier; never inferred from the crafting timestamp.</summary>
 public sealed record ExpansionDimension(GameContext Game, string Key, string? Name = null);
 
+public enum RecipeReagentDataSlotType
+{
+    Reagent,
+    ModifiedReagent
+}
+
+public enum RecipeReagentType
+{
+    Modifying,
+    Basic,
+    Finishing,
+    Automatic
+}
+
+/// <summary>A recipe schematic reagent slot with its known requiredness, quantity, and item alternatives.</summary>
+public sealed record RecipeReagentSlot(
+    GameContext Game,
+    int RecipeId,
+    RecipeReagentDataSlotType? DataSlotType,
+    int DataSlotIndex,
+    int? SlotIndex = null,
+    RecipeReagentType? ReagentType = null,
+    bool? IsRequired = null,
+    int? RequiredQuantity = null,
+    IReadOnlyList<int>? CandidateItemIds = null);
+
 /// <summary>A character's stable identity and optional mutable display metadata.</summary>
 public sealed record CharacterDimension(GameContext Game, CharacterIdentity Identity, string? Name = null, string? ClassFile = null);
 
@@ -26,6 +52,8 @@ public sealed record CraftDimensions(
     IReadOnlyList<ItemDimension> Items,
     IReadOnlyList<ExpansionDimension> Expansions)
 {
+    public IReadOnlyList<RecipeReagentSlot> RecipeReagentSlots { get; init; } = [];
+
     public static CraftDimensions Empty { get; } = new([], [], [], [], []);
 }
 
