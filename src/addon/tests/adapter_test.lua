@@ -1,6 +1,7 @@
 local root = arg[1] or "src/ArtisanLogbook_Core"
 local addon = {}
 assert(loadfile(root .. "/Flavors/Registry.lua"))("ArtisanLogbook", addon)
+assert(loadfile(root .. "/Flavors/Modern/Adapter.lua"))("ArtisanLogbook", addon)
 assert(loadfile(root .. "/Flavors/Retail/Adapter.lua"))("ArtisanLogbook", addon)
 assert(loadfile(root .. "/Core/API.lua"))("ArtisanLogbook", addon)
 local passed = 0

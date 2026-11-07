@@ -366,8 +366,8 @@ $sha = Get-CurrentSha
 $flavorConfig = Get-FlavorConfiguration
 $wowRoot = Resolve-WowPath $WowPath
 $addonsDirectory = Join-Path (Join-Path (Join-Path $wowRoot $flavorConfig.ClientDirectory) "Interface") "AddOns"
-if ($Flavor -eq "Forever" -and $Addon -ne "Tracer") {
-    Write-Warning "Forever Core/UI archives are buildable but unsupported. This milestone supports only standalone Tracer diagnostics."
+if ($Flavor -eq "Forever" -and $Addon -in @("Both", "UI")) {
+    Write-Warning "Forever production UI is not validated and will not initialize. Use Core + Tracer for ordinary fixed-input crafting capture."
 }
 
 $archivePrefix = switch ($Addon) {

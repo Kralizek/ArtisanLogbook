@@ -1316,7 +1316,16 @@ function API.GetCapabilities()
   local result = { flavor = capabilities.flavor }
   result.craftResults = capabilities.events.TRADE_SKILL_ITEM_CRAFTED_RESULT == true
   result.personalRequests = result.craftResults and capabilities.hooks.CraftRecipe == true
-  result.reagentAllocations = result.personalRequests and capabilities.operationInfo == true
+  result.reagentAllocations = result.personalRequests and
+    (capabilities.operationInfo == true or capabilities.fixedReagents == true)
+  if capabilities.flavor == "forever" then
+    result.captureReady = capabilities.captureReady == true
+    result.personalRequests = result.personalRequests and result.captureReady
+    result.reagentAllocations = result.reagentAllocations and result.captureReady
+    result.support = capabilities.support
+    result.resultCorrelation = capabilities.resultCorrelation
+    result.craftingStats, result.qualities, result.orders, result.salvage, result.recrafts = false, false, false, false, false
+  end
   return result
 end
 
@@ -1345,6 +1354,7 @@ function API.GetDiagnostics()
     captureHealth = {
       captureError = addon.ledgerCaptureError == true or adapter.capabilities.captureError == true,
       diagnosticObserverError = addon.diagnosticObserverError == true,
+      unsupportedReason = adapter.capabilities.lastUnsupportedReason,
     },
     correlation = {
       operationOwnershipUncertain = ledger.operationOwnershipUncertain == true,

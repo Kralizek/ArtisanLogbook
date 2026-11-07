@@ -6,7 +6,9 @@
 
 Storage/Ledger.lua
 Flavors/Registry.lua
+Flavors/Modern/Adapter.lua
 Flavors/Retail/Adapter.lua
+Flavors/Forever/Adapter.lua
 Core/API.lua
 Core/Management.lua
 Core/Bootstrap.lua

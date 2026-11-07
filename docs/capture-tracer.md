@@ -7,9 +7,130 @@ durable storage contract. The issue #4 ledger implementation and its conservativ
 [storage-ledger.md](storage-ledger.md). Other cases and universal correlation
 guarantees remain unverified.
 
-## Forever diagnostics-first milestone
+## First Forever crafting adapter
 
-Forever support currently means **standalone tracing only**, not production
+Core now supports **ordinary personal, deterministic item crafts** on Forever
+through the shared modern capture pipeline and schema-5 ledger. The production
+UI remains unvalidated and refuses initialization on Forever. Tracer remains
+independently usable, including when Core is disabled.
+
+### Architecture and acceptance boundary
+
+- Named project constants select `forever` (`WOW_PROJECT_CAMELOT`) before
+  Mainline. Retail retains its existing capture policy; shared code owns event
+  subscriptions, passive request hooks, schematic input snapshots and Core
+  recipe/profession/item enrichment. The ledger and API v1 remain shared.
+- A request must be `CraftRecipe` with a positive recipe/count, empty explicit
+  reagent selections, no order/recipe-level/concentration selection, and
+  readable matching recipe metadata. Qualities/stats/recraft/enchant/salvage/
+  gathering/dummy recipes must be explicitly false.
+- The matching schematic must expose an ordinary item recipe, no crafting
+  operation info, one known output ID and equal positive min/max quantity.
+  Every slot must be a visible fixed required basic item reagent, with exactly
+  one candidate and a positive required quantity. Optional, currency, variable,
+  ambiguous, inaccessible or missing data rejects production admission with
+  diagnostics rather than inventing inputs or attributing unknown output.
+- Profession enrichment reuses `GetProfessionInfoByRecipeID` when available.
+  Missing profession names do not fabricate names or block a resolved item
+  craft. Operation-info, quality, equipment and buff probes are not run for
+  Forever's fixed-only policy.
+- The supplied structured results have **`operationID = 0`**. Zero is preserved
+  in stored facts, never replaced with a synthetic game operation ID. A matching
+  player cast start/success provides an ephemeral correlation token; only a
+  subsequent structured item-result event creates a craft. Duplicate nil-GUID
+  starts and duplicate successes do not generate tokens twice.
+- The result must match the submitted recipe's deterministic output ID and
+  quantity. One token is consumed per accepted result. Begins, requests, success
+  events, bag changes and loot messages never increment the craft count.
+  Identical result events without a new matched cast are ignored diagnostically.
+- A next begin/start may precede the previous result. Its interruption ownership
+  is retained separately from that previous completed cast. Matched failure/
+  interruption cancels outstanding requests once; repeated notifications and
+  failures for unrelated GUIDs/units cannot cancel a newer request.
+  `UPDATE_TRADESKILL_CAST_STOPPED(false)` is **not** cancellation: it also occurs
+  on normal completion before the final result.
+- Overlapping submitted requests, or two completed casts awaiting
+  indistinguishable zero-ID results, are quarantined rather than guessed.
+  Arbitrarily delayed duplicate callbacks arriving after another matched
+  success remain fundamentally indistinguishable without native operation
+  identity. The capture validates the observed ordering, not every possible
+  native delivery pattern.
+- Fixed reagent rows represent **schematic requirements**, not measured bag
+  consumption. Resourcefulness/Concentration/Ingenuity/Multicraft/quality and
+  material-savings measurements remain unavailable; zero-valued result fields
+  are not converted into observed negatives.
+- API capabilities expose `captureReady`, the support boundary and correlation
+  mode. Missing required event registrations/getters/hooks disable admission;
+  the diagnostics snapshot includes the latest unsupported reason. Core can
+  initialize without the UI, Tracer, optional identity/profession APIs or quotes.
+
+There is no ledger schema change, migration, adapter-specific storage or
+production UI implementation. Existing schema-5 files reload through the same
+ledger. Tokens and pending requests do not survive reload. Forever remains
+`release: false`; no release or CurseForge publication is enabled.
+
+### Runtime fixture provenance
+
+The user-supplied cumulative Tracer SavedVariables export (Tracer `5b81d47`,
+Forever `1.60.1.70862`, interface `16001`, project ID `18`, Core disabled) contains
+256 records across **five** distinct start/stop sessions. The sanitized fixture
+is [forever-alchemy-70862.lua](../src/addon/tests/fixtures/forever-alchemy-70862.lua).
+Original sequence numbers and session ranges are retained; identity/build
+timestamps are sanitized, cast/item GUIDs are consistently pseudonymized, and
+irrelevant bag/UI traffic is omitted. The raw export is not committed.
+
+| Sequence range | Captured scenario | Confirmed result events |
+| --- | --- | --- |
+| 1–30 | Minor Mana Potion single craft | 1 × item 2455 |
+| 31–63 | Minor Mana Potion metadata probes and another single craft | 1 × item 2455 |
+| 64–206 | Fortitude: request 7 interrupted after 1; independent 1; complete batch 5 | 7 × item 2458 |
+| 207–249 | Minor Defense request 2 | 2 × item 5997 |
+| 250–256 | Minor Defense metadata probes only | 0 |
+
+The two Mana recordings are real separate crafts, not cumulative-file
+duplicates. Each session is extracted once: **11 total outputs from six
+requests**, not the requested-count total of 17.
+
+Captured schematics confirm quantities of one each for Mana reagents
+`785`, `2447`, `3371`, and Defense reagents `765`, `2447`, `3371`.
+Fortitude request/result/spell events are captured, but its recipe/schematic
+metadata was **not probed**. Its replay uses a clearly labelled synthetic
+ordinary schematic; Fortitude native metadata/consumption has not been verified.
+Metadata captured in later probe sessions supplies test API responses for
+earlier crafts; this does not prove native getter readiness at each request.
+
+### Deploy and test Core + Tracer in game
+
+```powershell
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Core
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Tracer
+```
+
+Enable Core and Tracer; leave Artisan Logbook UI disabled. Back up existing Core
+SavedVariables first. Verify the same client build and API readiness:
+`/dump GetBuildInfo()` and `/dump ArtisanLogbookAPI.GetCapabilities()`.
+
+1. Start normal tracing before opening Alchemy. Mark the scenario boundaries.
+2. Probe recipe `2331`, then craft one Mana Potion. Verify exactly one new craft
+   via `/dump ArtisanLogbookAPI.GetCrafts()` and inspect Diagnostics.
+3. Probe `7183`, craft a batch of two, and verify two additional results with
+   known schematic requirements and unavailable Retail mechanics.
+4. Probe `2334` **before testing Fortitude**; export this missing native metadata.
+   Request a batch, interrupt its second cast, verify exactly one confirmed
+   result, then submit a new single craft and a new batch. Confirm the cancelled
+   remainder is never counted and the new requests are independently captured.
+5. Stop tracing, export every page or back up the full Tracer SavedVariables.
+   Reload and restart; verify Core facts persist, pending correlation is reset
+   and Tracer recording is paused.
+
+Static/replay tests do not certify live Core behavior, native metadata readiness
+or latency, cross-profession signatures, unusual result ordering or other
+mechanics. If admission is refused, keep the trace and inspect
+`ArtisanLogbookAPI.GetDiagnostics()`; do not broaden the policy by guessing.
+
+## Forever diagnostics-first milestone (historical #58)
+
+The first milestone enabled **standalone tracing only**, not production
 crafting capture, correlation, ledger support or a Forever crafting adapter.
 Install and enable only Tracer for the first investigation; leave Core/UI
 disabled. No ledger schema, migrations or Retail crafting behavior are changed.
@@ -120,9 +241,8 @@ runtime evidence.
 
 `.flavors.yml` enables Forever CI/local artifacts with `release: false`. The
 release matrix excludes it, preserving Retail release/CurseForge semantics.
-Core/UI Forever archives are buildable artifacts **only**, not supported
-functionality. `-Flavor Forever -Addon Both` selects the proper bundle and
-warns, but should not be used for this first investigation.
+At that milestone Core/UI Forever archives were buildable artifacts **only**.
+The adapter above supersedes the Core restriction; UI remains unvalidated.
 
 ## Build and Install
 

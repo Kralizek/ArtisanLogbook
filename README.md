@@ -60,11 +60,22 @@ interfaces are validated against `.flavors.yml` before any extraction/copy.
 The PowerShell reader consumes the block-style `id` and `version` scalar fields
 used in that file; CI's existing YAML resolver validates the complete format.
 
-Forever is a diagnostics-only milestone. Deploy only Tracer and enable it
-explicitly in-game. Core/UI archives build for Forever but are **unsupported**;
-`-Flavor Forever -Addon Both` selects its bundle with a warning, not a support
-promise. The first-session plan and known/unknown capabilities are in
-[capture tracer](docs/capture-tracer.md#forever-diagnostics-first-milestone).
+Forever Core supports a first conservative adapter for ordinary personal crafts
+with deterministic output and fixed required reagents. Install **Core + Tracer**:
+
+```powershell
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Core
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Tracer
+```
+
+Enable both addons in-game (Tracer is disabled by default). Core capture runs
+independently of tracer recording. Forever production UI is **not validated**
+and refuses initialization; `-Flavor Forever -Addon Both` still selects the
+bundle but warns about the UI. Do not enable the UI for this milestone.
+The [Forever adapter guide](docs/capture-tracer.md#first-forever-crafting-adapter)
+documents the replayed evidence, support boundary and in-game acceptance plan.
+Orders, enchants, salvage, recrafts, optional/substituted inputs, crafting stats,
+qualities and Retail-specific mechanics are not supported on Forever.
 
 See the tracer and [production UI docs](docs/production-ui.md) for installation
 and live verification steps.
@@ -74,8 +85,8 @@ flavor has an `id` and WoW client `version`. The matrix computes its
 TOC interface number and creates a flavor-specific bundle. Retail keeps the
 unqualified bundle filename for compatibility. Set `release: false` for
 diagnostic flavors: they produce CI/local archives but are excluded from
-GitHub releases and CurseForge. Forever currently has this safety gate pending
-in-game validation; Retail release semantics are unchanged.
+GitHub releases and CurseForge. Forever retains this safety gate pending an
+in-game Core adapter acceptance session; Retail release semantics are unchanged.
 
 CurseForge publication uses
 [`curseforge-publish@v0.6.0`](https://github.com/Kralizek/github-actions/tree/v0.6.0/actions/curseforge-publish)

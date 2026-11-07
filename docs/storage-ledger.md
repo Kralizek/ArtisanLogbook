@@ -21,8 +21,8 @@ for correlation, ambiguity, migration, measurement coverage and retention.
 `ArtisanLogbookDB` is account-wide SavedVariables for durable facts.
 `ArtisanLogbook_Core` owns `ArtisanLogbookDB`; optional
 `ArtisanLogbook_Tracer` owns the independent bounded `ArtisanLogbookTraceDB`.
-The UI and Tracer require Core, but Core and the production UI do not require
-Tracer. These Lua tables are private persistence, not supported in-game
+The UI requires Core; Tracer uses Core optionally. Core and the production UI do
+not require Tracer. These Lua tables are private persistence, not supported in-game
 consumer APIs. All addons, including the production UI, must use
 `ArtisanLogbookAPI` for factual reads. Offline exporters may have
 version-specific persistence readers without making these tables a public
@@ -31,6 +31,16 @@ in-game API. The Core TOC addon version is recorded on each session;
 of both. The debug export version in
 `Capture/Trace.lua` is not an AL1 export contract. No final export contract or
 `exportContractVersion` exists in this slice.
+
+Forever's first adapter uses this same schema and public API without migrations.
+Its ordinary structured results have `operationID = 0`; the zero is retained.
+A matched submitted request plus an ephemeral player-cast token permits
+request attribution without pretending the token is a game operation ID.
+Tokens are session-local, consumed only after successful result commitment,
+and reset on reload. Material-savings eligibility is false independently of
+personal request ownership; fixed inputs remain schematic requirements, not
+measured consumption. See [Forever capture](capture-tracer.md#first-forever-crafting-adapter)
+for admission, cancellation and unavailable mechanics.
 
 Moving Tracer's SavedVariables declaration from Core to Tracer does not copy
 history between addon files. Before updating an existing installation, close

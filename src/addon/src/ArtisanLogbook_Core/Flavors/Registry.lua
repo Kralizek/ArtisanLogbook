@@ -2,6 +2,7 @@ local _, addon = ...
 
 local adapters = {}
 local projectConstants = {
+  { "WOW_PROJECT_CAMELOT", "forever" },
   { "WOW_PROJECT_MAINLINE", "retail" },
   { "WOW_PROJECT_CLASSIC", "classic" },
   { "WOW_PROJECT_BURNING_CRUSADE_CLASSIC", "burning-crusade-classic" },
@@ -30,9 +31,12 @@ function addon.CreateFlavorAdapter(api, handleEvent, submitCraft, invalidateCraf
   if addon.RegisterRetailAdapter then
     addon.RegisterRetailAdapter(api)
   end
+  if addon.RegisterForeverAdapter then
+    addon.RegisterForeverAdapter(api)
+  end
   local flavor, projectID = addon.DetectFlavor(api)
   local registered = adapters[projectID]
-  if registered then
+  if registered and registered.name == flavor then
     return registered.factory(api, handleEvent, submitCraft, invalidateCraft)
   end
   return {
