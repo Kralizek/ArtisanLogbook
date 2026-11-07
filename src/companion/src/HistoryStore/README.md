@@ -1,31 +1,49 @@
 # Companion History Store
 
-`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and depends on the database-independent C01/C02 contracts in Core. There is no implicit default database location: the host configures storage by passing a database file path to `HistoryStore` (also exposed as `DatabasePath`). The project creates its parent directory and initializes or migrates that file when opened; dispose the store to close its connection. Calls on one store instance are serialized. Tests use a unique temporary `.duckdb` file, dispose the store, and reopen it before asserting reconstructed observations.
+`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; the project creates its parent directory and initializes schema v1 when opened. Dispose the store to close its connection. Calls on one store instance are serialized.
 
 ## Physical schema (version 1)
 
-The seven history tables are:
+The initial schema persists every current `CraftDimensions` collection, canonical observations, and slot-level recipe requirements:
 
 | Table | Owns |
 |---|---|
-| `GameContext` | Blizzard project ID and nullable progression track; the internal key preserves both parts of the C01 identity. |
-| `Character` | Context-scoped stable character key and optional display name/class metadata. Rows created from a `CraftObservation` contain only the known key. |
-| `Recipe` | Context-scoped recipe ID and optional catalog metadata. Observation-only writes create the smallest ID row with catalog metadata left null. |
-| `RecipeReagent` | Optional recipe requirement rows. This table is intentionally empty for observation-only writes. |
-| `Craft` | Canonical craft identity, context/character/recipe references, craft attributes, recorded timestamp, tri-state outcomes/completeness, and versioned provenance/evidence JSON. |
-| `CraftReagent` | Craft × item allocations and returned quantities. Returned decimals are stored as invariant text to preserve the full .NET `decimal` range and scale. |
-| `CraftOutput` | Craft × item × quality output facts, including nullable quality and quantity. An internal quality key distinguishes unknown quality from known nonnegative quality values. |
+| `GameContext` | Blizzard project ID and nullable progression track. |
+| `Character` | Context-scoped stable character key and optional display name/class metadata. Observation-only writes create the known identity without inventing names. |
+| `Recipe` | Context-scoped recipe ID and optional name, profession, expansion, and quality metadata. |
+| `Profession` | Context-scoped skill-line ID, optional name, and optional parent skill line. |
+| `Item` | Context-scoped item ID and optional name. |
+| `Expansion` | Context-scoped expansion/skill-line key and optional name. |
+| `RecipeReagent` | A recipe schematic slot identified by context, recipe, data-slot type, and data-slot index. Slot type, UI slot index, reagent type, requiredness, quantity, and candidate item IDs retain unknown values independently. Candidate IDs are stored as a deterministic JSON array. |
+| `CraftIdentity` | Canonical `(IdentityOrigin, IdentityObservation)` identity and an internal immutable `CraftKey`. |
+| `Craft` | Mutable craft attributes, context, character/recipe IDs, recorded timestamp, tri-state outcomes/completeness, and versioned provenance/evidence JSON. |
+| `CraftReagent` | Craft × item allocations and returned quantities. Returned decimals are invariant text to preserve .NET decimal precision and scale. |
+| `CraftOutput` | Craft × item × quality output facts, including nullable quality and quantity. |
 
-Craft identity is the primary key `(IdentityOrigin, IdentityObservation)`, matching C01/C02 rather than addon-local numeric IDs. Dimension keys are context-scoped. The child fact tables are committed with their parent craft in one transaction. DuckDB does not permit updates to a parent row while another table has a foreign key to it, so child-to-craft references are validated and maintained by the store transaction rather than physical foreign-key constraints; context, character, and recipe relationships are database-constrained. Explicit `ReagentsObserved` and `OutputsObserved` flags distinguish unknown (`null`) collections from observed-empty collections; nullable scalar columns retain unknown separately from zero and false.
+`CraftIdentity` keeps C01/C02 identity separate from the database surrogate. `Craft` holds the mutable payload and references the immutable identity key; reagent and output rows have physical foreign keys to that key. This avoids DuckDB's limitation that a referenced parent row cannot be updated: the store can transactionally replace child facts and enrich `Craft` without changing the referenced identity. Insert and enrichment failures roll back the parent, dimensions, and all child facts. Tests verify FK rejection of orphan children and rollback after child insertion failures.
 
-`__HistoryStoreMigration` is a small internal schema-version ledger, separate from the seven history tables. Migrations run transactionally and are applied in ascending version order. Per-craft provenance, output callback evidence, and configuration evidence are versioned JSON on `Craft`; callback order and optional fields are retained by the C01 record types.
+All dimension keys are scoped to `GameContext`. Dimension-to-context constraints are database-enforced. Craft-to-character/recipe, recipe-to-profession/expansion, profession-parent, and recipe-slot-to-recipe associations are ensured by the store transaction; candidate item IDs are checked by C01 and materialized as item dimensions, but remain in the slot's JSON array rather than separate FK rows. This avoids extra join tables and does not infer a recipe definition from observed `CraftReagent` rows.
 
-## Contract gaps kept explicit
+`WriteDimensions` and `ReadDimensions` accept/return the canonical C01 sidecar independently of craft observations, so metadata can arrive before or after a craft. Writes use C02 reconciliation: unknown values do not erase known metadata, names enrich deterministically, identical re-imports are idempotent, and contradictory known recipe/profession/slot facts return a typed conflict without persisting any part of the conflicting write. Craft observations also create minimal context-scoped identity rows for their known character, recipe, profession, expansion, and observed item IDs; richer dimension writes later enrich them.
 
-C01 currently has no canonical recipe-reagent requirement type. Consequently `RecipeReagent` is present in the physical schema but no required quantities are inferred from observed craft inputs and no rows are fabricated. The observation API also does not accept a sidecar `CraftDimensions` catalog; recipe names, profession/expansion catalog metadata, and other dimensions remain null/unpopulated until a canonical store contract exposes them. The craft's own known recipe, profession, and profession-expansion attributes are persisted directly.
+The internal `__HistoryStoreMigration` table tracks schema versions separately. Schema v1 is corrected before initial merge; no migration is supplied for the unshipped PR schema. Provenance, callback evidence, and configuration evidence retain their C01 typed payloads and versioned JSON representation.
 
-`Write` first applies C01 validation. A repeated identity is reconciled with `HistoryReconciler`: compatible unknown-to-known enrichment and independent evidence are stored atomically, exact replay is idempotent, and contradictory known facts return a typed conflict without replacing the stored observation.
+## Recipe reagent evidence and limits
 
-## Persistence test
+`RecipeReagentSlot` models schematic slots rather than fixed recipe-to-item links. Multiple slots may contain the same item, and one slot may contain multiple candidate alternatives. `RequiredQuantity`, `IsRequired`, slot type, reagent type, and UI index remain nullable when the source did not preserve them. Historical craft inputs are stored separately and are never promoted to recipe requirements.
 
-`tests/HistoryStore/HistoryStoreIntegrationTests.cs` writes representative observations, disposes the first store, opens the same file again, and checks canonical values, provenance, both evidence collections, null/empty distinctions, false/zero values, multiple contexts, callback evidence, and high-precision decimal returns. Separate tests exercise replay, enrichment, and rejected conflicts.
+Retail's pinned `CraftingReagentSlotSchematic` declaration (client build `12.1.5.70688`, source commit `d07eb00237d8891f153215db98a5df880a26cfe5`) includes `reagents`, `reagentType`, `variableQuantities`, `quantityRequired`, `dataSlotType`, `dataSlotIndex`, `slotIndex`, `required`, and `hiddenInCraftingForm`. `CraftingReagentType` distinguishes Basic, Modifying, Finishing, and Automatic slots; `TradeskillSlotDataType` distinguishes Reagent, ModifiedReagent, and Currency. The addon accesses `C_TradeSkillUI.GetRecipeSchematic` behind availability/readability checks in [Retail Adapter.lua](../../../addon/src/ArtisanLogbook_Core/Flavors/Retail/Adapter.lua).
+
+The SavedVariables adapter imports only recipe-slot facts actually retained by the addon:
+
+- `fixedReagents` contain known required basic reagent items and quantities, which become singleton candidate slots.
+- Schema-3 `requirements` and independent result `reagentRequirements` preserve candidate item IDs, slot index, and required quantity for schematic observations. Those rows do not preserve data-slot type or UI slot index, so the canonical values remain unknown rather than being inferred.
+- Optional/finishing/modifying slots, hidden-state, currency slots, and `variableQuantities` are not preserved as standalone recipe definitions by current SavedVariables. The adapter does not invent them. Nonempty variable-quantity schematics are marked unsupported by the addon capture path; the canonical slot model therefore stores only the single required quantity when that value is known.
+
+The API declaration describes available fields, not guaranteed runtime availability for every recipe. The addon guards schematic reads, and this repository has no live-client fixture establishing that every API slot is observable. Full recipe-catalog collection remains out of scope.
+
+## Reconciliation and persistence tests
+
+`Write` applies C01 validation and C02 craft reconciliation. Exact replay is idempotent, compatible unknown-to-known enrichment and independent evidence are stored atomically, and contradictory known facts return a typed conflict without replacing the stored observation.
+
+`tests/HistoryStore/HistoryStoreIntegrationTests.cs` covers close/reopen reconstruction, dimensions written before and after crafts, all five C01 dimension kinds, slot alternatives/optional state/repeated item IDs, context isolation, metadata enrichment and conflicts, decimal precision, physical foreign keys, and transactional rollback. `tests/SavedVariables/SavedVariablesAdapterTests.cs` covers the recipe requirement fields the current addon actually persists.

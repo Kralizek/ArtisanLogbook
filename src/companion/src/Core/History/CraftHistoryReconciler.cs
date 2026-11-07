@@ -100,11 +100,52 @@ public static class CraftHistoryReconciler
             "Expansion", left.Dimensions.Expansions, right.Dimensions.Expansions,
             e => (e.Game, e.Key), (a, b) => a with { Name = Name(a.Name, b.Name) });
 
+        IReadOnlyList<RecipeReagentSlot> recipeReagentSlots = Join(
+            "RecipeReagentSlot",
+            left.Dimensions.RecipeReagentSlots,
+            right.Dimensions.RecipeReagentSlots,
+            slot => (slot.Game, slot.RecipeId, slot.DataSlotType, slot.DataSlotIndex),
+            (a, b) =>
+            {
+                T? Optional<T>(string field, T? first, T? second) where T : struct
+                {
+                    if (first.HasValue && second.HasValue &&
+                        !EqualityComparer<T>.Default.Equals(first.Value, second.Value))
+                        Conflict("RecipeReagentSlot", $"{a.RecipeId}/{a.DataSlotType}/{a.DataSlotIndex}", field);
+                    return first ?? second;
+                }
+
+                IReadOnlyList<int>? candidateIds;
+                if (a.CandidateItemIds is null) candidateIds = b.CandidateItemIds;
+                else if (b.CandidateItemIds is null) candidateIds = a.CandidateItemIds;
+                else if (a.CandidateItemIds.ToHashSet().SetEquals(b.CandidateItemIds))
+                    candidateIds = a.CandidateItemIds.Order().ToArray();
+                else
+                {
+                    Conflict("RecipeReagentSlot", $"{a.RecipeId}/{a.DataSlotType}/{a.DataSlotIndex}",
+                        nameof(RecipeReagentSlot.CandidateItemIds));
+                    candidateIds = a.CandidateItemIds.Order().ToArray();
+                }
+
+                return a with
+                {
+                    SlotIndex = Optional(nameof(RecipeReagentSlot.SlotIndex), a.SlotIndex, b.SlotIndex),
+                    ReagentType = Optional(nameof(RecipeReagentSlot.ReagentType), a.ReagentType, b.ReagentType),
+                    IsRequired = Optional(nameof(RecipeReagentSlot.IsRequired), a.IsRequired, b.IsRequired),
+                    RequiredQuantity = Optional(nameof(RecipeReagentSlot.RequiredQuantity),
+                        a.RequiredQuantity, b.RequiredQuantity),
+                    CandidateItemIds = candidateIds
+                };
+            });
+
         if (!crafts.IsSuccessful || errors.Count > 0)
             return new(null, crafts.Conflicts, errors);
 
         CraftHistory merged = new(crafts.Observations!,
-            new(characters, recipes, professions, items, expansions));
+            new CraftDimensions(characters, recipes, professions, items, expansions)
+            {
+                RecipeReagentSlots = recipeReagentSlots
+            });
         IReadOnlyList<HistoryValidationError> finalErrors = CraftHistoryValidator.Validate(merged);
         return finalErrors.Count == 0 ? new(merged, [], []) : new(null, [], [], finalErrors);
     }

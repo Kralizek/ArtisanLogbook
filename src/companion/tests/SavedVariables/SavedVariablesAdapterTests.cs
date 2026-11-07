@@ -857,6 +857,76 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
+    public void SchemaThreeReagentRequirementsBecomeRecipeSlotsWithoutInventingUnavailableFields()
+    {
+        SavedVariablesImportResult imported = SavedVariablesReader.Parse("""
+            return { schemaVersion = 4, schemaIdentity = "ArtisanLogbookLedger",
+              crafts = {
+                { id = 1, sessionId = 1, requestId = 7, recipeId = 123, timestamp = 1800000000 },
+                { id = 2, sessionId = 1, recipeId = 124, timestamp = 1800000001,
+                  requirementObservation = "result", reagentRequirements = {
+                    { dataSlotIndex = 3, candidateItemIDs = { 47, 48 },
+                      requiredQuantity = 4, source = "schematic" }
+                  } }
+              },
+              requests = { { id = 7, sessionId = 1, recipeId = 123, allocations = {},
+                fixedReagents = { { dataSlotIndex = 1, itemId = 44, requiredQuantity = 3 } },
+                requirements = { { dataSlotIndex = 2, candidateItemIDs = { 45, 46 },
+                  requiredQuantity = 2, source = "schematic" } } } },
+              dimensions = {
+                characters = { { id = 1, key = "project:1:region:3:realm:1309:guid:Player-A" } },
+                sessions = { { id = 1, key = "session", projectId = 1, characterDimensionId = 1 } },
+                items = {
+                  [44] = { id = 44 }, [45] = { id = 45 }, [46] = { id = 46 },
+                  [47] = { id = 47 }, [48] = { id = 48 }
+                }
+              }
+            }
+            """);
+
+        Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
+        RecipeReagentSlot[] slots = imported.History!.Dimensions.RecipeReagentSlots
+            .OrderBy(slot => slot.DataSlotIndex)
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(slots, Has.Length.EqualTo(3));
+            Assert.That(slots[0].DataSlotType, Is.EqualTo(RecipeReagentDataSlotType.Reagent));
+            Assert.That(slots[0].ReagentType, Is.EqualTo(RecipeReagentType.Basic));
+            Assert.That(slots[0].IsRequired, Is.True);
+            Assert.That(slots[0].RequiredQuantity, Is.EqualTo(3));
+            Assert.That(slots[0].CandidateItemIds, Is.EqualTo(new[] { 44 }));
+            Assert.That(slots[1].DataSlotType, Is.Null);
+            Assert.That(slots[1].CandidateItemIds, Is.EqualTo(new[] { 45, 46 }));
+            Assert.That(slots[1].RequiredQuantity, Is.EqualTo(2));
+            Assert.That(slots[2].RecipeId, Is.EqualTo(124));
+            Assert.That(slots[2].CandidateItemIds, Is.EqualTo(new[] { 47, 48 }));
+        });
+    }
+
+    [Test]
+    public void MalformedRecipeCandidateListIsReportedInsteadOfSilentlyTruncated()
+    {
+        SavedVariablesImportResult imported = SavedVariablesReader.Parse("""
+            return { schemaVersion = 4, schemaIdentity = "ArtisanLogbookLedger",
+              crafts = { { id = 1, sessionId = 1, requestId = 7, recipeId = 123, timestamp = 1800000000 } },
+              requests = { { id = 7, sessionId = 1, recipeId = 123, allocations = {},
+                requirements = { { dataSlotIndex = 2, candidateItemIDs = { [1] = 45, [3] = 46 },
+                  requiredQuantity = 2, source = "schematic" } } } },
+              dimensions = {
+                characters = { { id = 1, key = "project:1:region:3:realm:1309:guid:Player-A" } },
+                sessions = { { id = 1, key = "session", projectId = 1, characterDimensionId = 1 } },
+                items = { [45] = { id = 45 }, [46] = { id = 46 } }
+              }
+            }
+            """);
+
+        Assert.That(imported.IsSuccessful, Is.False);
+        Assert.That(imported.Diagnostics.Any(d => d.Code == "invalid-recipe-reagent-slot"), Is.True);
+    }
+
+    [Test]
     public void ActualDistinctSourceSessionsKeepCraftLineageWithoutInventingHistoricalBuilds()
     {
         string source = """

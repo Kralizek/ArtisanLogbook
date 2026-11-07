@@ -162,7 +162,11 @@ public sealed class HistoryStoreIntegrationTests
         Assert.That(tableNames, Does.Contain("GameContext"));
         Assert.That(tableNames, Does.Contain("Character"));
         Assert.That(tableNames, Does.Contain("Recipe"));
+        Assert.That(tableNames, Does.Contain("Profession"));
+        Assert.That(tableNames, Does.Contain("Item"));
+        Assert.That(tableNames, Does.Contain("Expansion"));
         Assert.That(tableNames, Does.Contain("RecipeReagent"));
+        Assert.That(tableNames, Does.Contain("CraftIdentity"));
         Assert.That(tableNames, Does.Contain("Craft"));
         Assert.That(tableNames, Does.Contain("CraftReagent"));
         Assert.That(tableNames, Does.Contain("CraftOutput"));
@@ -181,6 +185,187 @@ public sealed class HistoryStoreIntegrationTests
         Assert.That(Convert.ToInt64(command.ExecuteScalar()), Is.Zero);
         command.CommandText = "SELECT COUNT(*) FROM RecipeReagent";
         Assert.That(Convert.ToInt64(command.ExecuteScalar()), Is.Zero);
+    }
+
+    [Test]
+    public void DimensionsAndRecipeSlotsEnrichAcrossWritesAndSurviveReopenByContext()
+    {
+        GameContext retail = new(GameProject.Retail);
+        GameContext forever = new(GameProject.Forever, "progression-A");
+        CharacterIdentity character = new("project:1:region:3:realm:1309:guid:Player-Dimensions");
+        CraftDimensions retailDimensions = new(
+            [new(retail, character, "Retail Crafter", "MAGE")],
+            [new(retail, 123, "Retail Recipe", 171, "skillLine:2915", 5)],
+            [new(retail, 171, "Retail Profession", 164)],
+            [new(retail, 100, "Retail Herb")],
+            [new(retail, "skillLine:2915", "Retail Expansion")])
+        {
+            RecipeReagentSlots =
+            [
+                new(retail, 123, RecipeReagentDataSlotType.Reagent, 1, 1,
+                    RecipeReagentType.Basic, true, 2, [101, 100]),
+                new(retail, 123, RecipeReagentDataSlotType.Reagent, 2, 2,
+                    RecipeReagentType.Basic, false, 1, [100]),
+                new(retail, 123, RecipeReagentDataSlotType.ModifiedReagent, 1, 3,
+                    RecipeReagentType.Finishing, false, 1, [100])
+            ]
+        };
+        CraftDimensions foreverDimensions = new(
+            [new(forever, character, "Forever Crafter", "PRIEST")],
+            [new(forever, 123, "Forever Recipe", 171, "skillLine:2915", 5)],
+            [new(forever, 171, "Forever Profession", 164)],
+            [new(forever, 100, "Forever Herb")],
+            [new(forever, "skillLine:2915", "Forever Expansion")]);
+        CraftObservation retailCraft = new(
+            new CraftIdentity("dimensions", "retail"),
+            retail,
+            DateTimeOffset.UnixEpoch,
+            123,
+            character,
+            ProfessionId: 171,
+            ProfessionExpansionKey: "skillLine:2915",
+            Reagents: [new CraftReagent(100, 2, null)],
+            Outputs: [new CraftOutput(200, 1, 1)]);
+        CraftObservation foreverCraft = retailCraft with
+        {
+            Identity = new CraftIdentity("dimensions", "forever"),
+            Game = forever
+        };
+
+        using (Store store = new(_databasePath))
+        {
+            Assert.That(store.WriteDimensions(retailDimensions).Status, Is.EqualTo(DimensionWriteStatus.Inserted));
+            Assert.That(store.WriteDimensions(retailDimensions).Status, Is.EqualTo(DimensionWriteStatus.AlreadyPresent));
+
+            DimensionWriteResult unknownReplay = store.WriteDimensions(CraftDimensions.Empty with
+            {
+                Characters = [new(retail, character)]
+            });
+            Assert.That(unknownReplay.Status, Is.EqualTo(DimensionWriteStatus.AlreadyPresent));
+
+            DimensionWriteResult conflict = store.WriteDimensions(CraftDimensions.Empty with
+            {
+                Recipes = [new(retail, 123, "Conflicting Recipe", 333)],
+                Items = [new(retail, 999, "Must Roll Back")]
+            });
+            Assert.That(conflict.Status, Is.EqualTo(DimensionWriteStatus.Conflict));
+            Assert.That(store.ReadDimensions().Items.Any(item => item.Id == 999), Is.False);
+
+            Assert.That(store.Write(retailCraft).Status, Is.EqualTo(CraftWriteStatus.Inserted));
+            Assert.That(store.Write(foreverCraft).Status, Is.EqualTo(CraftWriteStatus.Inserted));
+            Assert.That(store.WriteDimensions(foreverDimensions).Status, Is.EqualTo(DimensionWriteStatus.Enriched));
+        }
+
+        using Store reopened = new(_databasePath);
+        CraftDimensions restored = reopened.ReadDimensions();
+        RecipeReagentSlot[] restoredSlots = restored.RecipeReagentSlots
+            .Where(slot => slot.Game == retail)
+            .OrderBy(slot => slot.DataSlotType)
+            .ThenBy(slot => slot.DataSlotIndex)
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(restored.Characters.Single(x => x.Game == retail).Name, Is.EqualTo("Retail Crafter"));
+            Assert.That(restored.Characters.Single(x => x.Game == forever).Name, Is.EqualTo("Forever Crafter"));
+            Assert.That(restored.Recipes.Single(x => x.Game == retail).Name, Is.EqualTo("Retail Recipe"));
+            Assert.That(restored.Recipes.Single(x => x.Game == forever).Name, Is.EqualTo("Forever Recipe"));
+            Assert.That(restored.Professions.Single(x => x.Game == retail && x.Id == 171).ParentId,
+                Is.EqualTo(164));
+            Assert.That(restored.Items.Single(x => x.Game == retail && x.Id == 100).Name, Is.EqualTo("Retail Herb"));
+            Assert.That(restored.Expansions.Single(x => x.Game == forever).Name, Is.EqualTo("Forever Expansion"));
+            Assert.That(restoredSlots, Has.Length.EqualTo(3));
+            Assert.That(restoredSlots[0].CandidateItemIds, Is.EqualTo(new[] { 100, 101 }));
+            Assert.That(restoredSlots[1].IsRequired, Is.False);
+            Assert.That(restoredSlots[2].DataSlotType, Is.EqualTo(RecipeReagentDataSlotType.ModifiedReagent));
+            Assert.That(reopened.Read(retailCraft.Identity), Is.EqualTo(retailCraft));
+            Assert.That(reopened.Read(foreverCraft.Identity), Is.EqualTo(foreverCraft));
+        });
+    }
+
+    [Test]
+    public void ChildForeignKeysRejectOrphansAndFailedInsertOrEnrichmentRollBackAtomically()
+    {
+        GameContext game = new(GameProject.Retail);
+        CharacterIdentity firstCharacter = new("project:1:region:3:realm:1309:guid:Player-Atomic-A");
+        CharacterIdentity secondCharacter = new("project:1:region:3:realm:1309:guid:Player-Atomic-B");
+        CraftObservation original = new(
+            new CraftIdentity("atomic", "one"),
+            game,
+            DateTimeOffset.UnixEpoch,
+            123,
+            firstCharacter,
+            Reagents: [new CraftReagent(100, 2, 0.5m)],
+            Outputs: [new CraftOutput(200, 1, null)]);
+        CraftObservation blocker = new(
+            new CraftIdentity("atomic", "two"),
+            game,
+            DateTimeOffset.UnixEpoch,
+            124,
+            secondCharacter,
+            Reagents: [new CraftReagent(101, 1, null)],
+            Outputs: [new CraftOutput(201, 1, 3)]);
+
+        using (Store store = new(_databasePath))
+        {
+            Assert.That(store.Write(original).Status, Is.EqualTo(CraftWriteStatus.Inserted));
+            Assert.That(store.Write(blocker).Status, Is.EqualTo(CraftWriteStatus.Inserted));
+        }
+
+        using (DuckDBConnection connection = new($"Data Source={_databasePath}"))
+        {
+            connection.Open();
+            using DuckDBCommand command = connection.CreateCommand();
+            command.CommandText = "CREATE UNIQUE INDEX TestUniqueOutputQuantity ON CraftOutput (Quantity)";
+            command.ExecuteNonQuery();
+        }
+
+        CraftObservation failedInsert = new(
+            new CraftIdentity("atomic", "three"),
+            game,
+            DateTimeOffset.UnixEpoch,
+            125,
+            new CharacterIdentity("project:1:region:3:realm:1309:guid:Player-Atomic-C"),
+            Reagents: [new CraftReagent(102, 1, null)],
+            Outputs: [new CraftOutput(202, 1, 3)]);
+        CraftObservation failedEnrichment = original with
+        {
+            Outputs = [new CraftOutput(200, 1, 3)],
+            OutputsComplete = true
+        };
+
+        using (Store reopened = new(_databasePath))
+        {
+            Assert.Throws<DuckDBException>(() => reopened.Write(failedInsert));
+            Assert.Throws<DuckDBException>(() => reopened.Write(failedEnrichment));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(reopened.ReadAll(), Has.Count.EqualTo(2));
+                Assert.That(reopened.Read(original.Identity)!.Outputs, Is.EqualTo(original.Outputs));
+                Assert.That(reopened.Read(blocker.Identity)!.Outputs, Is.EqualTo(blocker.Outputs));
+                Assert.That(reopened.ReadDimensions().Characters.Any(x => x.Identity.Key.EndsWith("Player-Atomic-C")),
+                    Is.False);
+                Assert.That(reopened.ReadDimensions().Items.Any(x => x.Id == 102), Is.False);
+            });
+        }
+
+        using DuckDBConnection integrityConnection = new($"Data Source={_databasePath}");
+        integrityConnection.Open();
+        using DuckDBCommand integrityCommand = integrityConnection.CreateCommand();
+        integrityCommand.CommandText = "SELECT COUNT(*) FROM CraftIdentity";
+        Assert.That(Convert.ToInt64(integrityCommand.ExecuteScalar()), Is.EqualTo(2));
+        integrityCommand.CommandText = "SELECT COUNT(*) FROM Craft";
+        Assert.That(Convert.ToInt64(integrityCommand.ExecuteScalar()), Is.EqualTo(2));
+        integrityCommand.CommandText = "SELECT COUNT(*) FROM CraftReagent";
+        Assert.That(Convert.ToInt64(integrityCommand.ExecuteScalar()), Is.EqualTo(2));
+        integrityCommand.CommandText = "SELECT COUNT(*) FROM CraftOutput";
+        Assert.That(Convert.ToInt64(integrityCommand.ExecuteScalar()), Is.EqualTo(2));
+        integrityCommand.CommandText = """
+            INSERT INTO CraftReagent (CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity)
+            VALUES (999999, 999999, NULL, NULL)
+            """;
+        Assert.Throws<DuckDBException>(() => integrityCommand.ExecuteNonQuery());
     }
 
     [Test]

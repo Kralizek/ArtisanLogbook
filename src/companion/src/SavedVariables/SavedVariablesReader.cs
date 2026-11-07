@@ -206,7 +206,10 @@ public static class SavedVariablesReader
         {
             CheckCollection(request, "allocations", diagnostics, "ArtisanLogbookDB.requests");
             CheckCollection(request, "fixedReagents", diagnostics, "ArtisanLogbookDB.requests");
+            CheckCollection(request, "requirements", diagnostics, "ArtisanLogbookDB.requests");
         }
+        foreach (LuaTable craft in craftRows)
+            CheckCollection(craft, "reagentRequirements", diagnostics, "ArtisanLogbookDB.crafts");
 
         List<CraftObservation> crafts = [];
         List<CharacterDimension> characterDimensions = [];
@@ -219,6 +222,33 @@ public static class SavedVariablesReader
         HashSet<(GameContext, int)> seenProfessions = [];
         HashSet<(GameContext, int)> seenItems = [];
         HashSet<(GameContext, string)> seenExpansions = [];
+        Dictionary<(GameContext Game, int RecipeId, RecipeReagentDataSlotType? DataSlotType, int DataSlotIndex),
+            RecipeReagentSlot> recipeReagentSlots = [];
+
+        void AddRecipeReagentSlot(RecipeReagentSlot slot, string location)
+        {
+            var key = (slot.Game, slot.RecipeId, slot.DataSlotType, slot.DataSlotIndex);
+            if (recipeReagentSlots.TryGetValue(key, out RecipeReagentSlot? existingSlot))
+            {
+                CraftHistoryMergeResult merge = CraftHistoryReconciler.Merge(
+                    new CraftHistory([], CraftDimensions.Empty with { RecipeReagentSlots = [existingSlot] }),
+                    new CraftHistory([], CraftDimensions.Empty with { RecipeReagentSlots = [slot] }));
+                if (!merge.IsSuccessful)
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "conflicting-recipe-reagent-slot",
+                        location, "Repeated schematic evidence disagrees for the same recipe reagent slot."));
+                    return;
+                }
+                recipeReagentSlots[key] = merge.History!.Dimensions.RecipeReagentSlots.Single();
+            }
+            else
+            {
+                recipeReagentSlots.Add(key, slot);
+            }
+
+            foreach (int candidateItemId in slot.CandidateItemIds ?? [])
+                AddItemDimension(slot.Game, candidateItemId, itemRows, itemDimensions, seenItems);
+        }
 
         foreach (IGrouping<string, LuaTable> group in GroupCraftRows(craftRows))
         {
@@ -572,8 +602,17 @@ public static class SavedVariablesReader
                     AddItemDimension(game, returned.ItemId, itemRows, itemDimensions, seenItems);
             }
             if (recipeId is > 0)
+            {
                 AddRecipeDimension(game, recipeId.Value, recipe, recipeProfessionId, recipeExpansionKey,
                     recipeDimensions, seenRecipes);
+                AddSavedRecipeReagentSlots(row, game, recipeId.Value, requests, diagnostics, location,
+                    AddRecipeReagentSlot);
+            }
+            else if (HasSavedRecipeReagentSlots(row, requests))
+            {
+                diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "recipe-reagent-slot-without-recipe",
+                    location, "Schematic reagent requirements cannot be attributed without a recipe ID."));
+            }
             if (professionId is > 0)
                 AddProfessionDimension(game, professionId.Value, professionRows,
                     professionDimensions, seenProfessions);
@@ -695,7 +734,14 @@ public static class SavedVariablesReader
                 $"{aggregateOnlyCount} craft(s) are represented by historical rollups without individual detail. No craft observations were reconstructed from those totals."));
         }
         CraftDimensions canonicalDimensions = new(
-            characterDimensions, recipeDimensions, professionDimensions, itemDimensions, canonicalExpansions);
+            characterDimensions, recipeDimensions, professionDimensions, itemDimensions, canonicalExpansions)
+        {
+            RecipeReagentSlots = recipeReagentSlots.Values
+                .OrderBy(x => x.RecipeId)
+                .ThenBy(x => x.DataSlotType)
+                .ThenBy(x => x.DataSlotIndex)
+                .ToArray()
+        };
         CraftHistory history = new(crafts, canonicalDimensions);
         foreach (HistoryValidationError error in CraftHistoryValidator.Validate(history))
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-canonical-history",
@@ -839,6 +885,104 @@ public static class SavedVariablesReader
         if (seen.Add((game, recipeId)))
             result.Add(new(game, recipeId, recipe?.Get("name") as string, professionId,
                 expansionKey, Integer(recipe?.Get("maxQuality"))));
+    }
+
+    private static void AddSavedRecipeReagentSlots(
+        LuaTable craft,
+        GameContext game,
+        int recipeId,
+        IReadOnlyDictionary<long, LuaTable> requests,
+        ICollection<SavedVariablesDiagnostic> diagnostics,
+        string location,
+        Action<RecipeReagentSlot, string> addSlot)
+    {
+        if (Long(craft.Get("requestId")) is long requestId &&
+            requests.TryGetValue(requestId, out LuaTable? request))
+        {
+            foreach (LuaTable fixedReagent in Rows(request.Get("fixedReagents")))
+            {
+                int? dataSlotIndex = Integer(fixedReagent.Get("dataSlotIndex"));
+                int? itemId = Integer(fixedReagent.Get("itemId"));
+                int? quantity = Integer(fixedReagent.Get("requiredQuantity"));
+                if (dataSlotIndex is not > 0 || itemId is not > 0 || quantity is not > 0)
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "unknown-recipe-reagent-slot",
+                        location + ".request.fixedReagents",
+                        "A fixed reagent without complete slot, item, and quantity metadata cannot become a recipe dimension."));
+                    continue;
+                }
+                addSlot(new(game, recipeId, RecipeReagentDataSlotType.Reagent, dataSlotIndex.Value,
+                    ReagentType: RecipeReagentType.Basic, IsRequired: true, RequiredQuantity: quantity,
+                    CandidateItemIds: [itemId.Value]), location + ".request.fixedReagents");
+            }
+
+            AddRequirements(request.Get("requirements"), dataSlotType: null,
+                location + ".request.requirements");
+        }
+
+        if (Rows(craft.Get("reagentRequirements")).Count > 0)
+            AddRequirements(craft.Get("reagentRequirements"), dataSlotType: null,
+                location + ".reagentRequirements");
+
+        void AddRequirements(object? source, RecipeReagentDataSlotType? dataSlotType, string fieldLocation)
+        {
+            foreach (LuaTable requirement in Rows(source))
+            {
+                string? requirementSource = requirement.Get("source") as string;
+                if (requirementSource == "unknown")
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "unknown-recipe-reagent-slot",
+                        fieldLocation, "Unknown-source reagent requirements were not promoted to recipe metadata."));
+                    continue;
+                }
+                if (requirementSource != "schematic")
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-recipe-reagent-slot",
+                        fieldLocation, "Recipe reagent requirements need an explicit schematic or unknown source."));
+                    continue;
+                }
+
+                int? dataSlotIndex = Integer(requirement.Get("dataSlotIndex"));
+                int? quantity = Integer(requirement.Get("requiredQuantity"));
+                if (!TryReadDenseValues(requirement.Get("candidateItemIDs"), out object?[] candidateValues))
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-recipe-reagent-slot",
+                        fieldLocation, "Schematic candidate item IDs must be a dense numeric list."));
+                    continue;
+                }
+                int?[] parsedCandidateIds = candidateValues.Select(Integer).ToArray();
+                int[] candidateItemIds = parsedCandidateIds
+                    .Where(itemId => itemId is > 0)
+                    .Select(itemId => itemId!.Value)
+                    .Order()
+                    .ToArray();
+                if (dataSlotIndex is not > 0 || quantity is not > 0 ||
+                    candidateItemIds.Length == 0 || candidateItemIds.Length != candidateValues.Length ||
+                    candidateItemIds.Distinct().Count() != candidateItemIds.Length)
+                {
+                    diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "invalid-recipe-reagent-slot",
+                        fieldLocation,
+                        "A schematic requirement requires positive slot and quantity values and known candidate items."));
+                    continue;
+                }
+
+                addSlot(new(game, recipeId, dataSlotType, dataSlotIndex.Value,
+                    ReagentType: RecipeReagentType.Basic, IsRequired: true, RequiredQuantity: quantity,
+                    CandidateItemIds: candidateItemIds), fieldLocation);
+            }
+        }
+    }
+
+    private static bool HasSavedRecipeReagentSlots(
+        LuaTable craft, IReadOnlyDictionary<long, LuaTable> requests)
+    {
+        if (Rows(craft.Get("reagentRequirements")).Count > 0)
+            return true;
+        if (Long(craft.Get("requestId")) is not long requestId ||
+            !requests.TryGetValue(requestId, out LuaTable? request))
+            return false;
+        return Rows(request.Get("fixedReagents")).Count > 0 ||
+            Rows(request.Get("requirements")).Count > 0;
     }
 
     private static void AddProfessionDimension(
@@ -992,6 +1136,21 @@ public static class SavedVariablesReader
                 .Where(entry => entry.Value is LuaTable)
                 .Select(entry => (LuaTable)entry.Value!).ToArray()
             : [];
+
+    private static bool TryReadDenseValues(object? value, out object?[] values)
+    {
+        if (value is not LuaTable table)
+        {
+            values = [];
+            return false;
+        }
+
+        values = new object?[table.Count];
+        for (int i = 0; i < values.Length; i++)
+            if (!table.TryGetValue((double)i + 1, out values[i]))
+                return false;
+        return true;
+    }
 
     private static void CheckCollection(
         LuaTable parent,

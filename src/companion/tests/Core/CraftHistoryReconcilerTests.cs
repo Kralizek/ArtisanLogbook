@@ -210,6 +210,67 @@ public class CraftHistoryReconcilerTests
     }
 
     [Test]
+    public void RecipeReagentSlotsEnrichUnknownFieldsAndKeepSlotAlternativesDistinct()
+    {
+        RecipeReagentSlot partial = new(Game, 123, RecipeReagentDataSlotType.Reagent, 1,
+            CandidateItemIds: [101, 100]);
+        RecipeReagentSlot enriched = partial with
+        {
+            DataSlotType = RecipeReagentDataSlotType.Reagent,
+            SlotIndex = 2,
+            ReagentType = RecipeReagentType.Basic,
+            IsRequired = true,
+            RequiredQuantity = 4,
+            CandidateItemIds = [100, 101]
+        };
+        CraftHistory left = new([], CraftDimensions.Empty with { RecipeReagentSlots = [partial] });
+        CraftHistory right = new([], CraftDimensions.Empty with
+        {
+            RecipeReagentSlots =
+            [
+                enriched,
+                enriched with { DataSlotType = RecipeReagentDataSlotType.ModifiedReagent, DataSlotIndex = 1 }
+            ]
+        });
+
+        CraftHistoryMergeResult result = CraftHistoryReconciler.Merge(left, right);
+
+        Assert.That(result.IsSuccessful, Is.True);
+        Assert.That(result.History!.Dimensions.RecipeReagentSlots, Has.Count.EqualTo(2));
+        RecipeReagentSlot restored = result.History.Dimensions.RecipeReagentSlots.Single(x =>
+            x.DataSlotType == RecipeReagentDataSlotType.Reagent);
+        Assert.Multiple(() =>
+        {
+            Assert.That(restored.SlotIndex, Is.EqualTo(enriched.SlotIndex));
+            Assert.That(restored.ReagentType, Is.EqualTo(enriched.ReagentType));
+            Assert.That(restored.IsRequired, Is.EqualTo(enriched.IsRequired));
+            Assert.That(restored.RequiredQuantity, Is.EqualTo(enriched.RequiredQuantity));
+            Assert.That(restored.CandidateItemIds, Is.EqualTo(enriched.CandidateItemIds));
+        });
+        Assert.That(result.History.Dimensions.RecipeReagentSlots.Single(x =>
+            x.DataSlotType == RecipeReagentDataSlotType.ModifiedReagent).DataSlotIndex, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ConflictingRecipeReagentAlternativesOrQuantitiesAreRejected()
+    {
+        RecipeReagentSlot original = new(Game, 123, RecipeReagentDataSlotType.Reagent, 1,
+            ReagentType: RecipeReagentType.Basic, IsRequired: true, RequiredQuantity: 4,
+            CandidateItemIds: [100, 101]);
+        CraftHistory left = new([], CraftDimensions.Empty with { RecipeReagentSlots = [original] });
+        CraftHistory conflicting = new([], CraftDimensions.Empty with
+        {
+            RecipeReagentSlots = [original with { CandidateItemIds = [100], RequiredQuantity = 5 }]
+        });
+
+        CraftHistoryMergeResult result = CraftHistoryReconciler.Merge(left, conflicting);
+
+        Assert.That(result.IsSuccessful, Is.False);
+        Assert.That(result.History, Is.Null);
+        Assert.That(result.DimensionConflicts, Has.Count.EqualTo(2));
+    }
+
+    [Test]
     public void ContradictoryKnownRecipeQualityScaleIsAConflict()
     {
         CraftHistory a = History(Craft("origin-a", "1", 123)) with

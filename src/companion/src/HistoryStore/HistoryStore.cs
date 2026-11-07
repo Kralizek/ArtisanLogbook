@@ -28,11 +28,32 @@ public sealed record CraftWriteResult(
         or CraftWriteStatus.Enriched;
 }
 
+public enum DimensionWriteStatus
+{
+    Inserted,
+    AlreadyPresent,
+    Enriched,
+    Conflict,
+    Invalid
+}
+
+public sealed record DimensionWriteResult(
+    DimensionWriteStatus Status,
+    CraftDimensions? Dimensions,
+    IReadOnlyList<HistoryValidationError> ValidationErrors,
+    IReadOnlyList<DimensionConflict> Conflicts)
+{
+    public bool IsSuccessful => Status is DimensionWriteStatus.Inserted
+        or DimensionWriteStatus.AlreadyPresent
+        or DimensionWriteStatus.Enriched;
+}
+
 /// <summary>Persists canonical craft observations in a local DuckDB database.</summary>
 public sealed class HistoryStore : IDisposable
 {
     private const int CurrentSchemaVersion = 1;
     private const int EvidenceFormatVersion = 1;
+    private const int UnknownDataSlotType = 0;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -127,6 +148,58 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
+    public DimensionWriteResult WriteDimensions(CraftDimensions dimensions)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(dimensions);
+
+            IReadOnlyList<HistoryValidationError> validationErrors =
+                CraftHistoryValidator.Validate(new CraftHistory([], dimensions));
+            if (validationErrors.Count > 0)
+                return new(DimensionWriteStatus.Invalid, null, validationErrors, []);
+
+            using DbTransaction transaction = _connection.BeginTransaction();
+            CraftDimensions existing = ReadDimensions(transaction);
+            CraftHistoryMergeResult merge = CraftHistoryReconciler.Merge(
+                new CraftHistory([], existing),
+                new CraftHistory([], dimensions));
+            if (!merge.IsSuccessful)
+            {
+                transaction.Commit();
+                return new(DimensionWriteStatus.Conflict, null, [], merge.DimensionConflicts);
+            }
+
+            CraftDimensions reconciled = merge.History!.Dimensions;
+            bool changed = !SerializeDimensions(existing)
+                .Equals(SerializeDimensions(reconciled), StringComparison.Ordinal);
+            if (!changed)
+            {
+                transaction.Commit();
+                return new(DimensionWriteStatus.AlreadyPresent, existing, [], []);
+            }
+
+            StoreDimensions(reconciled, transaction);
+            CraftDimensions persisted = ReadDimensions(transaction);
+            transaction.Commit();
+            bool hasExisting = existing.Characters.Count + existing.Recipes.Count +
+                existing.Professions.Count + existing.Items.Count + existing.Expansions.Count +
+                existing.RecipeReagentSlots.Count > 0;
+            return new(hasExisting ? DimensionWriteStatus.Enriched : DimensionWriteStatus.Inserted,
+                persisted, [], []);
+        }
+    }
+
+    public CraftDimensions ReadDimensions()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            return ReadDimensions(transaction: null);
+        }
+    }
+
     public IReadOnlyList<CraftObservation> ReadAll()
     {
         lock (_gate)
@@ -136,9 +209,10 @@ public sealed class HistoryStore : IDisposable
             using (DuckDBCommand command = _connection.CreateCommand())
             {
                 command.CommandText = """
-                    SELECT IdentityOrigin, IdentityObservation
-                    FROM Craft
-                    ORDER BY IdentityOrigin, IdentityObservation
+                    SELECT CraftIdentity.IdentityOrigin, CraftIdentity.IdentityObservation
+                    FROM CraftIdentity
+                    JOIN Craft USING (CraftKey)
+                    ORDER BY CraftIdentity.IdentityOrigin, CraftIdentity.IdentityObservation
                     """;
                 using DbDataReader reader = command.ExecuteReader();
                 while (reader.Read())
@@ -227,19 +301,60 @@ public sealed class HistoryStore : IDisposable
             )
             """,
             """
+            CREATE TABLE Profession (
+                ContextKey VARCHAR NOT NULL,
+                ProfessionId INTEGER NOT NULL,
+                Name VARCHAR,
+                ParentId INTEGER,
+                PRIMARY KEY (ContextKey, ProfessionId),
+                FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
+            )
+            """,
+            """
+            CREATE TABLE Item (
+                ContextKey VARCHAR NOT NULL,
+                ItemId INTEGER NOT NULL,
+                Name VARCHAR,
+                PRIMARY KEY (ContextKey, ItemId),
+                FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
+            )
+            """,
+            """
+            CREATE TABLE Expansion (
+                ContextKey VARCHAR NOT NULL,
+                ExpansionKey VARCHAR NOT NULL,
+                Name VARCHAR,
+                PRIMARY KEY (ContextKey, ExpansionKey),
+                FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
+            )
+            """,
+            """
             CREATE TABLE RecipeReagent (
                 ContextKey VARCHAR NOT NULL,
                 RecipeId INTEGER NOT NULL,
-                ItemId INTEGER NOT NULL,
-                RequiredQuantity VARCHAR NOT NULL,
-                PRIMARY KEY (ContextKey, RecipeId, ItemId),
-                FOREIGN KEY (ContextKey, RecipeId) REFERENCES Recipe(ContextKey, RecipeId)
+                DataSlotTypeKey SMALLINT NOT NULL,
+                DataSlotIndex INTEGER NOT NULL,
+                SlotIndex INTEGER,
+                ReagentType SMALLINT,
+                IsRequired BOOLEAN,
+                RequiredQuantity INTEGER,
+                CandidateItemIdsJson VARCHAR,
+                PRIMARY KEY (ContextKey, RecipeId, DataSlotTypeKey, DataSlotIndex),
+                FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
+            )
+            """,
+            "CREATE SEQUENCE CraftKeySequence START 1",
+            """
+            CREATE TABLE CraftIdentity (
+                IdentityOrigin VARCHAR NOT NULL,
+                IdentityObservation VARCHAR NOT NULL,
+                CraftKey BIGINT NOT NULL UNIQUE,
+                PRIMARY KEY (IdentityOrigin, IdentityObservation)
             )
             """,
             """
             CREATE TABLE Craft (
-                IdentityOrigin VARCHAR NOT NULL,
-                IdentityObservation VARCHAR NOT NULL,
+                CraftKey BIGINT PRIMARY KEY,
                 ContextKey VARCHAR NOT NULL,
                 CharacterKey VARCHAR NOT NULL,
                 RecordedAt VARCHAR NOT NULL,
@@ -261,30 +376,29 @@ public sealed class HistoryStore : IDisposable
                 OutputEvidenceJson VARCHAR,
                 ConfigurationEvidenceJson VARCHAR,
                 EvidenceFormatVersion INTEGER NOT NULL,
-                PRIMARY KEY (IdentityOrigin, IdentityObservation),
-                FOREIGN KEY (ContextKey, CharacterKey) REFERENCES Character(ContextKey, IdentityKey),
-                FOREIGN KEY (ContextKey, RecipeId) REFERENCES Recipe(ContextKey, RecipeId)
+                FOREIGN KEY (CraftKey) REFERENCES CraftIdentity(CraftKey),
+                FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
             )
             """,
             """
             CREATE TABLE CraftReagent (
-                IdentityOrigin VARCHAR NOT NULL,
-                IdentityObservation VARCHAR NOT NULL,
+                CraftKey BIGINT NOT NULL,
                 ItemId INTEGER NOT NULL,
                 AllocatedQuantity BIGINT,
                 ReturnedQuantity VARCHAR,
-                PRIMARY KEY (IdentityOrigin, IdentityObservation, ItemId)
+                PRIMARY KEY (CraftKey, ItemId),
+                FOREIGN KEY (CraftKey) REFERENCES CraftIdentity(CraftKey)
             )
             """,
             """
             CREATE TABLE CraftOutput (
-                IdentityOrigin VARCHAR NOT NULL,
-                IdentityObservation VARCHAR NOT NULL,
+                CraftKey BIGINT NOT NULL,
                 ItemId INTEGER NOT NULL,
                 QualityKey INTEGER NOT NULL,
                 Quality INTEGER,
                 Quantity BIGINT,
-                PRIMARY KEY (IdentityOrigin, IdentityObservation, ItemId, QualityKey),
+                PRIMARY KEY (CraftKey, ItemId, QualityKey),
+                FOREIGN KEY (CraftKey) REFERENCES CraftIdentity(CraftKey),
                 CHECK (QualityKey = COALESCE(Quality, -1))
             )
             """
@@ -294,6 +408,7 @@ public sealed class HistoryStore : IDisposable
 
     private CraftObservation? Read(CraftIdentity identity, DbTransaction? transaction)
     {
+        long craftKey;
         int projectId;
         string? progressionTrack;
         string recordedAt;
@@ -319,6 +434,7 @@ public sealed class HistoryStore : IDisposable
 
         using (DuckDBCommand command = CreateCommand("""
             SELECT
+                Craft.CraftKey,
                 GameContext.ProjectId,
                 GameContext.ProgressionTrack,
                 Craft.RecordedAt,
@@ -342,44 +458,46 @@ public sealed class HistoryStore : IDisposable
                 Craft.ConfigurationEvidenceJson,
                 Craft.EvidenceFormatVersion
             FROM Craft
+            JOIN CraftIdentity USING (CraftKey)
             JOIN GameContext USING (ContextKey)
-            WHERE Craft.IdentityOrigin = ? AND Craft.IdentityObservation = ?
+            WHERE CraftIdentity.IdentityOrigin = ? AND CraftIdentity.IdentityObservation = ?
             """, transaction))
         {
             AddParameters(command, identity.Origin, identity.Observation);
             using DbDataReader reader = command.ExecuteReader();
             if (!reader.Read()) return null;
 
-            projectId = reader.GetInt32(0);
-            progressionTrack = NullableString(reader, 1);
-            recordedAt = reader.GetString(2);
-            recipeId = NullableInt32(reader, 3);
-            characterKey = reader.GetString(4);
-            professionId = NullableInt32(reader, 5);
-            professionExpansionKey = NullableString(reader, 6);
-            concentrationSpent = NullableInt32(reader, 7);
-            ingenuityRefund = NullableInt32(reader, 8);
-            concentrationCurrencyId = NullableInt32(reader, 9);
-            hasIngenuityProc = NullableBoolean(reader, 10);
-            hasResourcefulnessProc = NullableBoolean(reader, 11);
-            multicraftBonus = NullableInt32(reader, 12);
-            inputsComplete = NullableBoolean(reader, 13);
-            resourcefulnessComplete = NullableBoolean(reader, 14);
-            outputsComplete = NullableBoolean(reader, 15);
-            reagentsObserved = reader.GetBoolean(16);
-            outputsObserved = reader.GetBoolean(17);
-            provenanceJson = NullableString(reader, 18);
-            outputEvidenceJson = NullableString(reader, 19);
-            configurationEvidenceJson = NullableString(reader, 20);
-            evidenceFormatVersion = reader.GetInt32(21);
+            craftKey = reader.GetInt64(0);
+            projectId = reader.GetInt32(1);
+            progressionTrack = NullableString(reader, 2);
+            recordedAt = reader.GetString(3);
+            recipeId = NullableInt32(reader, 4);
+            characterKey = reader.GetString(5);
+            professionId = NullableInt32(reader, 6);
+            professionExpansionKey = NullableString(reader, 7);
+            concentrationSpent = NullableInt32(reader, 8);
+            ingenuityRefund = NullableInt32(reader, 9);
+            concentrationCurrencyId = NullableInt32(reader, 10);
+            hasIngenuityProc = NullableBoolean(reader, 11);
+            hasResourcefulnessProc = NullableBoolean(reader, 12);
+            multicraftBonus = NullableInt32(reader, 13);
+            inputsComplete = NullableBoolean(reader, 14);
+            resourcefulnessComplete = NullableBoolean(reader, 15);
+            outputsComplete = NullableBoolean(reader, 16);
+            reagentsObserved = reader.GetBoolean(17);
+            outputsObserved = reader.GetBoolean(18);
+            provenanceJson = NullableString(reader, 19);
+            outputEvidenceJson = NullableString(reader, 20);
+            configurationEvidenceJson = NullableString(reader, 21);
+            evidenceFormatVersion = reader.GetInt32(22);
         }
 
         if (evidenceFormatVersion != EvidenceFormatVersion)
             throw new InvalidDataException(
                 $"Craft evidence format {evidenceFormatVersion} is not supported; expected {EvidenceFormatVersion}.");
 
-        IReadOnlyList<CraftReagent> reagentRows = ReadReagents(identity, transaction);
-        IReadOnlyList<CraftOutput> outputRows = ReadOutputs(identity, transaction);
+        IReadOnlyList<CraftReagent> reagentRows = ReadReagents(craftKey, transaction);
+        IReadOnlyList<CraftOutput> outputRows = ReadOutputs(craftKey, transaction);
         if ((!reagentsObserved && reagentRows.Count != 0) || (!outputsObserved && outputRows.Count != 0))
             throw new InvalidDataException(
                 $"Craft '{identity.Origin}/{identity.Observation}' has child rows for an unobserved collection.");
@@ -408,16 +526,16 @@ public sealed class HistoryStore : IDisposable
             Deserialize<IReadOnlyList<CraftConfigurationEvidence>>(configurationEvidenceJson));
     }
 
-    private IReadOnlyList<CraftReagent> ReadReagents(CraftIdentity identity, DbTransaction? transaction)
+    private IReadOnlyList<CraftReagent> ReadReagents(long craftKey, DbTransaction? transaction)
     {
         List<CraftReagent> reagents = [];
         using DuckDBCommand command = CreateCommand("""
             SELECT ItemId, AllocatedQuantity, ReturnedQuantity
             FROM CraftReagent
-            WHERE IdentityOrigin = ? AND IdentityObservation = ?
+            WHERE CraftKey = ?
             ORDER BY ItemId
             """, transaction);
-        AddParameters(command, identity.Origin, identity.Observation);
+        AddParameters(command, craftKey);
         using DbDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -432,16 +550,16 @@ public sealed class HistoryStore : IDisposable
         return reagents;
     }
 
-    private IReadOnlyList<CraftOutput> ReadOutputs(CraftIdentity identity, DbTransaction? transaction)
+    private IReadOnlyList<CraftOutput> ReadOutputs(long craftKey, DbTransaction? transaction)
     {
         List<CraftOutput> outputs = [];
         using DuckDBCommand command = CreateCommand("""
             SELECT ItemId, Quality, Quantity
             FROM CraftOutput
-            WHERE IdentityOrigin = ? AND IdentityObservation = ?
+            WHERE CraftKey = ?
             ORDER BY ItemId, QualityKey
             """, transaction);
-        AddParameters(command, identity.Origin, identity.Observation);
+        AddParameters(command, craftKey);
         using DbDataReader reader = command.ExecuteReader();
         while (reader.Read())
             outputs.Add(new CraftOutput(
@@ -457,19 +575,22 @@ public sealed class HistoryStore : IDisposable
         EnsureCharacter(observation.Game, observation.Character, transaction);
         if (observation.RecipeId is int recipeId)
             EnsureRecipe(observation.Game, recipeId, transaction);
+        if (observation.ProfessionId is int professionId)
+            EnsureProfession(observation.Game, professionId, transaction);
+        if (observation.ProfessionExpansionKey is string expansionKey)
+            EnsureExpansion(observation.Game, expansionKey, transaction);
+        EnsureObservationItems(observation, transaction);
+
+        long craftKey;
 
         if (isUpdate)
         {
+            craftKey = ReadCraftKey(observation.Identity, transaction) ??
+                throw new InvalidDataException("A craft disappeared during reconciliation.");
             ExecuteNonQuery(
-                "DELETE FROM CraftReagent WHERE IdentityOrigin = ? AND IdentityObservation = ?",
-                transaction,
-                observation.Identity.Origin,
-                observation.Identity.Observation);
+                "DELETE FROM CraftReagent WHERE CraftKey = ?", transaction, craftKey);
             ExecuteNonQuery(
-                "DELETE FROM CraftOutput WHERE IdentityOrigin = ? AND IdentityObservation = ?",
-                transaction,
-                observation.Identity.Origin,
-                observation.Identity.Observation);
+                "DELETE FROM CraftOutput WHERE CraftKey = ?", transaction, craftKey);
             ExecuteNonQuery("""
                 UPDATE Craft SET
                     ContextKey = ?,
@@ -493,42 +614,46 @@ public sealed class HistoryStore : IDisposable
                     OutputEvidenceJson = ?,
                     ConfigurationEvidenceJson = ?,
                     EvidenceFormatVersion = ?
-                WHERE IdentityOrigin = ? AND IdentityObservation = ?
+                WHERE CraftKey = ?
                 """,
                 transaction,
                 CraftValues(observation).Concat([
-                    observation.Identity.Origin,
-                    observation.Identity.Observation
+                    craftKey
                 ]).ToArray());
         }
         else
         {
+            craftKey = Convert.ToInt64(
+                ExecuteScalar("SELECT nextval('CraftKeySequence')", transaction),
+                CultureInfo.InvariantCulture);
+            ExecuteNonQuery("""
+                INSERT INTO CraftIdentity (IdentityOrigin, IdentityObservation, CraftKey)
+                VALUES (?, ?, ?)
+                """, transaction, observation.Identity.Origin, observation.Identity.Observation, craftKey);
             ExecuteNonQuery("""
                 INSERT INTO Craft (
-                    IdentityOrigin, IdentityObservation, ContextKey, CharacterKey, RecordedAt,
+                    CraftKey, ContextKey, CharacterKey, RecordedAt,
                     RecipeId, ProfessionId, ProfessionExpansionKey, ConcentrationSpent, IngenuityRefund,
                     ConcentrationCurrencyId, HasIngenuityProc, HasResourcefulnessProc, MulticraftBonus,
                     InputsComplete, ResourcefulnessComplete, OutputsComplete, ReagentsObserved, OutputsObserved,
                     ProvenanceJson, OutputEvidenceJson, ConfigurationEvidenceJson, EvidenceFormatVersion
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 transaction,
                 new object?[]
                 {
-                    observation.Identity.Origin,
-                    observation.Identity.Observation
+                    craftKey
                 }.Concat(CraftValues(observation)).ToArray());
         }
 
         foreach (CraftReagent reagent in observation.Reagents ?? [])
             ExecuteNonQuery("""
                 INSERT INTO CraftReagent (
-                    IdentityOrigin, IdentityObservation, ItemId, AllocatedQuantity, ReturnedQuantity
-                ) VALUES (?, ?, ?, ?, ?)
+                    CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity
+                ) VALUES (?, ?, ?, ?)
                 """,
                 transaction,
-                observation.Identity.Origin,
-                observation.Identity.Observation,
+                craftKey,
                 reagent.ItemId,
                 reagent.AllocatedQuantity,
                 reagent.ReturnedQuantity?.ToString(CultureInfo.InvariantCulture));
@@ -536,16 +661,241 @@ public sealed class HistoryStore : IDisposable
         foreach (CraftOutput output in observation.Outputs ?? [])
             ExecuteNonQuery("""
                 INSERT INTO CraftOutput (
-                    IdentityOrigin, IdentityObservation, ItemId, QualityKey, Quality, Quantity
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    CraftKey, ItemId, QualityKey, Quality, Quantity
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
                 transaction,
-                observation.Identity.Origin,
-                observation.Identity.Observation,
+                craftKey,
                 output.ItemId,
                 output.Quality ?? -1,
                 output.Quality,
                 output.Quantity);
+    }
+
+    private CraftDimensions ReadDimensions(DbTransaction? transaction)
+    {
+        Dictionary<string, GameContext> contexts = [];
+        using (DuckDBCommand command = CreateCommand("""
+            SELECT ContextKey, ProjectId, ProgressionTrack FROM GameContext
+            """, transaction))
+        {
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                contexts.Add(reader.GetString(0),
+                    new GameContext((GameProject)reader.GetInt32(1), NullableString(reader, 2)));
+        }
+
+        GameContext Game(DbDataReader reader, int ordinal) =>
+            contexts.TryGetValue(reader.GetString(ordinal), out GameContext? game)
+                ? game
+                : throw new InvalidDataException("A dimension references an unknown game context.");
+
+        List<CharacterDimension> characters = [];
+        using (DuckDBCommand command = CreateCommand("""
+            SELECT ContextKey, IdentityKey, Name, ClassFile FROM Character
+            ORDER BY ContextKey, IdentityKey
+            """, transaction))
+        {
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                characters.Add(new(Game(reader, 0), new CharacterIdentity(reader.GetString(1)),
+                    NullableString(reader, 2), NullableString(reader, 3)));
+        }
+
+        List<RecipeDimension> recipes = [];
+        using (DuckDBCommand command = CreateCommand("""
+            SELECT ContextKey, RecipeId, Name, ProfessionId, ProfessionExpansionKey, MaxQuality FROM Recipe
+            ORDER BY ContextKey, RecipeId
+            """, transaction))
+        {
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                recipes.Add(new(Game(reader, 0), reader.GetInt32(1), NullableString(reader, 2),
+                    NullableInt32(reader, 3), NullableString(reader, 4), NullableInt32(reader, 5)));
+        }
+
+        List<ProfessionDimension> professions = [];
+        using (DuckDBCommand command = CreateCommand("""
+            SELECT ContextKey, ProfessionId, Name, ParentId FROM Profession
+            ORDER BY ContextKey, ProfessionId
+            """, transaction))
+        {
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                professions.Add(new(Game(reader, 0), reader.GetInt32(1), NullableString(reader, 2),
+                    NullableInt32(reader, 3)));
+        }
+
+        List<ItemDimension> items = [];
+        using (DuckDBCommand command = CreateCommand("""
+            SELECT ContextKey, ItemId, Name FROM Item
+            ORDER BY ContextKey, ItemId
+            """, transaction))
+        {
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                items.Add(new(Game(reader, 0), reader.GetInt32(1), NullableString(reader, 2)));
+        }
+
+        List<ExpansionDimension> expansions = [];
+        using (DuckDBCommand command = CreateCommand("""
+            SELECT ContextKey, ExpansionKey, Name FROM Expansion
+            ORDER BY ContextKey, ExpansionKey
+            """, transaction))
+        {
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                expansions.Add(new(Game(reader, 0), reader.GetString(1), NullableString(reader, 2)));
+        }
+
+        List<RecipeReagentSlot> slots = [];
+        using (DuckDBCommand command = CreateCommand("""
+            SELECT ContextKey, RecipeId, DataSlotTypeKey, DataSlotIndex, SlotIndex,
+                ReagentType, IsRequired, RequiredQuantity, CandidateItemIdsJson
+            FROM RecipeReagent
+            ORDER BY ContextKey, RecipeId, DataSlotTypeKey, DataSlotIndex
+            """, transaction))
+        {
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                int dataSlotTypeKey = Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture);
+                RecipeReagentDataSlotType? dataSlotType = dataSlotTypeKey == UnknownDataSlotType
+                    ? null
+                    : EnumValue<RecipeReagentDataSlotType>(dataSlotTypeKey - 1, "data-slot type");
+                string? candidateIdsJson = NullableString(reader, 8);
+                slots.Add(new(Game(reader, 0), reader.GetInt32(1), dataSlotType, reader.GetInt32(3),
+                    NullableInt32(reader, 4),
+                    NullableEnum<RecipeReagentType>(reader, 5),
+                    NullableBoolean(reader, 6),
+                    NullableInt32(reader, 7),
+                    candidateIdsJson is null
+                        ? null
+                        : JsonSerializer.Deserialize<int[]>(candidateIdsJson, JsonOptions) ??
+                          throw new InvalidDataException("Recipe reagent candidate IDs are invalid JSON.")));
+            }
+        }
+
+        return new CraftDimensions(characters, recipes, professions, items, expansions)
+        {
+            RecipeReagentSlots = slots
+        };
+    }
+
+    private void StoreDimensions(CraftDimensions dimensions, DbTransaction transaction)
+    {
+        foreach (GameContext game in dimensions.Characters.Select(x => x.Game)
+            .Concat(dimensions.Recipes.Select(x => x.Game))
+            .Concat(dimensions.Professions.Select(x => x.Game))
+            .Concat(dimensions.Items.Select(x => x.Game))
+            .Concat(dimensions.Expansions.Select(x => x.Game))
+            .Concat(dimensions.RecipeReagentSlots.Select(x => x.Game))
+            .Distinct())
+            EnsureContext(game, transaction);
+
+        foreach (CharacterDimension character in dimensions.Characters)
+            ExecuteNonQuery("""
+                INSERT INTO Character (ContextKey, IdentityKey, Name, ClassFile) VALUES (?, ?, ?, ?)
+                ON CONFLICT (ContextKey, IdentityKey) DO UPDATE SET
+                    Name = COALESCE(excluded.Name, Character.Name),
+                    ClassFile = COALESCE(excluded.ClassFile, Character.ClassFile)
+                """, transaction, ContextKey(character.Game), character.Identity.Key,
+                character.Name, character.ClassFile);
+
+        foreach (RecipeDimension recipe in dimensions.Recipes)
+            ExecuteNonQuery("""
+                INSERT INTO Recipe (
+                    ContextKey, RecipeId, Name, ProfessionId, ProfessionExpansionKey, MaxQuality
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (ContextKey, RecipeId) DO UPDATE SET
+                    Name = COALESCE(excluded.Name, Recipe.Name),
+                    ProfessionId = COALESCE(excluded.ProfessionId, Recipe.ProfessionId),
+                    ProfessionExpansionKey = COALESCE(excluded.ProfessionExpansionKey, Recipe.ProfessionExpansionKey),
+                    MaxQuality = COALESCE(excluded.MaxQuality, Recipe.MaxQuality)
+                """, transaction, ContextKey(recipe.Game), recipe.Id, recipe.Name, recipe.ProfessionId,
+                recipe.ProfessionExpansionKey, recipe.MaxQuality);
+        foreach (RecipeDimension recipe in dimensions.Recipes)
+        {
+            if (recipe.ProfessionId is int professionId)
+                EnsureProfession(recipe.Game, professionId, transaction);
+            if (recipe.ProfessionExpansionKey is string expansionKey)
+                EnsureExpansion(recipe.Game, expansionKey, transaction);
+        }
+
+        foreach (ProfessionDimension profession in dimensions.Professions)
+        {
+            ExecuteNonQuery("""
+                INSERT INTO Profession (ContextKey, ProfessionId, Name, ParentId) VALUES (?, ?, ?, ?)
+                ON CONFLICT (ContextKey, ProfessionId) DO UPDATE SET
+                    Name = COALESCE(excluded.Name, Profession.Name),
+                    ParentId = COALESCE(excluded.ParentId, Profession.ParentId)
+                """, transaction, ContextKey(profession.Game), profession.Id, profession.Name, profession.ParentId);
+            if (profession.ParentId is int parentId)
+                EnsureProfession(profession.Game, parentId, transaction);
+        }
+
+        foreach (ItemDimension item in dimensions.Items)
+            ExecuteNonQuery("""
+                INSERT INTO Item (ContextKey, ItemId, Name) VALUES (?, ?, ?)
+                ON CONFLICT (ContextKey, ItemId) DO UPDATE SET
+                    Name = COALESCE(excluded.Name, Item.Name)
+                """, transaction, ContextKey(item.Game), item.Id, item.Name);
+
+        foreach (ExpansionDimension expansion in dimensions.Expansions)
+            ExecuteNonQuery("""
+                INSERT INTO Expansion (ContextKey, ExpansionKey, Name) VALUES (?, ?, ?)
+                ON CONFLICT (ContextKey, ExpansionKey) DO UPDATE SET
+                    Name = COALESCE(excluded.Name, Expansion.Name)
+                """, transaction, ContextKey(expansion.Game), expansion.Key, expansion.Name);
+
+        foreach (RecipeReagentSlot slot in dimensions.RecipeReagentSlots)
+        {
+            EnsureRecipe(slot.Game, slot.RecipeId, transaction);
+            foreach (int candidateItemId in slot.CandidateItemIds ?? [])
+                EnsureItem(slot.Game, candidateItemId, transaction);
+            ExecuteNonQuery("""
+                INSERT INTO RecipeReagent (
+                    ContextKey, RecipeId, DataSlotTypeKey, DataSlotIndex, SlotIndex, ReagentType,
+                    IsRequired, RequiredQuantity, CandidateItemIdsJson
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (ContextKey, RecipeId, DataSlotTypeKey, DataSlotIndex) DO UPDATE SET
+                    SlotIndex = COALESCE(excluded.SlotIndex, RecipeReagent.SlotIndex),
+                    ReagentType = COALESCE(excluded.ReagentType, RecipeReagent.ReagentType),
+                    IsRequired = COALESCE(excluded.IsRequired, RecipeReagent.IsRequired),
+                    RequiredQuantity = COALESCE(excluded.RequiredQuantity, RecipeReagent.RequiredQuantity),
+                    CandidateItemIdsJson = COALESCE(excluded.CandidateItemIdsJson, RecipeReagent.CandidateItemIdsJson)
+                """, transaction, ContextKey(slot.Game), slot.RecipeId,
+                slot.DataSlotType is null ? UnknownDataSlotType : (int)slot.DataSlotType.Value + 1,
+                slot.DataSlotIndex, slot.SlotIndex,
+                slot.ReagentType is null ? null : (int)slot.ReagentType.Value,
+                slot.IsRequired, slot.RequiredQuantity,
+                slot.CandidateItemIds is null ? null : JsonSerializer.Serialize(
+                    slot.CandidateItemIds.Order().ToArray(), JsonOptions));
+        }
+    }
+
+    private long? ReadCraftKey(CraftIdentity identity, DbTransaction transaction)
+    {
+        object? value = ExecuteScalar("""
+            SELECT CraftKey FROM CraftIdentity
+            WHERE IdentityOrigin = ? AND IdentityObservation = ?
+            """, transaction, identity.Origin, identity.Observation);
+        return value is null or DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    private void EnsureObservationItems(CraftObservation observation, DbTransaction transaction)
+    {
+        foreach (CraftReagent reagent in observation.Reagents ?? [])
+            EnsureItem(observation.Game, reagent.ItemId, transaction);
+        foreach (CraftOutput output in observation.Outputs ?? [])
+            EnsureItem(observation.Game, output.ItemId, transaction);
+        foreach (CraftOutputEvidence evidence in observation.OutputEvidence ?? [])
+            foreach (CraftOutputObservation callback in evidence.Callbacks)
+            {
+                EnsureItem(observation.Game, callback.Output.ItemId, transaction);
+                foreach (CraftReagent returned in callback.Returns)
+                    EnsureItem(observation.Game, returned.ItemId, transaction);
+            }
     }
 
     private void EnsureContext(GameContext game, DbTransaction transaction)
@@ -583,6 +933,33 @@ public sealed class HistoryStore : IDisposable
             transaction,
             ContextKey(game),
             recipeId);
+    }
+
+    private void EnsureProfession(GameContext game, int professionId, DbTransaction transaction)
+    {
+        ExecuteNonQuery("""
+            INSERT INTO Profession (ContextKey, ProfessionId)
+            VALUES (?, ?)
+            ON CONFLICT DO NOTHING
+            """, transaction, ContextKey(game), professionId);
+    }
+
+    private void EnsureItem(GameContext game, int itemId, DbTransaction transaction)
+    {
+        ExecuteNonQuery("""
+            INSERT INTO Item (ContextKey, ItemId)
+            VALUES (?, ?)
+            ON CONFLICT DO NOTHING
+            """, transaction, ContextKey(game), itemId);
+    }
+
+    private void EnsureExpansion(GameContext game, string expansionKey, DbTransaction transaction)
+    {
+        ExecuteNonQuery("""
+            INSERT INTO Expansion (ContextKey, ExpansionKey)
+            VALUES (?, ?)
+            ON CONFLICT DO NOTHING
+            """, transaction, ContextKey(game), expansionKey);
     }
 
     private static object?[] CraftValues(CraftObservation observation) =>
@@ -626,6 +1003,32 @@ public sealed class HistoryStore : IDisposable
     private static string? Serialize<T>(T? value) =>
         value is null ? null : JsonSerializer.Serialize(value, JsonOptions);
 
+    private static string SerializeDimensions(CraftDimensions dimensions) =>
+        JsonSerializer.Serialize(new
+        {
+            Characters = dimensions.Characters
+                .OrderBy(x => ContextKey(x.Game), StringComparer.Ordinal)
+                .ThenBy(x => x.Identity.Key, StringComparer.Ordinal),
+            Recipes = dimensions.Recipes
+                .OrderBy(x => ContextKey(x.Game), StringComparer.Ordinal)
+                .ThenBy(x => x.Id),
+            Professions = dimensions.Professions
+                .OrderBy(x => ContextKey(x.Game), StringComparer.Ordinal)
+                .ThenBy(x => x.Id),
+            Items = dimensions.Items
+                .OrderBy(x => ContextKey(x.Game), StringComparer.Ordinal)
+                .ThenBy(x => x.Id),
+            Expansions = dimensions.Expansions
+                .OrderBy(x => ContextKey(x.Game), StringComparer.Ordinal)
+                .ThenBy(x => x.Key, StringComparer.Ordinal),
+            RecipeReagentSlots = dimensions.RecipeReagentSlots
+                .OrderBy(x => ContextKey(x.Game), StringComparer.Ordinal)
+                .ThenBy(x => x.RecipeId)
+                .ThenBy(x => x.DataSlotType)
+                .ThenBy(x => x.DataSlotIndex)
+                .Select(x => x with { CandidateItemIds = x.CandidateItemIds?.Order().ToArray() })
+        }, JsonOptions);
+
     private static T? Deserialize<T>(string? value)
     {
         if (value is null) return default;
@@ -637,6 +1040,13 @@ public sealed class HistoryStore : IDisposable
     {
         using DuckDBCommand command = _connection.CreateCommand();
         command.CommandText = sql;
+        return command.ExecuteScalar();
+    }
+
+    private object? ExecuteScalar(string sql, DbTransaction transaction, params object?[] values)
+    {
+        using DuckDBCommand command = CreateCommand(sql, transaction);
+        AddParameters(command, values);
         return command.ExecuteScalar();
     }
 
@@ -676,6 +1086,18 @@ public sealed class HistoryStore : IDisposable
 
     private static bool? NullableBoolean(DbDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetBoolean(ordinal);
+
+    private static T? NullableEnum<T>(DbDataReader reader, int ordinal) where T : struct, Enum =>
+        reader.IsDBNull(ordinal) ? null : EnumValue<T>(
+            Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture), typeof(T).Name);
+
+    private static T EnumValue<T>(int value, string field) where T : struct, Enum
+    {
+        T enumValue = (T)Enum.ToObject(typeof(T), value);
+        return Enum.IsDefined(enumValue)
+            ? enumValue
+            : throw new InvalidDataException($"Stored recipe reagent {field} '{value}' is not supported.");
+    }
 
     private void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(_disposed, this);
