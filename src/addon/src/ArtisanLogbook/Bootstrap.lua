@@ -2,6 +2,7 @@ local addonName, addon = ...
 local lifecycle = CreateFrame("Frame")
 local unknownRecipeRecoveryNotified
 local initialized
+local unavailableReason
 
 function addon.Notify(message)
   DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook: " .. message)
@@ -41,6 +42,12 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
     addon.Notify("Compatible Artisan Logbook Core API v1 is required.")
     return
   end
+  local capabilities = api.GetCapabilities()
+  if capabilities and capabilities.flavor == "forever" then
+    unavailableReason = "Forever production UI is not validated. Enable Core + Tracer and use /al_trace."
+    addon.Notify(unavailableReason)
+    return
+  end
   api.RegisterCallback("CRAFT_COMMITTED", addon.NotifyCraft)
   addon.CreateProductionWindow()
   initialized = true
@@ -54,6 +61,6 @@ SlashCmdList.ARTISANLOGBOOK = function()
   if addon.productionWindow then
     addon.productionWindow:Show()
   else
-    addon.Notify("Compatible Artisan Logbook Core API v1 is required.")
+    addon.Notify(unavailableReason or "Compatible Artisan Logbook Core API v1 is required.")
   end
 end

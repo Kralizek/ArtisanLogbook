@@ -46,6 +46,7 @@ if [[ "$skip_tests" == false ]]; then
 	"$lua_bin" tests/probes_test.lua "$tracer_root" "$addon_root/tests"
 	"$lua_bin" tests/tracer_compatibility_test.lua "$tracer_root"
 	"$lua_bin" tests/adapter_test.lua "$core_root"
+	"$lua_bin" tests/forever_adapter_test.lua "$core_root" "$addon_root/tests"
 	"$lua_bin" tests/ledger_test.lua "$core_root" "$addon_root/tests"
 	"$lua_bin" tests/api_test.lua "$core_root" "$addon_root/tests"
 fi

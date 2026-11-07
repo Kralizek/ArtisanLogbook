@@ -1974,6 +1974,7 @@ local function createSession(self, metadata)
   self.attemptObservation, self.configurationChanged = nil, nil
   self.nonpersonalOperationOutstanding = nil
   self.observedOperationIds = {}
+  self.confirmedCastGUIDs = {}
   self.operationOwnershipUncertain = nil
   self.recentOperations, self.recentOperationOrder = {}, {}
   self.pendingSalvage = nil
@@ -2195,6 +2196,16 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   self.database.nextRequestId = request.id + 1
   self.database.requests[#self.database.requests + 1] = request
   self.requestById[request.id] = request
+  local session = self.dimensionRows.session[self.currentSessionId]
+  local fixedPersonal = session.capabilities.flavor == "forever" and materialsSavingsEligible == false and
+    request.inputComplete == true and request.grossRequirementsComplete == true and
+    type(observation) == "table" and observation.context and observation.context.kind == "personal"
+  if fixedPersonal then
+    -- This adapter requires a new matched player cast for every result. Savings eligibility
+    -- is not order ownership, and cancelled zero-ID attempts cannot poison later requests.
+    self.operationOwnershipUncertain, self.requestAmbiguous = nil, nil
+    self.pendingRequest, self.pendingOrderRequest, self.nonpersonalOperationOutstanding = nil, nil, nil
+  end
   if self.pendingRequest or self.nonpersonalOperationOutstanding then self.operationOwnershipUncertain = true end
   self.nonpersonalOperationOutstanding = nil
   self.pendingSalvage = nil
@@ -2203,7 +2214,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
   self.operationKind = "CraftRecipe"
   self.operationObservation = nil
   self.attemptObservation, self.configurationChanged = nil, nil
-  if materialsSavingsEligible == false then
+  if materialsSavingsEligible == false and not fixedPersonal then
     self.pendingRequest = nil
     self.pendingOrderRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
     self.nonpersonalOperationOutstanding = true
@@ -2699,7 +2710,7 @@ function Ledger:MigrateLegacyAttempts()
   return report
 end
 
-function Ledger:RecordResult(result, expectedRequirements)
+function Ledger:RecordResult(result, expectedRequirements, correlation)
   if type(result) ~= "table" then
     return nil, "craft result must be a table"
   end
@@ -2754,16 +2765,28 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
   local pendingOwnerState = self.pendingRequest or self.pendingOrderRequest
   local pendingOwner = pendingOwnerState and self.requestById[pendingOwnerState.id]
+  local session = self.dimensionRows.session[self.currentSessionId]
+  local confirmedCast = result.operationID == 0 and type(correlation) == "table" and
+    correlation.kind == "confirmed-cast" and session.capabilities.flavor == "forever" and
+    type(correlation.castGUID) == "string" and correlation.castGUID ~= "" and
+    not self.confirmedCastGUIDs[correlation.castGUID] and pendingOwner and
+    correlation.requestId == pendingOwner.id and correlation.recipeId == pendingOwner.recipeId and
+    correlation.outputItemId == result.itemID and correlation.outputQuantity == result.quantity and
+    pendingOwner.materialsSavingsEligible == false and pendingOwner.inputComplete == true and
+    self.operationKind == "CraftRecipe"
+  if correlation ~= nil and not confirmedCast then
+    return nil, "invalid or already consumed confirmed-cast correlation"
+  end
   local seen = observation and (observation.consumed or not pendingOwner or observation.requestId ~= pendingOwner.id)
   local contradictoryBegin = pendingOwner and self.pendingRecipeId and self.pendingRecipeId ~= pendingOwner.recipeId
-  local validPrimary = isGameId(result.operationID) and result.operationID > 0 and
+  local validPrimary = ((isGameId(result.operationID) and result.operationID > 0) or confirmedCast) and
     isGameId(result.itemID) and result.itemID > 0 and isGameId(result.quantity) and result.quantity > 0 and
     result.bonusCraft ~= true
   local eligible = validPrimary and not seen and not self.requestAmbiguous and not self.ambiguousRecipe and
     not self.operationOwnershipUncertain and not contradictoryBegin and
     self.operationKind ~= "CraftSalvage" and not salvageRecipeId
   local primary = eligible and primaryKinds[self.operationKind] == true
-  local returns, returnReason = normalizeReturns(result.resourcesReturned, primary)
+  local returns, returnReason = normalizeReturns(result.resourcesReturned, primary and not confirmedCast)
   if not returns then return nil, returnReason end
   craft.outcomeSource = returns.source
   craft.hasResourcefulnessProc = returns.proc
@@ -2964,6 +2987,7 @@ function Ledger:RecordResult(result, expectedRequirements)
   end
   data.nextCraftId = craft.id + 1
   data.crafts[#data.crafts + 1] = craft
+  if confirmedCast then self.confirmedCastGUIDs[correlation.castGUID] = true end
   if newSalvageOperation then
     -- Count operations, not output callbacks. Keep positive identity bounded; the
     -- existing seen-ID registry still rejects stale IDs after cache eviction.

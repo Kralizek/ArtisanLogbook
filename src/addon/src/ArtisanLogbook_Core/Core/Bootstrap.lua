@@ -4,6 +4,11 @@ local loginStartedAt = GetServerTime()
 local professionRecipeListSignature
 local professionRecipeListSettled = false
 
+local function recipeSource(kind)
+  local flavor = addon.adapter and addon.adapter.capabilities.flavor or "other"
+  return flavor .. "-" .. kind
+end
+
 local function diagnosticMessage(value)
   return type(value) == "string" and value or nil
 end
@@ -114,7 +119,7 @@ function addon.RecoverUnknownRecipeOutputs(deferRepair)
     end
   end
   if #observations > 0 then
-    local learned, reason = addon.LearnRecipeOutputs(observations, "retail-candidate", deferRepair)
+    local learned, reason = addon.LearnRecipeOutputs(observations, recipeSource("candidate"), deferRepair)
     if learned == nil then return nil, reason end
     summary.learnedCount = learned
   end
@@ -167,7 +172,7 @@ function addon.EnrichRecipe(recipeId, deferKnowledge)
   if recipeDimensionId and outputs and next(outputs) then
     local observations = {}
     appendRecipeOutputs(observations, recipeId, outputs)
-    if not deferKnowledge then addon.LearnRecipeOutputs(observations, "retail-api") end
+    if not deferKnowledge then addon.LearnRecipeOutputs(observations, recipeSource("api")) end
     return observations
   end
 end
@@ -267,7 +272,7 @@ local function enrichProfession(event)
     for _, observation in ipairs(outputs or {}) do observations[#observations + 1] = observation end
   end
   if #observations > 0 then
-    local learned, reason = addon.LearnRecipeOutputs(observations, "retail-api")
+    local learned, reason = addon.LearnRecipeOutputs(observations, recipeSource("api"))
     if learned == nil then
       addon.lastRecipeOutputDiagnostic = "recipe-output knowledge profession-enrichment success=false reason=" ..
         tostring(reason)
@@ -283,9 +288,19 @@ local function enrichProfession(event)
   end
 end
 
-function addon.HandleRetailEvent(event, ...)
+function addon.HandleCraftEvent(event, ...)
   if addon.ledger then
-    if event == "TRADE_SKILL_CRAFT_BEGIN" then
+    if event == "FOREVER_CAPTURE_DIAGNOSTIC" then
+      addon.ObserveDiagnostic("forever-capture", ...)
+    elseif event == "UNSUPPORTED_CRAFT_REQUEST" then
+      local recipeId, reason = ...
+      addon.ObserveDiagnostic("craft-submission", { recipeId = recipeId, accepted = false, reason = reason })
+    elseif event == "CRAFT_CANCELLED" then
+      addon.ledger:CancelCraft()
+      addon.craftCastGUID = nil
+      local context = ...
+      addon.ObserveDiagnostic("craft-cancelled", context)
+    elseif event == "TRADE_SKILL_CRAFT_BEGIN" then
       local recipeId = select(1, ...)
       local ok, err = pcall(addon.ledger.BeginCraft, addon.ledger, recipeId)
       if not ok then addon.ledgerCaptureError = true end
@@ -326,7 +341,7 @@ function addon.HandleRetailEvent(event, ...)
         addon.craftCastGUID = nil
       end
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
-      local result = select(1, ...)
+      local result, correlation = ...
       local salvage = addon.ledger.pendingSalvage
       if type(result) == "table" then tryEnrich(addon.EnrichItem, result.itemID) end
       local pending = addon.ledger.pendingRequest or addon.ledger.pendingOrderRequest
@@ -348,7 +363,7 @@ function addon.HandleRetailEvent(event, ...)
             { recipeId = onlyRecipe, requirements = {}, observation = "result" }
         end
       end
-      local ok, fact, reason = pcall(addon.ledger.RecordResult, addon.ledger, result, expected)
+      local ok, fact, reason = pcall(addon.ledger.RecordResult, addon.ledger, result, expected, correlation)
       if not ok or not fact then addon.ledgerCaptureError = true end
       addon.ObserveDiagnostic("craft-result", {
         operationID = type(result) == "table" and result.operationID or nil,
@@ -367,6 +382,7 @@ function addon.HandleRetailEvent(event, ...)
         for _, reagent in ipairs(addon.ledger.reagentsByCraftId[fact.id] or {}) do
           tryEnrich(addon.EnrichItem, reagent.itemId)
         end
+        return ok and fact or nil, reason
       end
     elseif event == "GET_ITEM_INFO_RECEIVED" then
       local itemId, succeeded = ...
@@ -383,6 +399,8 @@ function addon.HandleRetailEvent(event, ...)
     end
   end
 end
+
+addon.HandleRetailEvent = addon.HandleCraftEvent
 
 function addon.SubmitCraft(recipeId, count, concentration, quote, selections, inputs, materialsSavingsEligible, observation)
   if addon.ledger then
@@ -410,6 +428,7 @@ function addon.SubmitCraft(recipeId, count, concentration, quote, selections, in
         tryEnrich(addon.EnrichItem, fixed.itemId)
       end
     end
+    return request, reason
   end
 end
 
@@ -482,7 +501,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   addon.ledger, addon.ledgerError = addon.Ledger.New(ArtisanLogbookDB, {
     wall = GetServerTime,
   })
-  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleRetailEvent,
+  addon.adapter = addon.CreateFlavorAdapter(_G, addon.HandleCraftEvent,
     addon.SubmitCraft, addon.InvalidateCraft)
   if addon.ledger then
     local ok, sessionId, reason = pcall(addon.CreateCurrentSession, addon.ledger, loginStartedAt)
