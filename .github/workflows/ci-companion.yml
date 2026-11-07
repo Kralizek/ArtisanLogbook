@@ -30,4 +30,5 @@ jobs:
       - run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
       - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
       - run: dotnet test tests/Core/Tests.Core.csproj --no-build -c Release
+      - run: dotnet test tests/HistoryStore/Tests.HistoryStore.csproj --no-build -c Release
       - run: dotnet test tests/SavedVariables/Tests.SavedVariables.csproj --no-build -c Release
