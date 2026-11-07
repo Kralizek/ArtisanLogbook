@@ -28,9 +28,30 @@ local function environment(flavor, legacyResize)
     "EnableMouse", "RegisterForDrag", "SetAllPoints", "SetColorTexture", "SetJustifyH",
     "SetAutoFocus", "SetMaxLetters", "SetMultiLine", "SetFontObject", "SetTextInsets",
     "SetCursorPosition", "SetOrientation", "SetThumbTexture", "SetValueStep", "EnableMouseWheel",
-    "SetFrameStrata", "SetNormalTexture", "SetHighlightTexture", "SetWordWrap" }) do
+    "SetNormalTexture", "SetHighlightTexture", "SetWordWrap" }) do
     methods[name] = function() end
   end
+  function methods:SetPoint(point, relative, relativePoint, x, y)
+    if type(relative) ~= "table" then
+      relative, relativePoint, x, y = nil, nil, relative, relativePoint
+    end
+    self.anchors[#self.anchors + 1] = { point = point, relative = relative or self.parent,
+      relativePoint = relativePoint or point, x = x or 0, y = y or 0 }
+  end
+  function methods:ClearAllPoints() self.anchors, self.all = {}, nil end
+  function methods:SetAllPoints(relative) self.anchors, self.all = {}, relative or self.parent end
+  function methods:EnableMouse(enabled) self.mouse = enabled end
+  function methods:RegisterForClicks(...) self.clicks = { ... } end
+  function methods:RegisterForDrag(...) self.drag = { ... } end
+  function methods:SetFrameStrata(strata) self.strata = strata end
+  function methods:GetFrameStrata()
+    return self.strata or (self.parent and self.parent:GetFrameStrata()) or "MEDIUM"
+  end
+  function methods:SetFrameLevel(level) self.level = level end
+  function methods:GetFrameLevel() return self.level end
+  function methods:SetTextColor(...) self.color = { ... } end
+  function methods:LockHighlight() self.highlightLocked = true end
+  function methods:UnlockHighlight() self.highlightLocked = false end
   function methods:SetScript(name, callback) self.scripts[name] = callback end
   function methods:RegisterEvent(event) self.events[event] = true end
   function methods:RegisterUnitEvent(event) self.events[event] = true end
@@ -87,14 +108,19 @@ local function environment(flavor, legacyResize)
   function methods:CreateFontString() return env.CreateFrame("FontString", nil, self) end
   env.CreateFrame = function(kind, name, parent, template)
     assert(template == nil, "inspector must not need Blizzard templates")
-    local frame = setmetatable({ kind = kind, name = name, parent = parent,
-      scripts = {}, events = {}, shown = true }, { __index = methods })
+    local frame = setmetatable({ kind = kind, name = name, parent = parent, anchors = {},
+      scripts = {}, events = {}, shown = true, level = parent and parent.level and parent.level + 1 or 0,
+      -- WoW buttons and edit boxes receive mouse input and left-button-up clicks by default.
+      mouse = kind == "Button" or kind == "EditBox",
+      clicks = kind == "Button" and { "LeftButtonUp" } or nil }, { __index = methods })
+    if name then env[name] = frame end
     if legacyResize then frame.SetResizeBounds = false end
     env.frames[#env.frames + 1] = frame
     return frame
   end
   env.UIParent = env.CreateFrame("Frame")
   env.UIParent:SetSize(1280, 800)
+  env.date = os.date
   env.GetServerTime = function() return 1800000000 end
   env.GetBuildInfo = function() return flavor == "forever" and "1.60.1" or "12.1.5", "70862", "mock",
     flavor == "forever" and 16001 or 120105 end
@@ -140,6 +166,68 @@ local function settle(window)
   end
 end
 local function click(control) control.scripts.OnClick(control) end
+
+-- Minimal anchor geometry and hit-testing model: the topmost shown, mouse-enabled
+-- frame under the cursor wins by strata then frame level; equal tops are ambiguous.
+local strata = { BACKGROUND = 1, LOW = 2, MEDIUM = 3, HIGH = 4, DIALOG = 5, FULLSCREEN = 6, TOOLTIP = 7 }
+local horizontal = { TOPLEFT = "left", LEFT = "left", BOTTOMLEFT = "left", TOPRIGHT = "right",
+  RIGHT = "right", BOTTOMRIGHT = "right", TOP = "center", BOTTOM = "center", CENTER = "center" }
+local vertical = { TOPLEFT = "top", TOP = "top", TOPRIGHT = "top", BOTTOMLEFT = "bottom",
+  BOTTOM = "bottom", BOTTOMRIGHT = "bottom", LEFT = "middle", RIGHT = "middle", CENTER = "middle" }
+local function rect(env, frame)
+  if frame == env.UIParent then return { left = 0, bottom = 0, right = frame.width, top = frame.height } end
+  if frame.all then return rect(env, frame.all) end
+  local x, y = {}, {}
+  for _, anchor in ipairs(frame.anchors) do
+    local relative = assert(rect(env, anchor.relative), "relative frame is unanchored")
+    local h, v = horizontal[anchor.relativePoint], vertical[anchor.relativePoint]
+    local px = h == "left" and relative.left or h == "right" and relative.right or (relative.left + relative.right) / 2
+    local py = v == "top" and relative.top or v == "bottom" and relative.bottom or (relative.top + relative.bottom) / 2
+    x[horizontal[anchor.point]], y[vertical[anchor.point]] = px + anchor.x, py + anchor.y
+  end
+  local width, height = frame.width or 0, frame.height or 0
+  local left = x.left or (x.right and x.right - width) or (x.center and x.center - width / 2)
+  local right = x.right or (left and left + width)
+  local top = y.top or (y.bottom and y.bottom + height) or (y.middle and y.middle + height / 2)
+  local bottom = y.bottom or (top and top - height)
+  if not (left and right and top and bottom) then return nil end
+  return { left = left, right = right, top = top, bottom = bottom }
+end
+local function visibleOnScreen(frame)
+  while frame do
+    if not frame.shown then return false end
+    frame = frame.parent
+  end
+  return true
+end
+local function center(env, frame)
+  local area = assert(rect(env, frame))
+  return (area.left + area.right) / 2, (area.top + area.bottom) / 2
+end
+local function hit(env, x, y)
+  local best, bestKey, tied
+  for _, frame in ipairs(env.frames) do
+    local area = frame.kind ~= "Texture" and frame.kind ~= "FontString" and frame.mouse and
+      visibleOnScreen(frame) and rect(env, frame)
+    if area and x >= area.left and x <= area.right and y >= area.bottom and y <= area.top then
+      local key = strata[frame:GetFrameStrata()] * 10000 + frame.level
+      if not bestKey or key > bestKey then best, bestKey, tied = frame, key, false
+      elseif key == bestKey then tied = true end
+    end
+  end
+  assert(not tied, "mouse target is ambiguous: overlapping frames share strata and frame level")
+  return best
+end
+local function mouseClick(env, control)
+  local target = hit(env, center(env, control))
+  if target.scripts.OnMouseDown then target.scripts.OnMouseDown(target, "LeftButton") end
+  if target.scripts.OnMouseUp then target.scripts.OnMouseUp(target, "LeftButton") end
+  if target.kind == "Button" and target.enabled ~= false and target.clicks and
+      target.clicks[1] == "LeftButtonUp" and target.scripts.OnClick then
+    target.scripts.OnClick(target, "LeftButton")
+  end
+  return target
+end
 
 test("Core is lazy and slash toggles one template-free instance on both clients", function()
   for _, flavor in ipairs({ "retail", "forever" }) do
@@ -301,9 +389,13 @@ test("large craft history stays paged, newest is easy to inspect and all public 
   click(window.controls.previous)
   assert(window.dataPage == 12)
   click(window.rows[1])
+  local craftId = window.selectedId
   click(window.controls.session)
-  click(window.controls.previous)
-  assert(window.section == "Sessions" and window.dataPage == 1 and not window.failure)
+  assert(window.section == "Sessions" and window.breadcrumb.text:find("from craft #" .. craftId, 1, true))
+  click(window.controls.back)
+  assert(window.section == "Crafts" and window.selectedId == craftId and window.dataPage == 12 and not window.failure)
+  click(window.controls.back)
+  assert(not window.selectedId and window.dataPage == 12 and window.rows[1].selected)
   window:Section("Crafts")
   assert(window.records[1].id == 150)
   equal(original, ledger.database)
@@ -338,7 +430,7 @@ test("copy/export covers whole text pages, paging is bounded, scrolling and resi
   window.titleBar.scripts.OnDragStop(window.titleBar)
   assert(not window.moving and env.ArtisanLogbookDebugSettings.width == window:GetWidth())
   window.resize.scripts.OnMouseDown(window.resize, "LeftButton")
-  assert(window.sizing == "BOTTOMRIGHT" and window.bounds[1] == 620)
+  assert(window.sizing == "BOTTOMRIGHT" and window.bounds[1] == 560)
   window:SetSize(1000, 700)
   window.resize.scripts.OnMouseUp(window.resize, "LeftButton")
   assert(not window.sizing and env.ArtisanLogbookDebugSettings.width == 1000)
@@ -397,7 +489,7 @@ test("geometry preferences are separate, validated and reused without modifying 
   env.SlashCmdList.DUMP = dump
   env.SlashCmdList.ARTISANLOGBOOKDEBUG()
   local window = addon.debugWindow
-  assert(window:GetWidth() == 620 and window:GetHeight() == 640)
+  assert(window:GetWidth() == 560 and window:GetHeight() == 520)
   assert(env.SlashCmdList.DUMP == dump)
   window:SetSize(900, 600)
   window.resize.scripts.OnMouseUp(window.resize, "LeftButton")
@@ -409,6 +501,194 @@ test("geometry preferences are separate, validated and reused without modifying 
   assert(nextAddon.debugWindow:GetWidth() == 900 and nextAddon.debugWindow:GetHeight() == 600)
   equal(settings, nextEnv.ArtisanLogbookDebugSettings)
   equal(original, addon.ledger.database)
+end)
+
+test("X closes through mouse hit-testing above the draggable title bar and all close paths share cleanup", function()
+  for _, flavor in ipairs({ "retail", "forever" }) do
+    local addon, env = environment(flavor)
+    env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+    local window = addon.debugWindow
+    local titleBar, close = window.titleBar, window.close
+    assert(close:GetFrameLevel() > titleBar:GetFrameLevel())
+    local bar, x = rect(env, titleBar), rect(env, close)
+    assert(bar.right <= x.left, "drag region must not overlap the close button")
+    assert(hit(env, center(env, titleBar)) == titleBar)
+    window:Section("Diagnostics")
+    click(window.controls.mode)
+    assert(window.scripts.OnUpdate)
+    window.text:SetFocus()
+    assert(mouseClick(env, close) == close)
+    assert(not window:IsShown() and not window.scripts.OnUpdate and not window.text.focused)
+    env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+    assert(window:IsShown() and addon.debugWindow == window and window.section == "Diagnostics" and window.mode == "Raw")
+    settle(window)
+    -- Close while dragging: movement stops and geometry is saved exactly as on drag stop.
+    titleBar.scripts.OnDragStart(titleBar)
+    assert(window.moving)
+    assert(mouseClick(env, close) == close)
+    assert(not window.moving and env.ArtisanLogbookDebugSettings.width == window:GetWidth())
+    -- Escape uses UISpecialFrames, and /al_debug toggles: both hide the same instance.
+    env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+    window:Section("Crafts")
+    for _, name in ipairs(env.UISpecialFrames) do env[name]:Hide() end
+    assert(not window:IsShown() and not window.scripts.OnUpdate)
+    env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+    assert(window:IsShown() and window.section == "Crafts")
+    env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+    assert(not window:IsShown())
+    -- Every visible control is a unique mouse target.
+    env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+    for _, control in pairs(window.controls) do
+      if control.kind == "Button" and control:IsShown() then assert(hit(env, center(env, control)) == control) end
+    end
+    assert(hit(env, center(env, window.resize)) == window.resize)
+  end
+end)
+
+test("tabs, selections and contextual controls follow list and detail navigation", function()
+  local addon, env = environment("forever")
+  local ledger = addon.ledger
+  for index = 1, 14 do
+    assert(ledger:SubmitCraft(2331, 1, false))
+    assert(ledger:RecordResult({ operationID = index, itemID = 2455, quantity = 1 }))
+  end
+  env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+  local window = addon.debugWindow
+  local controls = window.controls
+  local function shown(name) return controls[name]:IsShown() end
+  assert(controls.Capabilities.active and controls.Capabilities.highlightLocked and controls.Capabilities.underline:IsShown())
+  assert(not controls.Crafts.active and not controls.Crafts.underline:IsShown())
+  assert(not shown("back") and not shown("previous") and not shown("next") and not shown("session"))
+  assert(not shown("textPrevious") and not shown("textNext") and not shown("textPage"))
+  assert(window.breadcrumb.text == "Capabilities" and window.scroll:IsShown() and not window.list:IsShown())
+  click(controls.Crafts)
+  assert(controls.Crafts.active and not controls.Capabilities.active)
+  assert(window.list:IsShown() and not window.scroll:IsShown() and controls.copy.enabled == false)
+  assert(shown("previous") and shown("next") and controls.previous.enabled == false and controls.next.enabled)
+  assert(not shown("session") and not shown("back"))
+  assert(window.breadcrumb.text == "Crafts  >  Page 1 (newest first)")
+  assert(window.rows[1]:IsShown() and window.rows[1].text:find("#14", 1, true) and not window.rows[1].selected)
+  click(controls.next)
+  assert(controls.previous.enabled and not controls.next.enabled and window.rows[2]:IsShown() and not window.rows[3]:IsShown())
+  click(controls.previous)
+  click(window.rows[2])
+  assert(window.selectedId == 13 and window.breadcrumb.text == "Crafts  >  Page 1  >  Craft #13")
+  assert(shown("back") and controls.back.text == "Back to list" and shown("session") and controls.session.enabled)
+  assert(not shown("previous") and not shown("next") and not window.list:IsShown() and window.scroll:IsShown())
+  assert(controls.copy.enabled)
+  click(controls.mode)
+  settle(window)
+  assert(shown("textPrevious") and shown("textNext") and controls.textPage.text == "Page 1 / 1")
+  assert(window.breadcrumb.text:find("Raw View", 1, true))
+  click(controls.mode)
+  click(controls.session)
+  assert(controls.Sessions.active and controls.back.text == "Back to craft #13" and not shown("session"))
+  click(controls.back)
+  assert(window.section == "Crafts" and window.selectedId == 13 and controls.Crafts.active)
+  click(controls.back)
+  assert(window.list:IsShown() and window.rows[2].selected and window.rows[2].highlightLocked)
+  assert(not window.rows[1].selected and not window.rows[1].highlightLocked)
+  click(controls.Sessions)
+  assert(window.rows[1]:IsShown() and window.rows[1].text:find("(current)", 1, true))
+  click(controls.Capabilities)
+  assert(not shown("previous") and not shown("session") and not shown("back"))
+end)
+
+test("summaries use readable local time and accurate provenance while Raw View keeps original values", function()
+  local addon, env = environment("forever")
+  local stamp = 1800000123
+  local craft = { id = 7, timestamp = stamp, sessionId = 3, outcomeSource = "unverified", outputQuantity = 1,
+    recipe = { id = 2331, name = "Minor Mana Potion" }, outputItem = { id = 2455 }, request = { id = 4 },
+    inputComplete = true, reagents = { { itemId = 785, quantity = 1 }, { itemId = 2447, quantity = 1 } } }
+  env.ArtisanLogbookAPI.GetCrafts = function() return { crafts = { craft } } end
+  env.ArtisanLogbookAPI.GetCraft = function() return craft end
+  env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+  local window = addon.debugWindow
+  window:Section("Crafts")
+  local readable = os.date("%Y-%m-%d %H:%M:%S", stamp)
+  assert(window.rows[1].text:find(readable, 1, true) and not window.rows[1].text:find(tostring(stamp), 1, true))
+  click(window.rows[1])
+  local summary = window.text:GetText()
+  assert(summary:find(readable, 1, true) and not summary:find(tostring(stamp), 1, true))
+  assert(summary:find("does not mean the craft failed", 1, true) and summary:find("2 recorded", 1, true))
+  assert(not summary:find("nil", 1, true) and summary:find("requirements complete: unknown", 1, true))
+  click(window.controls.mode); settle(window)
+  assert(window.text:GetText():find("[\"timestamp\"] = " .. stamp, 1, true))
+  assert(window.text:GetText():find('"unverified"', 1, true))
+  click(window.controls.mode)
+  for source, phrase in pairs({ native = "completely observed", partial = "only some returned", [false] = "not recorded" }) do
+    craft.outcomeSource = source or nil
+    click(window.controls.refresh)
+    assert(window.text:GetText():find(phrase, 1, true), source)
+  end
+  craft.timestamp = "not-a-time"
+  click(window.controls.refresh)
+  assert(window.text:GetText():find('Crafted:     not-a-time', 1, true))
+  env.date = nil
+  craft.timestamp = stamp
+  click(window.controls.refresh)
+  assert(window.text:GetText():find(tostring(stamp), 1, true))
+  click(window.controls.Capabilities)
+  local capabilities = window.text:GetText()
+  assert(capabilities:find("Flavor:              forever", 1, true) and capabilities:find("this is not an error", 1, true))
+  assert(capabilities:find("Events:", 1, true) and #capabilities < 4000)
+  click(window.controls.Diagnostics)
+  assert(window.text:GetText():find("Capture health:      OK", 1, true))
+end)
+
+test("layout stays inside the window at minimum, default and large sizes", function()
+  local addon, env = environment("retail")
+  local ledger = addon.ledger
+  for index = 1, 12 do
+    assert(ledger:SubmitCraft(2331, 1, false))
+    assert(ledger:RecordResult({ operationID = index, itemID = 2455, quantity = 1 }))
+  end
+  env.SlashCmdList.ARTISANLOGBOOKDEBUG()
+  local window = addon.debugWindow
+  assert(window:GetWidth() == 720 and window:GetHeight() == 520)
+  local function inside(frame, area)
+    local box = rect(env, frame)
+    return box.left >= area.left - 0.01 and box.right <= area.right + 0.01 and
+      box.bottom >= area.bottom - 0.01 and box.top <= area.top + 0.01
+  end
+  local function noOverlap(a, b)
+    local first, second = rect(env, a), rect(env, b)
+    return first.right <= second.left or second.right <= first.left or
+      first.top <= second.bottom or second.top <= first.bottom
+  end
+  for _, size in ipairs({ { 560, 420 }, { 720, 520 }, { 1260, 780 } }) do
+    window:SetSize(size[1], size[2])
+    for _, section in ipairs({ "Crafts", "Capabilities" }) do
+      window:Section(section)
+      for _, control in ipairs({ window.controls.Capabilities, window.controls.Sessions, window.controls.refresh,
+          window.controls.export, window.close, window.resize }) do
+        assert(inside(control, rect(env, window)), section .. " control outside at " .. size[1])
+      end
+      if section == "Crafts" then
+        local list = rect(env, window.list)
+        for index = 1, 12 do
+          assert(window.rows[index]:IsShown() and inside(window.rows[index], list), "row outside at " .. size[1])
+          for other = index + 1, 12 do assert(noOverlap(window.rows[index], window.rows[other])) end
+        end
+        assert(inside(window.controls.next, rect(env, window)) and noOverlap(window.controls.next, window.controls.previous))
+        assert(noOverlap(window.list, window.controls.refresh))
+      else
+        assert(inside(window.scroll, rect(env, window)) and noOverlap(window.scroll, window.controls.refresh))
+      end
+    end
+    window:Section("Crafts")
+    click(window.rows[1])
+    click(window.controls.mode); settle(window)
+    assert(noOverlap(window.controls.export, window.controls.textPrevious) and inside(window.controls.textNext, rect(env, window)))
+    assert(noOverlap(window.controls.back, window.controls.session) and inside(window.controls.back, rect(env, window)))
+    click(window.controls.mode)
+  end
+  window:SetSize(1260, 780)
+  window:Section("Crafts")
+  assert(rect(env, window.rows[1]).left == rect(env, window.rows[2]).left, "tall windows use one column")
+  window:SetSize(560, 420)
+  window:Section("Crafts")
+  assert(rect(env, window.rows[2]).left > rect(env, window.rows[1]).left, "short windows reflow into columns")
 end)
 
 print(passed .. " diagnostics tests passed")

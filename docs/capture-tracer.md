@@ -102,8 +102,8 @@ earlier crafts; this does not prove native getter readiness at each request.
 ### Deploy and test Core + Tracer in game
 
 Core now includes the standalone **`/al_debug`** [diagnostics inspector](diagnostics-window.md).
-Use Capabilities/Diagnostics, select the latest Crafts row, and inspect its Craft
-session without `/dump` or production UI. Raw View includes the public reagent
+Use Capabilities/Diagnostics, select the latest Crafts row, and open its session
+without `/dump` or production UI. Raw View includes the public reagent
 and correlated request data; Copy/Export pages work independently of chat.
 Tracer remains the event recorder, not a requirement for opening this inspector.
 
