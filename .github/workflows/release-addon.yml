@@ -74,6 +74,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_ONLY: 'true'
         run: python3 .github/workflows/scripts/resolve-flavor-matrix.py
 
       - name: Test and package configured flavors

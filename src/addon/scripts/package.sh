@@ -18,7 +18,13 @@ if ! addon_interface="$(jq -er --arg flavor "$addon_flavor" '.include[] | select
 	printf 'Flavor %s is not configured in .flavors.yml.\n' "$addon_flavor" >&2
 	exit 2
 fi
-artifact_suffix="${ARTIFACT_SUFFIX:-}"
+expected_suffix=""
+[[ "$addon_flavor" == retail ]] || expected_suffix="-$addon_flavor"
+artifact_suffix="${ARTIFACT_SUFFIX:-$expected_suffix}"
+if [[ "$artifact_suffix" != "$expected_suffix" ]]; then
+	printf 'Artifact suffix must be %s for flavor %s.\n' "$expected_suffix" "$addon_flavor" >&2
+	exit 2
+fi
 skip_tests="${SKIP_TESTS:-false}"
 
 if [[ ! "$addon_interface" =~ ^[0-9]+$ ]]; then
@@ -38,6 +44,7 @@ cd "$addon_root"
 if [[ "$skip_tests" == false ]]; then
 	"$lua_bin" tests/trace_test.lua "$tracer_root" "$addon_root/tests"
 	"$lua_bin" tests/probes_test.lua "$tracer_root" "$addon_root/tests"
+	"$lua_bin" tests/tracer_compatibility_test.lua "$tracer_root"
 	"$lua_bin" tests/adapter_test.lua "$core_root"
 	"$lua_bin" tests/ledger_test.lua "$core_root" "$addon_root/tests"
 	"$lua_bin" tests/api_test.lua "$core_root" "$addon_root/tests"
@@ -55,6 +62,7 @@ for toc in \
 	"$staging/ArtisanLogbook_Core/ArtisanLogbook_Core.toc" \
 	"$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc"; do
 	sed -i "1i## Interface: $addon_interface" "$toc"
+	sed -i "2i## X-ArtisanLogbook-Flavor: $addon_flavor" "$toc"
 	test "$(grep -c '^## Interface:' "$toc")" -eq 1
 	grep -Fx "## Interface: $addon_interface" "$toc" >/dev/null
 done
@@ -87,12 +95,12 @@ test ! -e "$staging/ArtisanLogbook_Core/UI"
 grep -q '^## SavedVariables: ArtisanLogbookDB$' "$staging/ArtisanLogbook_Core/ArtisanLogbook_Core.toc"
 grep -q '^## RequiredDeps: ArtisanLogbook_Core$' "$staging/ArtisanLogbook/ArtisanLogbook.toc"
 grep -q '^## SavedVariables: ArtisanLogbookUISettings$' "$staging/ArtisanLogbook/ArtisanLogbook.toc"
-grep -q '^## RequiredDeps: ArtisanLogbook_Core$' "$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc"
+grep -q '^## OptionalDeps: ArtisanLogbook_Core$' "$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc"
 grep -q '^## DefaultState: disabled$' "$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc"
 grep -q '^## SavedVariables: ArtisanLogbookTraceDB$' "$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc"
 ! grep -q '^## RequiredDeps:' "$staging/ArtisanLogbook_Core/ArtisanLogbook_Core.toc"
 test "$(grep -c '^## RequiredDeps:' "$staging/ArtisanLogbook/ArtisanLogbook.toc")" -eq 1
-test "$(grep -c '^## RequiredDeps:' "$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc")" -eq 1
+! grep -q '^## RequiredDeps:' "$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc"
 ! grep -q '^## SavedVariables:.*ArtisanLogbookTraceDB' "$staging/ArtisanLogbook_Core/ArtisanLogbook_Core.toc"
 ! grep -q '^## SavedVariables:.*ArtisanLogbookTraceDB' "$staging/ArtisanLogbook/ArtisanLogbook.toc"
 

@@ -3,6 +3,9 @@ param(
     [ValidateSet("Both", "UI", "Core", "Tracer")]
     [string]$Addon = "Both",
 
+    [ValidateSet("Retail", "Forever")]
+    [string]$Flavor = "Retail",
+
     [string]$WowPath
 )
 
@@ -14,6 +17,51 @@ $ArtifactName = "ArtisanLogbook-addon"
 $ConfigDirectory = Join-Path $env:LOCALAPPDATA "ArtisanLogbook"
 $ConfigPath = Join-Path $ConfigDirectory "deploy.json"
 
+function Get-FlavorConfiguration {
+    param([string]$Path = (Join-Path $PSScriptRoot "../.flavors.yml"))
+
+    # Consume only the id/version scalars of the CI-validated flavor format.
+    $id = $null
+    $versions = @{}
+    foreach ($line in Get-Content $Path) {
+        if ($line -match '^\s*-\s+id:\s+([a-z][a-z0-9-]*)\s*(?:#.*)?$') {
+            $id = $Matches[1]
+            if ($versions.ContainsKey($id)) { throw "Duplicate flavor '$id' in $Path." }
+            $versions[$id] = $null
+        }
+        elseif ($id -and $line -match '^\s+version:\s+[''"]?(\d+)\.(\d+)\.(\d+)[''"]?\s*(?:#.*)?$') {
+            $versions[$id] = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
+        }
+    }
+    $selected = $Flavor.ToLowerInvariant()
+    if (-not $versions[$selected]) { throw "Flavor '$selected' has no valid version in $Path." }
+    return [pscustomobject]@{
+        Id = $selected
+        Interface = $versions[$selected]
+        ClientDirectory = "_${selected}_"
+        Suffix = $(if ($selected -eq "retail") { "" } else { "-$selected" })
+    }
+}
+
+function Get-DeploymentConfiguration {
+    if (-not (Test-Path $ConfigPath)) { return @{} }
+    try {
+        $config = Get-Content -Raw $ConfigPath | ConvertFrom-Json
+        if ($config -isnot [pscustomobject]) {
+            throw "Expected a configuration object."
+        }
+        if ($config.paths -and $config.paths -isnot [pscustomobject]) {
+            throw "Expected paths to be a flavor-to-installation-root object."
+        }
+        $result = @{}
+        foreach ($property in $config.PSObject.Properties) { $result[$property.Name] = $property.Value }
+        return $result
+    }
+    catch {
+        throw "Invalid deployment configuration at $ConfigPath. Repair or back up this file before retrying: $_"
+    }
+}
+
 function Invoke-Gh {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
 
@@ -24,25 +72,32 @@ function Invoke-Gh {
 }
 
 function Get-ConfiguredWowPath {
-    if (-not (Test-Path $ConfigPath)) {
-        return $null
+    $config = Get-DeploymentConfiguration
+    if ($config.paths) {
+        $property = $config.paths.PSObject.Properties[$Flavor.ToLowerInvariant()]
+        if ($property -and $property.Value) { return $property.Value }
+        if ($config.paths -is [hashtable] -and $config.paths[$Flavor.ToLowerInvariant()]) {
+            return $config.paths[$Flavor.ToLowerInvariant()]
+        }
     }
-
-    try {
-        $config = Get-Content -Raw $ConfigPath | ConvertFrom-Json
-        return $config.wowPath
-    }
-    catch {
-        Write-Warning "Ignoring invalid deployment configuration at $ConfigPath."
-        return $null
-    }
+    # A shared root (including legacy wowPath) may contain both clients.
+    return $config.wowPath
 }
 
 function Save-WowPath {
     param([Parameter(Mandatory)][string]$Path)
 
     New-Item -ItemType Directory -Force -Path $ConfigDirectory | Out-Null
-    @{ wowPath = $Path } | ConvertTo-Json | Set-Content -Encoding UTF8 $ConfigPath
+    $config = Get-DeploymentConfiguration
+    $paths = @{}
+    if ($config.paths) {
+        foreach ($property in $config.paths.PSObject.Properties) { $paths[$property.Name] = $property.Value }
+    }
+    if ($config.wowPath -and -not $paths.retail) { $paths.retail = $config.wowPath }
+    $paths[$Flavor.ToLowerInvariant()] = $Path
+    if (-not $config.wowPath) { $config.wowPath = $Path }
+    $config.paths = $paths
+    $config | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $ConfigPath
 }
 
 function Resolve-WowPath {
@@ -53,14 +108,15 @@ function Resolve-WowPath {
         $path = Get-ConfiguredWowPath
     }
 
-    while (-not $path -or -not (Test-Path (Join-Path $path "_retail_"))) {
-        if ($path) {
-            Write-Warning "'$path' does not contain a _retail_ directory."
-        }
+    if (-not $path) {
         $path = Read-Host "World of Warcraft installation directory"
         if (-not $path) {
             throw "A World of Warcraft installation directory is required."
         }
+    }
+    $client = "_$($Flavor.ToLowerInvariant())_"
+    if (-not (Test-Path -Path (Join-Path $path $client) -PathType Container)) {
+        throw "'$path' does not contain the selected $Flavor client directory '$client'. Use -WowPath with the installation root containing $client. No addons were copied."
     }
 
     $resolved = (Resolve-Path $path).Path
@@ -150,9 +206,29 @@ function Test-RunArtifact {
     }
 
     $response = ($json -join "`n") | ConvertFrom-Json
-    return @($response.artifacts | Where-Object {
+    if (@($response.artifacts | Where-Object {
         $_.name -eq $ArtifactName -and -not $_.expired
-    }).Count -gt 0
+    }).Count -eq 0) { return $false }
+
+    $download = Join-Path ([IO.Path]::GetTempPath()) ("ArtisanLogbook-check-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $download | Out-Null
+    try {
+        Invoke-Gh run download $RunId --repo $Repository --name $ArtifactName --dir $download
+        $archive = Join-Path $download "$archivePrefix$($flavorConfig.Suffix).zip"
+        if (-not (Test-Path $archive -PathType Leaf)) {
+            Write-Verbose "Run $RunId does not contain $Addon for $Flavor."
+            return $false
+        }
+        try {
+            Test-AddonArchive -Path $archive
+            return $true
+        }
+        catch {
+            Write-Warning "Run $RunId cannot be reused for $Flavor/$Addon`: $_"
+            return $false
+        }
+    }
+    finally { Remove-Item -Recurse -Force $download }
 }
 
 function Find-ReusableRun {
@@ -165,8 +241,8 @@ function Find-ReusableRun {
         }
     }
 
-    # Reuse a dispatch already queued or running for precisely this commit.
-    return $runs | Where-Object { $_.status -ne "completed" } | Select-Object -First 1
+    # An unfinished run is not evidence that the requested package exists.
+    return $null
 }
 
 function Find-ReleasePackage {
@@ -183,7 +259,7 @@ function Find-ReleasePackage {
     foreach ($release in @(($json -join "`n") | ConvertFrom-Json)) {
         if ($release.draft -or $release.tag_name -notmatch '^addon-v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') { continue }
         $version = $release.tag_name.Substring("addon-v".Length)
-        $expectedAsset = "$ArchivePrefix-$version.zip"
+        $expectedAsset = "$ArchivePrefix$($flavorConfig.Suffix)-$version.zip"
         $asset = @($release.assets | Where-Object {
             $_.name -eq $expectedAsset -and
             $_.state -eq "uploaded"
@@ -215,6 +291,69 @@ function Copy-Addon {
     }
 }
 
+function Get-AddonDirectories {
+    switch ($Addon) {
+        "UI"     { "ArtisanLogbook" }
+        "Core"   { "ArtisanLogbook_Core" }
+        "Tracer" { "ArtisanLogbook_Tracer" }
+        default  { "ArtisanLogbook_Core"; "ArtisanLogbook"; "ArtisanLogbook_Tracer" }
+    }
+}
+
+function Test-AddonArchive {
+    param([Parameter(Mandatory)][string]$Path)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $directories = @(Get-AddonDirectories)
+        $names = @{}
+        foreach ($entry in $zip.Entries) {
+            $name = $entry.FullName
+            if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)' -or
+                $name.Split('/')[0] -notin $directories -or $names.ContainsKey($name)) {
+                throw "Unsafe, duplicate or unexpected archive entry '$name'. No addons were copied."
+            }
+            if (($entry.ExternalAttributes -shr 16 -band 0xF000) -eq 0xA000) {
+                throw "Symbolic links are not allowed in addon archives."
+            }
+            $names[$name] = $true
+        }
+        foreach ($directory in $directories) {
+            $toc = $zip.GetEntry("$directory/$directory.toc")
+            if (-not $toc) { throw "Package does not contain expected TOC '$directory.toc'." }
+            $reader = [IO.StreamReader]::new($toc.Open())
+            try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            $interfaces = [regex]::Matches($text, '(?m)^## Interface:\s*([0-9]+)\s*$')
+            $declarations = [regex]::Matches($text, '(?m)^## Interface:')
+            if ($declarations.Count -ne 1 -or $interfaces.Count -ne 1 -or
+                [int]$interfaces[0].Groups[1].Value -ne $flavorConfig.Interface) {
+                throw "TOC '$directory.toc' must target $Flavor interface $($flavorConfig.Interface). No addons were copied."
+            }
+            $target = [regex]::Matches($text, '(?m)^## X-ArtisanLogbook-Flavor:\s*([a-z-]+)\s*$')
+            if ($target.Count -gt 1 -or ($target.Count -eq 1 -and $target[0].Groups[1].Value -ne $flavorConfig.Id)) {
+                throw "TOC '$directory.toc' targets the wrong flavor. No addons were copied."
+            }
+        }
+    }
+    finally { $zip.Dispose() }
+}
+
+function Install-AddonArchive {
+    param([string]$Path, [string]$Expanded, [string]$Destination)
+
+    Test-AddonArchive -Path $Path
+    Expand-Archive -Path $Path -DestinationPath $Expanded -Force
+    foreach ($directory in @(Get-AddonDirectories)) {
+        $source = Join-Path $Expanded $directory
+        $target = Join-Path $Destination $directory
+        Write-Host "Deploying $directory -> $target"
+        Copy-Addon -Source $source -Destination $target
+    }
+}
+
+if ($MyInvocation.InvocationName -eq ".") { return }
+
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw "GitHub CLI (gh) is required."
 }
@@ -224,8 +363,12 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 
 $branch = Get-CurrentBranch
 $sha = Get-CurrentSha
+$flavorConfig = Get-FlavorConfiguration
 $wowRoot = Resolve-WowPath $WowPath
-$addonsDirectory = Join-Path $wowRoot "_retail_\Interface\AddOns"
+$addonsDirectory = Join-Path (Join-Path (Join-Path $wowRoot $flavorConfig.ClientDirectory) "Interface") "AddOns"
+if ($Flavor -eq "Forever" -and $Addon -ne "Tracer") {
+    Write-Warning "Forever Core/UI archives are buildable but unsupported. This milestone supports only standalone Tracer diagnostics."
+}
 
 $archivePrefix = switch ($Addon) {
     "UI"     { "ArtisanLogbook" }
@@ -268,6 +411,10 @@ else {
 
     Write-Host "Waiting for workflow run $runId..."
     Invoke-Gh run watch $runId --repo $Repository --exit-status
+    $runSha = Invoke-Gh run view $runId --repo $Repository --json headSha --jq '.headSha'
+    if (($runSha -join "").Trim() -ne $sha) {
+        throw "Workflow run $runId does not target commit $sha. The remote branch may have moved. No addons were copied."
+    }
     if (-not (Test-RunArtifact -RunId $runId)) {
         throw "Workflow run $runId completed without a usable '$ArtifactName' artifact."
     }
@@ -285,62 +432,19 @@ try {
     else {
         Write-Host "Downloading CI artifact from run $runId..."
         Invoke-Gh run download $runId --repo $Repository --name $ArtifactName --dir $temp
-        $archiveName = switch ($Addon) {
-            "UI"     { "ArtisanLogbook.zip" }
-            "Core"   { "ArtisanLogbook_Core.zip" }
-            "Tracer" { "ArtisanLogbook_Tracer.zip" }
-            default { "ArtisanLogbook-Bundle.zip" }
-        }
+        $archiveName = "$archivePrefix$($flavorConfig.Suffix).zip"
         $archive = Join-Path $temp $archiveName
     }
     if (-not (Test-Path $archive)) {
         throw "Expected archive '$archive' was not downloaded."
     }
 
-    $expanded = Join-Path $temp "expanded"
-    Expand-Archive -Path $archive -DestinationPath $expanded -Force
-
-    $directories = switch ($Addon) {
-        "UI"     { @("ArtisanLogbook") }
-        "Core"   { @("ArtisanLogbook_Core") }
-        "Tracer" { @("ArtisanLogbook_Tracer") }
-        default  { @("ArtisanLogbook_Core", "ArtisanLogbook", "ArtisanLogbook_Tracer") }
-    }
-
-    $interfaces = @()
-    foreach ($directory in $directories) {
-        $source = Join-Path $expanded $directory
-        if (-not (Test-Path $source)) {
-            throw "Package does not contain expected addon directory '$directory'."
-        }
-
-        $tocPath = Join-Path $source "$directory.toc"
-        if (-not (Test-Path $tocPath)) {
-            throw "Package does not contain expected TOC '$directory.toc'."
-        }
-        $interfaceLines = @(Select-String -Path $tocPath -Pattern '^## Interface: [0-9]+$' | ForEach-Object { $_.Line })
-        if ($interfaceLines.Count -ne 1) {
-            throw "Expected exactly one numeric interface in '$directory.toc'."
-        }
-        $interfaces += $interfaceLines[0] -replace '^## Interface: ', ''
-    }
-
-    if (@($interfaces | Select-Object -Unique).Count -ne 1) {
-        throw "The selected addon packages target different WoW interfaces."
-    }
-    Write-Host "Validated WoW interface $($interfaces[0])."
-
-    foreach ($directory in $directories) {
-        $source = Join-Path $expanded $directory
-        $destination = Join-Path $addonsDirectory $directory
-        Write-Host "Deploying $directory -> $destination"
-        Copy-Addon -Source $source -Destination $destination
-    }
+    Install-AddonArchive -Path $archive -Expanded (Join-Path $temp "expanded") -Destination $addonsDirectory
 }
 finally {
-    Remove-Item -Recurse -Force $temp -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $temp
 }
 
 Write-Host ""
-Write-Host "Deployed $Addon from $branch ($sha)."
+Write-Host "Deployed $Addon for $Flavor from $branch ($sha)."
 Write-Host "Switch to World of Warcraft and run /reload."

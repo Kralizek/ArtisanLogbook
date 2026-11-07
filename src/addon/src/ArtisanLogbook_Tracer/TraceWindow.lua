@@ -3,7 +3,7 @@ local _, addon = ...
 function addon.CreateTraceWindow()
   local width = math.min(760, UIParent:GetWidth() - 40)
   local height = math.min(560, UIParent:GetHeight() - 40)
-  local window = CreateFrame("Frame", "ArtisanLogbookTraceWindow", UIParent, "BasicFrameTemplateWithInset")
+  local window = addon.CreateCompatibleFrame("Frame", "ArtisanLogbookTraceWindow", UIParent, "BasicFrameTemplateWithInset")
   addon.window = window
   window:SetSize(width, height)
   window:SetPoint("CENTER")
@@ -13,8 +13,15 @@ function addon.CreateTraceWindow()
   window:RegisterForDrag("LeftButton")
   window:SetScript("OnDragStart", window.StartMoving)
   window:SetScript("OnDragStop", window.StopMovingOrSizing)
+  if not window.TitleText then
+    local background = window:CreateTexture(nil, "BACKGROUND")
+    background:SetAllPoints()
+    background:SetColorTexture(0.08, 0.08, 0.08, 0.95)
+    window.TitleText = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    window.TitleText:SetPoint("TOP", 0, -12)
+  end
   window.TitleText:SetText("Artisan Logbook - Capture Tracer")
-  tinsert(UISpecialFrames, "ArtisanLogbookTraceWindow")
+  if type(UISpecialFrames) == "table" then table.insert(UISpecialFrames, "ArtisanLogbookTraceWindow") end
 
   local status = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   status:SetPoint("TOPLEFT", 20, -38)
@@ -22,7 +29,12 @@ function addon.CreateTraceWindow()
   status:SetJustifyH("LEFT")
 
   local function button(text, offset, vertical, callback, buttonWidth)
-    local control = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
+    local control = addon.CreateCompatibleFrame("Button", nil, window, "UIPanelButtonTemplate")
+    if not control:GetFontString() then
+      local caption = control:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      caption:SetAllPoints()
+      control:SetFontString(caption)
+    end
     control:SetSize(buttonWidth or 86, 24)
     control:SetPoint("TOPLEFT", offset, vertical)
     control:SetText(text)
@@ -30,14 +42,15 @@ function addon.CreateTraceWindow()
     return control
   end
 
-  local label = CreateFrame("EditBox", nil, window, "InputBoxTemplate")
+  local label = addon.CreateCompatibleFrame("EditBox", nil, window, "InputBoxTemplate")
+  label:SetFontObject(ChatFontNormal)
   label:SetSize(width - 150, 24)
   label:SetPoint("TOPLEFT", 26, -104)
   label:SetAutoFocus(false)
   label:SetMaxLetters(240)
   label:SetScript("OnEscapePressed", label.ClearFocus)
 
-  local scroll = CreateFrame("ScrollFrame", nil, window, "UIPanelScrollFrameTemplate")
+  local scroll = addon.CreateCompatibleFrame("ScrollFrame", nil, window, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 20, -142)
   scroll:SetPoint("BOTTOMRIGHT", -42, 98)
   local text = CreateFrame("EditBox", nil, scroll)
@@ -112,24 +125,17 @@ function addon.CreateTraceWindow()
       "Quote and probe capture disabled.")
   end, 108)
   button("Diagnostics", 296, -72, function()
-    local core, reason
-    if type(ArtisanLogbookAPI) == "table" and type(ArtisanLogbookAPI.GetDiagnostics) == "function" then
-      local ok
-      ok, core, reason = pcall(ArtisanLogbookAPI.GetDiagnostics)
-      if not ok then reason, core = tostring(core), nil end
-    else
-      reason = "Core diagnostics are unavailable."
-    end
-    local coreDiagnostics = core and { available = true, snapshot = core } or
-      { available = false, reason = reason or "Core diagnostics are unavailable." }
     local payload = addon.Trace.Serialize({
       tracer = {
         recording = addon.recorder.recording == true,
         verbose = addon.verbose == true,
         events = addon.capabilities.events,
         hooks = addon.capabilities.hooks,
+        flavor = addon.capabilities.flavor,
+        apis = addon.capabilities.apis,
+        unavailable = addon.capabilities.unavailable,
       },
-      core = coreDiagnostics,
+      core = addon.GetCoreDiagnostics(),
     })
     text:SetText("Tracer and Core diagnostics\n\n" .. payload)
     text:SetCursorPosition(0)
@@ -145,27 +151,31 @@ function addon.CreateTraceWindow()
   button("<", 20, -height + 40, function() page = math.max(1, (page or 2) - 1); window:Refresh() end)
   button(">", 112, -height + 40, function() page = (page or 0) + 1; window:Refresh() end)
 
-  StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE = {
-    text = "Delete all captured trace events? Export them first. This cannot be undone.",
-    button1 = "Clear",
-    button2 = "Cancel",
-    OnAccept = function()
-      local ok, reason = addon.recorder:Clear()
-      if not ok then addon.Notify(reason) end
-      window:Refresh(true)
-    end,
-    timeout = 0,
-    whileDead = true,
-    hideOnEscape = true,
-    preferredIndex = 3,
-  }
-  button("Clear Trace", width - 154, -height + 40, function()
-    if addon.recorder.recording then
-      addon.Notify("Stop recording before clearing.")
-    else
-      StaticPopup_Show("ARTISANLOGBOOK_CLEAR_TRACE")
-    end
-  end, 134)
+  if type(StaticPopupDialogs) == "table" and type(StaticPopup_Show) == "function" then
+    StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE = {
+      text = "Delete all captured trace events? Export them first. This cannot be undone.",
+      button1 = "Clear",
+      button2 = "Cancel",
+      OnAccept = function()
+        local ok, reason = addon.recorder:Clear()
+        if not ok then addon.Notify(reason) end
+        window:Refresh(true)
+      end,
+      timeout = 0,
+      whileDead = true,
+      hideOnEscape = true,
+      preferredIndex = 3,
+    }
+    button("Clear Trace", width - 154, -height + 40, function()
+      if addon.recorder.recording then
+        addon.Notify("Stop recording before clearing.")
+      else
+        StaticPopup_Show("ARTISANLOGBOOK_CLEAR_TRACE")
+      end
+    end, 134)
+  else
+    addon.Notify("Clear Trace unavailable: confirmation popup API is missing.")
+  end
 
   local elapsed = 0
   window:SetScript("OnUpdate", function(_, delta)

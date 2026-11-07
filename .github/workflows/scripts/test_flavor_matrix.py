@@ -74,10 +74,20 @@ class FlavorMatrixTests(unittest.TestCase):
             [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"versionType": "retail "}}}],
             [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"versionType": "\tretail"}}}],
             [{"id": "retail", "version": "12.1.5", "metadata": {"curseforge": {"unknown": 1}}}],
+            [{"id": "forever", "version": "1.60.1", "release": "false"}],
         )
         for flavors in invalid:
             with self.subTest(flavors=flavors), self.assertRaises(ValueError):
                 resolver.resolve_matrix({"flavors": flavors}, "1.0.0")
+
+    def test_forever_is_buildable_but_not_releasable(self):
+        config = yaml.safe_load(Path(".flavors.yml").read_text(encoding="utf-8"))
+        rows = resolver.resolve_matrix(config, "local")["include"]
+        self.assertEqual([row["id"] for row in rows], ["retail", "forever"])
+        self.assertEqual(rows[1]["interface"], 16001)
+        self.assertEqual(rows[1]["asset"], "ArtisanLogbook-Bundle-forever-local.zip")
+        release = resolver.resolve_matrix(config, "1.0.0", release_only=True)["include"]
+        self.assertEqual([row["id"] for row in release], ["retail"])
 
 
 if __name__ == "__main__":

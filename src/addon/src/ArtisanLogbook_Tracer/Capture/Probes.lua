@@ -171,5 +171,62 @@ local function registerHooks(api, emit, isVerbose)
 end
 
 function addon.RegisterDiagnosticProbes(api, emit, isVerbose)
+  addon.capabilities.apis = addon.capabilities.apis or {}
+  for _, name in ipairs({ "DoTradeSkill", "GetNumTradeSkills", "GetTradeSkillSelectionIndex",
+    "GetTradeSkillInfo", "GetTradeSkillItemLink", "GetTradeSkillNumMade",
+    "GetTradeSkillNumReagents", "GetTradeSkillReagentInfo", "GetTradeSkillReagentItemLink" }) do
+    addon.capabilities.apis[name] = type(api[name]) == "function"
+  end
+  for _, name in ipairs({ "GetRecipeInfo", "GetRecipeSchematic", "GetProfessionInfoByRecipeID",
+    "GetAllRecipeIDs" }) do
+    addon.capabilities.apis["C_TradeSkillUI." .. name] =
+      type(api.C_TradeSkillUI) == "table" and type(api.C_TradeSkillUI[name]) == "function"
+  end
   registerHooks(api, emit, isVerbose)
+  addon.capabilities.hooks.DoTradeSkill = false
+  if type(api.DoTradeSkill) == "function" and type(api.hooksecurefunc) == "function" then
+    addon.capabilities.hooks.DoTradeSkill = pcall(api.hooksecurefunc, "DoTradeSkill", function(...)
+      emit("CALL_POST:DoTradeSkill", ...)
+    end)
+  end
+end
+
+function addon.ProbeProfession(api, emit, recipeID)
+  local function query(owner, name, label, ...)
+    local observation = { api = label, status = "unavailable" }
+    if type(owner) == "table" and type(owner[name]) == "function" then
+      local function collect(...)
+        return { n = select("#", ...), ... }
+      end
+      local values = collect(pcall(owner[name], ...))
+      if values[1] then
+        observation.status = "ok"
+        observation.values = { n = values.n - 1 }
+        for index = 2, values.n do observation.values[index - 1] = values[index] end
+      else
+        observation.status, observation.reason = "error", tostring(values[2])
+      end
+    end
+    emit("API_PROBE:" .. label, observation)
+    return observation.values and observation.values[1]
+  end
+  local index = query(api, "GetTradeSkillSelectionIndex", "GetTradeSkillSelectionIndex")
+  query(api, "GetNumTradeSkills", "GetNumTradeSkills")
+  if type(index) == "number" and index > 0 and index % 1 == 0 then
+    for _, name in ipairs({ "GetTradeSkillInfo", "GetTradeSkillItemLink", "GetTradeSkillNumMade" }) do
+      query(api, name, name, index)
+    end
+    local count = query(api, "GetTradeSkillNumReagents", "GetTradeSkillNumReagents", index)
+    if type(count) == "number" and count >= 0 and count % 1 == 0 then
+      for reagent = 1, math.min(count, 20) do
+        query(api, "GetTradeSkillReagentInfo", "GetTradeSkillReagentInfo", index, reagent)
+        query(api, "GetTradeSkillReagentItemLink", "GetTradeSkillReagentItemLink", index, reagent)
+      end
+    end
+  end
+  if type(recipeID) == "number" and recipeID > 0 and recipeID < math.huge and recipeID % 1 == 0 then
+    query(api.C_TradeSkillUI, "GetRecipeInfo", "C_TradeSkillUI.GetRecipeInfo", recipeID)
+    query(api.C_TradeSkillUI, "GetRecipeSchematic", "C_TradeSkillUI.GetRecipeSchematic", recipeID, false)
+    query(api.C_TradeSkillUI, "GetProfessionInfoByRecipeID", "C_TradeSkillUI.GetProfessionInfoByRecipeID", recipeID)
+  end
 end
