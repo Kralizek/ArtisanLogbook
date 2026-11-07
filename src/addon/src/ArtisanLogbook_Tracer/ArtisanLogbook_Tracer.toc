@@ -3,10 +3,11 @@
 ## Version: 0.0.0-dev
 ## X-Release-Tag: dev
 ## DefaultState: disabled
-## RequiredDeps: ArtisanLogbook_Core
+## OptionalDeps: ArtisanLogbook_Core
 ## SavedVariables: ArtisanLogbookTraceDB
 
 Capture/Trace.lua
+Compatibility.lua
 Capture/Probes.lua
 TraceWindow.lua
 Bootstrap.lua

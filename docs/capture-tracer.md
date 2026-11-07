@@ -1,4 +1,4 @@
-# Optional Tracer Addon and Retail Capture Evidence
+# Optional Tracer Addon, Forever Discovery and Retail Capture Evidence
 
 This document preserves the capture evidence verified in merged PR #3 against
 user-supplied live Retail traces from build 69933 (12.1.0). It is the historical
@@ -6,6 +6,123 @@ evidence record as well as the current Tracer operator guide; it is not the
 durable storage contract. The issue #4 ledger implementation and its conservative correlation behavior are documented in
 [storage-ledger.md](storage-ledger.md). Other cases and universal correlation
 guarantees remain unverified.
+
+## Forever diagnostics-first milestone
+
+Forever support currently means **standalone tracing only**, not production
+crafting capture, correlation, ledger support or a Forever crafting adapter.
+Install and enable only Tracer for the first investigation; leave Core/UI
+disabled. No ledger schema, migrations or Retail crafting behavior are changed.
+
+### Deployment and first session
+
+From a checkout of the feature branch on Windows, with authenticated `gh` and Git:
+
+```powershell
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Tracer
+# Optional explicit shared installation root (not the _forever_ directory):
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Tracer -WowPath 'C:\Program Files (x86)\World of Warcraft'
+```
+
+The destination is `<root>\_forever_\Interface\AddOns`. Retail remains the
+default and uses `<root>\_retail_\Interface\AddOns`. Both can share a root.
+See [local deployment](../README.md#local-packaging-and-deployment) for path
+migration, validation and artifact reuse. A deployment is not runtime certification.
+
+1. Restart Forever after the first installation. Enable **Artisan Logbook
+   Tracer** in the AddOns list (disabled by default). Disable unrelated addons
+   and Core/UI. Enable Lua errors with `/console scriptErrors 1`.
+2. Run `/dump GetBuildInfo()` and record all four results. The package currently
+   targets `16001`; if the installed interface differs, stop and update the
+   source-verified flavor configuration rather than changing an archive's TOC.
+3. Run `/al_trace` to check the window and Diagnostics, then
+   `/al_trace start normal` **before opening the profession**.
+4. `/al_trace mark before-open`; open the profession; mark `after-open`.
+5. Select one inexpensive recipe. Mark `recipe-selected`. Run
+   `/al_trace probe` for the selected legacy index if that getter is available.
+   If the client exposes a numeric recipe ID (for example in a request trace),
+   `/al_trace probe <recipeID>` also reads modern recipe, schematic and
+   profession metadata. Do not guess IDs or treat a legacy list index as an ID.
+6. Note the recipe, reagent IDs/links and bag counts manually. Mark
+   `before-craft`, craft **one** item using Blizzard's UI, and mark `after-craft`.
+   Note the result and consumed reagents. Do not infer causality from nearby
+   bag/loot events alone.
+7. Close the profession, mark `after-close`, then `/al_trace stop`.
+   `/al_trace export` opens the existing ten-record paged export. Copy **all**
+   pages using the arrows; each is a Lua `return` table with contract version 2.
+8. `/reload` and confirm the trace is preserved and recording is paused.
+   Exit/restart the client and check persistence again. The alternate full
+   export is the `ArtisanLogbookTraceDB` SavedVariable in
+   `_forever_\WTF\Account\<account>\SavedVariables\ArtisanLogbook_Tracer.lua`,
+   written on reload/logout. Back it up after the client finishes writing it.
+   If the UI cannot initialize, slash recording and this export remain usable;
+   the tracer reports the UI error explicitly.
+
+Send the build results, complete export, scenario notes and any Lua errors.
+Repeat a second separately marked pass in verbose mode only if needed. Never
+clear the first trace before backing it up.
+
+### Capabilities and evidence boundaries
+
+- Raw events, passive post-call hooks, opt-in recording, markers, bounded
+  serialization, SavedVariables and paged export retain the existing schema.
+  Unsupported registrations are recorded as `false`, with errors in
+  `capabilities.unavailable`; they cannot abort other event subscriptions.
+- Core diagnostics/observer APIs are optional and protected separately.
+  Failure or absence does not stop independent capture. Retail retains Core
+  capture-decision observations and existing modern request/verbose probes.
+- Client flavor uses named project constants (`WOW_PROJECT_CAMELOT` before
+  Mainline); unknown projects use explicit packaged flavor metadata, otherwise
+  remain `other`. `flavorSource`, actual project ID/build/interface and available
+  APIs are included in the start record. No flavor is inferred from API names.
+- Legacy candidates include `TRADE_SKILL_UPDATE`, `CRAFT_SHOW`, `CRAFT_UPDATE`,
+  `CRAFT_CLOSE` and `DoTradeSkill`. These are **unknown on Forever** until tested.
+  Registration is attempted under `pcall`; `DoTradeSkill` is post-hooked only
+  when the function and `hooksecurefunc` exist. No craft operation is replaced,
+  invoked, intercepted or modified.
+- Additional profession details/item/data-source events, loot and bag updates
+  help inspect possible result/reagent relationships. Unit spellcast events
+  are player-filtered when supported. Registration success proves only that
+  registration worked, not that an event fires during crafting.
+- `/al_trace probe [recipeID]` performs bounded, explicit read-only metadata
+  queries. Legacy getters are queried only with a detected selected index;
+  reagent reads are capped at 20. Modern getters require an explicit ID.
+  `API_PROBE:*` records distinguish `ok`, `unavailable`, and `error`, preserving
+  tuple arity/nil values. No recipe scanning, polling or forced UI loading occurs.
+- Clocks use `GetServerTime`/`time` and `GetTimePreciseSec`/`GetTime`.
+  Metadata uses `C_AddOns.GetAddOnMetadata` or the legacy global. Optional
+  identity APIs may be missing. Standard frame creation, event dispatch and a
+  wall/elapsed clock are required; absent clocks produce an explicit load error.
+  UI templates fall back to plain widgets; missing confirmation APIs disable
+  Clear rather than deleting without confirmation.
+
+Source verification on 2026-11-07:
+
+| Target | Source commit | Version | Evidence |
+| --- | --- | --- | --- |
+| Forever | `9dc84f0d3bbae1768ac3405b3716000bd93eda06` | `1.60.1.70862` / interface `16001` | [version.txt](https://github.com/Gethe/wow-ui-source/blob/9dc84f0d3bbae1768ac3405b3716000bd93eda06/version.txt) |
+| Retail | `297d7aaaa736f346b3e036f38ee088eaf7f8c07f` | `12.1.5.70783` / interface `120105` | [version.txt](https://github.com/Gethe/wow-ui-source/blob/297d7aaaa736f346b3e036f38ee088eaf7f8c07f/version.txt) |
+
+Forever's [ProjectConstants TOC](https://github.com/Gethe/wow-ui-source/blob/9dc84f0d3bbae1768ac3405b3716000bd93eda06/Interface/AddOns/Blizzard_ProjectConstants/Blizzard_ProjectConstants.toc)
+loads [Camelot constants](https://github.com/Gethe/wow-ui-source/blob/9dc84f0d3bbae1768ac3405b3716000bd93eda06/Interface/AddOns/Blizzard_ProjectConstants/Camelot/ProjectConstants.lua),
+assigning the named project constant and ID. Its
+[TradeSkillUI declarations](https://github.com/Gethe/wow-ui-source/blob/9dc84f0d3bbae1768ac3405b3716000bd93eda06/Interface/AddOns/Blizzard_APIDocumentationGenerated/TradeSkillUIDocumentation.lua)
+contain modern requests, recipe/schematic/profession getters and profession
+events. Shared declarations do **not** establish loaded addon access or actual
+operation semantics. No authoritative legacy API/event contract was established.
+
+The interface is derived from reliable source metadata, but the installed
+client is not available here. Frame/template behavior, slash dispatch,
+SavedVariables persistence, native getter costs, hook permissions, event
+delivery/payloads and item/reagent correlation still require the session above.
+Earlier beta persistence/project-ID reports must not be treated as current
+runtime evidence.
+
+`.flavors.yml` enables Forever CI/local artifacts with `release: false`. The
+release matrix excludes it, preserving Retail release/CurseForge semantics.
+Core/UI Forever archives are buildable artifacts **only**, not supported
+functionality. `-Flavor Forever -Addon Both` selects the proper bundle and
+warns, but should not be used for this first investigation.
 
 ## Build and Install
 
@@ -26,8 +143,8 @@ plus `ArtisanLogbook-Bundle.zip`, in `src/addon/dist/`. Extract the bundle's
 sibling `ArtisanLogbook_Core`, `ArtisanLogbook`, and `ArtisanLogbook_Tracer`
 folders into the live client's `_retail_/Interface/AddOns/`, or install the
 individual archives. Core's TOC must be at
-`Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc`; the UI and
-Tracer both require Core. Restart the client after the first installation.
+`Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc`; the UI requires
+Core, while Tracer integrates with Core optionally. Restart the client after the first installation.
 Enable **Artisan Logbook** for production capture and UI. **Artisan Logbook
 Tracer** is optional and its TOC sets `DefaultState: disabled`; enable it
 explicitly in the AddOns list before using `/al_trace`. Core and the UI continue
@@ -117,7 +234,7 @@ API-contract/source review (2026-10-03; not an in-client experiment):
    switching, or request loops. A live client is needed to characterize which
    unavailable recipes become readable at each opportunity.
 
-### Forever compatibility
+### Historical Forever API-contract review (not runtime support)
 
 The published Forever TradeSkillUI declarations include `GetRecipeSchematic`,
 `GetRecipeQualityItemIDs`, the existing recipe/profession information getters,
@@ -156,11 +273,11 @@ Sources reviewed:
    [issecretvalue](https://warcraft.wiki.gg/wiki/API_issecretvalue), and
    [canaccesstable](https://warcraft.wiki.gg/wiki/API_canaccesstable).
 
-Live acceptance: load the existing schema-v1 DB without opening a profession,
+Retail Core live acceptance: load the existing schema-v1 DB without opening a profession,
 inspect Core management status, open a relevant profession and check again, then
 exercise Core's `ArtisanLogbookManagement.RepairUnknownRecipes` only through a
 Core-side diagnostic harness if manual repair is required. Tracer Diagnostics
-reports Tracer capabilities, not Core ledger state. Verify silence, readiness,
+reports Tracer capabilities and optional detached Core diagnostics. Verify silence, readiness,
 ambiguous outputs remaining Unknown, cancel leaving craft facts untouched, and
 learned knowledge surviving reload. The actual 14-Unknown DB and a
 Retail/Forever client are not part of the Lua tests.

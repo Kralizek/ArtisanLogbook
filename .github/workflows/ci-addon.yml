@@ -6,6 +6,8 @@ on:
       - master
     paths:
       - "src/addon/**"
+      - "scripts/Deploy-WowAddon.ps1"
+      - "scripts/tests/**"
       - ".github/workflows/ci-addon.yml"
       - ".github/workflows/release-addon.yml"
       - ".flavors.yml"
@@ -13,6 +15,8 @@ on:
   pull_request:
     paths:
       - "src/addon/**"
+      - "scripts/Deploy-WowAddon.ps1"
+      - "scripts/tests/**"
       - ".github/workflows/ci-addon.yml"
       - ".github/workflows/release-addon.yml"
       - ".flavors.yml"
@@ -23,6 +27,14 @@ permissions:
   contents: read
 
 jobs:
+  deployment:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test multi-flavor deployment (mocked)
+        shell: pwsh
+        run: ./scripts/tests/Deploy-WowAddon.Tests.ps1
+
   addon:
     runs-on: ubuntu-latest
     steps:
@@ -52,6 +64,9 @@ jobs:
 
       - name: Test flavor matrix parsing
         run: python3 -m unittest discover -s .github/workflows/scripts -p 'test_*.py'
+
+      - name: Test flavor archive contracts
+        run: python3 -m unittest discover -s src/addon/tests -p 'package_test.py'
 
       - name: Test and package configured flavors
         shell: bash

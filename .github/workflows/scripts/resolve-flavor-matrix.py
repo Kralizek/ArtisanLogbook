@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 
-def resolve_matrix(config: dict, addon_version: str) -> dict:
+def resolve_matrix(config: dict, addon_version: str, release_only: bool = False) -> dict:
     rows = config.get("flavors")
     if not isinstance(rows, list) or not rows:
         raise ValueError("flavors must be a nonempty array")
@@ -17,8 +17,8 @@ def resolve_matrix(config: dict, addon_version: str) -> dict:
     seen = set()
     matrix = []
     for entry in rows:
-        if not isinstance(entry, dict) or set(entry) - {"id", "version", "metadata"}:
-            raise ValueError("Each flavor must be an object with id, version and optional metadata")
+        if not isinstance(entry, dict) or set(entry) - {"id", "version", "metadata", "release"}:
+            raise ValueError("Each flavor must have id, version and optional metadata/release")
         flavor, version = entry.get("id"), entry.get("version")
         if not isinstance(flavor, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", flavor) or flavor in seen:
             raise ValueError(f"Invalid or duplicate flavor: {flavor!r}")
@@ -37,6 +37,10 @@ def resolve_matrix(config: dict, addon_version: str) -> dict:
             raise ValueError(f"Invalid CurseForge version type for flavor {flavor}")
 
         major, minor, patch = map(int, version.split("."))
+        if not isinstance(entry.get("release", True), bool):
+            raise ValueError(f"release must be boolean for {flavor}")
+        if release_only and not entry.get("release", True):
+            continue
         suffix = "" if flavor == "retail" else f"-{flavor}"
         matrix.append({
             "id": flavor,
@@ -45,6 +49,8 @@ def resolve_matrix(config: dict, addon_version: str) -> dict:
             "asset": f"ArtisanLogbook-Bundle{suffix}-{addon_version}.zip",
             "curseforgeVersionType": version_type,
         })
+    if not matrix:
+        raise ValueError("No eligible flavors")
     return {"include": matrix}
 
 
@@ -52,7 +58,8 @@ def main() -> None:
     config = yaml.safe_load(Path(".flavors.yml").read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError(".flavors.yml must contain a mapping")
-    rendered = json.dumps(resolve_matrix(config, os.environ["VERSION"]), separators=(",", ":"))
+    rendered = json.dumps(resolve_matrix(config, os.environ["VERSION"],
+                                        os.environ.get("RELEASE_ONLY") == "true"), separators=(",", ":"))
     print(rendered)
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         output.write(f"matrix={rendered}\n")

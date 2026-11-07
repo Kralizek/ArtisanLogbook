@@ -1,20 +1,17 @@
 local addonName, addon = ...
 local lifecycle = CreateFrame("Frame")
-local loginStartedAt = GetServerTime()
-local loginUptime = GetTimePreciseSec()
+local wallClock = GetServerTime or time
+local elapsedClock = GetTimePreciseSec or GetTime
+local loginStartedAt = wallClock and wallClock()
+local loginUptime = elapsedClock and elapsedClock()
 
 function addon.Notify(message)
-  DEFAULT_CHAT_FRAME:AddMessage("Artisan Logbook Tracer: " .. tostring(message))
-end
-
-local function coreDiagnostics()
-  if type(ArtisanLogbookAPI) ~= "table" or type(ArtisanLogbookAPI.GetDiagnostics) ~= "function" then
-    return { available = false, reason = "Core diagnostics are unavailable." }
+  local text = "Artisan Logbook Tracer: " .. tostring(message)
+  if DEFAULT_CHAT_FRAME and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
+    DEFAULT_CHAT_FRAME:AddMessage(text)
+  elseif type(print) == "function" then
+    print(text)
   end
-  local ok, snapshot, reason = pcall(ArtisanLogbookAPI.GetDiagnostics)
-  if not ok then return { available = false, reason = "Core diagnostics failed: " .. tostring(snapshot) } end
-  if not snapshot then return { available = false, reason = reason or "Core diagnostics are unavailable." } end
-  return { available = true, snapshot = snapshot }
 end
 
 function addon.Emit(event, ...)
@@ -23,7 +20,7 @@ function addon.Emit(event, ...)
   if not ok then
     addon.recorder.recording = false
     addon.recorder.database.stoppedReason = "capture-error"
-    addon.Notify("Capture stopped after an error; earlier evidence is preserved.")
+    addon.Notify("Capture stopped after an error; earlier evidence is preserved: " .. tostring(captured))
     return false
   elseif not captured then
     if reason then addon.Notify(reason) end
@@ -38,23 +35,28 @@ function addon.Start(verbose)
     return
   end
   if verbose ~= nil then addon.verbose = verbose end
-  local version, build, buildDate, interface = GetBuildInfo()
+  local version, build, buildDate, interface
+  if type(GetBuildInfo) == "function" then
+    local ok
+    ok, version, build, buildDate, interface = pcall(GetBuildInfo)
+    if not ok then addon.Notify("GetBuildInfo failed: " .. tostring(version)); version = nil end
+  end
   local ok, reason = addon.recorder:Start({
-    addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version"),
+    addonVersion = addon.GetMetadata("Version"),
     version = version,
     build = build,
     buildDate = buildDate,
     interface = interface,
     projectID = WOW_PROJECT_ID,
-    locale = GetLocale(),
-    character = UnitName("player"),
-    characterGUID = UnitGUID("player"),
-    realm = GetRealmName(),
+    locale = addon.ReadOptional(_G, "GetLocale"),
+    character = addon.ReadOptional(_G, "UnitName", "player"),
+    characterGUID = addon.ReadOptional(_G, "UnitGUID", "player"),
+    realm = addon.ReadOptional(_G, "GetRealmName"),
     loginStartedAt = loginStartedAt,
     loginUptime = loginUptime,
     verbose = addon.verbose == true,
     capabilities = addon.capabilities,
-    coreDiagnostics = coreDiagnostics(),
+    coreDiagnostics = addon.GetCoreDiagnostics(),
   })
   addon.recorder.verbose = addon.verbose == true
   addon.Notify(ok and "Recording raw events." or reason)
@@ -85,6 +87,16 @@ local function registerEvents(api)
     "TRADE_SKILL_SHOW",
     "TRADE_SKILL_LIST_UPDATE",
     "TRADE_SKILL_CLOSE",
+    "TRADE_SKILL_UPDATE",
+    "TRADE_SKILL_DETAILS_UPDATE",
+    "TRADE_SKILL_ITEM_UPDATE",
+    "TRADE_SKILL_DATA_SOURCE_CHANGED",
+    "CRAFT_SHOW",
+    "CRAFT_UPDATE",
+    "CRAFT_CLOSE",
+    "CHAT_MSG_LOOT",
+    "BAG_UPDATE",
+    "BAG_UPDATE_DELAYED",
     "CRAFTING_DETAILS_UPDATE",
     "PLAYER_EQUIPMENT_CHANGED",
     "UNIT_AURA",
@@ -103,17 +115,32 @@ local function registerEvents(api)
     "UI_ERROR_MESSAGE",
     "PLAYER_LOGOUT",
   }
-  addon.capabilities = { flavor = "retail", events = {}, hooks = {} }
+  local flavor, flavorSource = addon.DetectClientFlavor(api)
+  addon.capabilities = { flavor = flavor, flavorSource = flavorSource, events = {}, hooks = {},
+    unavailable = {}, apis = {}, clocks = {
+      wall = GetServerTime and "GetServerTime" or "time",
+      elapsed = GetTimePreciseSec and "GetTimePreciseSec" or "GetTime",
+    } }
+  for _, name in ipairs({ "GetBuildInfo", "GetLocale", "UnitName", "UnitGUID", "GetRealmName",
+    "GetServerTime", "time", "GetTimePreciseSec", "GetTime", "issecretvalue", "GetAddOnMetadata",
+    "CreateFrame", "hooksecurefunc" }) do
+    addon.capabilities.apis[name] = type(api[name]) == "function"
+  end
+  addon.capabilities.apis["C_AddOns.GetAddOnMetadata"] =
+    type(api.C_AddOns) == "table" and type(api.C_AddOns.GetAddOnMetadata) == "function"
   local frame = api.CreateFrame("Frame")
   addon.eventFrame = frame
   for _, event in ipairs(events) do
-    local ok
-    if event:sub(1, 5) == "UNIT_" then
-      ok = pcall(frame.RegisterUnitEvent, frame, event, "player")
-    else
-      ok = pcall(frame.RegisterEvent, frame, event)
-    end
-    addon.capabilities.events[event] = ok and frame:IsEventRegistered(event) == true
+    local ok, registered = pcall(function()
+      if event:sub(1, 5) == "UNIT_" and type(frame.RegisterUnitEvent) == "function" then
+        frame:RegisterUnitEvent(event, "player")
+      else
+        frame:RegisterEvent(event)
+      end
+      return frame:IsEventRegistered(event) == true
+    end)
+    addon.capabilities.events[event] = ok and registered == true
+    if not ok then addon.capabilities.unavailable[event] = tostring(registered) end
   end
   frame:SetScript("OnEvent", function(_, event, ...)
     addon.Emit(event, ...)
@@ -125,23 +152,37 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
   if loadedName ~= addonName then return end
   lifecycle:UnregisterEvent("ADDON_LOADED")
   local existingDatabase = ArtisanLogbookTraceDB
+  if type(wallClock) ~= "function" or type(elapsedClock) ~= "function" then
+    addon.loadError = "Required clocks unavailable (GetServerTime/time and GetTimePreciseSec/GetTime)."
+    addon.Notify(addon.loadError)
+    return
+  end
   addon.recorder, addon.loadError = addon.Trace.New(existingDatabase, {
-    wall = GetServerTime,
-    elapsed = GetTimePreciseSec,
+    wall = wallClock,
+    elapsed = elapsedClock,
   }, issecretvalue)
   if not addon.recorder then
     addon.Notify(addon.loadError)
   else
     ArtisanLogbookTraceDB = addon.recorder.database
     registerEvents(_G)
-    local registered, reason = ArtisanLogbookAPI.SetDiagnosticObserver(function(event, context)
-      addon.Emit("CORE_CAPTURE_DECISION", event, context)
-    end)
+    local registered, reason = addon.RegisterCoreObserver()
+    addon.capabilities.coreObserver = registered
     if not registered then addon.Notify("Core diagnostic observer unavailable: " .. tostring(reason)) end
-    addon.RegisterDiagnosticProbes(_G, addon.Emit, function()
+    local probesOK, probeError = pcall(addon.RegisterDiagnosticProbes, _G, addon.Emit, function()
       return addon.recorder ~= nil and addon.recorder.recording and addon.recorder.verbose == true
     end)
-    addon.CreateTraceWindow()
+    if not probesOK then
+      addon.capabilities.unavailable.probes = tostring(probeError)
+      addon.Notify("Diagnostic probes unavailable; raw events remain enabled: " .. tostring(probeError))
+    end
+    local ok, windowError = pcall(addon.CreateTraceWindow)
+    addon.capabilities.window = ok
+    if not ok then
+      addon.window = nil
+      addon.Notify("Tracer UI unavailable; slash recording and SavedVariables export still work: " ..
+        tostring(windowError))
+    end
   end
 end)
 
@@ -168,6 +209,16 @@ SlashCmdList.ARTISANLOGBOOKTRACE = function(message)
     addon.Stop()
   elseif command == "mark" then
     addon.Mark(argument)
+  elseif command == "probe" then
+    if addon.recorder and addon.recorder.recording then
+      local ok, reason = pcall(addon.ProbeProfession, _G, addon.Emit, tonumber(argument))
+      if not ok then
+        addon.Emit("API_PROBE_ERROR", tostring(reason))
+        addon.Notify("Profession probe failed; raw capture remains enabled: " .. tostring(reason))
+      end
+    else
+      addon.Notify("Start recording before probing profession metadata.")
+    end
   elseif command == "verbose" then
     addon.verbose = not addon.verbose
     addon.Notify("Verbose probes " .. (addon.verbose and "enabled." or "disabled.") ..
@@ -179,6 +230,6 @@ SlashCmdList.ARTISANLOGBOOKTRACE = function(message)
       (addon.loadError or "Tracer unavailable."))
   else
     addon.Notify(addon.loadError or
-      "Use /al_trace [open|start [normal|verbose]|stop|mark <label>|verbose|status|export].")
+      "Use /al_trace [open|start [normal|verbose]|stop|mark <label>|probe [recipeID]|verbose|status|export].")
   end
 end

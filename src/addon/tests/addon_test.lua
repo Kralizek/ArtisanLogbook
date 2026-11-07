@@ -58,6 +58,8 @@ function methods:GetHeight() return self.height or (self.kind == "ScrollFrame" a
 function methods:GetCenter() return 500, 500 end
 function methods:GetEffectiveScale() return 1 end
 function methods:GetNormalTexture() return object() end
+function methods:GetFontString() return self.fontString end
+function methods:SetFontString(fontString) self.fontString = fontString end
 function methods:GetStringHeight()
   local _, lineCount = (self.text or ""):gsub("\n", "")
   return math.max(14, (lineCount + 1) * 14)
@@ -5345,4 +5347,40 @@ end)()
   environment.C_TradeSkillUI.GetProfessionInfoByRecipeID, environment.C_TradeSkillUI.GetProfessionSlots,
     environment.C_TradeSkillUI.CraftSalvage = saved.profession, saved.slots, saved.salvage
   print("PASS salvage target inputs, request configuration, output, API/UI projection and reload")
+end)()
+
+;(function()
+  local originalCreateFrame = environment.CreateFrame
+  environment.CreateFrame = function(kind, name, parent, template)
+    if template then error("Unavailable template: " .. template) end
+    return originalCreateFrame(kind, name, parent)
+  end
+  environment.ArtisanLogbookAPI = nil
+  environment.ArtisanLogbookTraceDB = nil
+  environment.StaticPopupDialogs, environment.StaticPopup_Show = nil, nil
+  environment.WOW_PROJECT_CAMELOT, environment.WOW_PROJECT_ID = 18, 18
+  environment.GetBuildInfo = function() return "1.60.1", "70862", "mock", 16001 end
+  local frameStart = #frames
+  local standalone = load(arg[3] or "src/ArtisanLogbook_Tracer", "ArtisanLogbook_Tracer")
+  local lifecycle = frames[frameStart + 1]
+  lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  assert(standalone.recorder and standalone.window and standalone.capabilities.window)
+  assert(standalone.capabilities.flavor == "forever" and not standalone.capabilities.coreObserver)
+  environment.SlashCmdList.ARTISANLOGBOOKTRACE("start")
+  environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark template-free")
+  environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
+  environment.SlashCmdList.ARTISANLOGBOOKTRACE("export")
+  assert(standalone.window:IsShown())
+  local foundExport = false
+  for index = frameStart + 1, #frames do
+    local frame = frames[index]
+    if frame.kind == "EditBox" and frame:GetText():match("^return {") then
+      local exported = assert(loadstring(frame:GetText()))()
+      assert(exported.traceExportVersion == 2 and #exported.records == 3)
+      foundExport = true
+    end
+    assert(frame:GetText() ~= "Clear Trace")
+  end
+  assert(foundExport)
+  print("PASS standalone Forever template-free recording/export and unavailable Clear confirmation")
 end)()
