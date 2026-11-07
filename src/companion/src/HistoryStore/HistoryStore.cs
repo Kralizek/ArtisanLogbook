@@ -48,6 +48,20 @@ public sealed record DimensionWriteResult(
         or DimensionWriteStatus.Enriched;
 }
 
+public sealed record CraftHistoryBatchWriteResult(
+    int InsertedCrafts,
+    int AlreadyPresentCrafts,
+    int EnrichedCrafts,
+    int InsertedDimensions,
+    int EnrichedDimensions,
+    IReadOnlyList<HistoryValidationError> ValidationErrors,
+    IReadOnlyList<HistoryConflict> CraftConflicts,
+    IReadOnlyList<DimensionConflict> DimensionConflicts)
+{
+    public bool IsSuccessful => ValidationErrors.Count == 0 &&
+        CraftConflicts.Count == 0 && DimensionConflicts.Count == 0;
+}
+
 /// <summary>Persists canonical craft observations in a local DuckDB database.</summary>
 public sealed class HistoryStore : IDisposable
 {
@@ -110,31 +124,92 @@ public sealed class HistoryStore : IDisposable
                 return new(CraftWriteStatus.Invalid, null, validationErrors, []);
 
             using DbTransaction transaction = _connection.BeginTransaction();
-            CraftObservation? existing = Read(observation.Identity, transaction);
-            if (existing is null)
-            {
-                StoreObservation(observation, transaction, isUpdate: false);
-                transaction.Commit();
-                return new(CraftWriteStatus.Inserted, observation, [], []);
-            }
-
-            HistoryMergeResult merge = HistoryReconciler.Merge([existing], [observation]);
-            if (!merge.IsSuccessful)
-            {
-                transaction.Commit();
-                return new(CraftWriteStatus.Conflict, null, [], merge.Conflicts);
-            }
-
-            CraftObservation reconciled = merge.Observations!.Single();
-            if (EquivalentIncludingEvidence(existing, reconciled))
-            {
-                transaction.Commit();
-                return new(CraftWriteStatus.AlreadyPresent, existing, [], []);
-            }
-
-            StoreObservation(reconciled, transaction, isUpdate: true);
+            CraftWriteResult result = WriteObservation(observation, transaction);
             transaction.Commit();
-            return new(CraftWriteStatus.Enriched, reconciled, [], []);
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Validates and reconciles a complete imported history in one DuckDB transaction.
+    /// Any conflict leaves both dimensions and crafts unchanged.
+    /// </summary>
+    public CraftHistoryBatchWriteResult WriteBatch(
+        CraftHistory history,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            IReadOnlyList<HistoryValidationError> validationErrors = CraftHistoryValidator.Validate(history);
+            if (validationErrors.Count > 0)
+                return new(0, 0, 0, 0, 0, validationErrors, [], []);
+
+            using DbTransaction transaction = _connection.BeginTransaction();
+            CraftDimensions existingDimensions = ReadDimensions(transaction);
+            CraftHistoryMergeResult dimensionMerge = CraftHistoryReconciler.Merge(
+                new CraftHistory([], existingDimensions),
+                new CraftHistory([], history.Dimensions));
+            if (!dimensionMerge.IsSuccessful)
+            {
+                transaction.Rollback();
+                return new(0, 0, 0, 0, 0, dimensionMerge.ValidationErrors ?? [],
+                    dimensionMerge.CraftConflicts, dimensionMerge.DimensionConflicts);
+            }
+
+            CraftDimensions reconciledDimensions = dimensionMerge.History!.Dimensions;
+            bool dimensionsChanged = !SerializeDimensions(existingDimensions)
+                .Equals(SerializeDimensions(reconciledDimensions), StringComparison.Ordinal);
+            (int insertedDimensions, int enrichedDimensions) = CountDimensionChanges(
+                existingDimensions, reconciledDimensions);
+            if (dimensionsChanged)
+                StoreDimensions(reconciledDimensions, transaction);
+
+            int insertedCrafts = 0;
+            int alreadyPresentCrafts = 0;
+            int enrichedCrafts = 0;
+            List<HistoryConflict> craftConflicts = [];
+            foreach (CraftObservation observation in history.Crafts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                CraftWriteResult result = WriteObservation(observation, transaction);
+                switch (result.Status)
+                {
+                    case CraftWriteStatus.Inserted:
+                        insertedCrafts++;
+                        break;
+                    case CraftWriteStatus.AlreadyPresent:
+                        alreadyPresentCrafts++;
+                        break;
+                    case CraftWriteStatus.Enriched:
+                        enrichedCrafts++;
+                        break;
+                    case CraftWriteStatus.Conflict:
+                        craftConflicts.AddRange(result.Conflicts);
+                        break;
+                    case CraftWriteStatus.Invalid:
+                        transaction.Rollback();
+                        return new(0, 0, 0, 0, 0, result.ValidationErrors, [], []);
+                    default:
+                        throw new InvalidOperationException($"Unexpected craft write status: {result.Status}.");
+                }
+            }
+
+            if (craftConflicts.Count > 0)
+            {
+                transaction.Rollback();
+                return new(0, 0, 0, 0, 0, [], craftConflicts, []);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            transaction.Commit();
+            return new(insertedCrafts, alreadyPresentCrafts, enrichedCrafts,
+                insertedDimensions, enrichedDimensions, [], [], []);
         }
     }
 
@@ -524,6 +599,58 @@ public sealed class HistoryStore : IDisposable
             outputsComplete,
             Deserialize<IReadOnlyList<CraftOutputEvidence>>(outputEvidenceJson),
             Deserialize<IReadOnlyList<CraftConfigurationEvidence>>(configurationEvidenceJson));
+    }
+
+    private CraftWriteResult WriteObservation(CraftObservation observation, DbTransaction transaction)
+    {
+        CraftObservation? existing = Read(observation.Identity, transaction);
+        if (existing is null)
+        {
+            StoreObservation(observation, transaction, isUpdate: false);
+            return new(CraftWriteStatus.Inserted, observation, [], []);
+        }
+
+        HistoryMergeResult merge = HistoryReconciler.Merge([existing], [observation]);
+        if (!merge.IsSuccessful)
+            return new(CraftWriteStatus.Conflict, null, [], merge.Conflicts);
+
+        CraftObservation reconciled = merge.Observations!.Single();
+        if (EquivalentIncludingEvidence(existing, reconciled))
+            return new(CraftWriteStatus.AlreadyPresent, existing, [], []);
+
+        StoreObservation(reconciled, transaction, isUpdate: true);
+        return new(CraftWriteStatus.Enriched, reconciled, [], []);
+    }
+
+    private static (int Inserted, int Enriched) CountDimensionChanges(
+        CraftDimensions existing,
+        CraftDimensions reconciled)
+    {
+        int inserted = 0;
+        int enriched = 0;
+
+        void Count<T, TKey>(IEnumerable<T> before, IEnumerable<T> after, Func<T, TKey> key)
+            where TKey : notnull
+        {
+            Dictionary<TKey, T> previous = before.ToDictionary(key);
+            foreach (T item in after)
+            {
+                if (!previous.TryGetValue(key(item), out T? prior))
+                    inserted++;
+                else if (!JsonSerializer.Serialize(prior, JsonOptions)
+                    .Equals(JsonSerializer.Serialize(item, JsonOptions), StringComparison.Ordinal))
+                    enriched++;
+            }
+        }
+
+        Count(existing.Characters, reconciled.Characters, x => (x.Game, x.Identity.Key));
+        Count(existing.Recipes, reconciled.Recipes, x => (x.Game, x.Id));
+        Count(existing.Professions, reconciled.Professions, x => (x.Game, x.Id));
+        Count(existing.Items, reconciled.Items, x => (x.Game, x.Id));
+        Count(existing.Expansions, reconciled.Expansions, x => (x.Game, x.Key));
+        Count(existing.RecipeReagentSlots, reconciled.RecipeReagentSlots,
+            x => (x.Game, x.RecipeId, x.DataSlotType, x.DataSlotIndex));
+        return (inserted, enriched);
     }
 
     private IReadOnlyList<CraftReagent> ReadReagents(long craftKey, DbTransaction? transaction)
