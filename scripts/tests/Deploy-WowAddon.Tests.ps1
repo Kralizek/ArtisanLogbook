@@ -23,7 +23,7 @@ function Throws([scriptblock]$Body, [string]$Pattern) {
     throw "Expected failure matching $Pattern"
 }
 function Read-Host { throw "Unexpected installation path prompt" }
-function Copy-Addon { $state.copies++ }
+function robocopy { $state.copies++; $global:LASTEXITCODE = 0 }
 function New-TestArchive($Name, $Interface, $Directories, $Target) {
     $path = Join-Path $temp $Name
     Add-Type -AssemblyName System.IO.Compression.FileSystem
