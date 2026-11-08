@@ -1,6 +1,5 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("UI", "Core", "Tracer")]
     [string[]]$Addon,
 
     [string[]]$Flavor,
@@ -60,6 +59,7 @@ function Get-SelectedAddons {
     if ($wanted.Count -eq 0) { $wanted = @("Core", "UI", "Tracer") }
     $seen = @{}
     foreach ($name in $wanted) {
+        if ($name -notin @("Core", "UI", "Tracer")) { throw "Unknown addon '$name'. Available: Core, UI, Tracer." }
         if (-not $seen[$name]) { $seen[$name] = $true; $name }
     }
 }
