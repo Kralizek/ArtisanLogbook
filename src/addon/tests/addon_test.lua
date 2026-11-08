@@ -21,6 +21,9 @@ for _, name in ipairs({
   "SetTextColor", "AddMaskTexture", "SetScale", "SetShadowOffset", "SetBlendMode",
   "SetBackdrop", "SetBackdropColor", "SetBackdropBorderColor",
   "SetPropagateMouseClicks", "SetClipsChildren",
+  "SetResizable", "SetResizeBounds", "SetTextInsets", "SetOrientation", "SetThumbTexture",
+  "SetValueStep", "SetMinMaxValues", "SetValue", "EnableMouseWheel",
+  "StartSizing", "SetFocus", "HighlightText",
 }) do
   methods[name] = function() end
 end
@@ -56,6 +59,8 @@ function methods:GetScript(name) return self.scripts[name] end
 function methods:GetWidth() return self.width or 1024 end
 function methods:GetHeight() return self.height or (self.kind == "ScrollFrame" and 300 or 768) end
 function methods:GetCenter() return 500, 500 end
+function methods:SetFrameLevel(level) self.frameLevel = level end
+function methods:GetFrameLevel() return self.frameLevel or 1 end
 function methods:GetEffectiveScale() return 1 end
 function methods:GetNormalTexture() return object() end
 function methods:GetFontString() return self.fontString end
@@ -5517,6 +5522,30 @@ end)()
   environment.C_TradeSkillUI.GetProfessionInfoByRecipeID, environment.C_TradeSkillUI.GetProfessionSlots,
     environment.C_TradeSkillUI.CraftSalvage = saved.profession, saved.slots, saved.salvage
   print("PASS salvage target inputs, request configuration, output, API/UI projection and reload")
+end)()
+
+;(function()
+  environment.ArtisanLogbookTraceDB = nil
+  local core = reload(nil)
+  local frameStart = #frames
+  local capture = load(arg[3] or "src/ArtisanLogbook_Tracer", "ArtisanLogbook_Tracer")
+  local lifecycle = frames[frameStart + 1]
+  lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  lifecycle.scripts.OnEvent(lifecycle, "PLAYER_LOGIN")
+  local observer, records = core.diagnosticObserver, #capture.recorder.database.records
+  local database, pending = core.ledger.database, core.ledger.pendingRecipeId
+  environment.SlashCmdList.ARTISANLOGBOOKDEBUG()
+  assert(core.debugWindow:IsShown() and capture.window)
+  for _, section in ipairs({ "Capabilities", "Diagnostics", "Crafts", "Sessions" }) do
+    core.debugWindow:Section(section)
+  end
+  environment.SlashCmdList.ARTISANLOGBOOKTRACE("")
+  assert(capture.window:IsShown() and core.debugWindow:IsShown())
+  assert(core.diagnosticObserver == observer and core.ledger.database == database)
+  assert(core.ledger.pendingRecipeId == pending and #capture.recorder.database.records == records)
+  core.debugWindow:Hide()
+  assert(capture.window:IsShown())
+  print("PASS Core inspector coexists with actual Tracer without replacing observers or affecting capture")
 end)()
 
 ;(function()

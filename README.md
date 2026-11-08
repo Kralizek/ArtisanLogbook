@@ -17,10 +17,17 @@ diagnostic evidence and use `/al_trace`. See
 persistent multi-character recording, per-event safety protections and
 SavedVariables compatibility.
 
+Core also provides a standalone, read-only developer inspector: **`/al_debug`**.
+Inspect Capabilities, Diagnostics, the latest Crafts and Sessions without `/dump`,
+Tracer or production UI. It has movable/resizable geometry, independent scrolling,
+raw structured pages, Refresh, Copy and paged Export. See
+[diagnostics window](docs/diagnostics-window.md) for controls, limits and acceptance
+checks; this is not the production UI.
+
 The package contains all three addons in one ZIP. They share a version, release
 tag and CurseForge project; the individual addon ZIPs are also produced for
-testing and deployment. Tracer owns `ArtisanLogbookTraceDB`; Core declares only
-`ArtisanLogbookDB`.
+testing and deployment. Tracer owns `ArtisanLogbookTraceDB`; Core declares
+`ArtisanLogbookDB` and separate inspector geometry `ArtisanLogbookDebugSettings`.
 
 ## Local packaging and deployment
 

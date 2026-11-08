@@ -49,6 +49,7 @@ if [[ "$skip_tests" == false ]]; then
 	"$lua_bin" tests/forever_adapter_test.lua "$core_root" "$addon_root/tests"
 	"$lua_bin" tests/ledger_test.lua "$core_root" "$addon_root/tests"
 	"$lua_bin" tests/api_test.lua "$core_root" "$addon_root/tests"
+	"$lua_bin" tests/diagnostics_test.lua "$core_root" "$addon_root/tests"
 fi
 
 staging="$(mktemp -d)"
@@ -93,7 +94,7 @@ test -f "$staging/ArtisanLogbook_Tracer/TraceWindow.lua"
 test -f "$staging/ArtisanLogbook/UI/Window.lua"
 test ! -e "$staging/ArtisanLogbook/Core"
 test ! -e "$staging/ArtisanLogbook_Core/UI"
-grep -q '^## SavedVariables: ArtisanLogbookDB$' "$staging/ArtisanLogbook_Core/ArtisanLogbook_Core.toc"
+grep -q '^## SavedVariables: ArtisanLogbookDB, ArtisanLogbookDebugSettings$' "$staging/ArtisanLogbook_Core/ArtisanLogbook_Core.toc"
 grep -q '^## RequiredDeps: ArtisanLogbook_Core$' "$staging/ArtisanLogbook/ArtisanLogbook.toc"
 grep -q '^## SavedVariables: ArtisanLogbookUISettings$' "$staging/ArtisanLogbook/ArtisanLogbook.toc"
 grep -q '^## OptionalDeps: ArtisanLogbook_Core$' "$staging/ArtisanLogbook_Tracer/ArtisanLogbook_Tracer.toc"

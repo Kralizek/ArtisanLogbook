@@ -128,7 +128,7 @@ local function projectObservation(ledger, row, result)
 end
 
 local function projectCraft(ledger, craft)
-  local result = fields(craft, { "id", "timestamp", "gameOperationId", "outputQuality", "outputItemLevel",
+  local result = fields(craft, { "id", "sessionId", "timestamp", "gameOperationId", "outputQuality", "outputItemLevel",
     "outputQuantity", "multicraftBonus", "concentrationSpent", "concentrationCurrencyId",
     "hasIngenuityProc", "ingenuityRefund", "hasResourcefulnessProc", "resourcefulnessComplete",
     "outcomeSource", "quoteObserved", "inputComplete", "grossRequirementsComplete",
@@ -447,6 +447,57 @@ function API.GetCraft(id)
   local craft = ledger.craftById[id]
   if craft then return projectCraft(ledger, craft) end
   return nil, "not-found"
+end
+
+local function projectSession(ledger, row)
+  local result = fields(row, { "id", "key", "startedAt", "addonVersion", "wowVersion", "wowBuild",
+    "wowBuildDate", "interface", "projectId", "locale" })
+  result.character = character(ledger, dimension(ledger, "character", row.characterDimensionId))
+  result.realm = realm(ledger, dimension(ledger, "realm", row.realmDimensionId))
+  result.capabilities = ledger.CopyObservation(row.capabilities)
+  return result
+end
+
+function API.GetSession(id)
+  if not integer(id, 1) then return nil, "invalid-id" end
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  local row = dimension(ledger, "session", id)
+  if not row then return nil, "not-found" end
+  return projectSession(ledger, row)
+end
+
+function API.GetSessions(options)
+  if options == nil then options = {} end
+  if not keysAllowed(options, { limit = true, cursor = true }) then return nil, "invalid-options" end
+  local limit = options.limit
+  if limit == nil then limit = 20 end
+  if not integer(limit, 1) or limit > 200 then return nil, "invalid-options" end
+  local ledger = addon.ledger
+  if not ledger then return nil, "not-ready" end
+  local rows = ledger.database.dimensions.sessions
+  local high = rows[#rows] and rows[#rows].id or 0
+  local after = math.huge
+  if options.cursor ~= nil then
+    if type(options.cursor) ~= "string" then return nil, "invalid-cursor" end
+    local savedHigh, savedAfter = options.cursor:match("^sessions:1:(%d+):(%d+)$")
+    savedHigh, savedAfter = tonumber(savedHigh), tonumber(savedAfter)
+    if not integer(savedHigh, 1) or savedHigh > high or not integer(savedAfter, 1) or
+        savedAfter > savedHigh then return nil, "invalid-cursor" end
+    high, after = savedHigh, savedAfter
+  end
+  local page = { sessions = {}, currentSessionId = ledger.currentSessionId }
+  for index = #rows, 1, -1 do
+    local row = rows[index]
+    if row.id <= high and row.id < after then
+      if #page.sessions == limit then
+        page.nextCursor = string.format("sessions:1:%d:%d", high, page.sessions[limit].id)
+        break
+      end
+      page.sessions[#page.sessions + 1] = projectSession(ledger, row)
+    end
+  end
+  return page
 end
 
 function API.GetCrafts(filter, options)
@@ -1314,12 +1365,15 @@ function API.GetCapabilities()
   if not addon.adapter then return nil, "not-ready" end
   local capabilities = addon.adapter.capabilities
   local result = { flavor = capabilities.flavor }
-  result.measurements = {}
-  for metric, supported in pairs(capabilities.measurements or {}) do
-    result.measurements[metric] = supported
+  for _, name in ipairs({ "events", "hooks", "measurements" }) do
+    result[name] = {}
+    for key, value in pairs(capabilities[name] or {}) do
+      if type(key) == "string" and type(value) == "boolean" then result[name][key] = value end
+    end
   end
-  result.operationInfo = capabilities.operationInfo == true
-  result.fixedReagents = capabilities.fixedReagents == true
+  for _, name in ipairs({ "operationInfo", "fixedReagents", "secretValueDetection" }) do
+    if type(capabilities[name]) == "boolean" then result[name] = capabilities[name] end
+  end
   result.craftResults = capabilities.events.TRADE_SKILL_ITEM_CRAFTED_RESULT == true
   result.personalRequests = result.craftResults and capabilities.hooks.CraftRecipe == true
   result.reagentAllocations = result.personalRequests and
