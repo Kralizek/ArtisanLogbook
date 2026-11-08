@@ -35,8 +35,7 @@ public sealed class CompanionSettingsStore(ApplicationPaths paths)
                 return new(SettingsStatus.Unsupported, null,
                     $"Unsupported settings version {number} at {FilePath}; this Companion supports version 1. " +
                     "Use a compatible Companion or explicitly back up and repair the configuration.");
-            if (document.RootElement.EnumerateObject().Select(property => property.Name).Distinct(StringComparer.Ordinal).Count() !=
-                document.RootElement.EnumerateObject().Count())
+            if (HasDuplicateProperties(document.RootElement))
                 return Invalid("Duplicate settings properties are not allowed.");
 
             CompanionSettings settings = JsonSerializer.Deserialize<CompanionSettings>(bytes, JsonOptions)!;
@@ -107,13 +106,19 @@ public sealed class CompanionSettingsStore(ApplicationPaths paths)
         catch (DirectoryNotFoundException) { return null; }
     }
 
-    private static CompanionSettings Validate(CompanionSettings settings)
+    public static CompanionSettings Validate(CompanionSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         if (settings.Version != CompanionSettings.CurrentVersion)
             throw new ArgumentException("Only settings version 1 can be saved.");
         if (settings.InstallationRoots is null)
             throw new ArgumentException("installationRoots must be an array of absolute installation paths.");
+        if (settings.Monitoring is null || settings.Http is null)
+            throw new ArgumentException("monitoring and http must be objects when specified.");
+        if (settings.Monitoring.ReconciliationIntervalSeconds is < 1 or > 86400)
+            throw new ArgumentException("monitoring.reconciliationIntervalSeconds must be between 1 and 86400.");
+        if (settings.Http.PreferredPort is < 1 or > 65535)
+            throw new ArgumentException("http.preferredPort must be between 1 and 65535.");
         List<string> roots = [];
         foreach (string root in settings.InstallationRoots)
         {
@@ -126,6 +131,15 @@ public sealed class CompanionSettingsStore(ApplicationPaths paths)
         }
         return settings with { InstallationRoots = roots };
     }
+
+    private static bool HasDuplicateProperties(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => element.EnumerateObject().Select(property => property.Name)
+            .Distinct(StringComparer.Ordinal).Count() != element.EnumerateObject().Count() ||
+            element.EnumerateObject().Any(property => HasDuplicateProperties(property.Value)),
+        JsonValueKind.Array => element.EnumerateArray().Any(HasDuplicateProperties),
+        _ => false
+    };
 
     private SettingsLoadResult Invalid(string message) =>
         new(SettingsStatus.Invalid, null, $"Invalid settings at {FilePath}: {message} Back up and repair it; it was not overwritten.");
