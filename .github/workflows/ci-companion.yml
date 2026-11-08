@@ -9,6 +9,7 @@ on:
     branches: [master]
     paths:
       - 'src/companion/**'
+      - 'scripts/deploy-companion.ps1'
       - '.github/workflows/ci-companion.yml'
 jobs:
   test:
