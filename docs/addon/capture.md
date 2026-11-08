@@ -4,7 +4,7 @@ This document preserves the capture evidence verified in merged PR #3 against
 user-supplied live Retail traces from build 69933 (12.1.0). It is the historical
 evidence record as well as the current Tracer operator guide; it is not the
 durable storage contract. The issue #4 ledger implementation and its conservative correlation behavior are documented in
-[storage-ledger.md](storage-ledger.md). Other cases and universal correlation
+[storage-ledger.md](storage.md). Other cases and universal correlation
 guarantees remain unverified.
 
 ## First Forever crafting adapter
@@ -74,7 +74,7 @@ ledger. Tokens and pending requests do not survive reload. Forever remains
 The user-supplied cumulative Tracer SavedVariables export (Tracer `5b81d47`,
 Forever `1.60.1.70862`, interface `16001`, project ID `18`, Core disabled) contains
 256 records across **five** distinct start/stop sessions. The sanitized fixture
-is [forever-alchemy-70862.lua](../src/addon/tests/fixtures/forever-alchemy-70862.lua).
+is [forever-alchemy-70862.lua](../../src/addon/tests/fixtures/forever-alchemy-70862.lua).
 Original sequence numbers and session ranges are retained; identity/build
 timestamps are sanitized, cast/item GUIDs are consistently pseudonymized, and
 irrelevant bag/UI traffic is omitted. The raw export is not committed.
@@ -101,7 +101,7 @@ earlier crafts; this does not prove native getter readiness at each request.
 
 ### Deploy and test Core + Tracer in game
 
-Core now includes the standalone **`/al_debug`** [diagnostics inspector](diagnostics-window.md).
+Core now includes the standalone **`/al_debug`** [diagnostics inspector](diagnostics.md).
 Use Capabilities/Diagnostics, select the latest Crafts row, and open its session
 without `/dump` or production UI. Raw View includes the public reagent
 and correlated request data; Copy/Export pages work independently of chat.
@@ -153,7 +153,7 @@ From a checkout of the feature branch on Windows, with authenticated `gh` and Gi
 
 The destination is `<root>\_forever_\Interface\AddOns`. Retail remains the
 default and uses `<root>\_retail_\Interface\AddOns`. Both can share a root.
-See [local deployment](addon-deployment.md#local-windows-deployment) for path
+See [local deployment](deployment.md#local-windows-deployment) for path
 migration, validation and artifact reuse. A deployment is not runtime certification.
 
 1. Restart Forever after the first installation. Enable **Artisan Logbook
@@ -627,7 +627,7 @@ The findings below come from the user's live Retail traces, with build `69933`
 and version `12.1.0` in trace metadata. The raw SavedVariables attachment is not
 committed because it includes personal and instance identifiers. The selected,
 sanitized callback sequences are replayed by
-[`tests/fixtures/retail-build-69933.lua`](../src/addon/tests/fixtures/retail-build-69933.lua).
+[`tests/fixtures/retail-build-69933.lua`](../../src/addon/tests/fixtures/retail-build-69933.lua).
 Cast tokens are replaced with fixture-local placeholders; character/account
 metadata, item-instance GUIDs, and hyperlinks are omitted. Recipe/item IDs and
 operation IDs are retained as representative game data.
@@ -713,7 +713,7 @@ Expansion/era dimensions and their references belong to the separate durable
 ledger schema, not this debug format. The tracer does not capture or infer item
 or recipe expansion metadata; in particular, an item's metadata must not be
 derived from a craft that consumes it. See
-[implementation-plan.md](implementation-plan.md) for the planned dimension
+[implementation-plan.md](../archive/implementation-plan.md) for the planned dimension
 direction. Unknown metadata remains absent until supported by game data and the
 schema review.
 
@@ -810,7 +810,7 @@ For future capture-contract changes, reviewers should continue to verify:
 
 If the raw tracer is insufficient, extend this debug slice and collect another
 controlled trace. Do not implement the durable ledger to paper over uncertainty.
-The approved later work is recorded in [implementation-plan.md](implementation-plan.md).
+The approved later work is recorded in [implementation-plan.md](../archive/implementation-plan.md).
 
 ## Issue #12: Request-side investigation and personal-craft evidence
 

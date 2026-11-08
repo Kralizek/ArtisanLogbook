@@ -1,6 +1,6 @@
 # Addon installation, local deployment, and releases
 
-This guide is for testers, maintainers, and anyone installing outside the normal packaged addon distribution. For a player-oriented introduction, start at the [project README](../README.md).
+This guide is for testers, maintainers, and anyone installing outside the normal packaged addon distribution. For a player-oriented introduction, start at the [project README](../../README.md).
 
 ## Addon layout
 
@@ -45,9 +45,9 @@ For manual installs, place the extracted Core and UI addon directories directly 
 
 Retail is the primary release target. Forever support is limited: ordinary personal crafts with deterministic output and fixed required reagents are supported, but Retail-only crafting mechanics and many advanced operations are not. Fixed reagent quantities inferred from schematics are **not** independently measured consumption or evidence of material savings.
 
-Forever is presently a validation/testing flavor, not a certified published release. See [production UI](production-ui.md#forever-live-acceptance) and [Forever capture notes](capture-tracer.md#first-forever-crafting-adapter) for test coverage and limitations.
+Forever is presently a validation/testing flavor, not a certified published release. See [production UI](ui.md#forever-live-acceptance) and [Forever capture notes](capture.md#first-forever-crafting-adapter) for test coverage and limitations.
 
-Flavor definitions live in [`.flavors.yml`](../.flavors.yml). Flavors with `release: false` may be packaged for testing but are not published to GitHub releases or CurseForge.
+Flavor definitions live in [`.flavors.yml`](../../.flavors.yml). Flavors with `release: false` may be packaged for testing but are not published to GitHub releases or CurseForge.
 
 ## Release maintenance
 
