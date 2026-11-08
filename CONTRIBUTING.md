@@ -33,7 +33,7 @@ dotnet test ArtisanLogbook.Companion.slnx -c Release --no-build
 
 The Companion uses `src/companion/NuGet.Config`, which clears inherited NuGet package sources and configures only `nuget.org`. This prevents unrelated user-wide feeds from triggering NU1507 during centrally managed restores. The Windows deployment script explicitly selects this configuration during `dotnet publish`; it does not modify user-wide NuGet settings.
 
-On Windows, the repository-root `scripts/deploy-companion.ps1` creates a local development installation. See the [Companion guide](src/companion/README.md) for user-facing commands.
+On Windows, the repository-root `scripts/Deploy-Companion.ps1` creates a local development installation. See the [Companion guide](src/companion/README.md) for user-facing commands.
 
 ## Documentation rules
 
