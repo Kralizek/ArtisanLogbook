@@ -1,4 +1,4 @@
-namespace ArtisanLogbook.Cli;
+namespace ArtisanLogbook.Runtime;
 
 public enum CompanionPlatform
 {
@@ -43,16 +43,26 @@ public sealed class ApplicationPaths
         if (databasePath is not null)
             return ResolveSource(databasePath);
 
-        string dataDirectory = _platform switch
+        return Path.Combine(DataDirectory, "history.duckdb");
+    }
+
+    public string SettingsFile => Path.Combine(DataDirectory, "settings.json");
+
+    public string DataDirectory
+    {
+        get
         {
-            CompanionPlatform.Windows => RequireBaseDirectory(_localApplicationData),
-            CompanionPlatform.MacOS => Path.Combine(RequireBaseDirectory(_home), "Library", "Application Support"),
-            CompanionPlatform.Linux => !string.IsNullOrWhiteSpace(_xdgDataHome) && Path.IsPathFullyQualified(_xdgDataHome)
-                ? _xdgDataHome
-                : Path.Combine(RequireBaseDirectory(_home), ".local", "share"),
-            _ => throw new NotSupportedException("Unsupported operating system.")
-        };
-        return Path.Combine(dataDirectory, "ArtisanLogbook", "Companion", "history.duckdb");
+            string dataDirectory = _platform switch
+            {
+                CompanionPlatform.Windows => RequireBaseDirectory(_localApplicationData),
+                CompanionPlatform.MacOS => Path.Combine(RequireBaseDirectory(_home), "Library", "Application Support"),
+                CompanionPlatform.Linux => !string.IsNullOrWhiteSpace(_xdgDataHome) && Path.IsPathFullyQualified(_xdgDataHome)
+                    ? _xdgDataHome
+                    : Path.Combine(RequireBaseDirectory(_home), ".local", "share"),
+                _ => throw new NotSupportedException("Unsupported operating system.")
+            };
+            return Path.Combine(dataDirectory, "ArtisanLogbook", "Companion");
+        }
     }
 
     public string ResolveSource(string path)

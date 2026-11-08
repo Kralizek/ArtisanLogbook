@@ -1,4 +1,4 @@
-using ArtisanLogbook.Cli;
+using ArtisanLogbook.Runtime;
 
 using NUnit.Framework;
 
@@ -12,6 +12,19 @@ public sealed class ApplicationPathsTests
     private static readonly string LocalData = Path.Combine(Home, "local-data");
     private static readonly string WorkingDirectory = Path.Combine(Root, "working");
     private static readonly string Suffix = Path.Combine("ArtisanLogbook", "Companion", "history.duckdb");
+
+    [Test]
+    public void SettingsAndDefaultHistoryShareOneApplicationDirectory()
+    {
+        foreach (CompanionPlatform platform in Enum.GetValues<CompanionPlatform>())
+        {
+            ApplicationPaths paths = Paths(platform);
+            Assert.That(paths.SettingsFile, Is.EqualTo(Path.Combine(paths.DataDirectory, "settings.json")));
+            Assert.That(paths.ResolveDatabase(null), Is.EqualTo(Path.Combine(paths.DataDirectory, "history.duckdb")));
+            _ = paths.ResolveDatabase("override.duckdb");
+            Assert.That(paths.SettingsFile, Is.EqualTo(Path.Combine(paths.DataDirectory, "settings.json")));
+        }
+    }
 
     [Test]
     public void WindowsUsesLocalApplicationData() =>

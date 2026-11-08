@@ -1,7 +1,7 @@
 # Artisan Logbook Companion MVP
 
 One cross-platform .NET executable preserves crafting history from explicit
-SavedVariables snapshots into **one authoritative DuckDB file for all game
+SavedVariables snapshots or configured installations into **one authoritative DuckDB file for all game
 contexts**. Import regularly, before the addon's detailed retention window
 expires. The Companion never changes the source file.
 
@@ -36,17 +36,19 @@ by this milestone.
 ## Commands and help
 
 ```text
-artisanlogbook import <source-file> [--database <path>]
+artisanlogbook init
+artisanlogbook import [source-file] [--database <path>]
 artisanlogbook status [--database <path>]
 artisanlogbook --help
 artisanlogbook import --help
+artisanlogbook init --help
 artisanlogbook status --help
 artisanlogbook --version
 ```
 
 No arguments displays help. Spectre generates argument/option descriptions and
 examples, validates settings, and rejects unknown commands/options, extra
-arguments, missing arguments, and missing option values. Quote paths containing
+arguments, empty explicit paths, and missing option values. Quote paths containing
 spaces. Relative paths resolve against the current working directory; `~` is
 expanded by your shell, not by the Companion.
 
@@ -67,6 +69,91 @@ migrate schemas, and does not create a missing file or directory. Unrecognized
 or unsupported schemas fail explicitly. Defaults never use the executable
 directory; an unavailable user data directory requires an explicit override.
 
+### Initialization and shared settings
+
+Run `artisanlogbook init` in an interactive terminal. The Spectre wizard explains
+the Companion, detects plausible installations, and offers discovered roots,
+the current root (preselected on repeat runs), manual entry, and cancellation.
+Manual entry is available even when candidates are found, accepts relative paths,
+and explains invalid selections before retrying. Select the **installation root**,
+not a flavor or account. A root must contain a direct client directory with
+`WTF/Account` or `Interface/AddOns`; a directory named "World of Warcraft" alone
+is insufficient. No flavor selection is needed.
+
+The wizard shows the proposed configuration and asks for confirmation (default
+**No**) before saving. Canceling leaves settings unchanged. It neither opens nor
+creates DuckDB, changes SavedVariables, nor imports anything. After saving,
+run `artisanlogbook import`. Redirected/noninteractive `init` returns a clear
+usage error rather than waiting for input.
+
+`settings.json` lives beside the **default** `history.duckdb` in the per-user
+directory listed above. `--database` does not relocate settings. Schema version 1
+contains only an integer `version` and an `installationRoots` array of normalized
+absolute paths. It has no credentials, account IDs, character IDs, flavor
+settings, or database overrides. For example on Linux:
+
+```json
+{
+  "version": 1,
+  "installationRoots": [
+    "/games/World of Warcraft"
+  ]
+}
+```
+
+The model and discovery support multiple roots now. This wizard manages the
+first root and preserves any additional roots. There is no `config set/get`
+command. Settings use strict, human-readable JSON; missing, duplicate, unknown,
+malformed, relative, or unsupported-version fields are not silently defaulted.
+Missing settings instruct the user to initialize; unreadable, malformed, or
+unsupported settings require explicit backup/repair or a compatible Companion.
+Neither `init` nor the reusable save service overwrites such a file. A settings
+path that is itself a link or directory is rejected.
+
+Saving writes and flushes a unique same-directory temporary file, then atomically
+renames it over the old file. Cancellation or write/rename failure leaves the
+previous complete configuration intact. A revision check rejects changes made
+while the wizard was open; configuration is intended for a single writer, not
+concurrent editing by multiple processes. Atomic visibility assumes filesystem
+rename support; this is not a power-loss guarantee on every filesystem. Settings
+paths are structurally validated on load; filesystem availability is checked
+during initialization/discovery so an offline installation is reported rather
+than erased.
+
+### Installation and SavedVariables discovery
+
+Automatic detection is a bounded set of hints, not a drive scan or a dependency
+on Battle.net:
+
+- Windows: Program Files, Program Files (x86), the system drive's `Games`, and
+  the user's `Games`, each with a `World of Warcraft` child.
+- macOS: `/Applications/World of Warcraft` and the user's `Applications`.
+- Linux: the user's `Games/World of Warcraft`, the default Wine prefix, and a
+  common Lutris `Games/world-of-warcraft/drive_c/Program Files (x86)` location.
+
+Other launchers, custom prefixes, drives, and mount points may require manual
+entry. The service validates layout, not directory names or launcher metadata.
+
+For every configured root, discovery inspects only direct client directories
+and the fixed account-level SavedVariables layout:
+
+```text
+<root>/<client>/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Core.lua
+```
+
+All accounts and client directories are considered, including Retail, Classic
+variants, Forever, and future names. Missing account/ledger directories are
+normal; no files is an explicit unsuccessful import, not a successful empty
+operation. Backups, temporary files, UI and Tracer SavedVariables, and
+character-level or unrelated directory trees are not scanned. Paths are
+normalized, sorted with the OS path comparer, and deduplicated. Directory links
+(including root ancestors) and ledger links are skipped with diagnostics;
+select a physical installation path. Hard-link aliases and case aliases on
+case-insensitive Unix filesystems are not physically deduplicated; C07/C02
+identity reconciliation still makes repeated observations idempotent.
+Inaccessible/broken paths produce structured diagnostics and do not hide other
+discoverable ledgers. Discovery never reads ledger contents or writes files.
+
 ### Import
 
 The thin command opens/disposes C03 and invokes C07's
@@ -78,6 +165,22 @@ unknown-to-known enrichment is retained. A rejected/conflicting batch commits
 **no** craft or dimension changes. Failed source reads and database errors are
 distinct from rejected source data. A first failed/rejected import may leave an
 initialized but empty database.
+
+With an explicit source file, behavior is unchanged: no configuration is needed,
+loaded, searched, or modified. With no source argument, the command loads shared
+settings, discovers and lists all Core ledgers, and imports each through that
+same C07 API into one database. Directory names **never** infer or override
+C04's source-derived GameContext. Each file has its own transaction; rejected
+or failed files do not roll back separately committed valid files. Processing
+continues across independent files, with complete per-file reports and final
+file/committed-craft totals. Totals count observations handled across files,
+not unique database cardinality (use `status` for that).
+
+Partial success is explicit and returns nonzero. Any failed file or discovery
+failure/skipped link returns 3; otherwise a rejected file returns 2. Source
+coverage and evidence warnings from C07 alone still allow success. No configured
+root returns 1 and advises `artisanlogbook init`; malformed/unreadable/unsupported
+settings or no discovered ledgers return 3 without opening DuckDB.
 
 Reports include resolved paths, observed source craft count, committed
 inserted/already-present/enriched counts, rejected/conflicting count, dimension
@@ -130,10 +233,10 @@ processes or start a host, watcher, server, or background service.
 
 | Code | Meaning |
 |---|---|
-| 0 | Successful import/status/help/version; also missing-database status |
-| 1 | CLI parsing or settings-validation error |
+| 0 | Successful init/import/status/help/version; also canceled init and missing-database status |
+| 1 | CLI parsing/settings-validation error, missing installation configuration, or noninteractive init |
 | 2 | Import rejected: malformed/unsupported source, validation, or conflict |
-| 3 | Failed operation: source read, permissions, database/lock/schema failure |
+| 3 | Failed operation: source read, permissions, database/lock/schema/configuration failure, no ledgers, or incomplete discovery |
 
 ## Architecture and Hyde conventions
 
@@ -144,8 +247,8 @@ shared base settings and command-local nested settings, asynchronous import
 commands, and Spectre tables. Unlike Hyde's static `AnsiConsole` usage, this
 Companion injects `IAnsiConsole` for testable output and configures Spectre's
 help/error renderer to use that same console. No site configuration interceptor
-is needed: explicit paths and one-shot commands do not require a configuration
-file or generic host.
+or generic host is needed: the shared Runtime settings/discovery services are
+injected directly. The initialization prompt boundary is replaceable in tests.
 
 Reference patterns were checked against Hyde commit
 `42a0fd1635a1928d2d4e6b2eb6b2cb8089a53b5e`.
@@ -163,6 +266,12 @@ ASP.NET Core/Kestrel, own DuckDB, and serve a browser UI and versioned REST API.
 There is no separate desktop executable. HTTP forwarding and multi-process
 coordination are deferred.
 
+`ArtisanLogbook.Companion.Runtime` owns `ApplicationPaths`,
+`CompanionSettingsStore`, and `InstallationDiscovery`. It references neither
+Spectre nor DuckDB. Future monitoring/host/web components reuse these application
+services, not CLI classes; the CLI owns only prompts, presentation, and command
+orchestration. C04 and C07 remain unchanged. See [Runtime contracts](src/Runtime/README.md).
+
 ## Validation and live-data acceptance
 
 ```sh
@@ -175,8 +284,13 @@ Companion CI builds/tests the executable and all five test projects on Ubuntu
 and Windows. Tests use isolated paths, Spectre `TestConsole`, real DuckDB,
 sanitized fixtures, and process-level lock checks; no WoW installation or user
 configuration is required.
+The milestone additionally tests strict settings/version validation, concurrent
+atomic readers, cancellation and stale-wizard protection, permission/path
+failures, manual/detected/repeat initialization, multi-root/flavor/account
+discovery, links, partial imports, mixed Retail/Forever history, replay, and
+byte-for-byte source preservation.
 
-A locally supplied November 2026 schema-5 Retail snapshot was tested without
+A locally supplied November 2026 schema-5 Retail snapshot was tested for PR #62 without
 modifying it. **Live preservation acceptance passed** after correcting the
 historical schematic evidence boundary:
 
@@ -205,10 +319,15 @@ exact persistence, idempotent evidence enrichment, round trips, and
 continued canonical conflict rejection. The original file, identities, GUIDs,
 account identifiers, and raw diagnostic traces are not committed.
 
+This initialization/discovery milestone has deterministic sanitized-installation
+acceptance only; no real WoW installation has been supplied or tested for the
+new wizard. The prior live-snapshot results above are not live installation
+discovery or interactive acceptance results.
+
 ## Current limitations
 
-- Only explicit `import` and `status`; no `serve`, `validate`, monitoring,
-  installation discovery, restoration, analytics, cloud sync, or checkpoints.
+- Only `init`, explicit/configured `import`, and `status`; no `serve`, `validate`,
+  monitoring, restoration, analytics, cloud sync, or checkpoints.
 - C04 supports ledger schemas 1-5 and its data-only Lua subset; C07 caps file
   snapshots at 64 MiB and rejects files that change during the read. Import a
   settled copy saved after logout/reload; a stable read does not prove WoW has
