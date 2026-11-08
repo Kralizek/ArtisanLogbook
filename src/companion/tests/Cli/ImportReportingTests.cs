@@ -184,10 +184,20 @@ public sealed class ImportReportingTests
             .And.Contain("Forever").And.Contain("4 new crafts preserved"));
         Assert.That(output.Contains(_directory, StringComparison.Ordinal), Is.EqualTo(verbose));
         Assert.That(output.Contains("Installation import totals", StringComparison.Ordinal), Is.EqualTo(verbose));
+        if (verbose)
+            Assert.That(output.IndexOf("Installation import totals", StringComparison.Ordinal),
+                Is.LessThan(output.LastIndexOf("Import complete", StringComparison.Ordinal)),
+                "The final outcome must follow the verbose installation totals.");
         (exit, output) = await Run(verbose);
         Assert.That(exit, Is.Zero, output);
         Assert.That(output, Does.Contain("no changes").And.Contain("4 existing crafts"));
         Assert.That(output.Contains("Warning", StringComparison.Ordinal), Is.EqualTo(verbose));
+        if (verbose)
+        {
+            Assert.That(output.IndexOf("Installation import totals", StringComparison.Ordinal),
+                Is.LessThan(output.LastIndexOf("Import complete", StringComparison.Ordinal)));
+            Assert.That(output.TrimEnd(), Does.EndWith("4 existing crafts / 0 new / 0 enriched"));
+        }
         using Store store = new(_database, readOnly: true);
         Assert.That(store.ReadStatus().Contexts.Select(context => (int)context.Game.Project),
             Is.EquivalentTo(new[] { 1, 18, 2, 3 }));
