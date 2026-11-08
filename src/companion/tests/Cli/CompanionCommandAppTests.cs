@@ -52,7 +52,7 @@ public sealed class CompanionCommandAppTests
     {
         (int exit, string output) = await Run("import", "--help");
         Assert.That(exit, Is.Zero);
-        Assert.That(output, Does.Contain("SOURCE-FILE").And.Contain("--database"));
+        Assert.That(output, Does.Contain("SOURCE-FILE").And.Contain("--database").And.Contain("--verbose"));
     }
 
     [Test]
@@ -105,7 +105,7 @@ public sealed class CompanionCommandAppTests
         SavedVariablesImportResult parsed = SavedVariablesReader.Parse(await File.ReadAllTextAsync(fixture));
         Assert.That(parsed.History!.Crafts, Has.Count.EqualTo(expectedCount));
         byte[] original = await File.ReadAllBytesAsync(fixture);
-        (int firstExit, string first) = await Run("import", fixture, "--database", _database);
+        (int firstExit, string first) = await Run("import", fixture, "--database", _database, "--verbose");
         Assert.That(firstExit, Is.Zero, first);
         Assert.That(first, Does.Contain("Import successful").And.Contain("Observed source crafts")
             .And.Contain("Inserted dimensions").And.Contain(_database));
@@ -120,7 +120,7 @@ public sealed class CompanionCommandAppTests
 
         using (Store reopened = new(_database, readOnly: true))
             Assert.That(reopened.ReadStatus().TotalCraftCount, Is.EqualTo(expectedCount));
-        (int repeatExit, string repeat) = await Run("import", fixture, "--database", _database);
+        (int repeatExit, string repeat) = await Run("import", fixture, "--database", _database, "--verbose");
         Assert.That(repeatExit, Is.Zero, repeat);
         Assert.That(repeat, Does.Contain("Already-present crafts").And.Contain("Inserted crafts"));
         AssertReportCount(repeat, "Inserted crafts", 0);
@@ -182,7 +182,7 @@ public sealed class CompanionCommandAppTests
               }
             }
             """);
-        (int exit, string output) = await Run("import", source, "--database", _database);
+        (int exit, string output) = await Run("import", source, "--database", _database, "--verbose");
         Assert.That(exit, Is.EqualTo(ExitCodes.Success));
         Assert.That(output, Does.Contain("historical-recipe-schematic-variation")
             .And.Not.Contain("No craft or dimension changes were committed"));

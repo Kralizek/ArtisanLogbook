@@ -28,6 +28,15 @@ canonical observation.
 
 The report includes the outcome, source craft-observation count, inserted/already-present/enriched/rejected craft counts, C03 dimension insert/enrichment counts, C04 diagnostics and coverage, C01 validation errors, C02 craft/dimension conflicts, file-input diagnostics, and persistence-failure diagnostics. Warnings do not change a successful outcome. `Coverage.AggregateOnlyCraftCount` and `CoverageWarnings` disclose craft history represented only by retained rollups; those totals are not imported as individual crafts. Dimension counts cover canonical dimensions returned by C04; they do not include minimal identities the store creates only to satisfy craft references.
 
+`Observations` forwards C03's committed per-observation outcomes, including
+previous and reconciled observations for enrichment. It is empty for rejected
+or failed imports. C04 diagnostics preserve their structured scope and canonical
+observation association when available; local IDs are not global identities.
+C07 returns all current diagnostics on every import without filtering or
+acknowledgment history. CLI/other hosts own visibility and grouping policy;
+`CoverageWarnings` overlaps `SourceDiagnostics` and must not be counted as a
+second set of occurrences.
+
 ## Atomicity and failure behavior
 
 C03 `WriteBatch` validates the complete history and applies dimension reconciliation and all craft writes in one DuckDB transaction. Invalid input or any known-fact conflict rejects the entire import; no craft or dimension enrichment from that batch is committed. DuckDB failures return a failed result with persistence diagnostics, and cancellation propagates to the caller while the transaction is disposed and rolled back. Identical observations are idempotent; compatible unknown-to-known corrections and independent evidence use the existing C02 reconciliation rules.
