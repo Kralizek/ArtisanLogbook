@@ -106,14 +106,30 @@ an All option even if its value no longer belongs to the scope. Craft-type visib
 uses recorded context populations and supported choices, not a Forever flavor check.
 Period, meaningful sorts, search and classification controls reflow into the vacated
 slots, including custom-date controls.
+Context summaries are shared across pages with the same stable dimension scope.
+Global character/profession choices use Core's durable identity indexes. Scoped
+choices and context counts require durable series queries on a cold scope; the
+retained-detail-only `GetFacets` API cannot replace them after pruning. Only the
+small resulting choices/counts are cached, not complete series projections.
+Period/search/preferences/navigation reuse that cache. Commits, repair, purge,
+changed history status and profession/world metadata events invalidate it.
+The large-history regression covers 25,000 occupied days and 400 revisits with
+zero additional historical projections; cold queries are still proportional to history.
 
 Item cells, output titles and item tooltips prefer Core's provided name. Missing
 names resolve through compatible modern/legacy WoW item APIs. Icon metadata can be
 available while the separate name cache is cold, so icons never establish that a
 name is unavailable permanently. Missing names use a temporary numeric fallback,
-request item data once per item/session, and refresh after `GET_ITEM_INFO_RECEIVED`
-or `ITEM_DATA_LOAD_RESULT`. Failed/invalid IDs retain honest fallbacks without
-polling. Display resolution is session-only and does not rewrite ledger facts or
+request item data with at most three attempts per item/session, and refresh after
+`GET_ITEM_INFO_RECEIVED` or `ITEM_DATA_LOAD_RESULT`. Exceptions/failed responses
+allow an on-demand retry after five seconds; pending requests expire after thirty
+seconds. A later display lookup or navigation can retry, without timers or polling
+for item data. Exhausted requests retain a numeric fallback until cache/event
+success or reload; late successful events are accepted even after exhaustion.
+Event registration is guarded independently: both events are declared at the
+pinned Forever/Retail sources, but a client rejecting an optional event retains
+the other event and cached/on-demand name resolution with a clear notification.
+Display resolution is session-only and does not rewrite ledger facts or
 invent an output name from its recipe. Existing links and artwork are retained.
 
 ### Forever live acceptance
@@ -381,9 +397,11 @@ render. A successful `GET_ITEM_INFO_RECEIVED` retries only the matching cached
 item's missing fields; `TRADE_SKILL_LIST_UPDATE` retries unresolved quality
 atlases when profession data updates. API errors retain safe fallbacks. Events
 repaint matching reagent cells, including mounted cells on a hidden page.
-Resolved names can also refresh the active view and applied name search, with
-multiple metadata arrivals coalesced into one next-frame refresh and filters/scroll
-preserved. The cache is never
+Resolved names repaint mounted item cells/tables and matching reagent headings,
+without invalidating the production window or restarting its data queries.
+Applied reagent name searches alone debounce metadata bursts for 200 milliseconds
+before rebuilding matches, preserving their selection/filter/scroll state.
+Hidden searches refresh on reopening. The cache is never
 persisted or stored in Core, and contains no craft totals or trivial preferences.
 
 Filters include Period (All time by default), contextual Character/Profession,
@@ -454,7 +472,10 @@ This page contains no TSM, inventory, valuation, or Warband Bank integration.
 
 ## Pinned recipes
 
-Up to five recipes can be pinned/unpinned from the Recipes list or Recipe Detail.
+Up to five new recipes can be pinned from the Recipes list or Recipe Detail.
+Legacy stores with more than five pins remain fully visible and individually
+unpinnable; adding is blocked until fewer than five remain. A toggle changes only
+its selected entry and never rebuilds or truncates unrelated legacy preferences.
 Compact list icons have state-specific tooltips and do not propagate row clicks.
 Pins are sorted
 alphabetically by name, with recipe ID as a deterministic tie-breaker; there is

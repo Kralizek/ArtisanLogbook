@@ -629,10 +629,12 @@ The UI persistence boundary retains `ArtisanLogbookUISettings.pinnedRecipes`,
 `hiddenRecipes` and the legacy item-wide `trivialReagents` key. These operations
 never change `ArtisanLogbookDB`, craft facts, measurements or correlation:
 
-- `GetPinnedRecipes()` returns detached display metadata, alphabetically sorted,
-  at most five recipes. `IsRecipePinned(recipeId)` returns a boolean.
+- `GetPinnedRecipes()` returns all valid detached display metadata, alphabetically
+  sorted, including legacy stores exceeding five pins. `IsRecipePinned(recipeId)`
+  returns a boolean for any stored valid pin.
 - `ToggleRecipePin(recipe)` takes a recipe projection with a positive integer ID,
-  returning `true` or `nil, reason` (including the five-pin limit).
+  returning `true` or `nil, reason` (including the five-pin limit on additions).
+  Removal remains possible above the limit; unrelated stored entries are preserved.
 - `UpdatePinnedRecipe(recipe)` refreshes an existing pin's display metadata.
 - `IsRecipeHidden(recipeId)` / `SetRecipeHidden(recipeId, hidden)` read/write
   independent visibility preferences.

@@ -447,6 +447,13 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       recipes.scroll:SetVerticalScroll(state.recipeOffset or 0)
     elseif self.dirty or not self.loaded then self:Refresh(true) end
   end
+  UI.RegisterItemCallback(detail, function(self, id)
+    local item = self.row and self.row.item or self.item
+    if item and item.id == id then
+      heading:SetText(UI.Elide(UI.ItemName(id, item.name), math.floor((inner - 40) / 7) * 2))
+      UI.ReagentVisual(self, id)
+    end
+  end)
   UI.RegisterTrivialCallback(function()
     if detail.item then detail:Refresh(true) end
   end)
@@ -644,6 +651,22 @@ function UI.ReagentsPage(page, width, height, openReagent)
         explanation:SetText("Reagent search unavailable")
         return
       end
+      local metadataRefresh = CreateFrame("Frame", nil, page)
+      page.metadataRefresh = metadataRefresh
+      UI.RegisterItemCallback(page, function(self)
+        if search == "" then return end
+        self.metadataSearchDirty = true
+        local elapsed = 0
+        metadataRefresh:SetScript("OnUpdate", function(worker, delta)
+          elapsed = elapsed + delta
+          if elapsed < .2 then return end
+          worker:SetScript("OnUpdate", nil)
+          if self:IsShown() then
+            self.metadataSearchDirty = false
+            rebuildSearch(true)
+          end
+        end)
+      end)
       for _, row in ipairs(result.reagents) do
         local label = UI.ItemName(row.item.id, row.item.name) .. " (#" .. row.item.id .. ")"
         if label:lower():find(needle, 1, true) then matches[#matches + 1] = row.item.id end
@@ -672,6 +695,11 @@ function UI.ReagentsPage(page, width, height, openReagent)
   function page:Open()
     if self.searchInput:GetScript("OnUpdate") then self.searchInput:GetScript("OnEnterPressed")(self.searchInput)
     elseif not self.loaded or self.dirty then self:Refresh(true, true) end
+    if self.metadataSearchDirty then
+      self.metadataSearchDirty = false
+      metadataRefresh:SetScript("OnUpdate", nil)
+      rebuildSearch(true)
+    end
   end
   UI.RegisterTrivialCallback(function()
     page.dirty = true

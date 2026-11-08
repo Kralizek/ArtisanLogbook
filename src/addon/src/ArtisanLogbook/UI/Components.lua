@@ -511,13 +511,48 @@ function UI.Population(character, profession, craftType)
     craftType = craftTypeValues[craftType] and craftType or nil }
 end
 
+local filterContexts, scopeHistories = {}, {}
+
+function UI.InvalidateFilterContexts()
+  filterContexts, scopeHistories = {}, {}
+end
+
+local function scopeKey(scope)
+  local parts = {}
+  for _, field in ipairs({ "characters", "professions", "recipes" }) do
+    local values = {}
+    for _, value in ipairs(scope and scope[field] or {}) do values[#values + 1] = tostring(value) end
+    table.sort(values)
+    parts[#parts + 1] = field .. "=" .. table.concat(values, ",")
+  end
+  return table.concat(parts, ";")
+end
+
+local function scopeHistory(scope)
+  local key = scopeKey(scope)
+  if not scopeHistories[key] then
+    local result, reason = ArtisanLogbookAPI.GetCraftSeries(scope)
+    if not result then return nil, reason end
+    scopeHistories[key] = result
+  end
+  return scopeHistories[key]
+end
+
 function UI.Choices(facet, character, scope)
   local result = { { label = "All", value = false } }
+  local cached = scope and next(scope) and filterContexts[scopeKey(scope)]
+  if cached then
+    result = { hasUnknown = cached[facet].hasUnknown }
+    for _, choice in ipairs(cached[facet]) do
+      result[#result + 1] = { label = choice.label, value = choice.value, classFile = choice.classFile }
+    end
+    return result
+  end
   local entries
   if scope and next(scope) then
     entries = {}
     local seen = {}
-    local history = ArtisanLogbookAPI.GetCraftSeries(scope)
+    local history = scopeHistory(scope)
     for _, row in ipairs(history and history.series or {}) do
       local entry = facet == "characters" and row.character or row.profession
       local id = entry and (entry.key or entry.skillLineId)
@@ -552,6 +587,9 @@ local function validItemId(id)
 end
 
 local itemMetadata, itemObservers = {}, setmetatable({}, { __mode = "k" })
+local function itemTime()
+  return type(GetTime) == "function" and GetTime() or time()
+end
 
 function UI.RegisterItemCallback(owner, callback)
   itemObservers[owner] = callback
@@ -579,13 +617,25 @@ local itemLoader
 local function initializeItemLoader()
   if itemLoader then return end
   itemLoader = CreateFrame("Frame")
-  itemLoader:RegisterEvent("GET_ITEM_INFO_RECEIVED")
-  itemLoader:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+  for _, event in ipairs({ "GET_ITEM_INFO_RECEIVED", "ITEM_DATA_LOAD_RESULT" }) do
+    local ok, reason = pcall(itemLoader.RegisterEvent, itemLoader, event)
+    if not ok or reason == false then
+      addon.Notify("Item metadata event " .. event .. " is unavailable; cached item names remain usable." ..
+        (not ok and (" " .. tostring(reason)) or ""))
+    end
+  end
   itemLoader:SetScript("OnEvent", function(_, _, id, success)
     local entry = itemMetadata[id]
-    if not entry or not success then return end
+    if not entry then return end
+    if not success then
+      if entry.state == "pending" then
+        entry.state, entry.retryAfter = "failed", itemTime() + 5
+      end
+      return
+    end
     local name = cachedItemName(id)
     if not name or name == entry.notifiedName then return end
+    entry.state = "resolved"
     entry.name, entry.notifiedName = name, name
     for owner, callback in pairs(itemObservers) do callback(owner, id) end
   end)
@@ -633,12 +683,18 @@ function UI.ItemName(itemId, coreName)
   local entry = itemMetadata[itemId]
   if not entry then entry = {}; itemMetadata[itemId] = entry end
   if not entry.name then entry.name = cachedItemName(itemId) end
-  if entry.name then return entry.name end
-  if not entry.requested then
-    entry.requested = true
+  if entry.name then entry.state = "resolved"; return entry.name end
+  local now = itemTime()
+  local pending = entry.state == "pending" and now < entry.deadline
+  if not pending and (entry.attempts or 0) < 3 and now >= (entry.retryAfter or 0) then
     if C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
+      entry.attempts = (entry.attempts or 0) + 1
+      entry.state, entry.deadline = "pending", now + 30
       local ok, reason = pcall(C_Item.RequestLoadItemDataByID, itemId)
-      if not ok then addon.Notify("Item information unavailable for #" .. itemId .. ": " .. tostring(reason)) end
+      if not ok or reason == false then
+        entry.state, entry.retryAfter = "failed", now + 5
+        addon.Notify("Item information unavailable for #" .. itemId .. ": " .. tostring(reason))
+      end
     end
   end
   return entry.name or ("#" .. itemId)
@@ -850,14 +906,14 @@ function UI.FilterBar(parent, width, y)
   end
   function bar:Scope(scope)
     self.scope = scope or {}
-    self.context = nil
     self:Reflow()
   end
   function bar:Context()
-    if self.context then return self.context end
+    local key = scopeKey(self.scope)
+    if filterContexts[key] then return filterContexts[key] end
     local context = { characters = UI.Choices("characters", nil, self.scope),
       professions = UI.Choices("professions", nil, self.scope), craftTypes = 0 }
-    local history, reason = ArtisanLogbookAPI.GetCraftSeries(self.scope)
+    local history, reason = scopeHistory(self.scope)
     if history then
       for _, row in ipairs(history.series) do
         if not row.character then context.characters.hasUnknown = true end
@@ -876,6 +932,7 @@ function UI.FilterBar(parent, width, y)
       local result, reason = ArtisanLogbookAPI.GetCraftSeries(filter)
       if not result then
         context.craftTypes = 2
+        context.unavailable = true
         addon.Notify("Craft filters unavailable: " .. tostring(reason))
         break
       end
@@ -889,7 +946,10 @@ function UI.FilterBar(parent, width, y)
       if counts.orders > counts.patron then context.craftTypes = context.craftTypes + 1 end
       if counts.unknown > 0 then context.craftTypes = context.craftTypes + 1 end
     end
-    self.context = context
+    if not context.unavailable then
+      filterContexts[key] = context
+      scopeHistories[key] = nil
+    end
     return context
   end
   function bar:Reflow()

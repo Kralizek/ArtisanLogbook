@@ -74,7 +74,12 @@ function methods:HookScript(name, callback)
 end
 function methods:SetPropagateMouseClicks(value) self.propagateClicks = value end
 function methods:SetClipsChildren(value) self.clipsChildren = value end
-function methods:RegisterEvent(event) self.events[event] = true end
+function methods:RegisterEvent(event)
+  if environment.rejectEvents and environment.rejectEvents[event] then
+    error("Unsupported event: " .. event)
+  end
+  self.events[event] = true
+end
 function methods:UnregisterEvent(event) self.events[event] = nil end
 function methods:RegisterUnitEvent(event, unit) assert(unit == "player"); self:RegisterEvent(event) end
 function methods:IsEventRegistered(event) return self.events[event] or false end
@@ -170,6 +175,7 @@ environment.date = os.date
 environment.DEFAULT_CHAT_FRAME = { AddMessage = function(_, message) notices[#notices + 1] = message end }
 environment.GetServerTime = function() return 1800000000 end
 environment.GetTimePreciseSec = function() return 100.5 end
+environment.GetTime = function() return 100.5 end
 environment.GetBuildInfo = function() return "12.1.0", "69933", "mock", 120100 end
 environment.GetLocale = function() return "enUS" end
 environment.UnitName = function() return "TestCrafter" end
@@ -1472,6 +1478,20 @@ do
     assert(not management.SetReagentIgnored(id, true))
   end
   assert(not management.SetReagentIgnored(190003, "true"))
+  local legacy = {}
+  for id = 1, 7 do legacy[id] = { id = id, name = "Legacy " .. id, custom = "preserved" } end
+  legacy.unrelated = { note = "Do not normalize on toggle" }
+  environment.ArtisanLogbookUISettings.pinnedRecipes = legacy
+  assert(#management.GetPinnedRecipes() == 7 and management.IsRecipePinned(7))
+  local ok, reason = management.ToggleRecipePin({ id = 8 })
+  assert(not ok and reason == "Five recipes are already pinned" and rowCount(legacy) == 8)
+  assert(management.ToggleRecipePin({ id = 7 }) and not management.IsRecipePinned(7))
+  assert(#management.GetPinnedRecipes() == 6 and legacy[6].custom == "preserved" and legacy.unrelated.note)
+  assert(management.UpdatePinnedRecipe({ id = 6, name = "Updated legacy pin" }))
+  assert(legacy[6].name == "Updated legacy pin")
+  assert(management.ToggleRecipePin({ id = 1 }) and #management.GetPinnedRecipes() == 5)
+  assert(not management.ToggleRecipePin({ id = 8 }))
+  environment.ArtisanLogbookUISettings.pinnedRecipes = {}
   assert(tracer.Trace.Serialize(uiLedger.database) == before, "Preferences mutated Core facts")
   print("PASS UI-managed Management preferences, wrapper interoperability and detached reads")
 end
@@ -5652,6 +5672,7 @@ end)()
     local search = bar:Search(function() end)
     for _, total in ipairs({ 0, 1, 2, 1, 0, 2 }) do
       count = total
+      UI.InvalidateFilterContexts()
       bar:Scope({})
       character:Update(UI.Choices("characters"), false)
       profession:Update(UI.Choices("professions"), false)
@@ -5662,6 +5683,7 @@ end)()
       assert(search:GetText() == "" and period.state.days == false)
     end
     count = 1
+    UI.InvalidateFilterContexts()
     bar:Scope({})
     character:Update(UI.Choices("characters"), "A")
     profession:Update(UI.Choices("professions"), 171)
@@ -5679,7 +5701,100 @@ end)()
         "Active period or dimension selection trapped another contextual selector")
     end
     api.GetCharacters, api.GetProfessions, api.GetCraftSeries = getCharacters, getProfessions, getSeries
+    UI.InvalidateFilterContexts()
     print("PASS contextual zero/one/multiple filters, reversible selections and reflow")
+  end
+  do
+    local getSeries = api.GetCraftSeries
+    local history, calls, projections = {}, 0, 0
+    for day = 1, 25000 do
+      history[day] = { bucketStart = day * 86400, craftCount = 1,
+        character = { key = "Large-history crafter", name = "Crafter" },
+        profession = { skillLineId = 171, name = "Alchemy" } }
+    end
+    api.GetCraftSeries = function(scope)
+      calls = calls + 1
+      local rows = (not scope.craftType or scope.craftType == "personal") and history or {}
+      projections = projections + #rows
+      return { series = rows }
+    end
+    UI.InvalidateFilterContexts()
+    local bar = UI.FilterBar(environment.CreateFrame("Frame", nil, window), 350)
+    bar:Scope({ recipes = { 7183 } })
+    assert(calls == 5, "Expected one cold scoped context query batch")
+    local coldCalls, coldProjections = calls, projections
+    for _ = 1, 20 do
+      local other = UI.FilterBar(environment.CreateFrame("Frame", nil, window), 350)
+      for _ = 1, 20 do
+        other:Scope({ recipes = { 7183 } })
+        other:Reflow()
+        UI.Choices("characters", nil, { recipes = { 7183 } })
+        UI.Choices("professions", nil, { recipes = { 7183 } })
+      end
+    end
+    assert(calls == coldCalls and projections == coldProjections,
+      "25,000-day history was reprojected while revisiting scopes or changing filters")
+    UI.InvalidateFilterContexts()
+    bar:Scope({ recipes = { 7183 } })
+    assert(calls == coldCalls + 5, "New facts did not invalidate the context cache exactly once")
+    assert(bar:Context().craftTypes == 1)
+    api.GetCraftSeries = getSeries
+    UI.InvalidateFilterContexts()
+    print("PASS 25,000-day context cache: 400 revisits add zero historical projections")
+  end
+  do
+    local savedClock, savedAPI, savedInfo = environment.GetTime, environment.C_Item, environment.GetItemInfo
+    local now, attempts, names, requests = 0, {}, {}, {}
+    environment.GetTime = function() return now end
+    environment.C_Item = {
+      GetItemInfo = function(id) return names[id] end,
+      RequestLoadItemDataByID = function(id)
+        attempts[id] = (attempts[id] or 0) + 1
+        requests[#requests + 1] = id
+        if id == 90001 and attempts[id] == 1 then error("Transient request failure") end
+      end,
+    }
+    environment.GetItemInfo = function(id) return names[id] end
+    local probeAddon = { Notify = loadedUI.Notify }
+    local probeChunk = assert(loadfile(uiRoot .. "/UI/Components.lua"))
+    setfenv(probeChunk, environment)
+    probeChunk("ArtisanLogbook", probeAddon)
+    local resolver = probeAddon.UI
+    local start = #frames
+    local owner, updates = environment.CreateFrame("Frame", nil, window), 0
+    resolver.RegisterItemCallback(owner, function() updates = updates + 1 end)
+    assert(resolver.ItemName(90001) == "#90001" and attempts[90001] == 1)
+    local loader
+    for index = start + 1, #frames do
+      if frames[index].events.GET_ITEM_INFO_RECEIVED then loader = frames[index] end
+    end
+    assert(loader and not loader.scripts.OnUpdate, "Resolver added a polling loop")
+    for _ = 1, 100 do resolver.ItemName(90001) end
+    assert(attempts[90001] == 1)
+    now = 5; resolver.ItemName(90001)
+    assert(attempts[90001] == 2, "Thrown request could not recover after cooldown")
+    names[90001] = "Recovered item"
+    loader.scripts.OnEvent(loader, "GET_ITEM_INFO_RECEIVED", 90001, true)
+    assert(resolver.ItemName(90001) == "Recovered item" and updates == 1)
+    resolver.ItemName(90002)
+    loader.scripts.OnEvent(loader, "ITEM_DATA_LOAD_RESULT", 90002, false)
+    resolver.ItemName(90002); assert(attempts[90002] == 1)
+    now = 10; resolver.ItemName(90002); assert(attempts[90002] == 2)
+    resolver.ItemName(90003)
+    for _ = 1, 100 do resolver.ItemName(90003) end
+    assert(attempts[90003] == 1)
+    now = 40; resolver.ItemName(90003); assert(attempts[90003] == 2)
+    now = 70; resolver.ItemName(90003); assert(attempts[90003] == 3)
+    now = 1000
+    for _ = 1, 100 do resolver.ItemName(90003) end
+    assert(attempts[90003] == 3, "Never-completing item requests were not bounded")
+    names[90003] = "Late success after exhausted requests"
+    loader.scripts.OnEvent(loader, "GET_ITEM_INFO_RECEIVED", 90003, true)
+    assert(resolver.ItemName(90003) == names[90003])
+    loader.scripts.OnEvent(loader, "ITEM_DATA_LOAD_RESULT", 90003, true)
+    assert(updates == 2, "Duplicate success events were not coalesced")
+    environment.GetTime, environment.C_Item, environment.GetItemInfo = savedClock, savedAPI, savedInfo
+    print("PASS recoverable exception/failure/timeout item states, bounded requests and late success")
   end
 
   window:Hide()
@@ -5761,6 +5876,30 @@ end)()
       "Metadata refresh reset craft inspection state")
     assert(tracer.Trace.Serialize(core.ledger.database) == before, "Item metadata refresh mutated Core facts")
     window.craftDetailWindow:Hide()
+    window:Activate("Reagents")
+    local catalogue = window.pages.Reagents.catalogue
+    catalogue:SetSelection(3371)
+    catalogue.scroll:SetVerticalScroll(42)
+    local refresh, invalidate = window.Refresh, window.Invalidate
+    local getSeries, getReagents = api.GetCraftSeries, api.GetReagentSummaries
+    local refreshes, invalidations, queries = 0, 0, 0
+    window.Refresh = function(self) refreshes = refreshes + 1; return refresh(self) end
+    window.Invalidate = function(self) invalidations = invalidations + 1; return invalidate(self) end
+    api.GetCraftSeries = function(...) queries = queries + 1; return getSeries(...) end
+    api.GetReagentSummaries = function(...) queries = queries + 1; return getReagents(...) end
+    for _, id in ipairs({ 900101, 900102, 900103 }) do
+      UI.ItemName(id)
+      resolvedNames[id] = "Separate-frame metadata " .. id
+      deliver("GET_ITEM_INFO_RECEIVED", id, true)
+      if window.scripts.OnUpdate then window.scripts.OnUpdate(window, .3) end
+    end
+    assert(refreshes == 0 and invalidations == 0 and queries == 0,
+      "Unrelated cross-frame item enrichment restarted production-window queries")
+    assert(catalogue.selectedItemId == 3371 and catalogue.scroll:GetVerticalScroll() == 42,
+      "Targeted metadata repaint lost catalogue selection or scroll")
+    window.Refresh, window.Invalidate = refresh, invalidate
+    api.GetCraftSeries, api.GetReagentSummaries = getSeries, getReagents
+    print("PASS cross-frame metadata updates: zero whole-window refreshes and preserved selection/scroll")
     environment.C_Item, environment.GetItemInfo = savedItemAPI, savedItemInfo
   end
 
@@ -5909,6 +6048,34 @@ end)()
     searchMetadata("Late herb")
     assert(#list.items == 1 and list.items[1].item.id == 2452 and list.items[1].allocatedQuantity == 1,
       "Resolved item name was not searchable without Core mutation")
+    searchMetadata("Newly named"); assert(#list.items == 0)
+    local savedAPI, savedInfo = environment.C_Item, environment.GetItemInfo
+    environment.C_Item = { GetItemInfo = function(id) if id == 2452 then return "Newly named herb" end end }
+    environment.GetItemInfo = environment.C_Item.GetItemInfo
+    local queries = 0
+    api.GetReagentSummaries = function(options) queries = queries + 1; return original(options) end
+    for _, name in ipairs({ "GET_ITEM_INFO_RECEIVED", "ITEM_DATA_LOAD_RESULT" }) do
+      for index = metadataFrameStart + 1, #frames do
+        local frame = frames[index]
+        if frame.events[name] and frame.scripts.OnEvent then frame.scripts.OnEvent(frame, name, 2452, true) end
+      end
+    end
+    assert(queries == 0, "Metadata search rebuilt synchronously for each event")
+    local worker = reagentsPage.metadataRefresh
+    assert(worker.scripts.OnUpdate)
+    worker.scripts.OnUpdate(worker, .1); assert(queries == 0)
+    worker.scripts.OnUpdate(worker, .1)
+    assert(not worker.scripts.OnUpdate, "Metadata debounce did not stop")
+    local turns = 0
+    while reagentsPage.searchWorker.scripts.OnUpdate do
+      turns = turns + 1; assert(turns < 30)
+      reagentsPage.searchWorker.scripts.OnUpdate(reagentsPage.searchWorker)
+    end
+    assert(#list.items == 1 and list.items[1].item.id == 2452 and queries > 0,
+      "Targeted metadata refresh did not restore newly matching search results")
+    environment.C_Item, environment.GetItemInfo = savedAPI, savedInfo
+    searchMetadata("Late herb")
+    assert(#list.items == 0, "Old display-name search remained stale after targeted refresh")
     searchMetadata("%"); assert(#list.items == 0)
     searchMetadata(".*"); assert(#list.items == 0, "Metadata name search interpreted a Lua pattern")
     searchMetadata("")
@@ -5949,11 +6116,31 @@ end)()
   core = reload(database)
   api = assert(environment.ArtisanLogbookAPI)
   assert(#api.GetCrafts().crafts == 4 and api.GetCraft(3).recipe.id == 7183)
+  environment.rejectEvents = { ITEM_DATA_LOAD_RESULT = true }
+  local eventFrameStart, eventNoticeStart = #frames, #notices
   local reloadedUI = loadUI()
   assert(reloadedUI.productionWindow)
+  reloadedUI.UI.ItemName(990001)
+  local legacyLoader, warned
+  for index = eventFrameStart + 1, #frames do
+    local frame = frames[index]
+    if frame.events.GET_ITEM_INFO_RECEIVED and not frame.events.ADDON_LOADED and
+        not frame.events.TRADE_SKILL_LIST_UPDATE then legacyLoader = frame end
+  end
+  for index = eventNoticeStart + 1, #notices do
+    if notices[index]:find("ITEM_DATA_LOAD_RESULT is unavailable", 1, true) then warned = true end
+  end
+  assert(legacyLoader and not legacyLoader.events.ITEM_DATA_LOAD_RESULT and warned)
+  local oldItemInfo = environment.GetItemInfo
+  environment.GetItemInfo = function(id) if id == 990001 then return "Legacy event item" end end
+  legacyLoader.scripts.OnEvent(legacyLoader, "GET_ITEM_INFO_RECEIVED", 990001, true)
+  assert(reloadedUI.UI.ItemName(990001) == "Legacy event item")
+  environment.GetItemInfo, environment.rejectEvents = oldItemInfo, nil
   reloadedUI.productionWindow:Hide()
   environment.SlashCmdList.ARTISANLOGBOOK()
   reloadedUI.productionWindow:Activate("Logbook")
+  assert(reloadedUI.productionWindow:IsShown())
+  print("PASS Forever production UI with unsupported optional event and legacy name delivery")
 
   local originalDropdown = environment.UIDropDownMenu_AddButton
   environment.UIDropDownMenu_AddButton = nil

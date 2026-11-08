@@ -60,7 +60,6 @@ function management.GetPinnedRecipes()
     local leftName, rightName = (left.name or ("#" .. left.id)):lower(), (right.name or ("#" .. right.id)):lower()
     return leftName == rightName and left.id < right.id or leftName < rightName
   end)
-  for index = #pins, 6, -1 do table.remove(pins, index) end
   return pins
 end
 
@@ -72,17 +71,12 @@ end
 function management.ToggleRecipePin(recipe)
   if type(recipe) ~= "table" or not validId(recipe.id) then return nil, "Unavailable recipe" end
   local pins = management.GetPinnedRecipes()
-  local stored, pinned = {}, false
-  for _, entry in ipairs(pins) do
-    stored[entry.id] = recipeCopy(entry)
-    if entry.id == recipe.id then pinned = true end
-  end
+  local stored, pinned = collection("pinnedRecipes"), management.IsRecipePinned(recipe.id)
   if pinned then stored[recipe.id] = nil
   else
     if #pins >= 5 then return nil, "Five recipes are already pinned" end
     stored[recipe.id] = recipeCopy(recipe)
   end
-  settings().pinnedRecipes = stored
   changed("pin", recipe.id)
   return true
 end

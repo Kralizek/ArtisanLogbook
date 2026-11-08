@@ -345,7 +345,10 @@ function addon.CreateProductionWindow()
       return
     end
     local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)
-    if signature ~= self.dataSignature then self:Invalidate(); self.dataSignature = signature end
+    if signature ~= self.dataSignature then
+      UI.InvalidateFilterContexts()
+      self:Invalidate(); self.dataSignature = signature
+    end
     for _, page in pairs(pages) do page:Hide() end
     pages[name]:Open(identity)
     pages[name]:Show(); self.visiblePage = pages[name]
@@ -365,10 +368,12 @@ function addon.CreateProductionWindow()
     end
   end
   management.OnUnknownRecipesRepaired = function()
+    UI.InvalidateFilterContexts()
     window:Invalidate()
     if window:IsShown() then window:Refresh() end
   end
   management.OnLogbookPurged = function()
+    UI.InvalidateFilterContexts()
     window.dataSignature = nil
     window:Invalidate()
     repairAnalysis = nil
@@ -383,13 +388,6 @@ function addon.CreateProductionWindow()
   end)
   UI.RegisterPinCallback(function()
     window:RefreshSidebar()
-  end)
-  UI.RegisterItemCallback(window, function()
-    window:Invalidate()
-    window:SetScript("OnUpdate", function(self)
-      self:SetScript("OnUpdate", nil)
-      if self:IsShown() and not self.openCraftId then self:Refresh() end
-    end)
   end)
   UI.RegisterCraftVisibilityCallback(function()
     window:Invalidate()
@@ -414,6 +412,7 @@ function addon.CreateProductionWindow()
     self:Activate(self.activeTab, self.identity); escape:Show()
   end)
   API.RegisterCallback("CRAFT_COMMITTED", function(craft)
+    UI.InvalidateFilterContexts()
     if craft.recipe and UI.IsPinned(craft.recipe.id) then
       local previous
       for _, pinned in ipairs(UI.Pins()) do if pinned.id == craft.recipe.id then previous = pinned end end
@@ -425,6 +424,7 @@ function addon.CreateProductionWindow()
   window:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
   window:RegisterEvent("PLAYER_ENTERING_WORLD")
   window:SetScript("OnEvent", function(self)
+    UI.InvalidateFilterContexts()
     self:Invalidate()
     self:SetScript("OnUpdate", function(self)
       self:SetScript("OnUpdate", nil)
