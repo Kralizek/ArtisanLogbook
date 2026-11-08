@@ -13,3 +13,7 @@ flavors:
     # version.txt = 1.60.1.70862. Confirm GetBuildInfo() on the installed client.
     version: '1.60.1'
     release: true
+    metadata:
+      curseforge:
+        # CurseForge WoW Forever version-type ID (not a game-version ID).
+        versionType: '88568'
