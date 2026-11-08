@@ -8,7 +8,8 @@ the ledger, statistics and public API; the UI requires Core and works without th
 optional `ArtisanLogbook_Tracer` diagnostic addon. Tracer can run without Core and
 is **disabled by default**. Enable it in the game's AddOns list to collect
 diagnostic evidence and use `/al_trace`. See
-[capture tracer](docs/capture-tracer.md) for recording modes, limits and
+[capture tracer](docs/capture-tracer.md#persistent-multi-character-recordings) for
+persistent multi-character recording, per-event safety protections and
 SavedVariables compatibility.
 
 The package contains all three addons in one ZIP. They share a version, release

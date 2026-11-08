@@ -12,6 +12,10 @@ local function initialize(options)
   env.time = function() return 1800000000 end
   env.GetTime = function() return 12 end
   env.GetBuildInfo = function() return "1.60.1", "70862", "mock", 16001 end
+  env.UnitName = function() return options.character or "First" end
+  env.UnitGUID = function() return options.guid or "Player-1" end
+  env.GetRealmName = function() return "Test Realm" end
+  env.ArtisanLogbookTraceDB = options.database
   env.WOW_PROJECT_CAMELOT, env.WOW_PROJECT_MAINLINE = 18, 1
   env.WOW_PROJECT_ID = options.retail and 1 or 18
   if options.unrecognized then env.WOW_PROJECT_ID = 999 end
@@ -52,6 +56,8 @@ local function initialize(options)
     addon.window = { Show = function() end, Refresh = function() end }
   end
   frames[1].scripts.OnEvent(frames[1], "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  assert(not addon.recorder)
+  frames[1].scripts.OnEvent(frames[1], "PLAYER_LOGIN")
   return addon, env, notices, hooks
 end
 
@@ -154,5 +160,64 @@ test("explicit profession probes preserve tuples and report errors/unavailabilit
   assert(found["API_PROBE:GetTradeSkillReagentInfo"].status == "error")
   assert(found["API_PROBE:GetTradeSkillItemLink"].status == "unavailable")
   assert(found["API_PROBE:C_TradeSkillUI.GetRecipeInfo"].values[1].recipeID == 123)
+end)
+
+test("verbose intent resumes across login and character switches until explicitly stopped", function()
+  local addon, env = initialize()
+  env.SlashCmdList.ARTISANLOGBOOKTRACE("start verbose")
+  local database = env.ArtisanLogbookTraceDB
+  local sessionID = database.logicalSessionID
+  assert(database.recordingEnabled and database.recordingMode == "verbose")
+  local function boundary(index)
+    return assert(loadstring("return " .. database.records[index].payload))()[1]
+  end
+  local first = boundary(1)
+  assert(first.startReason == "manual" and first.mode == "verbose")
+  assert(first.character == "First" and first.characterGUID == "Player-1")
+  assert(first.realm == "Test Realm" and first.flavor == "forever")
+  assert(first.build == "70862" and first.addonVersion == "0.1.0")
+  addon.eventFrame.scripts.OnEvent(addon.eventFrame, "PLAYER_LOGOUT")
+  assert(database.recordingEnabled and addon.recorder.recording)
+  assert(database.records[2].event == "PLAYER_LOGOUT")
+  assert(database.records[3].event == "TRACE_SEGMENT_END")
+  assert(boundary(3).segmentID == first.segmentID)
+  for _, character in ipairs({ "First", "Second", "First" }) do
+    addon, env = initialize({ database = database, character = character, guid = "GUID-" .. character })
+    assert(addon.recorder.recording and addon.recorder.verbose and addon.verbose)
+    assert(database.logicalSessionID == sessionID)
+    local resumed = boundary(#database.records)
+    assert(resumed.startReason == "automatic-resume" and resumed.logicalSessionID == sessionID)
+    assert(resumed.segmentID > first.segmentID and resumed.character == character)
+    assert(resumed.characterGUID == "GUID-" .. character and resumed.verbose)
+    first = resumed
+    assert(addon.Emit("TRADE_SKILL_CRAFT_BEGIN", 123))
+  end
+  env.SlashCmdList.ARTISANLOGBOOKTRACE("status")
+  assert(addon.GetTraceStatus():find("Recording | verbose | First", 1, true))
+  env.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
+  assert(not database.recordingEnabled)
+  local count = #database.records
+  addon = initialize({ database = database })
+  assert(not addon.recorder.recording and #database.records == count)
+  assert(addon.verbose)
+end)
+
+test("unexpected capture errors disable resumption and report retained evidence", function()
+  local addon, env, notices = initialize()
+  addon.Start(true)
+  assert(addon.Emit("KEEP", 42))
+  local database = env.ArtisanLogbookTraceDB
+  local count, sequence = #database.records, database.nextSequence
+  addon.recorder.Capture = function() error("synthetic capture failure") end
+  assert(not addon.Emit("FAIL"))
+  assert(not addon.recorder.recording and not database.recordingEnabled)
+  assert(database.stoppedReason == "capture-error")
+  assert(#database.records == count and database.nextSequence == sequence)
+  assert(notices[#notices]:find("synthetic capture failure", 1, true))
+  addon = initialize({ database = database })
+  assert(not addon.recorder.recording)
+  addon.Start()
+  addon.recorder:Stop()
+  assert(not database.recordingEnabled)
 end)
 print(passed .. " tracer compatibility tests passed")

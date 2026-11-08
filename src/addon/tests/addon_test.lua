@@ -266,6 +266,7 @@ do
   tracer = environment.testTracer
   lifecycle = frames[frameStart + 1]
   lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  lifecycle.scripts.OnEvent(lifecycle, "PLAYER_LOGIN")
   assert(tracer.recorder and not tracer.recorder.recording)
   assert(environment.ArtisanLogbookTraceDB == tracer.recorder.database)
 end
@@ -499,10 +500,34 @@ assert(tracer.recorder.recording)
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("mark from slash")
 assert(tracer.recorder.database.records[#tracer.recorder.database.records].event == "TRACE_MARK")
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("status")
-assert(notices[#notices] == "Artisan Logbook Tracer: Recording.")
+assert(notices[#notices] == "Artisan Logbook Tracer: " .. tracer.GetTraceStatus())
 environment.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
 assert(not tracer.recorder.recording)
 print("PASS Core-only TOC, lifecycle, tracer slash commands and debug UI controls (mocked)")
+
+;(function()
+  local database = tracer.recorder.database
+  local oldBytes = database.bytes
+  database.bytes = 12 * 1024 * 1024 + 1
+  tracer.window.scripts.OnUpdate(tracer.window, 0.6)
+  local foundStatus
+  for _, frame in ipairs(frames) do
+    if frame.parent == tracer.window and frame:GetText():find("KiB estimated", 1, true) then
+      foundStatus = frame:GetText()
+    end
+  end
+  assert(foundStatus and foundStatus:find("Stopped", 1, true))
+  assert(foundStatus:find("Large trace:", 1, true) and not foundStatus:find("FULL", 1, true))
+  click("Start")
+  assert(database.recordingEnabled and tracer.recorder.recording)
+  local count = #database.records
+  environment.StaticPopupDialogs.ARTISANLOGBOOK_CLEAR_TRACE.OnAccept()
+  assert(#database.records == count and database.recordingEnabled)
+  click("Stop")
+  assert(not database.recordingEnabled)
+  database.bytes = oldBytes + database.bytes - (12 * 1024 * 1024 + 1)
+  print("PASS warning-only large trace status and persistent Start/Stop with guarded Clear")
+end)()
 
 local function reload(database, afterFile)
   environment.ArtisanLogbookDB = database
@@ -5509,6 +5534,7 @@ end)()
   local standalone = load(arg[3] or "src/ArtisanLogbook_Tracer", "ArtisanLogbook_Tracer")
   local lifecycle = frames[frameStart + 1]
   lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  lifecycle.scripts.OnEvent(lifecycle, "PLAYER_LOGIN")
   assert(standalone.recorder and standalone.window and standalone.capabilities.window)
   assert(standalone.capabilities.flavor == "forever" and not standalone.capabilities.coreObserver)
   environment.SlashCmdList.ARTISANLOGBOOKTRACE("start")

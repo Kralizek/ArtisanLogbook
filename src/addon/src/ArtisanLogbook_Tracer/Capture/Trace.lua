@@ -5,8 +5,7 @@ addon.Trace = Trace
 
 Trace.schemaVersion = 2
 Trace.exportVersion = 2
-Trace.maxRecords = 10000
-Trace.maxBytes = 12 * 1024 * 1024
+Trace.largeTraceBytes = 12 * 1024 * 1024
 Trace.maxExportRecords = 10
 Trace.maxPayloadBytes = 16384
 
@@ -88,15 +87,10 @@ function Trace.Serialize(value, isSecret)
   return encoded, table.concat(reasons, ",")
 end
 
-function Trace.New(database, clock, isSecret)
+function Trace.New(database, clock, isSecret, metadata)
   local function isNonnegativeFinite(value)
     return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge and value >= 0
   end
-  local function stopForCapacity(recorder, reason)
-    recorder.recording = false
-    database.stoppedReason = reason
-  end
-
   if database == nil then
     database = {
       traceSchemaVersion = Trace.schemaVersion,
@@ -104,6 +98,8 @@ function Trace.New(database, clock, isSecret)
       nextSequence = 1,
       records = {},
       bytes = 0,
+      recordingEnabled = false,
+      recordingMode = "normal",
     }
   elseif type(database) == "table" and database.traceSchemaVersion == 1 and
       database.exportContractVersion == 1 and type(database.records) == "table" and
@@ -122,17 +118,28 @@ function Trace.New(database, clock, isSecret)
       database.bytes % 1 ~= 0 then
     return nil, "Unsupported or invalid trace database; existing data was left untouched."
   end
+  if (database.recordingEnabled ~= nil and type(database.recordingEnabled) ~= "boolean") or
+      (database.recordingMode ~= nil and database.recordingMode ~= "normal" and
+        database.recordingMode ~= "verbose") or
+      (database.logicalSessionID ~= nil and (not isNonnegativeFinite(database.logicalSessionID) or
+        database.logicalSessionID < 1 or database.logicalSessionID % 1 ~= 0)) then
+    return nil, "Invalid trace recording settings; existing data was left untouched."
+  end
+  if database.recordingEnabled == nil then database.recordingEnabled = false end
+  if database.recordingMode == nil then database.recordingMode = "normal" end
 
-  local recorder = { database = database, recording = false }
+  local recorder = { database = database, recording = false, verbose = database.recordingMode == "verbose" }
 
-  function recorder:Capture(event, ...)
-    if not self.recording then
-      return false, database.stoppedReason
-    end
-    if #database.records >= Trace.maxRecords then
-      stopForCapacity(self, "capacity")
-      return false, "Trace record limit reached; export and clear before recording more."
-    end
+  function recorder:Fail(reason)
+    self.recording = false
+    database.recordingEnabled = false
+    database.stoppedReason = "capture-error"
+    database.captureError = tostring(reason)
+    return false, "Capture stopped; automatic resumption disabled. Earlier evidence is preserved: " ..
+      database.captureError
+  end
+
+  local function capture(event, ...)
     local arguments = { n = select("#", ...), ... }
     local payload, warnings = Trace.Serialize(arguments, isSecret)
     local record = {
@@ -142,45 +149,62 @@ function Trace.New(database, clock, isSecret)
       event = event,
       payload = payload,
     }
+    assert(type(event) == "string" and isNonnegativeFinite(record.timestamp) and
+      isNonnegativeFinite(record.elapsed), "Invalid capture event or clock value.")
     if warnings ~= "" then
       record.warnings = warnings
     end
     local byteCount = #payload + #event + #warnings + 512
-    if database.bytes + byteCount > Trace.maxBytes then
-      stopForCapacity(self, "capacity-bytes")
-      return false, "Trace byte limit reached; export and clear before recording more."
-    end
     database.records[#database.records + 1] = record
     database.bytes = database.bytes + byteCount
     database.nextSequence = database.nextSequence + 1
-    if #database.records >= Trace.maxRecords then
-      stopForCapacity(self, "capacity")
-    end
     return true
   end
 
-  function recorder:Start(metadata)
+  function recorder:Capture(event, ...)
+    if not self.recording then return false, database.stoppedReason end
+    local ok, captured = pcall(capture, event, ...)
+    if not ok then return self:Fail(captured) end
+    return captured
+  end
+
+  local function begin(self, context, resumed)
     if self.recording then
       return false, "Already recording."
     end
-    if #database.records >= Trace.maxRecords then
-      stopForCapacity(self, "capacity")
-      return false, "Trace record limit reached; export and clear before recording more."
+    if not resumed or not database.logicalSessionID then
+      database.logicalSessionID = database.nextSequence
     end
-    if database.bytes >= Trace.maxBytes then
-      stopForCapacity(self, "capacity-bytes")
-      return false, "Trace byte limit reached; export and clear before recording more."
-    end
+    self.segmentID = database.nextSequence
+    local boundary = {}
+    for key, value in pairs(context or {}) do boundary[key] = value end
+    boundary.logicalSessionID = database.logicalSessionID
+    boundary.segmentID = self.segmentID
+    boundary.startReason = resumed and "automatic-resume" or "manual"
+    boundary.mode = database.recordingMode
+    boundary.verbose = self.verbose
     self.recording = true
+    database.recordingEnabled = true
     database.stoppedReason = nil
-    local captured, reason = self:Capture("TRACE_START", metadata)
-    if not captured then self.recording = false end
-    return captured, reason
+    database.captureError = nil
+    return self:Capture("TRACE_START", boundary)
+  end
+
+  function recorder:Start(context)
+    if self.recording then return false, "Already recording." end
+    if context and context.verbose ~= nil then
+      database.recordingMode = context.verbose == true and "verbose" or "normal"
+    end
+    self.verbose = database.recordingMode == "verbose"
+    return begin(self, context, false)
   end
 
   function recorder:Stop()
-    if self.recording then self:Capture("TRACE_STOP") end
+    local captured, reason = true, nil
+    if self.recording then captured, reason = self:Capture("TRACE_STOP") end
     self.recording = false
+    database.recordingEnabled = false
+    return captured, reason
   end
 
   function recorder:Clear()
@@ -190,6 +214,8 @@ function Trace.New(database, clock, isSecret)
     database.records = {}
     database.bytes = 0
     database.stoppedReason = nil
+    database.captureError = nil
+    database.logicalSessionID = nil
     return true
   end
 
@@ -225,5 +251,9 @@ function Trace.New(database, clock, isSecret)
     return table.concat(lines, "\n")
   end
 
+  if database.recordingEnabled then
+    local ok, reason = begin(recorder, metadata, true)
+    if not ok then return recorder, reason end
+  end
   return recorder
 end
