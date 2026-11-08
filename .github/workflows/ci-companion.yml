@@ -3,11 +3,13 @@ on:
   pull_request:
     paths:
       - 'src/companion/**'
+      - 'scripts/deploy-companion.ps1'
       - '.github/workflows/ci-companion.yml'
   push:
     branches: [master]
     paths:
       - 'src/companion/**'
+      - 'scripts/deploy-companion.ps1'
       - '.github/workflows/ci-companion.yml'
 jobs:
   test:
@@ -41,3 +43,14 @@ jobs:
       - run: ./artifacts/tool/artisanlogbook --version
       - run: ./artifacts/tool/artisanlogbook import ../addon/tests/fixtures/legacy/v1-outcome1.lua --database artifacts/history.duckdb
       - run: ./artifacts/tool/artisanlogbook status --database artifacts/history.duckdb
+      - name: Smoke-test Windows self-contained local deployment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ../../scripts/deploy-companion.ps1 -InstallDirectory "${{ runner.temp }}\ArtisanLogbookCompanion" -NoPathUpdate
+          if ($LASTEXITCODE -ne 0) { throw "Local deploy failed: $LASTEXITCODE" }
+          & "${{ runner.temp }}\ArtisanLogbookCompanion\artisanlogbook.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Installed executable smoke test failed" }
+          & "${{ runner.temp }}\ArtisanLogbookCompanion\al.cmd" --help
+          if ($LASTEXITCODE -ne 0) { throw "Alias smoke test failed" }
+

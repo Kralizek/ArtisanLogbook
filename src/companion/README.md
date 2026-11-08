@@ -5,6 +5,41 @@ SavedVariables snapshots or configured installations into **one authoritative Du
 contexts**. Import regularly, before the addon's detailed retention window
 expires. The Companion never changes the source file.
 
+## One-command Windows local deployment
+
+From the repository root on Windows, with the .NET 10 SDK installed:
+
+```powershell
+.\scripts\deploy-companion.ps1
+```
+
+This builds and smoke-tests a Release `win-x64` self-contained, untrimmed,
+single-file Companion using `dotnet publish`, then installs it under
+`%LOCALAPPDATA%\Programs\ArtisanLogbook\Companion`. It also installs an
+`al.cmd` forwarding alias and adds that directory to the **user PATH**
+(no administrator rights required). Open a **new terminal** after the first
+install, then run `al init`, `al import`, or `al status`.
+`artisanlogbook` remains the canonical executable name.
+
+Run the script again to rebuild and replace a previous script-managed
+installation. Publishing and the executable smoke test happen in a separate
+staging directory before replacing the installed binaries; an unsuccessful
+publish leaves the previous installation unchanged. If the Companion is running
+and Windows locks the executable, close it and retry. The script refuses to
+overwrite an existing directory that lacks its installation marker.
+
+```powershell
+.\scripts\deploy-companion.ps1 -Configuration Debug
+.\scripts\deploy-companion.ps1 -InstallDirectory 'D:\Tools\ArtisanLogbook' -NoPathUpdate
+```
+
+The installation path is **not** the data path. The script never deletes,
+migrates, or modifies `settings.json` or `history.duckdb` under the per-user
+application-data directory documented below. `-NoPathUpdate` is useful for
+CI/smoke tests and custom launchers; if used, invoke the executable from
+the install directory. This is a Windows x64 local development deployment
+script, **not** a public installer, auto-updater, or a macOS/Linux release.
+
 ## Build and install
 
 Use the .NET SDK pinned in [global.json](global.json) (currently .NET 10).
