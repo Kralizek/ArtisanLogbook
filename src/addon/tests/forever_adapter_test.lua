@@ -368,7 +368,7 @@ test("ledger errors retain pending evidence and duplicate cast tokens cannot be 
   assert(#addon.ledger.database.crafts == 1 and addon.ledger.pendingRequest.remaining == 1)
 end)
 
-test("Forever UI bootstrap refuses initialization without touching Core capture", function()
+test("Forever UI bootstrap initializes and opens without touching Core capture", function()
   local addon, env = environment()
   local handlers, notice = {}, nil
   env.CreateFrame = function()
@@ -379,13 +379,21 @@ test("Forever UI bootstrap refuses initialization without touching Core capture"
   end
   env.SlashCmdList = {}
   env.DEFAULT_CHAT_FRAME.AddMessage = function(_, message) notice = message end
-  local ui = { CreateProductionWindow = function() error("Retail UI must not initialize") end }
+  local shown, created = false, false
+  local ui = { UI = { CheckPrimitives = function() return true end } }
+  function ui.CreateProductionWindow()
+    created = true
+    ui.productionWindow = {
+      Show = function() shown = true end,
+      Hide = function() end,
+    }
+  end
   local uiRoot = root:gsub("ArtisanLogbook_Core$", "ArtisanLogbook")
   setfenv(assert(loadfile(uiRoot .. "/Bootstrap.lua")), env)("ArtisanLogbook", ui)
   handlers.OnEvent(nil, "ADDON_LOADED", "ArtisanLogbook")
-  assert(notice and notice:find("Forever production UI is not validated", 1, true))
+  assert(created and ui.productionWindow and notice and notice:find("Loaded", 1, true))
   env.SlashCmdList.ARTISANLOGBOOK()
-  assert(notice:find("Core + Tracer", 1, true))
+  assert(shown)
   env.call(2331)
   env.fire("UNIT_SPELLCAST_START", "player", "cast", 2331)
   env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast", 2331)

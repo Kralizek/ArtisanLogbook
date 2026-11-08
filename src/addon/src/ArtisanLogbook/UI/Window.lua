@@ -4,7 +4,7 @@ local API = ArtisanLogbookAPI
 local management = ArtisanLogbookManagement
 
 local function shell(name, title, parent, width, height)
-  local frame = CreateFrame("Frame", name, parent, "BasicFrameTemplateWithInset")
+  local frame = UI.WindowFrame(name, parent)
   frame:SetSize(width, height)
   frame:SetPoint("CENTER")
   frame:SetClampedToScreen(true)
@@ -432,9 +432,11 @@ function addon.CreateProductionWindow()
   local icon = launcher:GetNormalTexture()
   icon:ClearAllPoints(); icon:SetPoint("CENTER"); icon:SetSize(22, 22)
   icon:SetTexCoord(.08, .92, .08, .92)
-  local mask = launcher:CreateMaskTexture()
-  mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
-  mask:SetAllPoints(icon); icon:AddMaskTexture(mask)
+  if type(launcher.CreateMaskTexture) == "function" and type(icon.AddMaskTexture) == "function" then
+    local mask = launcher:CreateMaskTexture()
+    mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
+    mask:SetAllPoints(icon); icon:AddMaskTexture(mask)
+  end
   local border = launcher:CreateTexture(nil, "OVERLAY")
   border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
   border:SetSize(52, 52); border:SetPoint("TOPLEFT", launcher, "TOPLEFT", 0, 0)

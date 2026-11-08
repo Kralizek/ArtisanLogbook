@@ -1314,6 +1314,12 @@ function API.GetCapabilities()
   if not addon.adapter then return nil, "not-ready" end
   local capabilities = addon.adapter.capabilities
   local result = { flavor = capabilities.flavor }
+  result.measurements = {}
+  for metric, supported in pairs(capabilities.measurements or {}) do
+    result.measurements[metric] = supported
+  end
+  result.operationInfo = capabilities.operationInfo == true
+  result.fixedReagents = capabilities.fixedReagents == true
   result.craftResults = capabilities.events.TRADE_SKILL_ITEM_CRAFTED_RESULT == true
   result.personalRequests = result.craftResults and capabilities.hooks.CraftRecipe == true
   result.reagentAllocations = result.personalRequests and

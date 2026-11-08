@@ -42,16 +42,22 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
     addon.Notify("Compatible Artisan Logbook Core API v1 is required.")
     return
   end
-  local capabilities = api.GetCapabilities()
-  if capabilities and capabilities.flavor == "forever" then
-    unavailableReason = "Forever production UI is not validated. Enable Core + Tracer and use /al_trace."
-    addon.Notify(unavailableReason)
-    return
+  local ready, reason = addon.UI.CheckPrimitives()
+  if not ready then
+    unavailableReason = reason .. ". Enable Blizzard UI addons, disable UI replacements and /reload."
+    addon.Notify(unavailableReason); return
+  end
+  local created, errorMessage = pcall(addon.CreateProductionWindow)
+  if not created then
+    if addon.productionWindow then addon.productionWindow:Hide(); addon.productionWindow = nil end
+    unavailableReason = "Production UI could not initialize: " .. tostring(errorMessage) ..
+      " Enable Blizzard UI addons, disable UI replacements and /reload."
+    addon.Notify(unavailableReason); return
   end
   api.RegisterCallback("CRAFT_COMMITTED", addon.NotifyCraft)
-  addon.CreateProductionWindow()
   initialized = true
-  local addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version")
+  local metadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+  local addonVersion = type(metadata) == "function" and metadata(addonName, "Version") or nil
   addon.Notify("Loaded (version " .. (addonVersion or "Unknown") .. ").")
 end)
 

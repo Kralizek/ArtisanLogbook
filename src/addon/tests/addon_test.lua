@@ -91,6 +91,8 @@ end
 function methods:IsShown() return self.shown end
 function methods:SetVerticalScroll(offset) self.offset = offset end
 function methods:GetVerticalScroll() return self.offset or 0 end
+function methods:GetVerticalScrollRange() return self.verticalScrollRange or 0 end
+function methods:EnableMouseWheel(enabled) self.mouseWheelEnabled = enabled end
 function methods:CreateLine() return object() end
 function methods:CreateTexture()
   local texture = object()
@@ -110,6 +112,9 @@ function methods:CreateFontString()
   return label
 end
 environment.CreateFrame = function(kind, name, parent, template)
+  if environment.rejectTemplates and template and environment.rejectTemplates[template] then
+    error("Unavailable template: " .. template)
+  end
   local frame = object()
   frame.kind, frame.name, frame.parent, frame.template = kind, name, parent, template
   if kind == "EditBox" then frame.GetStringHeight = false end -- FontString-only API
@@ -119,9 +124,12 @@ environment.CreateFrame = function(kind, name, parent, template)
     frame.HandleRotation = function(self) self.rotated = self.isTabOnTop end
     frame.SetTabSelected = function(self, selected) self.isSelected = selected end
   end
+  if kind == "ScrollFrame" and template == "UIPanelScrollFrameTemplate" and
+      not environment.forceScrollFrameFallback then frame.ScrollBar = object() end
   frames[#frames + 1] = frame
   return frame
 end
+environment.testCreateFrame = environment.CreateFrame
 environment.UIParent = object()
 environment.Minimap = object()
 environment.Minimap:SetSize(140, 140)
@@ -5383,4 +5391,277 @@ end)()
   end
   assert(foundExport)
   print("PASS standalone Forever template-free recording/export and unavailable Clear confirmation")
+end)()
+
+;(function()
+  local fixture = dofile("tests/fixtures/forever-ui-schema5.lua")
+  local function copy(value)
+    if type(value) ~= "table" then return value end
+    local result = {}
+    for key, child in pairs(value) do result[key] = copy(child) end
+    return result
+  end
+
+  environment.CreateFrame = environment.testCreateFrame
+  environment.WOW_PROJECT_CAMELOT, environment.WOW_PROJECT_ID, environment.WOW_PROJECT_MAINLINE = 18, 18, 1
+  environment.GetBuildInfo = function() return "1.60.1", "70862", "mock", 16001 end
+  environment.SlashCmdList = {}
+  environment.UISpecialFrames = {}
+  environment.StaticPopupDialogs = {}
+  environment.StaticPopup_Show = function(name) environment.popup = name end
+  environment.ArtisanLogbookTraceDB = nil
+  environment.ArtisanLogbookUISettings = {}
+  environment.rejectTemplates = nil
+  environment.forceScrollFrameFallback = nil
+  environment.C_TradeSkillUI = {
+    CraftRecipe = function() end, CraftEnchant = function() end, CraftSalvage = function() end,
+    RecraftRecipe = function() end, RecraftRecipeForOrder = function() end,
+    GetAllRecipeIDs = function() return {} end,
+    GetRecipeInfo = function() end, GetRecipeSchematic = function() end,
+    GetProfessionInfoByRecipeID = function() end,
+  }
+
+  local core = reload(nil)
+  local api = assert(environment.ArtisanLogbookAPI)
+  assert(api.GetVersion() == 1)
+  fixture.Populate(core.ledger)
+  assert(core.ledger and not core.productionWindow and not core.recorder)
+  local database = copy(core.ledger.database)
+  assert(database.schemaVersion == 5 and database.schemaIdentity == "ArtisanLogbookLedger")
+  assert(#database.crafts == 4)
+  local capabilities = api.GetCapabilities()
+  assert(capabilities.flavor == "forever" and capabilities.captureReady and
+    capabilities.operationInfo == false and capabilities.fixedReagents and
+    capabilities.personalRequests and capabilities.reagentAllocations)
+  assert(capabilities.craftingStats == false and capabilities.qualities == false and
+    capabilities.orders == false and capabilities.salvage == false and capabilities.recrafts == false)
+
+  local all = assert(api.GetCrafts({}, { limit = 10, direction = "asc" }))
+  assert(#all.crafts == 4 and not all.nextCursor)
+  local expected = { { 2331, 2455 }, { 7183, 5997 }, { 7183, 5997 }, { 2329, 2454 } }
+  for index, pair in ipairs(expected) do
+    local craft = assert(api.GetCraft(all.crafts[index].id))
+    assert(craft.recipe.id == pair[1] and craft.outputItem.id == pair[2])
+    assert(craft.outputQuantity == 1 and craft.request and craft.request.materialsSavingsEligible == false)
+    assert(craft.grossRequirementsComplete and #craft.reagents == 3)
+    assert(craft.outputQuality == nil and craft.concentrationSpent == nil and craft.multicraftBonus == nil and
+      craft.hasResourcefulnessProc == nil and craft.resourcefulnessComplete == nil)
+    for _, reagent in ipairs(craft.reagents) do
+      assert(reagent.fixed and reagent.allocatedQuantity == 1 and reagent.returnedQuantity == nil)
+    end
+  end
+  local detached = assert(api.GetCraft(all.crafts[1].id))
+  detached.recipe.id, detached.outputItem.id = 999998, 999999
+  detached.reagents[1].item.id, detached.request.fixedReagents[1].item.id = 999996, 999997
+  local unchanged = assert(api.GetCraft(all.crafts[1].id))
+  assert(unchanged.recipe.id == 2331 and unchanged.outputItem.id == 2455 and
+    unchanged.reagents[1].item.id == 785 and unchanged.request.fixedReagents[1].item.id == 785)
+  local defense = assert(api.GetCraft(all.crafts[2].id))
+  assert(defense.request.requestedCount == 2)
+  assert(all.crafts[2].id ~= all.crafts[3].id)
+  local filtered = assert(api.GetCrafts({ recipes = { 7183 } }, { limit = 1, direction = "asc" }))
+  assert(#filtered.crafts == 1 and filtered.crafts[1].recipe.id == 7183 and filtered.nextCursor)
+  local nextPage = assert(api.GetCrafts({ recipes = { 7183 } }, {
+    limit = 1, direction = "asc", cursor = filtered.nextCursor }))
+  assert(#nextPage.crafts == 1 and nextPage.crafts[1].recipe.id == 7183 and
+    nextPage.crafts[1].id ~= filtered.crafts[1].id and not nextPage.nextCursor)
+  local emptyPage = assert(api.GetCrafts({ recipes = { 999999 } }, { limit = 10 }))
+  assert(#emptyPage.crafts == 0 and not emptyPage.nextCursor)
+  local defenseTotals = assert(api.GetRecipeOutcomes(7183)).totals
+  assert(defenseTotals.craftCount == 2 and defenseTotals.outputQuantity == 2)
+  assert(defenseTotals.concentrationSpent == nil and defenseTotals.multicraftBonus == nil and
+    defenseTotals.resourcefulnessProcCount == nil)
+  local reagentTotals = assert(api.GetReagentSummaries({ items = { 765 } }))
+  assert(#reagentTotals.reagents == 1 and reagentTotals.reagents[1].allocatedQuantity == 2)
+  local vialTotals = assert(api.GetReagentSummaries({ items = { 3371 } }))
+  assert(#vialTotals.reagents == 1 and vialTotals.reagents[1].allocatedQuantity == 4)
+  local missingMetadata = assert(api.GetCraft(all.crafts[4].id))
+  assert(missingMetadata.recipe.id == 2329 and missingMetadata.recipe.name == nil)
+
+  core = reload(database)
+  api = assert(environment.ArtisanLogbookAPI)
+  local loadedUI = loadUI()
+  local window = assert(loadedUI.productionWindow)
+  assert(environment.ArtisanLogbookTraceDB == nil)
+  local UI = loadedUI.UI
+  assert(UI.Supports("quality") == false and UI.Supports("multicraft") == false and
+    UI.Supports("resourcefulness") == false and UI.Supports("concentrationSpent") == false and
+    UI.Supports("ingenuityRefund") == false and UI.Supports("operationInfo") == false)
+  assert(UI.Supports("fixedReagents") and UI.FixedInputs())
+  assert(UI.InputLabel() == "Expected requirements")
+  assert(UI.InputExplanation():find("schematics", 1, true) and
+    UI.InputExplanation():find("Not independently measured bag consumption", 1, true))
+  assert(UI.Name(missingMetadata.recipe) == "#2329")
+  assert(UI.MeasurementState("resourcefulness", 1, 1, 1, true) == "unsupported")
+
+  window:Hide()
+  assert(not window:IsShown())
+  environment.SlashCmdList.ARTISANLOGBOOK()
+  assert(window:IsShown())
+  window:Hide()
+  assert(not window:IsShown())
+  window:Show()
+  local runtimeStatus, statusReason = environment.ArtisanLogbookManagement.Status()
+  assert(runtimeStatus, statusReason)
+  for _, pageName in ipairs({ "Overview", "Logbook", "Recipes", "Reagents", "Settings" }) do
+    window:Activate(pageName)
+    assert(window.activeTab == pageName, "active page did not change: " .. pageName)
+    assert(window.pages[pageName]:IsShown(), "page did not show: " .. pageName)
+  end
+  local characters = assert(api.GetCharacters())
+  local professions = assert(api.GetProfessions())
+  window:Activate("Character", characters[1])
+  assert(window.activeTab == "Character" and window.pages.Character:IsShown())
+  window:Activate("Profession", professions[1])
+  assert(window.activeTab == "Profession" and window.pages.Profession:IsShown())
+  window:OpenRecipe(assert(api.GetCraft(1)).recipe)
+  assert(window.activeTab == "Recipe" and window.pages.Recipe:IsShown())
+  window:Activate("Reagent", assert(api.GetCraft(1)).reagents[1].item)
+  assert(window.activeTab == "Reagent" and window.pages.Reagent:IsShown())
+  window:OpenCraft(1)
+  assert(window.openCraftId == 1 and window.craftDetailWindow:IsShown())
+  window.craftDetailWindow:Hide()
+  assert(window.openCraftId == nil and not window.craftDetailWindow:IsShown())
+
+  local overviewSummary = window.pages.Overview.summary
+  assert(overviewSummary.tiles[1]:IsShown() and overviewSummary.tiles[2]:IsShown() and
+    not overviewSummary.tiles[3]:IsShown() and not overviewSummary.tiles[4]:IsShown() and
+    not overviewSummary.tiles[5]:IsShown() and overviewSummary.tiles[6]:IsShown())
+  assert(overviewSummary.tiles[6].title:GetText() == "Recipes crafted")
+  assert(overviewSummary.tiles[1].value:GetText() == "4" and
+    overviewSummary.tiles[2].value:GetText() == "4" and overviewSummary.tiles[6].value:GetText() == "3")
+  local outcomes = window.recipeOutcomes
+  assert(outcomes and outcomes.views.Statistics == nil)
+  outcomes:Open(7183)
+  assert(outcomes.tiles[1].value:GetText() == "2" and outcomes.tiles[2].value:GetText() == "2")
+  outcomes:SelectView("Statistics")
+  assert(outcomes.activeView == "Overview" and outcomes.tiles[3] == nil and outcomes.tiles[4] == nil and
+    outcomes.tiles[5] == nil and outcomes.tiles[6] == nil)
+  local honestExplanation = false
+  for _, frame in ipairs(frames) do
+    local text = frame:GetText()
+    if frame.parent == outcomes.views.Overview and type(text) == "string" and
+        text:find("Expected recipe requirements attributed to confirmed crafts", 1, true) then
+      honestExplanation = true
+    end
+  end
+  assert(honestExplanation)
+
+  for _, metric in ipairs({ "resourcefulness", "multicraft", "concentrationSpent", "ingenuityRefund", "quality" }) do
+    core.adapter.capabilities.measurements = {
+      resourcefulness = false, multicraft = false, concentrationSpent = false,
+      ingenuityRefund = false, quality = false,
+    }
+    core.adapter.capabilities.measurements[metric] = true
+    local parent = environment.CreateFrame("Frame", nil, environment.UIParent)
+    local pane = UI.RecipeOutcomes(parent, 840, function() end, 620)
+    pane:Open(7183)
+    local indices = { concentrationSpent = 3, multicraft = 4, resourcefulness = 5, ingenuityRefund = 6 }
+    for name, index in pairs(indices) do
+      assert((pane.tiles[index] ~= nil) == (name == metric), metric .. " outcome tile gating")
+    end
+    assert((pane.views.Statistics ~= nil) == (metric ~= "quality"))
+    pane:SelectView("Statistics")
+    assert(pane.activeView == (metric == "quality" and "Overview" or "Statistics"))
+    local summary = UI.ProductionSummary(parent, 840, 0, function() end, true)
+    for index = 3, 5 do
+      local enabled = (metric == "concentrationSpent" and index == 3) or
+        (metric == "multicraft" and index == 4) or (metric == "resourcefulness" and index == 5)
+      assert(summary.tiles[index]:IsShown() == enabled, metric .. " production summary gating")
+    end
+  end
+  core.adapter.capabilities.measurements = {
+    resourcefulness = false, multicraft = false, concentrationSpent = false,
+    ingenuityRefund = false, quality = false,
+  }
+  assert(UI.MeasurementState("resourcefulness", nil, 0, 2, true) == "unsupported")
+  core.adapter.capabilities.measurements.resourcefulness = true
+  assert(UI.MeasurementState("resourcefulness", nil, 0, 2, true) == "unobserved")
+  assert(UI.MeasurementState("resourcefulness", 2, 1, 2, true) == "insufficient")
+  assert(UI.MeasurementState("resourcefulness", 0, 2, 2, true) == "zero")
+  assert(UI.MeasurementState("resourcefulness", 3, 2, 2, true) == "value")
+  assert(UI.MeasurementState("resourcefulness", 0, 1, 2, false) == "zero")
+  local partialStat = UI.Stat(environment.UIParent, "Known zero", "Test", 0, 0, 160)
+  partialStat:SetNumber(0, false)
+  assert(partialStat.value:GetText() == "0" and partialStat.note:GetText() == "Partial total")
+
+  local reagentPage = window.pages.Reagent
+  assert(reagentPage.tiles.returned == nil and reagentPage.tiles.rate == nil and
+    not reagentPage.classification:IsShown())
+  local reagentsPage = window.pages.Reagents
+  assert(#reagentsPage.summary == 2)
+  local fixedColumns = {}
+  for _, column in ipairs(reagentsPage.catalogue.columns) do fixedColumns[#fixedColumns + 1] = column.title end
+  assert(table.concat(fixedColumns, "|"):find("Expected requirements", 1, true) and
+    not table.concat(fixedColumns, "|"):find("Returned", 1, true))
+
+  local missingDropdown = environment.UIDropDownMenu_AddButton
+  environment.UIDropDownMenu_AddButton = nil
+  local ready, reason = UI.CheckPrimitives()
+  assert(not ready and reason:find("UIDropDownMenu_AddButton", 1, true))
+  environment.UIDropDownMenu_AddButton = missingDropdown
+
+  local fallbackParent = environment.CreateFrame("Frame", nil, environment.UIParent)
+  environment.rejectTemplates = {
+    BasicFrameTemplateWithInset = true,
+    TabSystemButtonArtTemplate = true,
+    UIPanelScrollFrameTemplate = true,
+  }
+  local fallbackWindow = UI.WindowFrame("FallbackWindow", environment.UIParent)
+  assert(fallbackWindow.TitleText and fallbackWindow.CloseButton)
+  local fallbackTab = UI.Tab(fallbackParent, "Fallback", 0, 0, 100, function() end)
+  assert(fallbackTab.template == "UIPanelButtonTemplate")
+  local fallbackScroll = UI.ScrollFrame(fallbackParent)
+  assert(fallbackScroll.mouseWheelEnabled and fallbackScroll.scripts.OnMouseWheel)
+  fallbackScroll.verticalScrollRange = 120
+  fallbackScroll.scripts.OnMouseWheel(fallbackScroll, -1)
+  assert(fallbackScroll:GetVerticalScroll() == 30)
+  environment.rejectTemplates = nil
+  environment.forceScrollFrameFallback = nil
+
+  local emptyWindowAPI = api
+  assert(core.ledger:ClearHistory())
+  assert(#emptyWindowAPI.GetCrafts().crafts == 0)
+  window:Activate("Logbook")
+  assert(window.pages.Logbook.history.empty:IsShown() and
+    window.pages.Logbook.history.empty:GetText() == "No crafts in this period")
+  core = reload(database)
+  api = assert(environment.ArtisanLogbookAPI)
+  assert(#api.GetCrafts().crafts == 4 and api.GetCraft(3).recipe.id == 7183)
+  local reloadedUI = loadUI()
+  assert(reloadedUI.productionWindow)
+  reloadedUI.productionWindow:Hide()
+  environment.SlashCmdList.ARTISANLOGBOOK()
+  reloadedUI.productionWindow:Activate("Logbook")
+
+  local originalDropdown = environment.UIDropDownMenu_AddButton
+  environment.UIDropDownMenu_AddButton = nil
+  local blocked = load(uiRoot, "ArtisanLogbook")
+  local blockedLifecycle = frames[#frames]
+  blockedLifecycle.scripts.OnEvent(blockedLifecycle, "ADDON_LOADED", "ArtisanLogbook")
+  assert(not blocked.productionWindow and notices[#notices]:find("Missing Blizzard UI primitive", 1, true))
+  environment.SlashCmdList.ARTISANLOGBOOK()
+  assert(notices[#notices]:find("UIDropDownMenu_AddButton", 1, true))
+  environment.UIDropDownMenu_AddButton = originalDropdown
+
+  environment.rejectTemplates = {
+    BasicFrameTemplateWithInset = true,
+    TabSystemButtonArtTemplate = true,
+    UIPanelScrollFrameTemplate = true,
+  }
+  local templateFallback = load(uiRoot, "ArtisanLogbook")
+  local templateLifecycle = frames[#frames]
+  templateLifecycle.scripts.OnEvent(templateLifecycle, "ADDON_LOADED", "ArtisanLogbook")
+  assert(templateFallback.productionWindow)
+  environment.rejectTemplates = nil
+  environment.rejectTemplates = { UIPanelButtonTemplate = true }
+  local blockedTemplate = load(uiRoot, "ArtisanLogbook")
+  local failedTemplateLifecycle = frames[#frames]
+  failedTemplateLifecycle.scripts.OnEvent(failedTemplateLifecycle, "ADDON_LOADED", "ArtisanLogbook")
+  assert(not blockedTemplate.productionWindow and
+    notices[#notices]:find("Production UI could not initialize", 1, true) and
+    notices[#notices]:find("UIPanelButtonTemplate", 1, true))
+  environment.rejectTemplates = nil
+  assert(#api.GetCrafts().crafts == 4 and core.ledger.database.schemaVersion == 5)
+  print("PASS Forever schema-5 projections, fixed-input production UI, honest metrics, pages and fallbacks")
 end)()

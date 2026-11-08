@@ -1062,16 +1062,23 @@ end)
 
 test("capabilities describe runtime support, not retained history", function()
   local _, api, _, addon = fixture()
-  equal(api.GetCapabilities(), { flavor = "retail", craftResults = true,
-    personalRequests = true, reagentAllocations = true })
+  assert(api.GetVersion() == 1, "capability additions must not change the public API version")
+  local capabilities = api.GetCapabilities()
+  equal(capabilities, { flavor = "retail", measurements = {}, operationInfo = true, fixedReagents = false,
+    craftResults = true, personalRequests = true, reagentAllocations = true })
+  capabilities.measurements.resourcefulness = true
+  capabilities.fixedReagents = true
+  local detached = api.GetCapabilities()
+  assert(detached.measurements.resourcefulness == nil and detached.fixedReagents == false)
   addon.adapter.capabilities.operationInfo = false
   assert(api.GetCapabilities().reagentAllocations == false)
   addon.adapter.capabilities.operationInfo = true
   local history = api.GetFacets()
   addon.adapter.capabilities = { flavor = "classic", events = {}, hooks = {}, measurements = {},
     operationInfo = false }
-  local capabilities = api.GetCapabilities()
-  equal(capabilities, { flavor = "classic", craftResults = false, personalRequests = false, reagentAllocations = false })
+  capabilities = api.GetCapabilities()
+  equal(capabilities, { flavor = "classic", measurements = {}, operationInfo = false, fixedReagents = false,
+    craftResults = false, personalRequests = false, reagentAllocations = false })
   capabilities.flavor = "Changed"
   equal(api.GetFacets(), history)
   assert(api.GetCapabilities().flavor == "classic" and api.GetCraft(1).hasIngenuityProc == false)

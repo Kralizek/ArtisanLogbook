@@ -923,11 +923,19 @@ retains its retained-detail-only semantics.
 ### Runtime capabilities
 
 `GetCapabilities()` returns a fresh
-`{ flavor = "...", craftResults = boolean, personalRequests = boolean, reagentAllocations = boolean }`.
+`{ flavor = "...", craftResults = boolean, personalRequests = boolean,
+reagentAllocations = boolean, operationInfo = boolean, fixedReagents = boolean,
+measurements = table }`.
+The additive `measurements` table is detached from Core and carries explicit
+measurement support declarations (a missing key is not a measured zero).
+Forever currently declares `resourcefulness`, `multicraft`, `concentrationSpent`,
+`ingenuityRefund` and `quality` false, and reports `craftingStats`, `qualities`,
+`orders`, `salvage` and `recrafts` false. `fixedReagents` identifies the schematic
+requirements path; `operationInfo` identifies the crafting-operation query path.
 `craftResults` reports successful registration of the authoritative result event;
 `personalRequests` additionally requires the personal `CraftRecipe` hook;
 `reagentAllocations` additionally requires the production adapter's
-`GetCraftingOperationInfo` query capability. This is a runtime capability for the
+`GetCraftingOperationInfo` query capability or fixed schematic requirements. This is a runtime capability for the
 selected reagent allocation/quote capture path, not proof that any individual
 craft supplied a readable quote or complete allocation measurements. Tracer's
 diagnostic hooks do not affect these values.
@@ -935,7 +943,7 @@ Unsupported adapters report false for these capture paths. True means the path
 is available, **not** that every craft will contain every related measurement or
 that every event's semantics have been verified. Optional fields still depend on
 payload evidence and unambiguous correlation. Orders/recraft requests and reagent
-ownership remain unsupported in this slice.
+ownership depend on the selected adapter's support.
 
 Capabilities describe the current adapter, not the session stored with a craft.
 Historical facets/measurements are never hidden or reclassified when runtime

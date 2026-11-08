@@ -9,7 +9,7 @@ capture and public API; the optional, default-disabled Tracer addon provides
 `ArtisanLogbook` requires `ArtisanLogbook_Core` and reads facts through
 `ArtisanLogbookAPI` v1. Retention uses `ArtisanLogbookManagement`. The production
 UI neither accesses Core's private namespace nor reads/writes its SavedVariables.
-Core and the UI work with Tracer absent or disabled; Tracer also requires Core
+Core and the UI work with Tracer absent or disabled; Tracer can run independently
 and owns only its diagnostic SavedVariables. Confirmed destructive ledger
 maintenance is provided by Core's management API, never by Tracer. Storage,
 retention, and the durable outcomes introduced by #21 are unchanged. Additive API changes
@@ -18,6 +18,119 @@ with selection-wide totals. Recipe summaries also accept day-aligned time bounds
 These remain read-only API v1 catalogue queries; capture and storage are unchanged.
 
 ## Pages and navigation
+
+### Forever support and presentation evidence
+
+The existing production UI now initializes on Forever with Core API v1 and the
+management API, without Tracer or the standalone diagnostics inspector. This is
+ready for live acceptance, **not a release or a visual compatibility certification**.
+The accepted design is the existing Retail parchment, dark sidebar, tabs, item
+cells and navigation; no separate Forever pages or third-party dependencies are added.
+Forever publishing stays disabled by `release: false` in `.flavors.yml`.
+
+Target evidence: Forever **1.60.1.70862**, interface **16001**, project **18**;
+Gethe/wow-ui-source commit `9dc84f0d3bbae1768ac3405b3716000bd93eda06`.
+Retail source was resolved to `297d7aaaa736f346b3e036f38ee088eaf7f8c07f`
+(**12.1.5.70783**, configured interface **120105**).
+Source presence is distinct from runtime/visual verification. The Forever
+`Blizzard_SharedXML.toc`, `Blizzard_UIPanelTemplates.toc` and
+`Blizzard_Fonts_Shared.toc` route shared and family files, including the Mainline
+button/dropdown/frame templates and shared tab templates, with Camelot overrides.
+`BasicFrameTemplateWithInset` is declared in Mainline `UIPanelTemplates.xml`;
+`TabSystemButtonArtTemplate` in shared `TabSystemTemplates.xml`. These declarations
+do not by themselves prove the installed client's loading or appearance.
+
+The compatibility helpers retain native templates when usable. Missing basic
+window chrome falls back to the established dark surface, title and accessible
+close button; missing tab mixins use native panel buttons with selected highlights.
+Missing backdrop mixins use the existing parchment/dark surfaces.
+Missing scroll chrome uses a native ScrollFrame with bounded mouse-wheel scrolling
+and up/down controls. Other required template failures, missing dropdown primitives,
+tooltip/root/popup systems, or drawing primitives produce a chat/slash-command error
+with instructions to enable Blizzard UI addons, disable UI replacements and reload.
+Font construction retries with `GameFontNormal`. Item icons/links retain the
+existing guarded modern/legacy getters and question-mark/name fallbacks.
+Windows retain drag, clamping, viewport-based scale, Escape and close/reopen behavior.
+Mocked checks validate control logic, **not pixel layout, fonts, assets or live taint**.
+
+`UI.Supports` derives presentation decisions from the public capability projection,
+including a detached copy of Core's explicit measurement support. It does not
+inspect native result zeros, flavor-specific payloads or correlation evidence.
+`UI.FixedInputs` identifies schematic requirements, rather than measured consumption.
+Core still owns every correlation and confirmation decision. In particular, a
+confirmed craft whose material-return evidence is unverified remains a normal craft.
+
+| Screen | Public reads / management | Forever presentation |
+|---|---|---|
+| Overview | GetCraftSeries, GetRecipeOutcomes, GetCrafts, GetCharacters, GetProfessions | Confirmed crafts, total output, recipes crafted, activity chart and most-crafted recipes; unsupported outcome cards omitted and remaining cards reflowed |
+| Logbook | GetCrafts, GetCharacters, GetProfessions | Recipe/output, quantity, timestamp, character and profession; shared filters, scrolling and paging |
+| Recipes | GetRecipeSummaries, GetRecipeOutcomes, GetCrafts | Recorded recipes remain discoverable with sort/search/period filters; no proc-rate columns |
+| Reagents | GetReagentSummaries | Expected schematic quantities and craft history; no zero savings/return graphs |
+| Character / Profession | GetCraftSeries, GetCrafts, GetCharacters, GetProfessions | Persisted identities, activity and recipes; no equipment/stats prerequisite |
+| Recipe detail | GetRecipeOutcomes, GetCrafts, GetFacets, GetRecipeReagentStatistics, GetRecipeReagentRequirements and supported outcome queries | Output/activity/history and fixed reagents; unsupported quality/statistics sections omitted |
+| Reagent detail | GetReagentSummaries, GetCrafts, GetCraft | Expected requirements attributed to confirmed crafts, browsing/history/navigation; no inferred net consumption |
+| Craft detail / tooltips | GetCraft and supported recipe queries | Result and ingredients; unsupported result cards and configuration tab omitted |
+| Settings | Status, SetRetentionDays, supported Core analysis/discovery/repair and confirmed purge | Existing supported management; no new diagnostics/settings subsystem |
+
+All screens share Components' native buttons, dropdowns, text/item cells and scroll
+helpers. Recipe/reagent/population views use the shared tabbed content. Craft detail
+and the main window share window chrome; tooltips use GameTooltip. Required fixed
+reagents may be absent for unsupported recipes or unavailable metadata; an empty
+selection is not evidence that a recipe has no inputs.
+
+Unavailable is not zero: unsupported measurements are omitted; unobserved values
+are unavailable/dashes with explanations; incomplete observations are identified
+as partial; rates without a valid denominator are unavailable. An observed zero
+remains a zero where its observation coverage establishes it. Retail retains its
+existing supported quality, proc, concentration, configuration and return views.
+Fixed reagent quantities mean **expected recipe requirements attributed to confirmed
+crafts**, derived from schematics. They are **not independently measured bag
+consumption and not Resourcefulness savings or return evidence**.
+
+### Forever live acceptance
+
+With WoW closed, back up the existing SavedVariables containing the four accepted
+crafts. Install this branch's Forever Core + UI archives (or the bundle) into
+`_forever_/Interface/AddOns`; do not install Retail archives there. On Windows use
+`Deploy-WowAddon.ps1 -Flavor Forever -Addon Core` and then `-Addon UI` (or `-Addon Both`).
+Tracer may remain disabled; the diagnostics inspector is not required.
+
+1. Enable Core and production UI; open `/al` and `/artisanlogbook`. Check no Lua
+   errors, readable parchment/labels, sidebar, close controls and selected tabs.
+2. Select All time. Confirm **4 crafts across 3 recipes**: Minor Mana Potion
+   (2331, output 2455) once, Elixir of Minor Defense (7183, output 5997) twice,
+   Elixir of Minor Strength (2329, output 2454) once.
+3. In Logbook, inspect both separate Defense batch entries, output quantities,
+   timestamps and result/ingredient views. Neither entry should appear failed
+   merely because material returns were not verified.
+4. Browse Recipes; exercise name/count/profession sorting, search, period and
+   character/profession filtering, pin/hide and recipe navigation. Inspect a recipe's
+   fixed reagents; compare expected quantities against the schematic used for capture.
+5. Browse Reagents, history and recipe links. Confirm labels describe expected
+   requirements, not measured consumption, net used, returns or savings.
+6. Open Character and Profession, Overview and Craft History tabs. Confirm activity
+   and recipe totals remain meaningful with equipment, stats and buffs absent.
+7. Check Resourcefulness, Multicraft, Ingenuity, concentration, quality and
+   operation/configuration measurements are hidden rather than displayed as 0%.
+   Check no empty chart legends, blank sections or large abandoned card spaces.
+8. Check tooltips, unknown/cold-cache item names/icons, empty filters, long names,
+   scrolling, paging with a larger history, drag/clamping and smaller viewport/UI scale.
+9. Close/reopen with the close button, Escape and minimap book. Reload; history
+   and saved UI preferences must remain available. Do not purge or repair to test browsing.
+10. Repeat Core-only, Core + UI, and Core + UI + Tracer (optional) installations.
+    Record actual build, resolution/scale, screenshots and first Lua error if any.
+
+Focused **Retail smoke test**: enable same-version Core + UI without Tracer; open both
+slash commands, Overview/Logbook/Recipes/Reagents and entity/details/Settings; confirm
+observed quality, Resourcefulness, Multicraft, Ingenuity, concentration, returns,
+configuration/equipment/buffs and salvage outputs still appear on their existing
+screens. Exercise filters, paging, tabs, tooltips, pins/hiding, scrolling, close/reopen
+and reload. Check measured zeros and incomplete evidence against known Retail fixtures.
+
+Automated acceptance uses a sanitized schema-5 fixture through real Core/public reads.
+It is not a substitute for the above installed-client checks. Live Forever/Retail and
+UIForever visual comparisons have not been run in this development environment.
+Do not upload personal SavedVariables or repository code to a hosted simulator.
 
 Owned multi-output salvage appears as one history/detail craft. Result detail,
 history tooltips and quality populations include every observed output. Repeated

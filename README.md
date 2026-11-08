@@ -60,18 +60,29 @@ interfaces are validated against `.flavors.yml` before any extraction/copy.
 The PowerShell reader consumes the block-style `id` and `version` scalar fields
 used in that file; CI's existing YAML resolver validates the complete format.
 
-Forever Core supports a first conservative adapter for ordinary personal crafts
-with deterministic output and fixed required reagents. Install **Core + Tracer**:
+Forever Core supports ordinary personal crafts with deterministic output and
+fixed required reagents. The shared production UI is ready for **live acceptance**,
+not released or fully visually validated. Install **Core + UI**:
 
 ```powershell
 .\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Core
-.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Tracer
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon UI
 ```
 
-Enable both addons in-game (Tracer is disabled by default). Core capture runs
-independently of tracer recording. Forever production UI is **not validated**
-and refuses initialization; `-Flavor Forever -Addon Both` still selects the
-bundle but warns about the UI. Do not enable the UI for this milestone.
+Enable both addons in-game and open `/al` or `/artisanlogbook`. Tracer may remain
+disabled or absent. Overview, Logbook, Recipes, Reagents, Character and Profession
+use the same screens as Retail. Confirmed crafts, output quantities, recorded
+identities and expected fixed reagent requirements are available. Fixed quantities
+come from recipe schematics and are attributed to confirmed crafts; they are
+**not independently measured bag consumption or evidence of savings/returns**.
+Resourcefulness, Multicraft, Ingenuity, concentration, qualities and crafting
+operation measurements are unavailable, not zero, and their cards/charts are hidden.
+Build local Forever archives with
+`ADDON_FLAVOR=forever bash src/addon/scripts/package.sh`; extract the Core and UI
+directories into `_forever_/Interface/AddOns` with WoW closed. Back up
+`ArtisanLogbookDB` and `ArtisanLogbookUISettings` SavedVariables before deployment.
+See the [Forever UI acceptance checklist](docs/production-ui.md#forever-live-acceptance)
+for the four-craft history and a focused Retail smoke test.
 The [Forever adapter guide](docs/capture-tracer.md#first-forever-crafting-adapter)
 documents the replayed evidence, support boundary and in-game acceptance plan.
 Orders, enchants, salvage, recrafts, optional/substituted inputs, crafting stats,
@@ -85,8 +96,9 @@ flavor has an `id` and WoW client `version`. The matrix computes its
 TOC interface number and creates a flavor-specific bundle. Retail keeps the
 unqualified bundle filename for compatibility. Set `release: false` for
 diagnostic flavors: they produce CI/local archives but are excluded from
-GitHub releases and CurseForge. Forever retains this safety gate pending an
-in-game Core adapter acceptance session; Retail release semantics are unchanged.
+GitHub releases and CurseForge. Forever retains this safety gate pending production
+UI live acceptance; initial Core capture acceptance does not certify UI layout.
+Retail release semantics are unchanged.
 
 CurseForge publication uses
 [`curseforge-publish@v0.6.0`](https://github.com/Kralizek/github-actions/tree/v0.6.0/actions/curseforge-publish)
