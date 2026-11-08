@@ -151,8 +151,11 @@ normalized, sorted with the OS path comparer, and deduplicated. Directory links
 select a physical installation path. Hard-link aliases and case aliases on
 case-insensitive Unix filesystems are not physically deduplicated; C07/C02
 identity reconciliation still makes repeated observations idempotent.
-Inaccessible/broken paths produce structured diagnostics and do not hide other
-discoverable ledgers. Discovery never reads ledger contents or writes files.
+Inaccessible/broken configured roots, account entries, and known client source
+branches produce errors and do not hide other discoverable ledgers. Incidental
+failures inspecting unrecognized installation children or `Interface/AddOns`
+layout hints are warnings, as are skipped filesystem links. Discovery never
+reads ledger contents or writes files.
 
 ### Import
 
@@ -177,8 +180,10 @@ file/committed-craft totals. Totals count observations handled across files,
 not unique database cardinality (use `status` for that).
 
 Partial success is explicit and returns nonzero. Any failed file or discovery
-failure/skipped link returns 3; otherwise a rejected file returns 2. Source
-coverage and evidence warnings from C07 alone still allow success. No configured
+error returns 3; otherwise a rejected file returns 2. Discovery warnings
+(including skipped links) and source coverage/evidence warnings do not fail
+an otherwise successful import or mark it partial; diagnostics and warning
+totals remain visible. No configured
 root returns 1 and advises `artisanlogbook init`; malformed/unreadable/unsupported
 settings or no discovered ledgers return 3 without opening DuckDB.
 

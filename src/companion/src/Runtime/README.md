@@ -22,7 +22,10 @@ first consumer; future monitoring and web hosts should use these same services.
   `Interface/AddOns`. A new installation can have no saved ledgers.
 - `DiscoverSavedVariables(roots)`: normalized sorted Core ledger paths and
   structured path/code/severity/message diagnostics. Missing optional layout
-  branches are normal. Filesystem failures and skipped links are explicit.
+  branches are normal. Configured-root enumeration and known source-branch
+  failures are errors; incidental client-candidate/addon-layout inspection
+  failures and skipped links are warnings. All remain explicit. Consumers
+  should use `HasErrors`, not diagnostic count, to determine incomplete discovery.
 
 All discovery results are read-only inspections. They do not parse sources,
 establish game identity, import, or prove WoW has finished saving. Only C04

@@ -137,6 +137,68 @@ public sealed class InstallationDiscoveryTests
     }
 
     [Test]
+    public void IncidentalLayoutFailuresAreWarningsButKnownSourceFailuresAreErrors()
+    {
+        string ledger = Ledger("_retail_", "Sanitized");
+        File.WriteAllText(ledger, "unchanged");
+        string interfacePath = Path.Combine(_root, "_retail_", "Interface");
+        File.WriteAllText(interfacePath, "unrelated file");
+        string unknown = Path.Combine(_root, "unrelated");
+        Directory.CreateDirectory(unknown);
+        File.WriteAllText(Path.Combine(unknown, "WTF"), "not a client");
+        DiscoveryResult result = _discovery.DiscoverSavedVariables([_root]);
+        Assert.That(result.Paths, Is.EqualTo(new[] { ledger }));
+        Assert.That(result.Diagnostics, Has.Count.EqualTo(2));
+        Assert.That(result.Diagnostics.All(diagnostic => diagnostic.Severity == DiscoverySeverity.Warning), Is.True);
+        Assert.That(result.HasErrors, Is.False);
+
+        string known = Path.Combine(_root, "known-client");
+        Directory.CreateDirectory(Path.Combine(known, "Interface", "AddOns"));
+        string sourceBranch = Path.Combine(known, "WTF");
+        File.WriteAllText(sourceBranch, "invalid source directory");
+        result = _discovery.DiscoverSavedVariables([_root]);
+        Assert.That(result.Paths, Is.EqualTo(new[] { ledger }));
+        Assert.That(result.Diagnostics.Single(diagnostic => diagnostic.Path == sourceBranch).Severity,
+            Is.EqualTo(DiscoverySeverity.Error));
+        Assert.That(result.HasErrors, Is.True);
+    }
+
+    [TestCase("unrelated", DiscoverySeverity.Warning)]
+    [TestCase("root", DiscoverySeverity.Error)]
+    [TestCase("accounts", DiscoverySeverity.Error)]
+    [TestCase("savedVariables", DiscoverySeverity.Error)]
+    public void InaccessibleLocationsAreClassifiedBySourceBoundary(string location, DiscoverySeverity severity)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Ignore("Unix permissions; portable malformed-layout classification is tested separately.");
+            return;
+        }
+        string ledger = Ledger("_retail_", "Sanitized");
+        File.WriteAllText(ledger, "unchanged");
+        string unrelated = Path.Combine(_root, "unrelated");
+        Directory.CreateDirectory(unrelated);
+        string inaccessible = location switch
+        {
+            "root" => _root,
+            "accounts" => Path.Combine(_root, "_retail_", "WTF", "Account"),
+            "savedVariables" => Path.GetDirectoryName(ledger)!,
+            _ => unrelated
+        };
+        UnixFileMode mode = File.GetUnixFileMode(inaccessible);
+        try
+        {
+            File.SetUnixFileMode(inaccessible, UnixFileMode.None);
+            DiscoveryResult result = _discovery.DiscoverSavedVariables([_root]);
+            Assert.That(result.Diagnostics, Is.Not.Empty);
+            Assert.That(result.Diagnostics.All(diagnostic => diagnostic.Severity == severity), Is.True);
+            Assert.That(result.HasErrors, Is.EqualTo(severity == DiscoverySeverity.Error));
+            Assert.That(result.Paths, location == "unrelated" ? Is.EqualTo(new[] { ledger }) : Is.Empty);
+        }
+        finally { File.SetUnixFileMode(inaccessible, mode); }
+    }
+
+    [Test]
     public void InvalidDirectoryAndInaccessibleAccountsAreDiagnosedWhileOtherLedgersSurvive()
     {
         string ledger = Ledger("_retail_", "Sanitized");

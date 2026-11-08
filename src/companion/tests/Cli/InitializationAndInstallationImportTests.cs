@@ -252,6 +252,101 @@ public sealed class InitializationAndInstallationImportTests
     }
 
     [Test]
+    public async Task UnrelatedSkippedLinkPreservesWarningsWithoutFailingSuccessfulImports()
+    {
+        string source = await WriteLedger("_retail_", "Sanitized", 1);
+        byte[] before = await File.ReadAllBytesAsync(source);
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        string link = Path.Combine(_root, "unrelated-link");
+        Directory.CreateSymbolicLink(link, _directory);
+        try
+        {
+            (int exit, string output) = await Run(["import"]);
+            Assert.That(exit, Is.EqualTo(ExitCodes.Success), output);
+            Assert.That(output, Does.Contain("Warning (link-skipped)").And.Contain("Installation import complete")
+                .And.Not.Contain("partial success").And.Not.Contain("Incomplete installation import"));
+            Count(output, "Discovery errors", 0);
+            Count(output, "Discovery warnings", 1);
+            Count(output, "Successful files", 1);
+            Count(output, "Committed inserted crafts", 1);
+        }
+        finally { Directory.Delete(link); }
+        Assert.That(await File.ReadAllBytesAsync(source), Is.EqualTo(before));
+    }
+
+    [Test]
+    public async Task IncidentalLayoutWarningsDoNotFailButAccountSourceErrorsProducePartialSuccess()
+    {
+        await WriteLedger("_retail_", "Sanitized", 1);
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        File.WriteAllText(Path.Combine(_root, "_retail_", "Interface"), "unrelated");
+        (int exit, string output) = await Run(["import"]);
+        Assert.That(exit, Is.Zero, output);
+        Assert.That(output, Does.Contain("Warning (discovery-failed)").And.Contain("Installation import complete")
+            .And.Not.Contain("partial success"));
+        Count(output, "Discovery errors", 0);
+        Count(output, "Discovery warnings", 1);
+
+        string account = Path.Combine(_root, "_retail_", "WTF", "Account", "Sanitized-B");
+        Directory.CreateDirectory(account);
+        File.WriteAllText(Path.Combine(account, "SavedVariables"), "invalid source directory");
+        (exit, output) = await Run(["import"]);
+        Assert.That(exit, Is.EqualTo(ExitCodes.Failed), output);
+        Assert.That(output, Does.Contain("Error (discovery-failed)").And.Contain("partial success"));
+        Count(output, "Discovery errors", 1);
+        Count(output, "Discovery warnings", 1);
+        Count(output, "Committed already-present crafts", 1);
+    }
+
+    [TestCase("unrelated", ExitCodes.Success)]
+    [TestCase("root", ExitCodes.Failed)]
+    [TestCase("savedVariables", ExitCodes.Failed)]
+    public async Task InaccessibleLocationSeverityControlsImportExit(string location, int expectedExit)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Ignore("Unix permissions; portable path failures and warning exits are tested separately.");
+            return;
+        }
+        await WriteLedger("_retail_", "Sanitized-A", 1);
+        string second = await WriteLedger("_forever_", "Sanitized-B", 18);
+        string unrelated = Path.Combine(_root, "unrelated");
+        Directory.CreateDirectory(unrelated);
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        string inaccessible = location switch
+        {
+            "root" => _root,
+            "savedVariables" => Path.GetDirectoryName(second)!,
+            _ => unrelated
+        };
+        UnixFileMode mode = File.GetUnixFileMode(inaccessible);
+        try
+        {
+            File.SetUnixFileMode(inaccessible, UnixFileMode.None);
+            (int exit, string output) = await Run(["import"]);
+            Assert.That(exit, Is.EqualTo(expectedExit), output);
+            if (location == "unrelated")
+            {
+                Assert.That(output, Does.Contain("Warning (discovery-failed)").And.Contain("Installation import complete")
+                    .And.Not.Contain("partial success"));
+                Count(output, "Successful files", 2);
+            }
+            else
+            {
+                Assert.That(output, Does.Contain("Error (discovery-failed)"));
+                if (location == "savedVariables")
+                {
+                    Assert.That(output, Does.Contain("partial success"));
+                    Count(output, "Successful files", 1);
+                }
+                else
+                    Assert.That(File.Exists(_paths.ResolveDatabase(null)), Is.False);
+            }
+        }
+        finally { File.SetUnixFileMode(inaccessible, mode); }
+    }
+
+    [Test]
     public async Task DiscoveryFailureAlongsideValidSourceIsExplicitAndNonzero()
     {
         await WriteLedger("_retail_", "Sanitized", 1);

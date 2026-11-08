@@ -124,13 +124,23 @@ public sealed class InstallationDiscovery
     {
         if (!SafeDirectory(root, diagnostics)) return [];
         List<string> flavors = [];
-        foreach (string directory in Directories(root, diagnostics))
+        foreach (string directory in Directories(root, diagnostics, entryFailureSeverity: DiscoverySeverity.Warning))
         {
-            if (!SafeDirectory(directory, diagnostics)) continue;
-            if (SafeDirectory(Path.Combine(directory, "WTF"), diagnostics, optional: true) &&
-                SafeDirectory(Path.Combine(directory, "WTF", "Account"), diagnostics, optional: true) ||
-                SafeDirectory(Path.Combine(directory, "Interface"), diagnostics, optional: true) &&
-                SafeDirectory(Path.Combine(directory, "Interface", "AddOns"), diagnostics, optional: true))
+            if (!SafeDirectory(directory, diagnostics, failureSeverity: DiscoverySeverity.Warning)) continue;
+            List<DiscoveryDiagnostic> sourceDiagnostics = [];
+            bool hasWtf = SafeDirectory(Path.Combine(directory, "WTF"), sourceDiagnostics,
+                optional: true, failureSeverity: DiscoverySeverity.Warning);
+            bool hasAccounts = hasWtf &&
+                SafeDirectory(Path.Combine(directory, "WTF", "Account"), sourceDiagnostics, optional: true);
+            bool hasAddons = SafeDirectory(Path.Combine(directory, "Interface"), diagnostics,
+                optional: true, failureSeverity: DiscoverySeverity.Warning) &&
+                SafeDirectory(Path.Combine(directory, "Interface", "AddOns"), diagnostics,
+                    optional: true, failureSeverity: DiscoverySeverity.Warning);
+            // A recognized client makes failures in its source branch significant; addon checks are only layout hints.
+            diagnostics.AddRange(sourceDiagnostics.Select(diagnostic =>
+                (hasWtf || hasAddons) && diagnostic.Code != "link-skipped"
+                    ? diagnostic with { Severity = DiscoverySeverity.Error } : diagnostic));
+            if (hasAccounts || hasAddons)
                 flavors.Add(directory);
         }
         return flavors;
@@ -154,7 +164,9 @@ public sealed class InstallationDiscovery
         }
     }
 
-    private static bool SafeDirectory(string path, List<DiscoveryDiagnostic> diagnostics, bool optional = false)
+    private static bool SafeDirectory(
+        string path, List<DiscoveryDiagnostic> diagnostics, bool optional = false,
+        DiscoverySeverity failureSeverity = DiscoverySeverity.Error)
     {
         try
         {
@@ -171,12 +183,14 @@ public sealed class InstallationDiscovery
         catch (Exception exception) when (optional && exception is FileNotFoundException or DirectoryNotFoundException) { return false; }
         catch (Exception exception) when (IsFileSystemFailure(exception))
         {
-            diagnostics.Add(Failure(path, exception));
+            diagnostics.Add(Failure(path, exception, failureSeverity));
             return false;
         }
     }
 
-    private static string[] Directories(string path, List<DiscoveryDiagnostic> diagnostics)
+    private static string[] Directories(
+        string path, List<DiscoveryDiagnostic> diagnostics,
+        DiscoverySeverity entryFailureSeverity = DiscoverySeverity.Error)
     {
         try
         {
@@ -191,7 +205,10 @@ public sealed class InstallationDiscovery
                     else if ((attributes & FileAttributes.Directory) != 0)
                         directories.Add(entry);
                 }
-                catch (Exception exception) when (IsFileSystemFailure(exception)) { diagnostics.Add(Failure(entry, exception)); }
+                catch (Exception exception) when (IsFileSystemFailure(exception))
+                {
+                    diagnostics.Add(Failure(entry, exception, entryFailureSeverity));
+                }
             }
             return directories.ToArray();
         }
@@ -205,8 +222,9 @@ public sealed class InstallationDiscovery
     private static bool IsFileSystemFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or NotSupportedException;
 
-    private static DiscoveryDiagnostic Failure(string path, Exception exception) =>
-        new(path, "discovery-failed", exception.Message, DiscoverySeverity.Error);
+    private static DiscoveryDiagnostic Failure(
+        string path, Exception exception, DiscoverySeverity severity = DiscoverySeverity.Error) =>
+        new(path, "discovery-failed", exception.Message, severity);
     private static DiscoveryDiagnostic Link(string path) =>
         new(path, "link-skipped", "Filesystem links are not followed; select a physical installation path.", DiscoverySeverity.Warning);
 }

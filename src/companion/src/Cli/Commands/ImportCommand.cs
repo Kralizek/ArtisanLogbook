@@ -90,12 +90,12 @@ public sealed class ImportCommand(
         Add("Committed already-present crafts", results.Sum(result => (long)result.AlreadyPresentCrafts));
         Add("Committed enriched crafts", results.Sum(result => (long)result.EnrichedCrafts));
         console.Write(totals);
-        bool partial = rejected > 0 || failed > 0 || discovered.Diagnostics.Count > 0;
+        bool partial = rejected > 0 || failed > 0 || discovered.HasErrors;
         console.MarkupLine(partial
             ? "[yellow]Incomplete installation import" + (successful > 0 ? " (partial success)" : "") +
                 ".[/] Valid files remain committed; review individual diagnostics and retry."
             : "[green]Installation import complete.[/]");
-        return failed > 0 || discovered.Diagnostics.Count > 0 ? ExitCodes.Failed :
+        return failed > 0 || discovered.HasErrors ? ExitCodes.Failed :
             rejected > 0 ? ExitCodes.Rejected : ExitCodes.Success;
 
         void Add(string label, long count) => totals.AddRow(label, count.ToString(CultureInfo.InvariantCulture));
