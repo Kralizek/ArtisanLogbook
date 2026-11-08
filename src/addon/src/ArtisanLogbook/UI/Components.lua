@@ -18,6 +18,52 @@ function UI.Supports(metric)
   return true
 end
 
+function UI.ActionButton(parent, x, y, width, action)
+  local button = UI.Button(parent, "", x, y, width, action)
+  button.icon = button:CreateTexture(nil, "ARTWORK")
+  button.icon:SetSize(16, 16); button.icon:SetPoint("CENTER")
+  button:SetPropagateMouseClicks(false)
+  return button
+end
+
+function UI.RecipeActions(parent, x, y)
+  local actions = CreateFrame("Frame", nil, parent)
+  actions:SetPoint("TOPLEFT", x, y); actions:SetSize(60, 28)
+  local pin = UI.ActionButton(actions, 0, -2, 26, function()
+    local ok, reason = UI.TogglePin(actions.recipe)
+    if not ok then addon.Notify(reason) end
+  end)
+  local hide = UI.ActionButton(actions, 30, -2, 26, function()
+    if actions.recipe then UI.SetRecipeHidden(actions.recipe.id, not UI.IsRecipeHidden(actions.recipe.id)) end
+  end)
+  actions.pin, actions.hide = pin, hide
+  function actions:SetRecipe(recipe)
+    self.recipe = recipe
+    local pinned, hidden = UI.IsPinned(recipe.id), UI.IsRecipeHidden(recipe.id)
+    pin.icon:SetTexture("Interface\\Icons\\INV_Misc_Note_01")
+    pin.icon:SetAlpha(pinned and 1 or .45)
+    if pinned then pin:LockHighlight() else pin:UnlockHighlight() end
+    hide.icon:SetTexture(hidden and "Interface\\Icons\\Spell_Holy_MagicalSentry" or "Interface\\Icons\\Ability_Stealth")
+    pin.tooltip = pinned and "Unpin recipe" or "Pin recipe"
+    hide.tooltip = hidden and "Show recipe" or "Hide recipe"
+  end
+  for _, button in ipairs({ pin, hide }) do
+    button:SetScript("OnEnter", function(self)
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.tooltip)
+      GameTooltip:AddLine(self == pin and "Pin in the sidebar. Hiding and saved history are unchanged." or
+        "Hide from rankings and craft lists. The recipe stays in Recipes and saved history is unchanged.", 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  end
+  local function refresh(id)
+    if actions.recipe and actions.recipe.id == id then actions:SetRecipe(actions.recipe) end
+  end
+  UI.RegisterPinCallback(refresh)
+  UI.RegisterHiddenRecipeCallback(refresh)
+  return actions
+end
+
 function UI.FixedInputs()
   local capabilities = ArtisanLogbookAPI.GetCapabilities()
   return capabilities and capabilities.fixedReagents == true and capabilities.operationInfo == false or false
@@ -36,8 +82,13 @@ end
 
 function UI.InputExplanation()
   return UI.FixedInputs() and
-    "Expected recipe requirements attributed to confirmed crafts, derived from schematics. Not independently measured bag consumption or evidence of savings or returns." or
+    "Quantities are calculated from recipe requirements, not measured inventory changes." or
     "Recorded recipe inputs; return measurements are shown only when available."
+end
+
+function UI.InputHelp()
+  return UI.FixedInputs() and
+    "Expected recipe requirements attributed to confirmed crafts, derived from schematics. Not independently measured bag consumption or evidence of savings or returns." or UI.InputExplanation()
 end
 
 function UI.CheckPrimitives()
@@ -160,24 +211,28 @@ function UI.RegisterCraftVisibilityCallback(callback)
 end
 
 function UI.IsRecipeHidden(recipeId)
-  local settings = ArtisanLogbookUISettings
-  return type(settings) == "table" and type(settings.hiddenRecipes) == "table" and
-    settings.hiddenRecipes[recipeId] == true or false
+  return ArtisanLogbookManagement.IsRecipeHidden(recipeId)
 end
 
 function UI.SetRecipeHidden(recipeId, hidden)
-  if type(recipeId) ~= "number" or recipeId <= 0 or recipeId >= math.huge or recipeId % 1 ~= 0 or
-      type(hidden) ~= "boolean" then return nil end
-  local changed = UI.IsRecipeHidden(recipeId) ~= hidden
-  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
-  if type(ArtisanLogbookUISettings.hiddenRecipes) ~= "table" then ArtisanLogbookUISettings.hiddenRecipes = {} end
-  ArtisanLogbookUISettings.hiddenRecipes[recipeId] = hidden and true or nil
-  if changed then for _, callback in ipairs(hiddenRecipeCallbacks) do callback(recipeId, hidden) end end
-  return true
+  local ok, reason = ArtisanLogbookManagement.SetRecipeHidden(recipeId, hidden)
+  if not ok then addon.Notify(reason) end
+  return ok, reason
 end
 
 function UI.RegisterHiddenRecipeCallback(callback)
   hiddenRecipeCallbacks[#hiddenRecipeCallbacks + 1] = callback
+end
+
+local pinCallbacks = {}
+function UI.RegisterPinCallback(callback)
+  pinCallbacks[#pinCallbacks + 1] = callback
+end
+if ArtisanLogbookManagement and ArtisanLogbookManagement.RegisterPreferenceCallback then
+  ArtisanLogbookManagement.RegisterPreferenceCallback(function(kind, id)
+  local handlers = kind == "hidden" and hiddenRecipeCallbacks or kind == "pin" and pinCallbacks or nil
+  for _, callback in ipairs(handlers or {}) do callback(id) end
+  end)
 end
 
 function UI.VisibleRecipe(row)
@@ -389,43 +444,15 @@ function UI.CopyRecipe(recipe, fallback)
 end
 
 function UI.Pins()
-  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
-  local stored = ArtisanLogbookUISettings.pinnedRecipes
-  local pins = {}
-  if type(stored) == "table" then
-    for id, recipe in pairs(stored) do
-      if type(id) == "number" and id > 0 and id < math.huge and id % 1 == 0 and
-          type(recipe) == "table" then
-        pins[#pins + 1] = UI.CopyRecipe({ id = id, name = type(recipe.name) == "string" and recipe.name or nil,
-          profession = recipe.profession, expansion = recipe.expansion, maxQuality = recipe.maxQuality })
-      end
-    end
-  end
-  table.sort(pins, function(left, right)
-    local leftName, rightName = UI.Name(left):lower(), UI.Name(right):lower()
-    if leftName == rightName then return left.id < right.id end
-    return leftName < rightName
-  end)
-  ArtisanLogbookUISettings.pinnedRecipes = {}
-  for index = #pins, 6, -1 do table.remove(pins, index) end
-  for _, recipe in ipairs(pins) do ArtisanLogbookUISettings.pinnedRecipes[recipe.id] = recipe end
-  return pins
+  return ArtisanLogbookManagement.GetPinnedRecipes()
 end
 
 function UI.IsPinned(id)
-  UI.Pins()
-  return ArtisanLogbookUISettings.pinnedRecipes[id] ~= nil
+  return ArtisanLogbookManagement.IsRecipePinned(id)
 end
 
 function UI.TogglePin(recipe)
-  if type(recipe) ~= "table" or type(recipe.id) ~= "number" or recipe.id <= 0 or
-      recipe.id >= math.huge or recipe.id % 1 ~= 0 then return nil, "Unavailable recipe" end
-  local pins = UI.Pins()
-  local stored = ArtisanLogbookUISettings.pinnedRecipes
-  if stored[recipe.id] then stored[recipe.id] = nil; return true end
-  if #pins >= 5 then return nil, "Five recipes are already pinned" end
-  stored[recipe.id] = UI.CopyRecipe(recipe)
-  return true
+  return ArtisanLogbookManagement.ToggleRecipePin(recipe)
 end
 
 function UI.Text(parent, x, y, width, height, font)
@@ -484,10 +511,23 @@ function UI.Population(character, profession, craftType)
     craftType = craftTypeValues[craftType] and craftType or nil }
 end
 
-function UI.Choices(facet, character)
+function UI.Choices(facet, character, scope)
   local result = { { label = "All", value = false } }
-  local entries = facet == "characters" and ArtisanLogbookAPI.GetCharacters() or
-    ArtisanLogbookAPI.GetProfessions(character or nil)
+  local entries
+  if scope and next(scope) then
+    entries = {}
+    local seen = {}
+    local history = ArtisanLogbookAPI.GetCraftSeries(scope)
+    for _, row in ipairs(history and history.series or {}) do
+      local entry = facet == "characters" and row.character or row.profession
+      local id = entry and (entry.key or entry.skillLineId)
+      if id and not seen[id] then entries[#entries + 1] = entry; seen[id] = true
+      elseif not id then result.hasUnknown = true end
+    end
+  else
+    entries = facet == "characters" and ArtisanLogbookAPI.GetCharacters() or
+      ArtisanLogbookAPI.GetProfessions(character or nil)
+  end
   for _, entry in ipairs(entries or {}) do
     result[#result + 1] = { label = UI.Name(entry), value = entry.key or entry.skillLineId,
       classFile = entry.classFile }
@@ -501,6 +541,62 @@ function UI.Choices(facet, character)
   return result
 end
 
+local function knownName(value)
+  if type(issecretvalue) == "function" and issecretvalue(value) then return nil end
+  return type(value) == "string" and value ~= "" and value ~= "Unknown" and value
+end
+
+local function validItemId(id)
+  if type(issecretvalue) == "function" and issecretvalue(id) then return false end
+  return type(id) == "number" and id > 0 and id < math.huge and id % 1 == 0
+end
+
+local itemMetadata, itemObservers = {}, setmetatable({}, { __mode = "k" })
+
+function UI.RegisterItemCallback(owner, callback)
+  itemObservers[owner] = callback
+end
+
+local function cachedItemName(id)
+  local itemApi = C_Item or {}
+  for _, getter in ipairs({ itemApi.GetItemInfo or false, itemApi.GetItemNameByID or false, GetItemInfo or false }) do
+    if type(getter) == "function" then
+      local ok, name = pcall(getter, id)
+      if ok and knownName(name) then return name end
+      if not ok then
+        local entry = itemMetadata[id]
+        entry.getterErrors = entry.getterErrors or {}
+        if not entry.getterErrors[getter] then
+          entry.getterErrors[getter] = true
+          addon.Notify("Item information unavailable for #" .. id .. ": " .. tostring(name))
+        end
+      end
+    end
+  end
+end
+
+local itemLoader
+local function initializeItemLoader()
+  if itemLoader then return end
+  itemLoader = CreateFrame("Frame")
+  itemLoader:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+  itemLoader:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+  itemLoader:SetScript("OnEvent", function(_, _, id, success)
+    local entry = itemMetadata[id]
+    if not entry or not success then return end
+    local name = cachedItemName(id)
+    if not name or name == entry.notifiedName then return end
+    entry.name, entry.notifiedName = name, name
+    for owner, callback in pairs(itemObservers) do callback(owner, id) end
+  end)
+end
+
+function UI.ItemDisplayName(item, fallback)
+  if not item then return fallback or "Unknown" end
+  if knownName(item.name) then return item.name end
+  return UI.ItemName(item.id)
+end
+
 function UI.ItemTooltip(owner, item)
   if not item then UI.Tooltip.Hide(owner); return end
   GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
@@ -508,7 +604,9 @@ function UI.ItemTooltip(owner, item)
   UI.Tooltip.owner = owner
   local shown = item.id and type(GameTooltip.SetItemByID) == "function" and
     pcall(GameTooltip.SetItemByID, GameTooltip, item.id)
-  if not shown then GameTooltip:SetText(UI.Name(item)) end
+  if not shown or (type(GameTooltip.NumLines) == "function" and GameTooltip:NumLines() == 0) then
+    GameTooltip:SetText(UI.ItemDisplayName(item))
+  end
   if item.id then GameTooltip:AddLine("Item ID: " .. item.id, 1, 1, 1) end
   if item.note then GameTooltip:AddLine(item.note, 1, 1, 1, true) end
   GameTooltip:Show()
@@ -528,18 +626,22 @@ function UI.ItemIcon(itemId)
   end
 end
 
-function UI.ItemName(itemId)
-  if itemId == nil then return "Item information unavailable" end
-  local itemApi = C_Item
-  local getItemInfo = type(itemApi) == "table" and itemApi.GetItemInfo or GetItemInfo
-  if type(getItemInfo) == "function" then
-    local ok, name = pcall(getItemInfo, itemId)
-    if ok and type(name) == "string" and name ~= "" then return name end
+function UI.ItemName(itemId, coreName)
+  if knownName(coreName) then return coreName end
+  if not validItemId(itemId) then return "Item information unavailable" end
+  initializeItemLoader()
+  local entry = itemMetadata[itemId]
+  if not entry then entry = {}; itemMetadata[itemId] = entry end
+  if not entry.name then entry.name = cachedItemName(itemId) end
+  if entry.name then return entry.name end
+  if not entry.requested then
+    entry.requested = true
+    if C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
+      local ok, reason = pcall(C_Item.RequestLoadItemDataByID, itemId)
+      if not ok then addon.Notify("Item information unavailable for #" .. itemId .. ": " .. tostring(reason)) end
+    end
   end
-  if type(itemApi) == "table" and type(itemApi.RequestLoadItemDataByID) == "function" then
-    pcall(itemApi.RequestLoadItemDataByID, itemId)
-  end
-  return "Item information loading"
+  return entry.name or ("#" .. itemId)
 end
 
 function UI.ItemCell(parent, left, width)
@@ -559,12 +661,15 @@ function UI.ItemCell(parent, left, width)
   cell.label:SetWordWrap(false)
   function cell:Update(item, atlas, icon)
     UI.Tooltip.ReleaseTree(self)
-    self.item = item
+    self.item, self.atlas, self.itemIcon = item, atlas, icon
     self.icon:SetTexture(icon or (item and UI.ItemIcon(item.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
     self.quality:SetShown(atlas ~= nil)
     if atlas then self.quality:SetAtlas(atlas) end
-    self.label:SetText(UI.Elide(UI.Name(item), math.max(4, math.floor((width - 34) / 6))))
+    self.label:SetText(UI.Elide(UI.ItemDisplayName(item), math.max(4, math.floor((width - 34) / 6))))
   end
+  UI.RegisterItemCallback(cell, function(self, id)
+    if self.item and self.item.id == id then self:Update(self.item, self.atlas, self.itemIcon) end
+  end)
   return cell
 end
 
@@ -582,7 +687,7 @@ function UI.HistoryColumns(width, context)
   end
   columns[#columns + 1] = { title = "Result", width = unit * 1.05,
     value = function(row) return row.outputs and UI.CraftOutput(row) or
-      (UI.Name(row.outputItem) .. (row.outputQuality and " (quality " .. row.outputQuality .. ")" or "")) end,
+      (UI.ItemDisplayName(row.outputItem) .. (row.outputQuality and " (quality " .. row.outputQuality .. ")" or "")) end,
     create = function(parent, left) return UI.ItemCell(parent, left, unit * 1.05) end,
     update = function(cell, row)
       cell:Update(row.outputItem, UI.QualityAtlas(row.recipe and row.recipe.id, row.outputQuality, row.recipe and row.recipe.maxQuality))
@@ -739,6 +844,98 @@ function UI.FilterBar(parent, width, y)
   local bar = CreateFrame("Frame", nil, parent)
   bar:SetPoint("TOPLEFT", 0, y or 0); bar:SetSize(width, 46)
   bar.controls, bar.nextX, bar.row = {}, 0, 0
+  bar.layoutEntries, bar.scope = {}, {}
+  local function dimensionMeaningful(choices, selected)
+    return selected ~= nil and selected ~= false or #choices - 1 + (choices.hasUnknown and 1 or 0) > 1
+  end
+  function bar:Scope(scope)
+    self.scope = scope or {}
+    self.context = nil
+    self:Reflow()
+  end
+  function bar:Context()
+    if self.context then return self.context end
+    local context = { characters = UI.Choices("characters", nil, self.scope),
+      professions = UI.Choices("professions", nil, self.scope), craftTypes = 0 }
+    local history, reason = ArtisanLogbookAPI.GetCraftSeries(self.scope)
+    if history then
+      for _, row in ipairs(history.series) do
+        if not row.character then context.characters.hasUnknown = true end
+        if not row.profession then context.professions.hasUnknown = true end
+      end
+    else
+      context.characters.hasUnknown, context.professions.hasUnknown = true, true
+      context.unavailable = true
+      addon.Notify("Craft filters unavailable: " .. tostring(reason))
+    end
+    local counts = {}
+    for _, kind in ipairs({ "personal", "orders", "patron", "unknown" }) do
+      local filter = {}
+      for key, value in pairs(self.scope) do filter[key] = value end
+      filter.craftType = kind
+      local result, reason = ArtisanLogbookAPI.GetCraftSeries(filter)
+      if not result then
+        context.craftTypes = 2
+        addon.Notify("Craft filters unavailable: " .. tostring(reason))
+        break
+      end
+      local count = 0
+      for _, row in ipairs(result.series) do count = count + row.craftCount end
+      counts[kind] = count
+    end
+    if counts.unknown then
+      if counts.personal > 0 then context.craftTypes = context.craftTypes + 1 end
+      if counts.patron > 0 then context.craftTypes = context.craftTypes + 1 end
+      if counts.orders > counts.patron then context.craftTypes = context.craftTypes + 1 end
+      if counts.unknown > 0 then context.craftTypes = context.craftTypes + 1 end
+    end
+    self.context = context
+    return context
+  end
+  function bar:Reflow()
+    local context = self:Context()
+    self.nextX, self.row = 0, 0
+    for _, entry in ipairs(self.layoutEntries) do
+      local control, visible = entry.control, true
+      if entry.title == "Character" or entry.title == "Profession" then
+        local choices = context[entry.title == "Character" and "characters" or "professions"]
+        visible = context.unavailable or dimensionMeaningful(choices, control.value)
+      elseif entry.title == "Craft type" then
+        visible = control.value ~= nil and control.value ~= false or context.craftTypes > 1
+      end
+      control:SetShown(visible)
+      if visible then
+        local left, top = self:Slot(entry.size)
+        entry.position(left, top)
+      end
+    end
+    local height = (#self.layoutEntries > 0 and self.row + 1 or 0) * 46
+    if self.period and self.period.dates then
+      local custom = self.period.state.days == "custom"
+      self.period.dates:SetShown(custom)
+      self.period.dates:ClearAllPoints(); self.period.dates:SetPoint("TOPLEFT", 0, -height)
+      if custom then height = height + 46 end
+    end
+    self:SetHeight(height)
+    if self.onLayout then self.onLayout(height) end
+  end
+  function bar:Register(control, size, title, position)
+    self.layoutEntries[#self.layoutEntries + 1] = { control = control, size = size, title = title, position = position }
+    local update = control.Update
+    if update then
+      function control:Update(choices, selected)
+        if title == "Character" or title == "Profession" then
+          choices = bar:Context()[title == "Character" and "characters" or "professions"]
+          if selected and not UI.HasChoice(choices, selected) then
+            choices[#choices + 1] = { label = "Selected (not in this view)", value = selected }
+          end
+        end
+        update(self, choices, selected)
+        bar:Reflow()
+      end
+    end
+    self:Reflow()
+  end
   function bar:Slot(size)
     if self.nextX + size > width then self.nextX, self.row = 0, self.row + 1 end
     local left, top = self.nextX, -self.row * 46
@@ -751,6 +948,9 @@ function UI.FilterBar(parent, width, y)
     local left, top = self:Slot(size)
     local control = UI.Selector(self, left, top, size, choices, onChoose, title)
     self.controls[#self.controls + 1] = control
+    self:Register(control, size, title, function(x, top)
+      control:ClearAllPoints(); control:SetPoint("TOPLEFT", x - 15, top - 13)
+    end)
     return control
   end
   function bar:Checks(title, choices, selected, onChange, size)
@@ -758,14 +958,19 @@ function UI.FilterBar(parent, width, y)
     local left, top = self:Slot(size)
     local control = UI.MultiSelector(self, left, top, size, choices, selected, onChange, title)
     self.controls[#self.controls + 1] = control
+    self:Register(control, size, title, function(x, top)
+      control:ClearAllPoints(); control:SetPoint("TOPLEFT", x - 15, top - 13)
+    end)
     return control
   end
   function bar:Search(onSearch)
     local size = 190
     local left, top = self:Slot(size)
-    UI.Text(self, left, top, size, 16, "GameFontNormalSmall"):SetText("Search")
-    local input = CreateFrame("EditBox", nil, self, "InputBoxTemplate")
-    input:SetPoint("TOPLEFT", left + 4, top - 16); input:SetSize(128, 24)
+    local group = CreateFrame("Frame", nil, self)
+    group:SetSize(size, 46); group:SetPoint("TOPLEFT", left, top)
+    UI.Text(group, 0, 0, size, 16, "GameFontNormalSmall"):SetText("Search")
+    local input = CreateFrame("EditBox", nil, group, "InputBoxTemplate")
+    input:SetPoint("TOPLEFT", 4, -16); input:SetSize(128, 24)
     input:SetAutoFocus(false); input:SetMaxLetters(120)
     local function apply() input:SetScript("OnUpdate", nil); input:ClearFocus(); onSearch(input:GetText()) end
     input:SetScript("OnEnterPressed", apply)
@@ -778,15 +983,15 @@ function UI.FilterBar(parent, width, y)
       end)
     end)
     local function actionButton(x, texture, action)
-      local button = CreateFrame("Button", nil, self, "UIPanelButtonTemplate")
-      button:SetSize(24, 24); button:SetPoint("TOPLEFT", x, top - 16)
+      local button = CreateFrame("Button", nil, group, "UIPanelButtonTemplate")
+      button:SetSize(24, 24); button:SetPoint("TOPLEFT", x, -16)
       local icon = button:CreateTexture(nil, "ARTWORK")
       icon:SetSize(16, 16); icon:SetPoint("CENTER"); icon:SetTexture(texture)
       button:SetScript("OnClick", action)
       return button
     end
-    local search = actionButton(left + 136, "Interface\\Common\\UI-Searchbox-Icon", apply)
-    local clear = actionButton(left + 164, "Interface\\Buttons\\UI-GroupLoot-Pass-Up", function() input:SetText(""); apply() end)
+    local search = actionButton(136, "Interface\\Common\\UI-Searchbox-Icon", apply)
+    local clear = actionButton(164, "Interface\\Buttons\\UI-GroupLoot-Pass-Up", function() input:SetText(""); apply() end)
     clear:SetScript("OnClick", function() input:SetText(""); apply() end)
     for button, text in pairs({ [search] = "Search", [clear] = "Clear search" }) do
       button:SetScript("OnEnter", function(self)
@@ -795,6 +1000,9 @@ function UI.FilterBar(parent, width, y)
       button:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
     input.searchButton, input.clearButton = search, clear
+    self:Register(group, size, "Search", function(x, top)
+      group:ClearAllPoints(); group:SetPoint("TOPLEFT", x, top)
+    end)
     return input
   end
   function bar:Period(state, onChange, includeAll, size)
@@ -832,10 +1040,7 @@ function UI.FilterBar(parent, width, y)
       inputs[1]:SetText(date("!%Y-%m-%d", self.state.customFrom))
       inputs[2]:SetText(date("!%Y-%m-%d", self.state.customTo - 86400))
       self:Update(choices, self.state.days)
-      dates:SetShown(self.state.days == "custom")
-      dates:ClearAllPoints(); dates:SetPoint("TOPLEFT", 0, -(bar.row + 1) * 46)
-      bar:SetHeight((bar.row + 1) * 46 + (self.state.days == "custom" and 46 or 0))
-      if bar.onLayout then bar.onLayout(bar:GetHeight()) end
+      bar:Reflow()
     end
     function control:Time()
       if self.state.days == false then return nil end
@@ -843,9 +1048,9 @@ function UI.FilterBar(parent, width, y)
       local from, to = UI.Range(GetServerTime(), self.state.days or 30)
       return { from = from, to = to }
     end
-    control.state, control.inputs = state, inputs
-    control:UpdateState()
+    control.state, control.inputs, control.dates = state, inputs, dates
     self.period = control
+    control:UpdateState()
     return control
   end
   function bar:CraftType(state, onChange, size)
@@ -860,7 +1065,11 @@ function UI.FilterBar(parent, width, y)
       elseif activeState.craftType == nil then
         activeState.craftType = UI.DefaultCraftType()
       end
-      if not UI.HasChoice(choices, activeState.craftType) then activeState.craftType = false end
+      if not UI.HasChoice(choices, activeState.craftType) then
+        for _, choice in ipairs(craftTypeChoices) do
+          if choice.value == activeState.craftType then choices[#choices + 1] = choice end
+        end
+      end
       control:Update(choices, activeState.craftType)
     end
     control = self:Select("Craft type", choices, function(value)
@@ -1358,6 +1567,9 @@ function UI.ScrollList(parent, x, y, width, height, columns, onOpen, emptyMessag
       frame.onNearEnd()
     end
   end)
+  UI.RegisterItemCallback(frame, function(self)
+    self:Append(self.items, true)
+  end)
   frame:Reset()
   return frame
 end
@@ -1505,7 +1717,7 @@ function UI.Chart(parent, x, y, width, quantities)
 end
 
 function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
-  local available = width - 24 - (hideToggle and 44 or 0)
+  local available = width - 24 - (hideToggle and 60 or 0)
   local mechanics = {}
   for _, entry in ipairs({ { "Multicraft", "multicraftProcCount" },
       { "Resourcefulness", "resourcefulnessProcCount" }, { "Ingenuity", "ingenuityProcCount" } }) do
@@ -1554,10 +1766,10 @@ function UI.RecipeTable(parent, x, y, width, height, openRecipe, hideToggle)
       exact = function(row) return UI.ProcTooltip(row.totals, metric) end }
   end
   if hideToggle then
-    columns[#columns + 1] = { title = "Hide", width = 44,
-      value = function(row) return UI.IsRecipeHidden(row.recipe.id) and "Yes" or "No" end,
-      create = function(owner, left) return UI.HiddenRecipeCheckbox(owner, left + 6, -2, true) end,
-      update = function(check, row) check:SetRecipe(row.recipe.id) end }
+    columns[#columns + 1] = { title = "Actions", width = 60,
+      value = function(row) return UI.IsPinned(row.recipe.id) and "Pinned" or "Not pinned" end,
+      create = function(owner, left) return UI.RecipeActions(owner, left, 0) end,
+      update = function(actions, row) actions:SetRecipe(row.recipe) end }
   end
   local list = UI.ScrollList(parent, x, y, width, height, columns,
     function(row) if row.recipe then openRecipe(row.recipe) end end, "No recipes in this period")
@@ -1611,12 +1823,12 @@ function UI.CraftOutput(craft)
   if craft.outputs and #craft.outputs > 1 then
     local names = {}
     for _, output in ipairs(craft.outputs) do
-      names[#names + 1] = UI.Name(output.item) .. " x" .. UI.Number(output.quantity) ..
+      names[#names + 1] = UI.ItemDisplayName(output.item) .. " x" .. UI.Number(output.quantity) ..
         (output.quantityAmbiguous and " (uncertain)" or "")
     end
     return table.concat(names, ", ")
   end
-  local output = UI.Name(craft.outputItem, "")
+  local output = UI.ItemDisplayName(craft.outputItem, "")
   if craft.recipe and craft.recipe.name and craft.recipe.name == output then return "" end
   return output
 end
@@ -1663,7 +1875,7 @@ function UI.CraftIngredients(craft)
   local function itemRow(item, slot)
     local row = byItem[item.id]
     if not row then
-      row = { item = item, name = UI.Name(item) }
+      row = { item = item, name = UI.ItemDisplayName(item) }
       byItem[item.id] = row
       rows[#rows + 1] = row
     end
@@ -1683,7 +1895,7 @@ function UI.CraftIngredients(craft)
           if item.name and not seen[item.name] then seen[item.name] = true; names[#names + 1] = item.name end
         end
         if #names == 0 then
-          for _, item in ipairs(items) do names[#names + 1] = UI.Name(item) end
+          for _, item in ipairs(items) do names[#names + 1] = UI.ItemDisplayName(item) end
         end
         local name = table.concat(names, " or ")
         row = { item = items[1], candidates = items, qualityUnknown = true, name = name, title = name,
@@ -1798,7 +2010,7 @@ function UI.IngredientRequiredText(row)
         local qualities = {}
         for quality in pairs(selection.qualities) do qualities[#qualities + 1] = quality end
         table.sort(qualities)
-        local name = UI.Name(selection.item)
+        local name = UI.ItemDisplayName(selection.item)
         if #qualities == 1 then name = name .. " (quality " .. UI.Number(qualities[1]) .. ")" end
         known[#known + 1] = name .. " x" .. UI.Number(selection.quantity)
       end

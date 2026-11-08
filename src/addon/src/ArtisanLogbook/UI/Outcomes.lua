@@ -6,40 +6,52 @@ function UI.RegisterTrivialCallback(callback)
   trivialCallbacks[#trivialCallbacks + 1] = callback
 end
 
-function UI.TrivialItemIds()
-  local ids = {}
-  if type(ArtisanLogbookUISettings) == "table" and type(ArtisanLogbookUISettings.trivialReagents) == "table" then
-    for id, selected in pairs(ArtisanLogbookUISettings.trivialReagents) do
-      if selected == true and type(id) == "number" and id > 0 and id < math.huge and id % 1 == 0 then
-        ids[#ids + 1] = id
-      end
+if ArtisanLogbookManagement and ArtisanLogbookManagement.RegisterPreferenceCallback then
+  ArtisanLogbookManagement.RegisterPreferenceCallback(function(kind, itemId)
+    if kind == "ignored" then
+      local ignored = ArtisanLogbookManagement.IsReagentIgnored(itemId)
+      for _, callback in ipairs(trivialCallbacks) do callback(itemId, ignored) end
     end
-  end
-  table.sort(ids)
-  return ids
+  end)
 end
 
-local function trivialItems()
-  if type(ArtisanLogbookUISettings) ~= "table" then ArtisanLogbookUISettings = {} end
-  if type(ArtisanLogbookUISettings.trivialReagents) ~= "table" then
-    ArtisanLogbookUISettings.trivialReagents = {}
-  end
-  return ArtisanLogbookUISettings.trivialReagents
+function UI.TrivialItemIds()
+  return ArtisanLogbookManagement.GetIgnoredReagents()
 end
 
 function UI.IsTrivial(itemId)
-  return trivialItems()[itemId] == true
+  return ArtisanLogbookManagement.IsReagentIgnored(itemId)
 end
 
 function UI.SetTrivial(itemId, trivial)
   if type(itemId) ~= "number" or itemId < 1 or itemId >= math.huge or itemId % 1 ~= 0 or
       type(trivial) ~= "boolean" then return nil end
-  local changed = UI.IsTrivial(itemId) ~= trivial
-  trivialItems()[itemId] = trivial and true or nil
-  if changed then
-    for _, callback in ipairs(trivialCallbacks) do callback(itemId, trivial) end
+  return ArtisanLogbookManagement.SetReagentIgnored(itemId, trivial)
+end
+
+function UI.IgnoreReagentButton(parent, x, y, compact)
+  local button
+  button = UI.ActionButton(parent, x, y, compact and 64 or 112, function()
+    if button.itemId then UI.SetTrivial(button.itemId, not UI.IsTrivial(button.itemId)) end
+  end)
+  if compact then button.icon:Hide()
+  else button.icon:ClearAllPoints(); button.icon:SetPoint("LEFT", 6, 0) end
+  UI.Tooltip.Bind(button, function(self)
+    UI.Tooltip.Begin(self, UI.IsTrivial(self.itemId) and "Restore reagent" or "Ignore reagent")
+    UI.Tooltip.Subtitle("Applies to this item in every recipe. Ignored reagents are hidden by default and excluded from reagent totals and useful returns. Craft records and overall proc rates are unchanged.", "muted")
+    UI.Tooltip.Show()
+  end)
+  function button:SetItem(itemId)
+    self.itemId = itemId
+    local ignored = itemId ~= nil and UI.IsTrivial(itemId)
+    self:SetText(ignored and "Restore" or "Ignore")
+    self.icon:SetTexture("Interface\\Buttons\\UI-" .. (ignored and "Plus" or "Minus") .. "Button-UP")
+    self:SetShown(itemId ~= nil)
   end
-  return true
+  UI.RegisterTrivialCallback(function(itemId)
+    if button.itemId == itemId then button:SetItem(itemId) end
+  end)
+  return button
 end
 
 function UI.NonTrivialCount(sets)
@@ -127,7 +139,7 @@ function UI.TrivialCheckbox(parent, x, y, onChange, compact)
   local checkbox = UI.TemplateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
   checkbox:SetSize(24, 24)
   checkbox:SetPoint("TOPLEFT", x, y)
-  if not compact then UI.Text(checkbox, 26, -5, 218, 32):SetText("Ignore in savings statistics") end
+  if not compact then UI.Text(checkbox, 26, -5, 218, 32):SetText("Ignore reagent") end
   checkbox:SetScript("OnClick", function(self)
     if self.itemId then
       UI.SetTrivial(self.itemId, self:GetChecked() == true)
@@ -136,8 +148,8 @@ function UI.TrivialCheckbox(parent, x, y, onChange, compact)
   end)
   checkbox:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Ignore in savings statistics")
-    GameTooltip:AddLine("Exclude this reagent when counting crafts with useful returns. Quantities and the overall Resourcefulness rate stay unchanged.", 1, 1, 1, true)
+    GameTooltip:SetText("Ignore reagent")
+    GameTooltip:AddLine("Hide this item by default and exclude it from reagent totals and useful returns in every recipe. Craft records and overall proc rates stay unchanged.", 1, 1, 1, true)
     GameTooltip:Show()
   end)
   checkbox:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -159,7 +171,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   pane:SetPoint("TOPLEFT", 0, -62)
   pane.calculationGeneration = 0
   local api = ArtisanLogbookAPI
-  local state, recipeId = { days = 30, character = false, craftType = UI.DefaultCraftType() }, nil
+  local state, recipeId = { days = 30, character = false, craftType = UI.DefaultCraftType(), showIgnored = false }, nil
   local function refresh()
     if recipeId then pane:Refresh(); onFilterChanged() end
   end
@@ -167,13 +179,17 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   local period = filters:Period(state, refresh, true)
   local craftType = filters:CraftType(state, refresh)
   local characters = filters:Select("Character", {}, function(value) state.character = value; refresh() end)
+  local ignoredChoices = { { label = "No", value = false }, { label = "Yes", value = true } }
+  local ignoredFilter = filters:Select("Show ignored", ignoredChoices, function(value)
+    state.showIgnored = value; refresh()
+  end)
   pane.filters, pane.period, pane.craftType = filters, period, craftType
   local status = UI.Text(pane, 370, -16, width - 370, 24)
   local outcomeMetrics = { [3] = "concentrationSpent", [4] = "multicraft", [5] = "resourcefulness", [6] = "ingenuityRefund" }
   local entries, tileIndices = {}, {}
   for index, entry in ipairs({ { "Crafts", "Trade_BlackSmithing" }, { "Total output", "INV_Misc_Bag_10" },
       { "Concentration spent", "Spell_Arcane_Arcane01" }, { "Multicraft bonus", "Trade_Engineering" },
-      { "Returned units", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } }) do
+      { "Useful returned units", "INV_Misc_Herb_19" }, { "Ingenuity refund", "Spell_Holy_MindVision" } }) do
     if not outcomeMetrics[index] or UI.Supports(outcomeMetrics[index]) then
       entries[#entries + 1], tileIndices[#tileIndices + 1] = entry, index
     end
@@ -202,13 +218,13 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   local chart = UI.Chart(overview, 0, 0, inner)
   pane.chart = chart
   pane.qualityWorker = CreateFrame("Frame", nil, pane)
-  local explanationHeight = UI.FixedInputs() and 56 or 0
+  local explanationHeight = 0
   local qualityTitle = UI.Text(overview, 0, -170 - explanationHeight, inner, 24, "GameFontNormal")
   qualityTitle:SetText("Output by quality")
   local qualityWidth = inner - 24
   local resultWidth = qualityWidth * (UI.Supports("concentrationSpent") and .35 or .63)
   local qualityColumns = {
-    { title = "Result", width = resultWidth, value = function(row) return UI.Name(row.item) end,
+    { title = "Result", width = resultWidth, value = function(row) return UI.ItemName(row.item and row.item.id, row.item and row.item.name) end,
       create = function(owner, left) return UI.ItemCell(owner, left, resultWidth) end,
       update = function(cell, row)
         cell:Update(row.item, UI.QualityAtlas(recipeId, row.quality, pane.maxQuality))
@@ -247,9 +263,6 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   local qualityStatus = UI.Text(overview, 0, -340, inner, 32)
   pane.qualityList, pane.qualityTitle, pane.qualityStatus = qualityList, qualityTitle, qualityStatus
   qualityList:Hide(); qualityTitle:Hide()
-  local explanation = UI.Text(overview, 0, -174, inner, 52)
-  explanation:SetText(UI.FixedInputs() and UI.InputExplanation() or "")
-  explanation:SetShown(UI.FixedInputs())
   function pane:QualityBreakdown(filter, totals)
     self.qualityWorker:SetScript("OnUpdate", nil)
     if not UI.Supports("quality") then
@@ -370,9 +383,11 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     pane.returnQuantity = UI.Text(statistics, 0, -208, resourceWidth, 22)
   end
   local materialQuantityWidth = UI.FixedInputs() and 160 or 110
-  local materialNameWidth = inner - 24 - materialQuantityWidth - (UI.Supports("resourcefulness") and 320 or 0)
+  local materialNameWidth = inner - 24 - materialQuantityWidth - 72 - (UI.Supports("resourcefulness") and 250 or 0)
   local materialColumns = {
-    { title = "Reagent", width = materialNameWidth, value = function(row) return UI.Name(row.item) end,
+    { title = "Reagent", width = materialNameWidth, value = function(row)
+      return UI.ItemName(row.item.id, row.item.name)
+    end,
       create = function(owner, left) return UI.ItemCell(owner, left, materialNameWidth) end,
       update = function(cell, row)
         UI.ReagentCell(cell, row.item)
@@ -381,7 +396,7 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       return row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
     end, exact = function(row)
       if row.allocatedQuantity == nil then return "No quantity was recorded for this item." end
-      if UI.FixedInputs() then return UI.Number(row.allocatedQuantity) .. ". " .. UI.InputExplanation() end
+      if UI.FixedInputs() then return UI.Number(row.allocatedQuantity) .. ". " .. UI.InputHelp() end
       local text = UI.Number(row.allocatedQuantity) ..
         " recorded for this item across these crafts. Returns are shown separately."
       if row.matchedCraftCount and row.matchedCraftCount > 0 then
@@ -405,32 +420,43 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       " required across " .. UI.Count(row.matchedCraftCount, "comparable craft") ..
       ". The share uses this item in the same crafts."
     end },
-    { title = "Ignore", width = 64, value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
-      create = function(owner, left) return UI.TrivialCheckbox(owner, left + 8, -2, function() end, true) end,
+    { title = "", width = 72, value = function(row) return UI.IsTrivial(row.item.id) and "Restore" or "Ignore" end,
+      create = function(owner, left) return UI.IgnoreReagentButton(owner, left + 4, -2, true) end,
       update = function(check, row) check:SetItem(row.item.id) end },
   }
   if not UI.Supports("resourcefulness") then
-    for index = #materialColumns, 3, -1 do table.remove(materialColumns, index) end
+    table.remove(materialColumns, 4); table.remove(materialColumns, 3)
   end
   local materialList = UI.ScrollList(materials, 0, 0, inner, height - 253, materialColumns,
     function(row) if openReagent then openReagent(row.item) end end,
     UI.FixedInputs() and "No reagent requirements in this period" or "No reagent measurements in this period")
   pane.materialList = materialList
-  local requirementNote = UI.Text(materials, 0, -4, inner, 18, "GameFontNormalSmall")
+  local explanation = UI.Text(materials, 0, -4, inner, 32, "GameFontNormalSmall")
+  explanation:SetText(UI.FixedInputs() and UI.InputExplanation() or "")
+  explanation:SetShown(UI.FixedInputs())
+  pane.inputExplanation = explanation
+  UI.Tooltip.Bind(explanation, function(owner)
+    UI.Tooltip.Begin(owner, UI.InputLabel())
+    UI.Tooltip.Subtitle(UI.InputHelp(), "muted")
+    UI.Tooltip.Show()
+  end)
+  local materialCounts = UI.Text(materials, 0, UI.FixedInputs() and -40 or -4, inner, 18, "GameFontNormalSmall")
+  pane.materialCounts = materialCounts
+  local requirementNote = UI.Text(materials, 0, UI.FixedInputs() and -62 or -26, inner, 18, "GameFontNormalSmall")
   requirementNote:SetJustifyH("LEFT")
   requirementNote:SetWordWrap(false); requirementNote:SetMaxLines(1); requirementNote:Hide()
   pane.requirementNote = requirementNote
   pane.requirementFamilies = {}
   pane.requirementMore = false
   local function showRequirementDetails()
-    if #pane.requirementFamilies == 0 then return end
     GameTooltip:SetOwner(requirementNote, "ANCHOR_RIGHT")
     GameTooltip:SetText("Recipe requirements")
-    if UI.FixedInputs() then GameTooltip:AddLine(UI.InputExplanation(), 1, 1, 1, true) end
+    if UI.FixedInputs() then GameTooltip:AddLine(UI.InputHelp(), 1, 1, 1, true) end
     for _, family in ipairs(pane.requirementFamilies) do
       local names, seen = {}, {}
       for _, candidate in ipairs(family.candidateItems) do
-        local name = UI.Name(candidate)
+        local name = UI.ItemName(candidate.id, candidate.name) ..
+          (UI.IsTrivial(candidate.id) and " (ignored)" or "")
         if not seen[name] then seen[name] = true; names[#names + 1] = name end
       end
       GameTooltip:AddLine(table.concat(names, " or ") .. ": " .. UI.Number(family.requiredQuantity) .. " across " ..
@@ -440,6 +466,9 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     if pane.requirementMore then
       GameTooltip:AddLine("More ingredients aren't shown.", 1, 1, 1, true)
     end
+    if pane.requirementExcluded then
+      GameTooltip:AddLine("Ignored items are excluded. Totals for an unidentified quality are also omitted when any candidate item is ignored; the included amount cannot be determined.", 1, 1, 1, true)
+    end
     GameTooltip:Show()
   end
   requirementNote:SetScript("OnEnter", showRequirementDetails)
@@ -448,11 +477,38 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
   UI.LazyList(materialList, function(cursor)
     local result, reason = api.GetRecipeReagentStatistics(recipeId, pane:Filter(), { limit = 40, cursor = cursor })
     return result and result.reagents, result and result.nextCursor or reason
-  end)
+  end, function(row) return state.showIgnored or not UI.IsTrivial(row.item.id) end)
+  pane.materialWorker = CreateFrame("Frame", nil, pane)
+  local function refreshMaterialCounts(filter)
+    local cursor, included, excluded = nil, {}, {}
+    for _, family in ipairs(pane.allRequirementFamilies or {}) do
+      for _, candidate in ipairs(family.candidateItems) do
+        local target = UI.IsTrivial(candidate.id) and excluded or included
+        target[candidate.id] = true
+      end
+    end
+    materialCounts:SetText("Counting reagents...")
+    pane.materialWorker:SetScript("OnUpdate", function(worker)
+      local result = api.GetRecipeReagentStatistics(recipeId, filter, { limit = 200, cursor = cursor })
+      if not result then worker:SetScript("OnUpdate", nil); materialCounts:SetText("Reagent counts unavailable"); return end
+      for _, row in ipairs(result.reagents) do
+        local target = UI.IsTrivial(row.item.id) and excluded or included
+        target[row.item.id] = true
+      end
+      cursor = result.nextCursor
+      if cursor then return end
+      worker:SetScript("OnUpdate", nil)
+      local includedCount, excludedCount = 0, 0
+      for _ in pairs(included) do includedCount = includedCount + 1 end
+      for _ in pairs(excluded) do excludedCount = excludedCount + 1 end
+      materialCounts:SetText(UI.Number(includedCount) .. " included · " .. UI.Number(excludedCount) ..
+        " ignored" .. (pane.requirementMore and " · More requirements available" or ""))
+    end)
+  end
   local materialViewHeight
   local function layoutMaterialList()
     if not materialViewHeight then return end
-    local offset = pane.requirementVisible and 26 or 0
+    local offset = (UI.FixedInputs() and 58 or 22) + (pane.requirementVisible and 26 or 0)
     materialList:ClearAllPoints()
     materialList:SetPoint("TOPLEFT", 0, -4 - offset)
     materialList:SetViewportHeight(math.max(0, materialViewHeight - offset))
@@ -481,8 +537,13 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     self:SetScript("OnUpdate", nil)
     self.returnWorker:SetScript("OnUpdate", nil)
     self.qualityWorker:SetScript("OnUpdate", nil)
+    self.materialWorker:SetScript("OnUpdate", nil)
     self.calculationGeneration = self.calculationGeneration + 1
     local generation = self.calculationGeneration
+    local scope = { recipes = { recipeId } }
+    if filters.Scope then filters:Scope(scope) end
+    characters:Update(self.ContextChoices and self.ContextChoices("characters") or UI.Choices("characters", nil, scope), state.character)
+    ignoredFilter:Update(ignoredChoices, state.showIgnored == true)
     local filter = self:Filter()
     local result, reason = api.GetRecipeOutcomes(recipeId, filter, { buckets = 60 })
     status:SetText(reason or "")
@@ -498,22 +559,38 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
       for _, label in pairs(self.resourcefulness) do label:SetText("Unavailable") end
       qualityList:Hide(); qualityTitle:Hide(); qualityStatus:SetText("")
       materialList:Reset("Reagents unavailable")
+      materialCounts:SetText("")
       chart:Render({}, 0, 86400, 86400)
       return
     end
     local totals = result.totals
     local requirements = api.GetRecipeReagentRequirements(recipeId, filter, { limit = 200 })
-    pane.requirementFamilies = requirements and requirements.requirements or {}
+    pane.allRequirementFamilies = requirements and requirements.requirements or {}
+    pane.requirementFamilies = {}
+    pane.requirementExcluded = false
+    for _, family in ipairs(pane.allRequirementFamilies) do
+      local ignored = false
+      for _, candidate in ipairs(family.candidateItems) do
+        if UI.IsTrivial(candidate.id) then ignored = true; break end
+      end
+      if state.showIgnored or not ignored then
+        pane.requirementFamilies[#pane.requirementFamilies + 1] = family
+      else
+        pane.requirementExcluded = true
+      end
+    end
     pane.requirementMore = requirements and requirements.nextCursor ~= nil or false
-    pane.requirementVisible = #pane.requirementFamilies > 0
+    pane.requirementVisible = #pane.requirementFamilies > 0 or pane.requirementExcluded
     requirementNote:SetShown(pane.requirementVisible)
     if pane.requirementVisible then
-      requirementNote:SetText(UI.FixedInputs() and "Hover for expected recipe totals." or
+      requirementNote:SetText(pane.requirementExcluded and "Recipe totals exclude ignored items. Hover for details." or
+        UI.FixedInputs() and "Hover for expected recipe totals." or
         "Some ingredients aren't listed by quality. Hover for recipe totals.")
     else
       requirementNote:SetText("")
     end
     layoutMaterialList()
+    refreshMaterialCounts(filter)
     self:QualityBreakdown(filter, totals)
     self.tiles[1]:SetNumber(totals.craftCount, true)
     local outputAverage = UI.MulticraftAverage(totals)
@@ -638,11 +715,6 @@ function UI.RecipeOutcomes(parent, width, onFilterChanged, height, openReagent)
     craftType:UpdateState(state)
     recipeId = id
     qualityList.tooltipRecipe = pane.recipe or { id = id }
-    local available = { { label = "All", value = false } }
-    for _, entry in ipairs(api.GetCharacters() or {}) do
-      available[#available + 1] = { label = UI.Name(entry), value = entry.key, classFile = entry.classFile }
-    end
-    characters:Update(available, state.character)
     period:UpdateState(state)
     self:Refresh(saved ~= nil)
   end

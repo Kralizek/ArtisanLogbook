@@ -40,7 +40,9 @@ function UI.ReturnTotals(owner, recipes, filter, onResult)
     local outcomeFilter = { time = filter.time, characters = filter.characters, craftType = filter.craftType }
     local page = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipe.id, outcomeFilter, { limit = 100, cursor = cursor })
     if not page then self:SetScript("OnUpdate", nil); onResult(nil); return end
-    for _, reagent in ipairs(page.returns) do total = total + reagent.returnedQuantity end
+    for _, reagent in ipairs(page.returns) do
+      if not UI.IsTrivial(reagent.item and reagent.item.id) then total = total + reagent.returnedQuantity end
+    end
     cursor = page.nextCursor
     if not cursor then index = index + 1 end
   end)
@@ -289,6 +291,9 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
       if summary.returnedQuantity ~= nil then
         GameTooltip:AddLine("Known returned material units: " .. UI.Number(summary.returnedQuantity), 1, 1, 1, true)
       end
+      if #UI.TrivialItemIds() > 0 then
+        GameTooltip:AddLine("Useful procs and material units exclude ignored reagents; the recorded proc rate is unchanged.", 1, 1, 1, true)
+      end
       GameTooltip:Show()
     end)
     self.tiles[5]:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -330,7 +335,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   local characters, professions
   if kind ~= "Character" then
     characters = filters:Select("Character", {}, function(value)
-      state.character, state.profession = value, false; page:Refresh(true)
+      state.character = value; page:Refresh(true)
     end)
   end
   if kind ~= "Profession" then
@@ -420,11 +425,11 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     end)
   end
   function page:Refresh(reset, preserve)
-    local character = kind == "Character" and self.identity.key or state.character
+    filters:Scope(UI.Population(kind == "Character" and self.identity.key or nil,
+      kind == "Profession" and self.identity.skillLineId or nil))
     if characters then characters:Update(UI.Choices("characters"), state.character) end
     if professions then
-      local available = UI.Choices("professions", character)
-      if not UI.HasChoice(available, state.profession) then state.profession = false end
+      local available = UI.Choices("professions", nil, filters.scope)
       professions:Update(available, state.profession)
       status:SetText("")
     end

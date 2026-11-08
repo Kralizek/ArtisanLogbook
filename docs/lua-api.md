@@ -619,8 +619,34 @@ prove the same crafts were measured. The production UI shows bonus/output and
 refund/spend percentages only when both measures cover the complete selected
 population and the denominator is positive; otherwise quantities are shown with
 a short missing-details note where needed, and the percentage is omitted.
-Trivial-item preferences are not part
-of either the factual API or `ArtisanLogbookManagement`.
+Ignored-item preferences are not part of the factual API. With the production UI
+loaded, its preferences module extends `ArtisanLogbookManagement` with UI-owned
+operations; Core-only consumers do not depend on those optional methods.
+
+#### Optional production UI preference management
+
+The UI persistence boundary retains `ArtisanLogbookUISettings.pinnedRecipes`,
+`hiddenRecipes` and the legacy item-wide `trivialReagents` key. These operations
+never change `ArtisanLogbookDB`, craft facts, measurements or correlation:
+
+- `GetPinnedRecipes()` returns detached display metadata, alphabetically sorted,
+  at most five recipes. `IsRecipePinned(recipeId)` returns a boolean.
+- `ToggleRecipePin(recipe)` takes a recipe projection with a positive integer ID,
+  returning `true` or `nil, reason` (including the five-pin limit).
+- `UpdatePinnedRecipe(recipe)` refreshes an existing pin's display metadata.
+- `IsRecipeHidden(recipeId)` / `SetRecipeHidden(recipeId, hidden)` read/write
+  independent visibility preferences.
+- `GetIgnoredReagents()` returns a detached sorted array of positive item IDs.
+  `IsReagentIgnored(itemId)` / `SetReagentIgnored(itemId, ignored)` read/write
+  item-wide classification, shared across recipes.
+- Setters return `true` or `nil, reason`. `RegisterPreferenceCallback(callback)`
+  observes changed preferences as `(kind, id)`, where kind is `pin`, `hidden`
+  or `ignored`; callbacks are UI-session-only.
+
+Presentation uses generic item selectors to exclude ignored items before catalogue
+totals and paging. Show ignored removes this exclusion; it does not rewrite evidence.
+The UI resolves optional item display names through compatible WoW cache APIs without
+persisting them or extending the public craft/item projection.
 
 ### Durable daily craft series
 
@@ -852,8 +878,9 @@ Options:
 - `items` / `excludeItems`: optional dense arrays of positive item IDs. Duplicates
   are ignored. Inclusion and exclusion compose; an empty inclusion matches none.
   These are generic identity filters, not a Core classification preference. UI
-  implements Trivial with `items` and Non-trivial with `excludeItems`, using its
-  single `ArtisanLogbookUISettings.trivialReagents` store. `trivial` is not an
+  excludes ignored items by default using `excludeItems`, with Show ignored to
+  reveal them, using its single `ArtisanLogbookUISettings.trivialReagents` store
+  via UI management. `trivial` is not an
   accepted API option; Core never reads that UI store.
 - `limit`: integer 1-200, default 50. UI requests 40. `cursor` is an opaque
   filter/sort-bound offset; do not construct it. Changed filters/sort, malformed

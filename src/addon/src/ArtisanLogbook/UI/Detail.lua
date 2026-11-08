@@ -32,6 +32,11 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
   UI.RegisterHiddenRecipeCallback(function(recipeId)
     if page.recipe and page.recipe.id == recipeId then updateHiddenButton() end
   end)
+  UI.RegisterPinCallback(function(recipeId)
+    if page.recipe and page.recipe.id == recipeId then
+      pin:SetText(UI.IsPinned(recipeId) and "Unpin recipe" or "Pin recipe")
+    end
+  end)
   local history
   local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end, height - 62, openReagent)
   page.outcomes = outcomes
@@ -77,7 +82,9 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     heading:SetText(UI.Name(recipe))
     local details = { "Recipe #" .. recipe.id }
     if recipe.profession then details[#details + 1] = UI.Name(recipe.profession) end
-    if recipe.expansion then details[#details + 1] = UI.Name(recipe.expansion) end
+    if recipe.expansion and (not recipe.profession or UI.Name(recipe.expansion) ~= UI.Name(recipe.profession)) then
+      details[#details + 1] = UI.Name(recipe.expansion)
+    end
     metadata:SetText(table.concat(details, "  -  "))
     icon:SetTexture(UI.RecipeIcon(recipe))
     pin:SetText(UI.IsPinned(recipe.id) and "Unpin recipe" or "Pin recipe")
@@ -333,7 +340,7 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
             cell = UI.ItemCell(child, roleWidth, bodyWidth - roleWidth)
             equipmentCells[index] = cell
           end
-          local item = { id = equipment.itemID, name = UI.ItemName(equipment.itemID), note = equipment.role }
+          local item = { id = equipment.itemID, note = equipment.role }
           cell:ClearAllPoints(); cell:SetPoint("TOPLEFT", roleWidth, -top); cell:SetWidth(bodyWidth - roleWidth)
           cell:Update(item); cell:Show()
           self.itemCells[#self.itemCells + 1] = { itemID = equipment.itemID, cell = cell, note = equipment.role }
@@ -381,7 +388,7 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
           reagentCells[index] = cell
         end
         cell:ClearAllPoints(); cell:SetPoint("TOPLEFT", 0, -top); cell:SetWidth(bodyWidth - 84)
-        cell:Update({ id = reagent.itemID, name = reagent.name, note = "Finishing reagent" }); cell:Show()
+        cell:Update({ id = reagent.itemID, note = "Finishing reagent" }); cell:Show()
         self.itemCells[#self.itemCells + 1] = { itemID = reagent.itemID, cell = cell, note = "Finishing reagent" }
         local amount = addText(top + 6, "x" .. UI.Number(reagent.quantity), 72, 18, true)
         amount:ClearAllPoints(); amount:SetPoint("TOPRIGHT", child, "TOPRIGHT", -4, -(top + 6)); amount:SetJustifyH("RIGHT")
@@ -404,7 +411,7 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
   function frame:RefreshItem(itemID)
     for _, entry in ipairs(self.itemCells) do
       if entry.itemID == itemID then
-        entry.cell:Update({ id = itemID, name = UI.ItemName(itemID), note = entry.note })
+        entry.cell:Update({ id = itemID, note = entry.note })
       end
     end
   end
@@ -467,7 +474,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local function renderOutputs(craft)
     local lines = {}
     for _, output in ipairs(craft.outputs or {}) do
-      lines[#lines + 1] = UI.Name(output.item) .. " x" .. UI.Number(output.quantity) ..
+      lines[#lines + 1] = UI.ItemDisplayName(output.item) .. " x" .. UI.Number(output.quantity) ..
         (output.quantityAmbiguous and " (quantity uncertain)" or "")
     end
     local outputHeight = #lines > 1 and #lines * 36 + 8 or 0
@@ -552,18 +559,21 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     configurationView:GetWidth(), configurationView:GetHeight())
   detail.configurationList, detail.configurationPanel, detail.configurationTab = configurationPanel, configurationPanel,
     tabbed.buttons.Configuration
-  detail:RegisterEvent("GET_ITEM_INFO_RECEIVED")
-  detail:SetScript("OnEvent", function(_, event, itemID, success)
-    if event == "GET_ITEM_INFO_RECEIVED" and success and detail.craft then
+  local fillResult
+  UI.RegisterItemCallback(detail, function(_, itemID)
+    if detail.craft then
       if configurationPanel then configurationPanel:RefreshItem(itemID) end
       if detail.craft.outputItem and detail.craft.outputItem.id == itemID then
-        heading:SetText(UI.Elide(UI.ItemName(itemID), math.floor((width - 166) / 10)))
+        heading:SetText(UI.Elide(UI.ItemDisplayName(detail.craft.outputItem), math.floor((width - 166) / 10)))
         identity:SetTexture(UI.ItemIcon(itemID) or UI.RecipeIcon(detail.craft.recipe))
       end
-      for _, output in ipairs(detail.craft.outputs or {}) do
-        if output.item and output.item.id == itemID then output.item.name = UI.ItemName(itemID) end
-      end
       renderOutputs(detail.craft)
+      ingredientList:Append(UI.CraftIngredients(detail.craft), true)
+      if fillResult then
+        local scroll = resultScroll:GetVerticalScroll()
+        fillResult(detail.craft)
+        resultScroll:SetVerticalScroll(scroll)
+      end
     end
   end)
   detail:HookScript("OnHide", function()
@@ -599,7 +609,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
         "Return results weren't available for this craft.")
   end
 
-  local function fillResult(craft)
+  fillResult = function(craft)
     local quantity = craft.outputQuantity
     producedValue:SetText(quantity ~= nil and UI.Count(quantity, "item") or "-")
     local outputHeight = renderOutputs(craft)
@@ -669,7 +679,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       return
     end
-    local itemName = craft.outputItem and (craft.outputItem.name or UI.ItemName(craft.outputItem.id)) or
+    local itemName = craft.outputItem and UI.ItemDisplayName(craft.outputItem) or
       UI.Name(craft.recipe, "Craft result")
     heading:SetText(UI.Elide(itemName, math.floor((width - 166) / 10)))
     local identityParts = {}

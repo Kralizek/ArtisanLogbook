@@ -174,7 +174,9 @@ function UI.RecipeTooltip(owner, recipe, filter)
   Tooltip.Begin(owner, UI.Name(recipe, "Unattributed recipe"))
   local context = {}
   if recipe and recipe.profession then context[#context + 1] = UI.Name(recipe.profession) end
-  if recipe and recipe.expansion then context[#context + 1] = UI.Name(recipe.expansion) end
+  if recipe and recipe.expansion and (not recipe.profession or UI.Name(recipe.expansion) ~= UI.Name(recipe.profession)) then
+    context[#context + 1] = UI.Name(recipe.expansion)
+  end
   Tooltip.Subtitle(table.concat(context, " - "))
   Tooltip.Scope(filter, recipe)
   if not recipe or not recipe.id then
@@ -252,12 +254,12 @@ function UI.CraftTooltip(owner, craft)
   Tooltip.Section("Results")
   if craft.outputs and #craft.outputs > 1 then
     for _, output in ipairs(craft.outputs) do
-      Tooltip.Row(UI.Name(output.item), UI.Number(output.quantity, true) ..
+      Tooltip.Row(UI.ItemDisplayName(output.item), UI.Number(output.quantity, true) ..
         (output.quantityAmbiguous and " observed; quantity uncertain" or ""), "value")
     end
   elseif not (craft.outputItem and craft.outputItem.name and craft.recipe and craft.recipe.name and
       craft.outputItem.name == craft.recipe.name) then
-    Tooltip.Row("Output", UI.Name(craft.outputItem, "Item not recorded"), craft.outputItem and "value" or "muted")
+    Tooltip.Row("Output", UI.ItemDisplayName(craft.outputItem, "Item not recorded"), craft.outputItem and "value" or "muted")
   end
   Tooltip.Row("Produced", craft.outputQuantity ~= nil and UI.Number(craft.outputQuantity, true) or "Not recorded",
     craft.outputQuantity ~= nil and "value" or "muted")

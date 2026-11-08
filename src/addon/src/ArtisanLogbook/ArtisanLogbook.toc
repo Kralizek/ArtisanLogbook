@@ -5,6 +5,7 @@
 ## RequiredDeps: ArtisanLogbook_Core
 ## SavedVariables: ArtisanLogbookUISettings
 
+UI/Preferences.lua
 UI/Components.lua
 UI/Tooltip.lua
 UI/Detail.lua

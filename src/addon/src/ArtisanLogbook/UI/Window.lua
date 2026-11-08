@@ -381,6 +381,16 @@ function addon.CreateProductionWindow()
     window:Invalidate()
     if window:IsShown() then window:Refresh() end
   end)
+  UI.RegisterPinCallback(function()
+    window:RefreshSidebar()
+  end)
+  UI.RegisterItemCallback(window, function()
+    window:Invalidate()
+    window:SetScript("OnUpdate", function(self)
+      self:SetScript("OnUpdate", nil)
+      if self:IsShown() and not self.openCraftId then self:Refresh() end
+    end)
+  end)
   UI.RegisterCraftVisibilityCallback(function()
     window:Invalidate()
     if window:IsShown() then window:Refresh() end
@@ -405,8 +415,9 @@ function addon.CreateProductionWindow()
   end)
   API.RegisterCallback("CRAFT_COMMITTED", function(craft)
     if craft.recipe and UI.IsPinned(craft.recipe.id) then
-      ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id] = UI.CopyRecipe(craft.recipe,
-        ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id])
+      local previous
+      for _, pinned in ipairs(UI.Pins()) do if pinned.id == craft.recipe.id then previous = pinned end end
+      management.UpdatePinnedRecipe(UI.CopyRecipe(craft.recipe, previous))
     end
     window:Invalidate()
     if window:IsShown() then window:Refresh() end

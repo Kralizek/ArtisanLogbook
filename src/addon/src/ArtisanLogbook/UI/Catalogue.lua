@@ -39,6 +39,7 @@ function UI.ReagentCell(cell, item)
   local metadata = reagentDisplay(item.id)
   cell:Update(item, nil, metadata.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
   UI.ReagentVisual(cell, item.id)
+  cell:SetAlpha(UI.IsTrivial(item.id) and .55 or 1)
 end
 
 -- No quality badge: the recipe's total is known, but not which quality was used.
@@ -50,12 +51,15 @@ end
 
 function UI.ReagentSummaryTooltip(owner, row)
   if not row or not row.item then return end
-  UI.Tooltip.Begin(owner, UI.Elide(UI.Name(row.item), 44))
+  UI.Tooltip.Begin(owner, UI.Elide(UI.ItemName(row.item.id, row.item.name), 44))
 
   local input = row.allocatedQuantity ~= nil and UI.Number(row.allocatedQuantity) or "-"
   if row.allocatedQuantity ~= nil and not row.allocationComplete then input = input .. " recorded" end
   UI.Tooltip.Row(UI.InputLabel(), input)
-  if UI.FixedInputs() then UI.Tooltip.Subtitle(UI.InputExplanation(), "muted") end
+  if UI.FixedInputs() then UI.Tooltip.Subtitle(UI.InputHelp(), "muted") end
+  if UI.IsTrivial(row.item.id) then
+    UI.Tooltip.Subtitle("Ignored · Excluded from reagent totals and useful returns.", "muted")
+  end
   if not UI.Supports("resourcefulness") then
     if not UI.FixedInputs() and not row.allocationComplete then
       UI.Tooltip.Subtitle("Input coverage is incomplete.", "muted")
@@ -83,7 +87,7 @@ function UI.ReagentSummaryTooltip(owner, row)
   local ignored = UI.IsTrivial(row.item.id)
   local note
   if ignored then
-    note = "Savings are excluded by your preference. Amounts above are unchanged."
+    note = "Excluded from reagent totals and useful returns. Item amounts above are unchanged."
   elseif inputIncomplete and returnsIncomplete then
     note = savingsAvailable and
       ("Coverage is incomplete; input total may be higher. Savings use " .. UI.Count(row.matchedCraftCount, "comparable craft") .. ".") or
@@ -115,7 +119,7 @@ function UI.CataloguePage(page, width, height, openRecipe)
   local period = filters:Period({ days = false }, function() page:Refresh(true) end, true, controlWidth)
   filters:CraftType(state, function() page:Refresh(true) end, controlWidth)
   local characters = filters:Select("Character", {}, function(value)
-    character, profession = value, false; page:Refresh(true)
+    character = value; page:Refresh(true)
   end, controlWidth)
   local professions = filters:Select("Profession", {}, function(value)
     profession = value; page:Refresh(true)
@@ -140,9 +144,10 @@ function UI.CataloguePage(page, width, height, openRecipe)
   end)
   function page:Refresh(reset, preserve)
     period:UpdateState()
-    characters:Update(UI.Choices("characters"), character)
-    local available = UI.Choices("professions", character)
-    if not UI.HasChoice(available, profession) then profession = false end
+    if filters.Scope then filters:Scope({}) end
+    local choices = self.ContextChoices or UI.Choices
+    characters:Update(choices("characters"), character)
+    local available = choices("professions")
     professions:Update(available, profession)
     sorts:Update(sorts.choices, sort)
     if reset or not self.loaded then list:Reload(preserve) end
@@ -171,11 +176,9 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   iconHover:SetAllPoints(detail.icon); iconHover:EnableMouse(true)
   UI.Tooltip.Bind(iconHover, function(self) UI.ItemTooltip(self, detail.item) end)
   detail.iconHover = iconHover
-  local heading = UI.Text(content, 40, 0, width - 320, 28, "GameFontNormalLarge")
+  local heading = UI.Text(content, 40, 0, width - 164, 28, "GameFontNormalLarge")
   local identity = UI.Text(content, 40, -30, width - 40, 18)
-  detail.classification = UI.TrivialCheckbox(content, width - 250, 0, function() end)
-  detail.classification:SetShown(returnsSupported)
-  if not returnsSupported then heading:SetWidth(width - 40) end
+  detail.classification = UI.IgnoreReagentButton(content, width - 112, 0)
   local filters = UI.FilterBar(content, width, -58)
   detail.filters = filters
   local period = filters:Period(state, function() detail:Refresh() end, true)
@@ -208,7 +211,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       value = function(row) return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete") end,
       exact = function(row)
         return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-          (UI.FixedInputs() and " " .. UI.InputExplanation() or
+          (UI.FixedInputs() and " " .. UI.InputHelp() or
             " Total quantity recorded for this item across the listed crafts. Returns are shown separately.")
       end },
     { title = "Returned", width = (inner - 24) * .20, value = function(row)
@@ -267,10 +270,11 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
   function detail:Render(row, filter, preserve)
     self.worker:SetScript("OnUpdate", nil)
     self.row = row
-    heading:SetText(row and UI.Elide(UI.Name(row.item), math.floor((inner - 40) / 7) * 2) or "Select a reagent")
+    heading:SetText(row and UI.Elide(UI.ItemName(row.item.id, row.item.name), math.floor((inner - 40) / 7) * 2) or "Select a reagent")
     local professions = {}
     for _, entry in ipairs(row and row.professions or {}) do professions[#professions + 1] = UI.Name(entry) end
-    identity:SetText(row and UI.Elide("#" .. row.item.id .. "  " .. table.concat(professions, ", "), math.floor(inner / 6)) or "")
+    identity:SetText(row and UI.Elide("#" .. row.item.id .. "  " .. table.concat(professions, ", ") ..
+      (UI.IsTrivial(row.item.id) and " · Ignored" or " · Included"), math.floor(inner / 6)) or "")
     if row then UI.ReagentVisual(self, row.item.id)
     else self.icon:SetTexture(nil); self.quality:Hide() end
     for _, field in pairs(self.fields) do field:SetText("-") end
@@ -285,7 +289,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
       GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
       GameTooltip:SetText(UI.FixedInputs() and UI.InputLabel() or "Required quantity")
       GameTooltip:AddLine(UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete), 1, 1, 1, true)
-      GameTooltip:AddLine(UI.FixedInputs() and UI.InputExplanation() or
+      GameTooltip:AddLine(UI.FixedInputs() and UI.InputHelp() or
         "Counts crafts where this item was recorded. Returns aren't subtracted.", 1, 1, 1, true)
       GameTooltip:Show()
     end)
@@ -303,12 +307,15 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     self.tiles.crafts:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.fields.recipes:SetText(UI.Number(row.recipeCount))
     if self.tiles.rate then
-      self.fields.rate:SetText(UI.MatchedSavingsText(row))
+      self.fields.rate:SetText(UI.IsTrivial(row.item.id) and "Excluded" or UI.MatchedSavingsText(row))
       self.tiles.rate.note:SetText(row.matchedCraftCount and row.matchedCraftCount > 0 and
         UI.Count(row.matchedCraftCount, "comparable craft") .. "\nSelected history" or "No comparable sample")
       self.tiles.rate:SetScript("OnEnter", function(tile)
         GameTooltip:SetOwner(tile, "ANCHOR_RIGHT")
-        if UI.MatchedSavings(row) == "Unavailable" then
+        if UI.IsTrivial(row.item.id) then
+          GameTooltip:SetText("Ignored reagent")
+          GameTooltip:AddLine("Excluded from reagent totals and useful returns. Item amounts are unchanged.", 1, 1, 1, true)
+        elseif UI.MatchedSavings(row) == "Unavailable" then
           GameTooltip:SetText("Saved share unavailable")
           GameTooltip:AddLine("No comparable crafts have both required and returned amounts known for this item.", 1, 1, 1, true)
         else
@@ -415,13 +422,15 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     if not self.item then return end
     period:UpdateState(state)
     filters.craftType:UpdateState(state)
-    characters:Update(UI.Choices("characters"), state.character)
-    professions:Update(UI.Choices("professions", state.character), state.profession)
+    if filters.Scope then filters:Scope({}) end
+    local choices = self.ContextChoices or UI.Choices
+    characters:Update(choices("characters"), state.character)
+    professions:Update(choices("professions"), state.profession)
     local result = ArtisanLogbookAPI.GetReagentSummaries({ items = { self.item.id }, limit = 40,
       time = period:Time(), character = state.character or nil, profession = state.profession or nil,
       craftType = UI.CraftTypeFilter(state) })
     self:Render(result and result.reagents[1] or { item = self.item, professions = {} }, self:Filter(), preserve)
-    if returnsSupported then self.classification:SetItem(self.item.id) end
+    self.classification:SetItem(self.item.id)
     self.loaded, self.dirty = true, false
   end
   function detail:Open(item)
@@ -439,7 +448,7 @@ function UI.ReagentPage(detail, width, height, openRecipe, openCraft)
     elseif self.dirty or not self.loaded then self:Refresh(true) end
   end
   UI.RegisterTrivialCallback(function()
-    if returnsSupported and detail.item then detail.classification:SetItem(detail.item.id) end
+    if detail.item then detail:Refresh(true) end
   end)
   return detail
 end
@@ -447,28 +456,22 @@ end
 function UI.ReagentsPage(page, width, height, openReagent)
   UI.Section(page, "Reagents", 0, -2, width)
   local returnsSupported = UI.Supports("resourcefulness")
-  local profession, trivial, sort, search, character = false, "all", "name", "", false
+  local profession, showIgnored, sort, search, character = false, false, "name", "", false
   local state = { craftType = UI.DefaultCraftType() }
   local filters = UI.FilterBar(page, width, -42)
   page.filters = filters
   local period = filters:Period({ days = false }, function() page:Refresh(true) end, true)
   filters:CraftType(state, function() page:Refresh(true) end)
   local characters = filters:Select("Character", {}, function(value)
-    character, profession = value, false; page:Refresh(true)
+    character = value; page:Refresh(true)
   end)
   local professions = filters:Select("Profession", {}, function(value)
     profession = value; page:Refresh(true)
   end)
-  local trivialChoices = {
-    { label = "All", value = "all" }, { label = "Ignored", value = "trivial" },
-    { label = "Included", value = "non-trivial" },
-  }
-  local trivialFilter
-  if returnsSupported then
-    trivialFilter = filters:Select("Savings statistics", trivialChoices, function(value)
-      trivial = value; page:Refresh(true)
-    end)
-  end
+  local ignoredChoices = { { label = "No", value = false }, { label = "Yes", value = true } }
+  local ignoredFilter = filters:Select("Show ignored", ignoredChoices, function(value)
+    showIgnored = value; page:Refresh(true)
+  end)
   local sortChoices = {
     { label = "Name", value = "name" },
     { label = UI.FixedInputs() and "Most expected" or "Most required", value = "allocated" },
@@ -477,9 +480,9 @@ function UI.ReagentsPage(page, width, height, openReagent)
   if not returnsSupported then table.remove(sortChoices, 3) end
   local sorts = filters:Select("Sort", sortChoices, function(value) sort = value; page:Refresh(true) end)
   page.searchInput = filters:Search(function(value) search = value; page:Refresh(true) end)
-  local summaryEntries = { { "Reagents", "INV_Misc_Herb_19" },
-    { UI.FixedInputs() and UI.InputLabel() or "Recorded units", "INV_Misc_Bag_10" } }
-  if returnsSupported then summaryEntries[#summaryEntries + 1] = { "Returned units", "Trade_Alchemy" } end
+  local summaryEntries = { { "Included reagents", "INV_Misc_Herb_19" } }
+  if not UI.FixedInputs() then summaryEntries[#summaryEntries + 1] = { "Recorded units", "INV_Misc_Bag_10" } end
+  if returnsSupported then summaryEntries[#summaryEntries + 1] = { "Useful returned units", "Trade_Alchemy" } end
   local summary = UI.SummaryRow(page, width, -142, summaryEntries)
   summary:SetHeight(60)
   for _, tile in ipairs(summary.tiles) do tile:SetHeight(60); tile.note:Hide() end
@@ -487,10 +490,10 @@ function UI.ReagentsPage(page, width, height, openReagent)
   local listWidth = width
   local available = listWidth - 24
   local inputWidth = UI.FixedInputs() and 160 or 80
-  local nameWidth = available - 234 - inputWidth - (returnsSupported and 236 or 0)
+  local nameWidth = available - 234 - inputWidth - 72 - (returnsSupported and 172 or 0)
   local columns = {
     { title = "Reagent", width = nameWidth, value = function(row)
-        return UI.Name(row.item) .. " (#" .. row.item.id .. ")"
+        return UI.ItemName(row.item.id, row.item.name) .. " (#" .. row.item.id .. ")"
       end,
       create = function(parent, left)
         return UI.ItemCell(parent, left, nameWidth)
@@ -508,7 +511,7 @@ function UI.ReagentsPage(page, width, height, openReagent)
       return UI.ReagentAmount(row, "allocatedQuantity", "allocationComplete")
     end, exact = function(row)
       return UI.AmountTooltip(row.allocatedQuantity, row.allocationComplete) ..
-        (UI.FixedInputs() and " " .. UI.InputExplanation() or
+        (UI.FixedInputs() and " " .. UI.InputHelp() or
           " Input quantity recorded for this item across crafts. Returns are shown separately.")
     end },
       { title = "Returned", width = 80, value = function(row)
@@ -524,29 +527,32 @@ function UI.ReagentsPage(page, width, height, openReagent)
       return UI.Number(row.matchedReturnedQuantity) .. " saved of " .. UI.Number(row.matchedAllocatedQuantity) ..
         " required across " .. UI.Count(row.matchedCraftCount, "measured craft")
     end },
-    { title = "Ignore", width = 64,
-      value = function(row) return UI.IsTrivial(row.item.id) and "Yes" or "No" end,
-      create = function(parent, left) return UI.TrivialCheckbox(parent, left + 8, -2, function() end, true) end,
+    { title = "", width = 72,
+      value = function(row) return UI.IsTrivial(row.item.id) and "Restore" or "Ignore" end,
+      create = function(parent, left) return UI.IgnoreReagentButton(parent, left + 4, -2, true) end,
       update = function(check, row) check:SetItem(row.item.id) end },
   }
   if not returnsSupported then
-    for index = #columns, 5, -1 do table.remove(columns, index) end
+    table.remove(columns, 6); table.remove(columns, 5)
   end
   local list = UI.ScrollList(page, 0, -224, listWidth, height - 258, columns,
     function(row) openReagent(row.item) end, "No reagents in this selection")
   page.catalogue = list
   list.rowTooltip = UI.ReagentSummaryTooltip
-  local explanation = UI.Text(page, 0, -202, width, 36, "GameFontNormalSmall")
-  explanation:SetText(UI.FixedInputs() and UI.InputExplanation() or "")
-  explanation:SetShown(UI.FixedInputs())
+  local explanation = UI.Text(page, 0, -202, width, UI.FixedInputs() and 54 or 18, "GameFontNormalSmall")
+  page.reagentCounts = explanation
+  UI.Tooltip.Bind(explanation, function(owner)
+    UI.Tooltip.Begin(owner, "Reagent quantities")
+    UI.Tooltip.Subtitle(UI.InputHelp(), "muted")
+    UI.Tooltip.Subtitle("Ignored items are excluded from summary totals, even when shown. Each item's amounts and craft records are unchanged.", "muted")
+    UI.Tooltip.Show()
+  end)
   function filters.onLayout(filterHeight)
     local top = 48 + filterHeight
     summary:ClearAllPoints(); summary:SetPoint("TOPLEFT", 0, -top)
     local listTop = top + summary:GetHeight() + 8
-    if UI.FixedInputs() then
-      explanation:ClearAllPoints(); explanation:SetPoint("TOPLEFT", 0, -listTop)
-      listTop = listTop + 40
-    end
+    explanation:ClearAllPoints(); explanation:SetPoint("TOPLEFT", 0, -listTop)
+    listTop = listTop + (UI.FixedInputs() and 58 or 24)
     list:ClearAllPoints(); list:SetPoint("TOPLEFT", 0, -listTop); list:SetViewportHeight(height - listTop)
   end
   function page:Filter()
@@ -575,30 +581,92 @@ function UI.ReagentsPage(page, width, height, openReagent)
       end
     end
   end)
-  local selectedItems, excludedItems
+  local ignoredItems, searchItems, searching
+  local searchWorker = CreateFrame("Frame", nil, page)
+  page.searchWorker = searchWorker
+  local function reagentOptions(cursor, excludeItems, items)
+    return { profession = profession or nil, character = character or nil, time = page:Filter().time,
+      craftType = UI.CraftTypeFilter(state), sort = sort, items = items,
+      excludeItems = excludeItems, limit = cursor and 40 or 1, cursor = cursor }
+  end
   UI.LazyList(list, function(cursor)
-    local result, reason = ArtisanLogbookAPI.GetReagentSummaries({ profession = profession or nil,
-      character = character or nil, time = page:Filter().time, craftType = UI.CraftTypeFilter(state),
-      search = search, sort = sort, items = selectedItems, excludeItems = excludedItems, limit = 40, cursor = cursor })
-    page.summary[1]:SetNumber(result and result.totalCount, true)
-    for index, metric in ipairs({ "allocatedQuantity", "returnedQuantity" }) do
-      local totals = result and result.totals or {}
-      local complete = index == 1 and totals.allocationComplete or index == 2 and totals.returnComplete
-      if page.summary[index + 1] then page.summary[index + 1]:SetNumber(totals[metric], complete) end
+    if searching then return {}, nil end
+    local options = reagentOptions(cursor, not showIgnored and ignoredItems or nil, searchItems)
+    options.limit = 40
+    local result, reason = ArtisanLogbookAPI.GetReagentSummaries(options)
+    if not cursor then
+      local included = showIgnored and ArtisanLogbookAPI.GetReagentSummaries(reagentOptions(nil, ignoredItems, searchItems)) or result
+      local ignoredSelection = ignoredItems
+      if searchItems then
+        local matches = {}
+        for _, id in ipairs(searchItems) do matches[id] = true end
+        ignoredSelection = {}
+        for _, id in ipairs(ignoredItems) do
+          if matches[id] then ignoredSelection[#ignoredSelection + 1] = id end
+        end
+      end
+      local ignored = ArtisanLogbookAPI.GetReagentSummaries(reagentOptions(nil, nil, ignoredSelection))
+      page.summary[1]:SetNumber(included and included.totalCount, true)
+      local totals = included and included.totals or {}
+      local index = 2
+      if not UI.FixedInputs() then
+        page.summary[index]:SetNumber(totals.allocatedQuantity, totals.allocationComplete)
+        index = index + 1
+      end
+      if returnsSupported then page.summary[index]:SetNumber(totals.returnedQuantity, totals.returnComplete) end
+      explanation:SetText((UI.FixedInputs() and UI.InputExplanation() .. "\n" or "") ..
+        (included and UI.Number(included.totalCount) or "-") .. " included · " ..
+        (ignored and UI.Number(ignored.totalCount) or "-") .. " ignored" ..
+        (showIgnored and " · Ignored items shown; totals exclude them" or " · Ignored items hidden"))
     end
     return result and result.reagents, result and result.nextCursor or reason
   end)
+  local function rebuildSearch(preserve)
+    searchWorker:SetScript("OnUpdate", nil)
+    searchItems, searching = nil, false
+    if search == "" then list:Reload(preserve); return end
+    searching = true
+    local needle, cursor, matches = search:lower(), nil, {}
+    local saved = preserve and list:Save() or nil
+    list:Reset("Searching reagent names...")
+    list:SetScript("OnUpdate", nil)
+    list.pageLoader:SetScript("OnUpdate", nil)
+    for _, tile in ipairs(page.summary) do tile:SetNumber(nil, false) end
+    explanation:SetText("Searching reagent names...")
+    searchWorker:SetScript("OnUpdate", function(worker)
+      local options = reagentOptions(cursor)
+      options.limit, options.sort = 200, "name"
+      local result, reason = ArtisanLogbookAPI.GetReagentSummaries(options)
+      if not result then
+        worker:SetScript("OnUpdate", nil)
+        searching = false
+        list:Reset(reason or "Reagent search unavailable")
+        explanation:SetText("Reagent search unavailable")
+        return
+      end
+      for _, row in ipairs(result.reagents) do
+        local label = UI.ItemName(row.item.id, row.item.name) .. " (#" .. row.item.id .. ")"
+        if label:lower():find(needle, 1, true) then matches[#matches + 1] = row.item.id end
+      end
+      cursor = result.nextCursor
+      if cursor then return end
+      worker:SetScript("OnUpdate", nil)
+      searchItems, searching = matches, false
+      if saved then list:Restore(saved) end
+      list:Reload(saved ~= nil)
+    end)
+  end
   function page:Refresh(reset, preserve)
     period:UpdateState()
-    characters:Update(UI.Choices("characters"), character)
-    local availableProfessions = UI.Choices("professions", character)
-    if not UI.HasChoice(availableProfessions, profession) then profession = false end
+    if filters.Scope then filters:Scope({}) end
+    local choices = self.ContextChoices or UI.Choices
+    characters:Update(choices("characters"), character)
+    local availableProfessions = choices("professions")
     professions:Update(availableProfessions, profession)
-    if trivialFilter then trivialFilter:Update(trivialChoices, trivial) end
+    ignoredFilter:Update(ignoredChoices, showIgnored)
     sorts:Update(sorts.choices, sort)
-    selectedItems = trivial == "trivial" and UI.TrivialItemIds() or nil
-    excludedItems = trivial == "non-trivial" and UI.TrivialItemIds() or nil
-    if reset or not self.loaded then list:Reload(preserve) end
+    ignoredItems = UI.TrivialItemIds()
+    if reset or not self.loaded then rebuildSearch(preserve) end
     self.loaded, self.dirty = true, false
   end
   function page:Open()

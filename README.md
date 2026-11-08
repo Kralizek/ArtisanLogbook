@@ -61,8 +61,10 @@ The PowerShell reader consumes the block-style `id` and `version` scalar fields
 used in that file; CI's existing YAML resolver validates the complete format.
 
 Forever Core supports ordinary personal crafts with deterministic output and
-fixed required reagents. The shared production UI is ready for **live acceptance**,
-not released or fully visually validated. Install **Core + UI**:
+fixed required reagents. Initial live acceptance on Forever 1.60.1.70862 confirmed
+the shared Blizzard-themed UI, four crafts, activity graph and recipe/reagent totals.
+The contextual-filter, item-name and preference fixes need a further live pass;
+Forever is not released or fully validated. Install **Core + UI**:
 
 ```powershell
 .\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Core
@@ -77,6 +79,11 @@ come from recipe schematics and are attributed to confirmed crafts; they are
 **not independently measured bag consumption or evidence of savings/returns**.
 Resourcefulness, Multicraft, Ingenuity, concentration, qualities and crafting
 operation measurements are unavailable, not zero, and their cards/charts are hidden.
+Singleton character/profession/craft-type filters collapse without discarding
+selections. Recipes offer independent Pin/Hide actions directly in the list.
+Reagents offer Ignore/Restore and Show ignored: ignored items leave reagent-focused
+totals and lists, not crafting history. Per-item expected quantities remain visible;
+there is no aggregate KPI summing unrelated reagent units.
 Build local Forever archives with
 `ADDON_FLAVOR=forever bash src/addon/scripts/package.sh`; extract the Core and UI
 directories into `_forever_/Interface/AddOns` with WoW closed. Back up

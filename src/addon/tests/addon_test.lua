@@ -510,7 +510,11 @@ end
 local function loadUI()
   local frameStart = #frames
   local ui = load(uiRoot, "ArtisanLogbook")
-  local frame = frames[frameStart + 1]
+  local frame
+  for index = frameStart + 1, #frames do
+    if frames[index].events.ADDON_LOADED then frame = frames[index] end
+  end
+  assert(frame, "UI lifecycle listener missing")
   local noticeCount = #notices
   frame.scripts.OnEvent(frame, "ADDON_LOADED", "AnotherAddon")
   assert(#notices == noticeCount)
@@ -522,7 +526,8 @@ local function loadUI()
     frame.scripts.OnEvent(frame, "ADDON_LOADED", "ArtisanLogbook")
     assert(#notices == noticeCount)
   else
-    assert(notices[#notices] == "Artisan Logbook: Compatible Artisan Logbook Core API v1 is required.")
+    assert(notices[#notices] == "Artisan Logbook: Compatible Artisan Logbook Core API v1 is required.",
+      "Unexpected UI initialization failure: " .. tostring(notices[#notices]))
   end
   return ui
 end
@@ -1333,7 +1338,7 @@ highlightProbe.rows[1].indicators[1].scripts.OnEnter(highlightProbe.rows[1].indi
 assert(environment.GameTooltip.text == "Multicraft: produced 5 additional items")
 local smallCatalogue = environment.CreateFrame("Frame", nil, paperProbe)
 UI.CataloguePage(smallCatalogue, 732, 576, function() end)
-assert(smallCatalogue.filters:GetHeight() == 92 and smallCatalogue.searchInput.y == -62)
+assert(smallCatalogue.filters:GetHeight() == 46 and smallCatalogue.searchInput.y == -16)
 assert(smallCatalogue.resourcefulnessNote == nil)
 local itemProbe = UI.ItemCell(paperProbe, 0, 200)
 itemProbe:Update({ id = 123, name = "Potion" })
@@ -1434,6 +1439,42 @@ reloadComponents("ArtisanLogbook", reloadedUI)
 assert(#reloadedUI.UI.Pins() == 5 and reloadedUI.UI.IsPinned(1))
 for index = 1, 5 do assert(UI.TogglePin({ id = index })) end
 assert(#UI.Pins() == 0 and not uiAddon.ledger)
+do
+  local management = environment.ArtisanLogbookManagement
+  for _, method in ipairs({ "GetPinnedRecipes", "IsRecipePinned", "ToggleRecipePin",
+      "SetRecipeHidden", "IsRecipeHidden", "GetIgnoredReagents", "IsReagentIgnored",
+      "SetReagentIgnored" }) do
+    assert(type(management[method]) == "function", "Missing UI-managed method: " .. method)
+  end
+  local before = tracer.Trace.Serialize(uiLedger.database)
+  local recipe = { id = 190001, name = "Preference-only recipe",
+    profession = { name = "Alchemy", skillLineId = 171 } }
+  assert(management.ToggleRecipePin(recipe) and UI.IsPinned(recipe.id))
+  recipe.name, recipe.profession.name = "Mutated", "Mutated"
+  local pins = management.GetPinnedRecipes()
+  assert(pins[1].name == "Preference-only recipe" and pins[1].profession.name == "Alchemy")
+  pins[1].name, pins[1].profession.name = "Detached", "Detached"
+  assert(management.GetPinnedRecipes()[1].name == "Preference-only recipe" and
+    management.GetPinnedRecipes()[1].profession.name == "Alchemy")
+  assert(management.ToggleRecipePin({ id = 190001 }) and not UI.IsPinned(190001))
+  assert(management.SetRecipeHidden(190001, true) and UI.IsRecipeHidden(190001))
+  assert(UI.SetRecipeHidden(190001, false) and not management.IsRecipeHidden(190001))
+  assert(management.SetReagentIgnored(190002, true) and UI.IsTrivial(190002))
+  assert(management.GetIgnoredReagents()[1] == 190002 and UI.TrivialItemIds()[1] == 190002)
+  local ignored = management.GetIgnoredReagents()
+  ignored[1] = 999999
+  assert(management.GetIgnoredReagents()[1] == 190002)
+  UI.SetTrivial(190002, false)
+  assert(not management.IsReagentIgnored(190002) and #management.GetIgnoredReagents() == 0)
+  for _, id in ipairs({ 0, -1, .5, math.huge, 0 / 0, "190003" }) do
+    assert(not management.ToggleRecipePin({ id = id }))
+    assert(not management.SetRecipeHidden(id, true))
+    assert(not management.SetReagentIgnored(id, true))
+  end
+  assert(not management.SetReagentIgnored(190003, "true"))
+  assert(tracer.Trace.Serialize(uiLedger.database) == before, "Preferences mutated Core facts")
+  print("PASS UI-managed Management preferences, wrapper interoperability and detached reads")
+end
 assert(UI.ReturnQuantity(0, 5, 0) == "-" and UI.ReturnQuantity(0, 5, 5) == "0")
 assert(UI.ReturnQuantity(7, 5, 0) == "7" and UI.ReturnQuantity(nil) == "Unavailable")
 print("PASS UI-owned alphabetical pins, five-pin limit and reload persistence")
@@ -1602,7 +1643,11 @@ sampleTable:Reset()
 assert(sampleTable.empty:IsShown() and not sampleTable.rows[1]:IsShown())
 local getSeries = environment.ArtisanLogbookAPI.GetCraftSeries
 environment.ArtisanLogbookAPI.GetCraftSeries = function(filter, options)
-  assert(filter and filter.time and filter.time.from and filter.time.to,
+  assert(filter and ((filter.time and filter.time.from and filter.time.to) or
+    (next(filter) == nil and options == nil) or
+    (filter.craftType and options == nil) or (filter.recipes and options == nil) or
+    (filter.profession and options == nil) or (filter.character and options == nil) or
+    (filter.characters and options == nil) or (filter.professions and options == nil)),
     "UI series requests must be bounded")
   return getSeries(filter, options)
 end
@@ -1631,8 +1676,25 @@ local function dropdown(parent, label)
     local ancestor = frame.parent
     while ancestor and ancestor ~= parent do ancestor = ancestor.parent end
     if ancestor == parent and frame.choices then
+      local function ready()
+        if not frame.testSearchPump then
+          local choose = frame.Choose
+          function frame:Choose(value)
+            choose(self, value)
+            local count = 0
+            while parent.searchWorker and parent.searchWorker.scripts.OnUpdate do
+              count = count + 1
+              assert(count <= 30, "Reagent search did not finish")
+              parent.searchWorker.scripts.OnUpdate(parent.searchWorker)
+            end
+          end
+          frame.testSearchPump = true
+        end
+        return frame
+      end
+      if frame.caption and frame.caption:GetText() == label then return ready() end
       for _, choice in ipairs(frame.choices) do
-        if choice.label == label then return frame end
+        if choice.label == label then return ready() end
       end
     end
   end
@@ -1718,8 +1780,8 @@ assert(otherKey)
 dropdown(logbook, "Alchemy"):Choose(171)
 dropdown(logbook, "Other"):Choose(otherKey)
 local logbookProfessions = dropdown(logbook, "Enchanting")
-assert(logbookProfessions.value == false and logbookProfessions.text == "All")
-assert(#history.items == 1 and history.items[1].id == 14)
+assert(logbookProfessions.value == 171 and logbookProfessions:IsShown())
+assert(#history.items == 0, "Independent profession selection was silently reset")
 logbookProfessions:Choose(333)
 assert(#history.items == 1 and history.items[1].profession.skillLineId == 333)
 dropdown(logbook, "30 days"):Choose(30)
@@ -1737,7 +1799,7 @@ assert(recentFirst)
 recentFirst.scripts.OnClick(recentFirst)
 assert(uiWindow.openCraftId == 14 and uiWindow.visiblePage ~= logbook)
 local sharedDetail = uiWindow.visiblePage
-assert(sharedDetail.heading.text ~= "" and not sharedDetail.heading.text:match("^#%d+$") and
+assert(sharedDetail.heading.text ~= "" and
   sharedDetail.tabs.activeView == "Result")
 assert(sharedDetail.tabViews.Result:IsShown() and not sharedDetail.tabViews.Ingredients:IsShown() and
   not sharedDetail.tabViews.Configuration:IsShown())
@@ -1763,7 +1825,8 @@ dropdown(recipes, "Other"):Choose(otherKey)
 assert(#catalogue.items == 1 and catalogue.items[1].recipe.id == 502)
 dropdown(recipes, "Enchanting"):Choose(333)
 assert(#catalogue.items == 1)
-dropdown(recipes, "All"):Choose(false)
+dropdown(recipes, "Character"):Choose(false)
+dropdown(recipes, "Profession"):Choose(false)
 assert(#catalogue.items == 2)
 apple = displayedRow(recipes, function(item) return item.recipe and item.recipe.id == 502 end)
 apple.scripts.OnClick(apple)
@@ -1796,6 +1859,7 @@ assert(uiWindow.visiblePage == recipePage and recipePage:IsShown() and not share
 assertRecipesSelected()
 uiWindow:Activate("Logbook")
 dropdown(logbook, "TestCrafter"):Choose(currentKey)
+dropdown(logbook, "Profession"):Choose(171)
 local characterCraft = displayedRow(logbook, function(item) return item.id == 12 end)
 assert(characterCraft)
 characterCraft.scripts.OnClick(characterCraft)
@@ -1805,7 +1869,8 @@ assert(not visibleText("Ingenuity proc: No"))
 assert(not visibleText("Net concentration: 0"))
 assert(not visibleText("Reported Ingenuity refund: 9"))
 uiWindow:Activate("Logbook")
-dropdown(logbook, "All"):Choose(false)
+dropdown(logbook, "Character"):Choose(false)
+dropdown(logbook, "Profession"):Choose(false)
 uiLedger:BeginCraft(502)
 uiWindow:Hide()
 local noticeCount = #notices
@@ -1947,7 +2012,7 @@ uiWindow:OpenCraft(professionPage.history.items[1].id)
 uiWindow.craftDetailWindow:Hide()
 assert(uiWindow.visiblePage == professionPage and professionPage.history.scroll:GetVerticalScroll() == 95)
 uiWindow:Activate("Recipes")
-dropdown(recipes, "Profession"):Choose("profession")
+dropdown(recipes, "Sort"):Choose("profession")
 assert(catalogue.items[1].profession.name == "Alchemy")
 uiWindow:OpenRecipe(catalogue.items[1].recipe)
 button(uiWindow.pages.Recipe.content, "Pin recipe").scripts.OnClick()
@@ -2312,8 +2377,14 @@ do
     error("Missing recipe catalogue row " .. recipeId)
   end
   local function toggleCatalogue(recipeId, hidden)
-    local check = recipeRow(recipeId).widgets[2].widget
-    check:SetChecked(hidden); check.scripts.OnClick(check)
+    local control
+    for _, entry in ipairs(recipeRow(recipeId).widgets) do
+      if entry.column.title == "Actions" then control = entry.widget.hide end
+    end
+    assert(control, "Missing independent Hide widget")
+    assert(control:GetWidth() <= 60 and control:GetHeight() <= 28)
+    if helpers.IsRecipeHidden(recipeId) ~= hidden then control.scripts.OnClick(control) end
+    assert(window.activeTab == "Recipes", "Hide navigated away from the recipe list")
   end
   local function finishList(list)
     local framesRun = 0
@@ -2335,7 +2406,17 @@ do
   end
   toggleCatalogue(10051, true); toggleCatalogue(10053, true)
   assert(#catalogue.items == 3 and helpers.IsRecipeHidden(10051) and helpers.IsPinned(10051))
-  assert(recipeRow(10051).widgets[2].widget:GetChecked())
+  assert(helpers.IsRecipeHidden(10051))
+  local pinControl
+  for _, entry in ipairs(recipeRow(10051).widgets) do
+    if entry.column.title == "Actions" then pinControl = entry.widget.pin end
+  end
+  assert(pinControl and pinControl:GetWidth() <= 60 and pinControl:GetHeight() <= 28,
+    "Recipe list needs an independent compact Pin widget")
+  pinControl.scripts.OnClick(pinControl)
+  assert(not helpers.IsPinned(10051) and helpers.IsRecipeHidden(10051) and window.activeTab == "Recipes")
+  pinControl.scripts.OnClick(pinControl)
+  assert(helpers.IsPinned(10051) and helpers.IsRecipeHidden(10051) and window.activeTab == "Recipes")
   window:Activate("Overview")
   local overview = window.pages.Overview
   assert(#overview.topRecipes.items == 1 and overview.topRecipes.items[1].recipe.id == 10052)
@@ -2538,7 +2619,7 @@ do
   assert(#list.items == 0 and list.empty:IsShown())
   local summaries = api.GetReagentSummaries
   api.GetReagentSummaries = function(options)
-    assert(options.limit == 40 and options.trivial == nil)
+    assert((options.limit == 40 or options.limit == 1 or options.limit == 200) and options.trivial == nil)
     return summaries(options)
   end
   assert(ledger:AddDimension("profession", 171, { name = "Alchemy" }))
@@ -2582,15 +2663,21 @@ do
   assert(environment.GameTooltip.itemId == 4008 and environment.GameTooltip.lines[1] == "Item ID: 4008")
   assert(list.rows[2].widgets[1].widget.item.id == 4009)
   local catalogueCheck = list.rows[1].widgets[2].widget
-  catalogueCheck:SetChecked(true); catalogueCheck.scripts.OnClick(catalogueCheck)
-  assert(helpers.IsTrivial(4008))
+  assert(catalogueCheck:GetWidth() <= 76 and catalogueCheck:GetHeight() <= 28)
+  catalogueCheck.scripts.OnClick(catalogueCheck)
+  assert(helpers.IsTrivial(4008) and window.activeTab == "Reagents")
+  assert(#list.items == 1 and list.items[1].item.id == 4009, "Ignored reagent remained in default catalogue")
+  dropdown(page, "Show ignored"):Choose(true)
+  assert(#list.items == 2)
   for _, cell in ipairs(list.rows[1].cells) do
     if cell.column.title == "Saved share" then savedCell = cell end
   end
   assert(savedCell and savedCell.label.text == "-")
   assert(savedCell.column.exact(list.items[1]) == "Excluded from savings by your preference. Recorded quantities are unchanged.")
-  catalogueCheck:SetChecked(false); catalogueCheck.scripts.OnClick(catalogueCheck)
+  catalogueCheck = list.rows[1].widgets[2].widget
+  catalogueCheck.scripts.OnClick(catalogueCheck)
   assert(not helpers.IsTrivial(4008))
+  dropdown(page, "Show ignored"):Choose(false)
   for index = 1, 45 do record(9701, 4100 + index, string.format("Herb %02d", index), index, index, 1) end
   assert(#list.items == 40)
   page.searchInput:SetText("Bloom")
@@ -2598,6 +2685,9 @@ do
   list.scroll:SetVerticalScroll(1200); list.scroll.scripts.OnVerticalScroll(list.scroll)
   assert(#list.items == 47)
   page.searchInput.scripts.OnUpdate(page.searchInput, .3)
+  while page.searchWorker and page.searchWorker.scripts.OnUpdate do
+    page.searchWorker.scripts.OnUpdate(page.searchWorker)
+  end
   assert(#list.items == 2)
   page.searchInput:SetText("")
   page.searchInput.scripts.OnTextChanged(page.searchInput)
@@ -2624,43 +2714,55 @@ do
     page.searchInput:SetText(text)
     page.searchInput.scripts.OnTextChanged(page.searchInput)
     page.searchInput.scripts.OnUpdate(page.searchInput, .3)
+    while page.searchWorker and page.searchWorker.scripts.OnUpdate do
+      page.searchWorker.scripts.OnUpdate(page.searchWorker)
+    end
   end
   search("BLOOM")
   assert(#list.items == 2)
   helpers.SetTrivial(4008, true)
   assert(helpers.IsTrivial(4008) and environment.ArtisanLogbookUISettings.trivialReagents[4008])
-  dropdown(page, "Ignored"):Choose("trivial")
-  assert(#list.items == 1 and list.items[1].item.id == 4008)
-  dropdown(page, "Included"):Choose("non-trivial")
+  dropdown(page, "Show ignored"):Choose(false)
   assert(#list.items == 1 and list.items[1].item.id == 4009)
-  dropdown(page, "Ignored"):Choose("all")
+  dropdown(page, "Show ignored"):Choose(true)
   assert(#list.items == 2)
   window:OpenRecipe({ id = 9701 })
   local outcomes = window.recipeOutcomes
   local function finish()
     while outcomes.scripts.OnUpdate do outcomes.scripts.OnUpdate() end
+    while outcomes.materialWorker.scripts.OnUpdate do outcomes.materialWorker.scripts.OnUpdate(outcomes.materialWorker) end
+    while page.searchWorker and page.searchWorker.scripts.OnUpdate do page.searchWorker.scripts.OnUpdate(page.searchWorker) end
   end
+  finish()
+  assert(#outcomes.materialList.items > 0 and
+    not helpers.IsTrivial(outcomes.materialList.items[1].item.id))
+  dropdown(outcomes, "Show ignored"):Choose(true)
   finish()
   assert(helpers.IsTrivial(outcomes.materialList.items[1].item.id))
   local before = outcomes.resourcefulness.nonTrivial.text
+  local procBefore = tracer.Trace.Serialize(api.GetRecipeOutcomes(9701).totals)
   window:Activate("Reagents")
+  finish()
   assert(#list.items == 2 and page.searchInput:GetText() == "BLOOM")
-  helpers.SetTrivial(4008, false)
+  assert(environment.ArtisanLogbookManagement.SetReagentIgnored(4008, false))
   finish()
   assert(not helpers.IsTrivial(4008) and outcomes.resourcefulness.nonTrivial.text ~= before)
+  assert(tracer.Trace.Serialize(api.GetRecipeOutcomes(9701).totals) == procBefore,
+    "Ignoring changed Retail proc statistics")
   list.rows[1].scripts.OnClick(list.rows[1])
   assert(window.activeTab == "Reagent" and window.identity.id == 4008)
   local preference = window.pages.Reagent.classification
-  assert(preference and preference.itemId == 4008 and not preference:GetChecked())
-  preference:SetChecked(true); preference.scripts.OnClick(preference)
+  assert(preference and preference.itemId == 4008)
+  preference.scripts.OnClick(preference)
   assert(helpers.IsTrivial(4008))
   window:Activate("Reagents")
   assert(helpers.IsTrivial(4008))
-  dropdown(page, "Ignored"):Choose("trivial")
+  dropdown(page, "Show ignored"):Choose(false)
   assert(#list.items == 1)
   helpers.SetTrivial(4008, false)
-  assert(#list.items == 0 and list.empty:IsShown() and not preference:GetChecked())
-  dropdown(page, "Ignored"):Choose("all")
+  finish()
+  assert(#list.items == 2 and not list.empty:IsShown())
+  dropdown(page, "Show ignored"):Choose(true)
   search("Herb")
   dropdown(page, "Alchemy"):Choose(171)
   dropdown(page, "Most required"):Choose("allocated")
@@ -2668,6 +2770,7 @@ do
   assert(#list.items == 45)
   list.scroll:SetVerticalScroll(150)
   window:Activate("Recipes"); window:Activate("Reagents")
+  finish()
   assert(#list.items == 45 and list.scroll:GetVerticalScroll() == 150 and page.searchInput:GetText() == "Herb")
   assert(dropdown(page, "Alchemy").value == 171 and dropdown(page, "Most required").value == "allocated")
   search("not recorded")
@@ -2840,6 +2943,7 @@ do
   assert(window.activeTab == "Reagents" and dropdown(page, "Most returned").value == "returned")
   page.searchInput:SetText("5102")
   page.searchInput.scripts.OnTextChanged(page.searchInput); page.searchInput.scripts.OnUpdate(page.searchInput, .3)
+  while page.searchWorker and page.searchWorker.scripts.OnUpdate do page.searchWorker.scripts.OnUpdate(page.searchWorker) end
   assert(#list.items == 1 and cell(5102).icon.texture == "Icon-5102")
   assert(iconCalls[5102] == 2 and qualityCalls[5102] == 3)
   local visibleCell = cell(5102)
@@ -3174,7 +3278,10 @@ do
   window:Show()
   window:Activate("Recipes")
   local oldSeries = api.GetCraftSeries
-  api.GetCraftSeries = function() error("recipe UI requested unbounded daily rows") end
+  api.GetCraftSeries = function(filter, options)
+    assert(filter and options == nil, "UI requested paged daily rows")
+    return oldSeries(filter, options)
+  end
   window:OpenRecipe({ id = 9001, name = "Observed recipe" })
   local pane = window.recipeOutcomes
   assert(window.recipeDetailPage == window.pages.Recipe and window.recipeDetailPage:IsShown())
@@ -3227,14 +3334,15 @@ do
   assert(material.label.text == materialRows[2].widgets[1].widget.label.text)
   assert(materialRows[1].item.item.id == 8 and materialRows[2].item.item.id == 9)
   assert(materialRows[1].item.returnedQuantity == 3 and materialRows[2].item.returnedQuantity == 5)
+  dropdown(pane, "Show ignored"):Choose(true)
   local reagentCheck = materialRows[1].widgets[2].widget
-  reagentCheck:SetChecked(true); reagentCheck.scripts.OnClick(reagentCheck)
+  reagentCheck.scripts.OnClick(reagentCheck)
   assert(helpers.IsTrivial(8))
   for _, cell in ipairs(pane.materialList.rows[1].cells) do
     if cell.column.title == "Saved share" then recipeSavingsCell = cell end
   end
   assert(recipeSavingsCell and recipeSavingsCell.label.text == "-")
-  reagentCheck:SetChecked(false); reagentCheck.scripts.OnClick(reagentCheck)
+  reagentCheck.scripts.OnClick(reagentCheck)
   assert(not helpers.IsTrivial(8))
   assert(material.icon.texture and material.quality.atlas == "ReagentQuality-8")
   assert(materialRows[2].widgets[1].widget.quality.atlas == "ReagentQuality-9")
@@ -3534,7 +3642,7 @@ do
   assert(pane.requirementNote:IsShown())
   assert(pane.requirementNote.height == 18 and pane.requirementNote.text ==
     "Some ingredients aren't listed by quality. Hover for recipe totals.")
-  assert(pane.materialList.y == -30)
+  assert(pane.materialList.y == -52)
   pane.requirementNote.scripts.OnEnter(pane.requirementNote)
   local requirementTooltip = environment.GameTooltip.text .. "\n" .. table.concat(environment.GameTooltip.lines, "\n")
   assert(requirementTooltip:find("Recipe requirements", 1, true))
@@ -3544,7 +3652,7 @@ do
   assert(not requirementTooltip:lower():find("schematic", 1, true))
   api.GetRecipeReagentRequirements = oldRequirementQuery
   pane:Refresh()
-  assert(not pane.requirementNote:IsShown() and pane.materialList.y == -4)
+  assert(not pane.requirementNote:IsShown() and pane.materialList.y == -26)
   print("PASS recipe-local views and filters, per-recipe state, durable returned quantities and guarded allocation ratios")
   assert(environment.ArtisanLogbookManagement.Clear())
   assert(helpers.IsTrivial(8) and helpers.IsTrivial(10))
@@ -5004,20 +5112,29 @@ end)()
       buffsCoverage = "supported-list", finishingCoverage = "submitted" } }
   detail.craft = equipmentCraft
   equipmentPanel:ShowCraft(equipmentCraft)
-  assert(equipmentPanel.itemCells[1].cell.item.name == "Item information loading")
+  assert(equipmentPanel.itemCells[1].cell.label.text == "#88001" and
+    equipmentPanel.itemCells[1].cell.item.name == nil)
   assert(equipmentPanel.rows.equipment[1].role == "Profession tool" and equipmentPanel.itemCells[1].cell.item.guid == nil)
   assert(equipmentPanel.buffRows[1].label.text == "Ingenuity phial" and
     equipmentPanel.buffRows[1].stacks.text == "x2" and equipmentPanel.buffRows[1].icon.texture == "Spell-Ingenuity")
-  assert(equipmentPanel.reagentCells[1].item.name == "Item information loading")
+  assert(equipmentPanel.reagentCells[1].label.text == "#88002" and
+    equipmentPanel.reagentCells[1].item.name == nil)
   equipmentPanel:ShowCraft({ context = { kind = "unknown" }, configurationCoverage = "unavailable" })
   assert(equipmentPanel.emptyTitle:IsShown() and not equipmentPanel.statCards[1]:IsShown())
   equipmentPanel:ShowCraft(equipmentCraft)
   assert(not equipmentPanel.emptyTitle:IsShown() and equipmentPanel.statCards[1]:IsShown())
   itemReady = true
-  detail.scripts.OnEvent(detail, "GET_ITEM_INFO_RECEIVED", 88001, true)
-  assert(equipmentPanel.itemCells[1].cell.item.name == "Profession Tool")
-  detail.scripts.OnEvent(detail, "GET_ITEM_INFO_RECEIVED", 88002, true)
-  assert(equipmentPanel.reagentCells[1].item.name == "Finishing Salt")
+  for _, id in ipairs({ 88001, 88002 }) do
+    local count = #frames
+    for index = 1, count do
+      local frame = frames[index]
+      if frame.events.GET_ITEM_INFO_RECEIVED and frame.scripts.OnEvent then
+        frame.scripts.OnEvent(frame, "GET_ITEM_INFO_RECEIVED", id, true)
+      end
+    end
+  end
+  assert(equipmentPanel.itemCells[1].cell.label.text == "Profession Tool")
+  assert(equipmentPanel.reagentCells[1].label.text == "Finishing Salt")
   local narrowPanel = ui.ConfigurationPanel(environment.CreateFrame("Frame"), 0, 0, 500, 180)
   assert(narrowPanel.statColumns == 2)
   local compactDetail = ui.CraftDetail(environment.CreateFrame("Frame"), 500, 380, function() end)
@@ -5478,8 +5595,18 @@ end)()
   local missingMetadata = assert(api.GetCraft(all.crafts[4].id))
   assert(missingMetadata.recipe.id == 2329 and missingMetadata.recipe.name == nil)
 
+  local savedItemAPI, savedItemInfo = environment.C_Item, environment.GetItemInfo
+  local resolvedNames, itemRequests = {}, {}
+  environment.C_Item = {
+    GetItemInfo = function(id) return resolvedNames[id] end,
+    GetItemNameByID = function(id) return resolvedNames[id] end,
+    RequestLoadItemDataByID = function(id) itemRequests[id] = (itemRequests[id] or 0) + 1 end,
+  }
+  environment.GetItemInfo = function(id) return resolvedNames[id] end
+  database.dimensions.items[2454].name, database.dimensions.items[2452].name = nil, nil
   core = reload(database)
   api = assert(environment.ArtisanLogbookAPI)
+  local metadataFrameStart = #frames
   local loadedUI = loadUI()
   local window = assert(loadedUI.productionWindow)
   assert(environment.ArtisanLogbookTraceDB == nil)
@@ -5489,10 +5616,71 @@ end)()
     UI.Supports("ingenuityRefund") == false and UI.Supports("operationInfo") == false)
   assert(UI.Supports("fixedReagents") and UI.FixedInputs())
   assert(UI.InputLabel() == "Expected requirements")
-  assert(UI.InputExplanation():find("schematics", 1, true) and
-    UI.InputExplanation():find("Not independently measured bag consumption", 1, true))
+  assert(UI.InputExplanation():find("not measured inventory changes", 1, true) and #UI.InputExplanation() < 120)
+  assert(UI.InputHelp():find("schematics", 1, true) and
+    UI.InputHelp():find("Not independently measured bag consumption", 1, true))
   assert(UI.Name(missingMetadata.recipe) == "#2329")
   assert(UI.MeasurementState("resourcefulness", 1, 1, 1, true) == "unsupported")
+  do
+    local getCharacters, getProfessions, getSeries = api.GetCharacters, api.GetProfessions, api.GetCraftSeries
+    local count, queriedScopes = 0, {}
+    local characterEntries = { { key = "A", name = "A" }, { key = "B", name = "B" } }
+    local professionEntries = { { skillLineId = 171, name = "Alchemy" }, { skillLineId = 333, name = "Enchanting" } }
+    api.GetCharacters = function() return count == 0 and {} or
+      count == 1 and { characterEntries[1] } or characterEntries end
+    api.GetProfessions = function(character)
+      assert(character == nil, "Contextual choices were narrowed by another active selector")
+      return count == 0 and {} or count == 1 and { professionEntries[1] } or professionEntries
+    end
+    api.GetCraftSeries = function(scope)
+      queriedScopes[#queriedScopes + 1] = scope
+      local series = {}
+      for index = 1, count do
+        local kind = index == 1 and "personal" or "patron"
+        if not scope.craftType or scope.craftType == kind or scope.craftType == "orders" and kind == "patron" then
+          series[#series + 1] = { character = characterEntries[index], profession = professionEntries[index],
+            craftCount = 1, context = { kind = kind } }
+        end
+      end
+      return { series = series }
+    end
+    local bar = UI.FilterBar(environment.CreateFrame("Frame", nil, window), 350)
+    local period = bar:Period({ days = false }, function() end, true)
+    local craftType = bar:CraftType({ craftType = false }, function() end)
+    local character = bar:Select("Character", UI.Choices("characters"), function() end)
+    local profession = bar:Select("Profession", UI.Choices("professions"), function() end)
+    local search = bar:Search(function() end)
+    for _, total in ipairs({ 0, 1, 2, 1, 0, 2 }) do
+      count = total
+      bar:Scope({})
+      character:Update(UI.Choices("characters"), false)
+      profession:Update(UI.Choices("professions"), false)
+      bar:Reflow()
+      assert(character:IsShown() == (total > 1) and profession:IsShown() == (total > 1) and
+        craftType:IsShown() == (total > 1), "Contextual zero/one/multiple visibility mismatch")
+      assert(bar:GetHeight() == (total > 1 and 138 or 92), "Contextual reflow did not restore dimensions")
+      assert(search:GetText() == "" and period.state.days == false)
+    end
+    count = 1
+    bar:Scope({})
+    character:Update(UI.Choices("characters"), "A")
+    profession:Update(UI.Choices("professions"), 171)
+    craftType:UpdateState({ craftType = "personal" })
+    bar:Reflow()
+    assert(character:IsShown() and profession:IsShown() and craftType:IsShown(),
+      "Active contextual filter became impossible to clear")
+    character:Choose(false); profession:Choose(false); craftType:Choose(false); bar:Reflow()
+    assert(not character:IsShown() and not profession:IsShown() and not craftType:IsShown())
+    count = 2
+    bar:Scope({ recipes = { 7183 } })
+    assert(character:IsShown() and profession:IsShown() and craftType:IsShown())
+    for _, scope in ipairs(queriedScopes) do
+      assert(scope.time == nil and scope.character == nil and scope.profession == nil,
+        "Active period or dimension selection trapped another contextual selector")
+    end
+    api.GetCharacters, api.GetProfessions, api.GetCraftSeries = getCharacters, getProfessions, getSeries
+    print("PASS contextual zero/one/multiple filters, reversible selections and reflow")
+  end
 
   window:Hide()
   assert(not window:IsShown())
@@ -5523,6 +5711,59 @@ end)()
   window.craftDetailWindow:Hide()
   assert(window.openCraftId == nil and not window.craftDetailWindow:IsShown())
 
+  do
+    local before = tracer.Trace.Serialize(core.ledger.database)
+    local probe = environment.CreateFrame("Frame", nil, window)
+    local output, reagent = UI.ItemCell(probe, 0, 300), UI.ItemCell(probe, 310, 300)
+    output:Update({ id = 2454 }); reagent:Update({ id = 2452 })
+    assert(output.label:GetText() == "#2454" and reagent.label:GetText() == "#2452")
+    assert(UI.ItemName(2454, "Core-first name") == "Core-first name")
+    assert(UI.ItemName(2454) == "#2454" and itemRequests[2454] == 1 and itemRequests[2452] == 1)
+    for _, invalid in ipairs({ 0, -1, .5, math.huge, 0 / 0, "2454" }) do UI.ItemName(invalid) end
+    for id in pairs(itemRequests) do assert(type(id) == "number" and id > 0 and id % 1 == 0) end
+    window:Activate("Logbook")
+    window:OpenCraft(4)
+    window.craftDetailPage.tabs:Select("Ingredients")
+    window.craftDetailPage.returnedReagents.scroll:SetVerticalScroll(25)
+    local function descendant(frame, owner)
+      while frame do if frame == owner then return true end; frame = frame.parent end
+      return false
+    end
+    local function hasText(owner, text)
+      for _, frame in ipairs(frames) do
+        if descendant(frame, owner) and frame:GetText() == text then return true end
+      end
+      return false
+    end
+    local function deliver(event, id, success)
+      local count = #frames
+      for index = metadataFrameStart + 1, count do
+        local frame = frames[index]
+        if frame.events[event] and frame.scripts.OnEvent then frame.scripts.OnEvent(frame, event, id, success) end
+      end
+    end
+    deliver("GET_ITEM_INFO_RECEIVED", 2454, false)
+    assert(output.label:GetText() == "#2454" and itemRequests[2454] == 1)
+    resolvedNames[2454], resolvedNames[2452] = "Late potion", "Late herb"
+    deliver("GET_ITEM_INFO_RECEIVED", 2454, true)
+    deliver("ITEM_DATA_LOAD_RESULT", 2452, true)
+    assert(output.label:GetText() == "Late potion" and reagent.label:GetText() == "Late herb",
+      "Resolved cells: " .. output.label:GetText() .. " / " .. reagent.label:GetText() ..
+        " (cache " .. UI.ItemName(2452) .. ", item.name " .. tostring(reagent.item.name) .. ")")
+    assert(hasText(window.pages.Logbook.history, "Late potion"), "Visible output table did not resolve item metadata")
+    assert(hasText(window.craftDetailWindow, "Late potion"), "Visible craft heading did not resolve item metadata")
+    assert(hasText(window.craftDetailWindow, "Late herb"), "Visible detail reagent did not resolve item metadata")
+    deliver("GET_ITEM_INFO_RECEIVED", 2454, true)
+    deliver("ITEM_DATA_LOAD_RESULT", 2452, true)
+    assert(itemRequests[2454] == 1 and itemRequests[2452] == 1)
+    assert(window.craftDetailPage.tabs.activeView == "Ingredients" and
+      window.craftDetailPage.returnedReagents.scroll:GetVerticalScroll() == 25,
+      "Metadata refresh reset craft inspection state")
+    assert(tracer.Trace.Serialize(core.ledger.database) == before, "Item metadata refresh mutated Core facts")
+    window.craftDetailWindow:Hide()
+    environment.C_Item, environment.GetItemInfo = savedItemAPI, savedItemInfo
+  end
+
   local overviewSummary = window.pages.Overview.summary
   assert(overviewSummary.tiles[1]:IsShown() and overviewSummary.tiles[2]:IsShown() and
     not overviewSummary.tiles[3]:IsShown() and not overviewSummary.tiles[4]:IsShown() and
@@ -5532,17 +5773,28 @@ end)()
     overviewSummary.tiles[2].value:GetText() == "4" and overviewSummary.tiles[6].value:GetText() == "3")
   local outcomes = window.recipeOutcomes
   assert(outcomes and outcomes.views.Statistics == nil)
-  outcomes:Open(7183)
+  window:OpenRecipe(assert(api.GetCraft(2)).recipe)
   assert(outcomes.tiles[1].value:GetText() == "2" and outcomes.tiles[2].value:GetText() == "2")
+  local recipeHeadings = 0
+  for _, frame in ipairs(frames) do
+    if (frame.parent == window.pages.Recipe or frame.parent == outcomes) and
+        frame:GetText() == "Minor Defense Potion" then
+      recipeHeadings = recipeHeadings + 1
+    end
+  end
+  assert(recipeHeadings == 1, "Recipe header is absent or repeated inside outcome content")
   outcomes:SelectView("Statistics")
   assert(outcomes.activeView == "Overview" and outcomes.tiles[3] == nil and outcomes.tiles[4] == nil and
     outcomes.tiles[5] == nil and outcomes.tiles[6] == nil)
   local honestExplanation = false
   for _, frame in ipairs(frames) do
     local text = frame:GetText()
-    if frame.parent == outcomes.views.Overview and type(text) == "string" and
-        text:find("Expected recipe requirements attributed to confirmed crafts", 1, true) then
-      honestExplanation = true
+    if type(text) == "string" and text == UI.InputExplanation() then
+      assert(frame.parent ~= outcomes.views.Overview, "Reagent provenance duplicated in recipe overview")
+      if frame.parent == outcomes.views.Reagents then
+        assert(#text <= 240, "Recipe reagent provenance should be concise")
+        honestExplanation = true
+      end
     end
   end
   assert(honestExplanation)
@@ -5587,13 +5839,82 @@ end)()
 
   local reagentPage = window.pages.Reagent
   assert(reagentPage.tiles.returned == nil and reagentPage.tiles.rate == nil and
-    not reagentPage.classification:IsShown())
+    reagentPage.classification:IsShown())
   local reagentsPage = window.pages.Reagents
-  assert(#reagentsPage.summary == 2)
+  assert(#reagentsPage.summary == 1, "Forever must not aggregate unlike reagent units into a KPI")
   local fixedColumns = {}
   for _, column in ipairs(reagentsPage.catalogue.columns) do fixedColumns[#fixedColumns + 1] = column.title end
   assert(table.concat(fixedColumns, "|"):find("Expected requirements", 1, true) and
     not table.concat(fixedColumns, "|"):find("Returned", 1, true))
+  do
+    local before = tracer.Trace.Serialize(core.ledger.database)
+    window:Activate("Reagents")
+    local list = reagentsPage.catalogue
+    assert(#list.items == 5)
+    local queries, original = {}, api.GetReagentSummaries
+    api.GetReagentSummaries = function(options)
+      queries[#queries + 1] = options
+      return original(options)
+    end
+    local ignore
+    for _, row in ipairs(list.rows) do
+      if row.item and row.item.item.id == 3371 then
+        for _, entry in ipairs(row.widgets) do
+          if type(entry.widget.SetItem) == "function" then ignore = entry.widget end
+        end
+      end
+    end
+    assert(ignore and ignore:GetWidth() <= 76 and ignore:GetHeight() <= 28)
+    ignore.scripts.OnClick(ignore)
+    assert(UI.IsTrivial(3371) and window.activeTab == "Reagents" and #list.items == 4)
+    local excludedQuery
+    for _, query in ipairs(queries) do
+      if query.excludeItems and query.excludeItems[1] == 3371 then excludedQuery = true end
+    end
+    assert(excludedQuery,
+      "Ignored reagents must be excluded by the real API, including aggregates")
+    local included = assert(original({ excludeItems = { 3371 } }))
+    assert(included.totalCount == #list.items)
+    assert(reagentsPage.summary[1].value:GetText() == tostring(included.totalCount))
+    for _, row in ipairs(list.items) do
+      local full = assert(original({ items = { row.item.id } })).reagents[1]
+      assert(row.allocatedQuantity == full.allocatedQuantity, "Ignoring changed another item's expected quantity")
+    end
+    dropdown(reagentsPage, "Show ignored"):Choose(true)
+    assert(#list.items == 5)
+    local vial
+    for _, row in ipairs(list.rows) do
+      if row.item and row.item.item.id == 3371 then
+        vial = row.item
+        for _, entry in ipairs(row.widgets) do
+          if type(entry.widget.SetItem) == "function" then ignore = entry.widget end
+        end
+      end
+    end
+    assert(vial and vial.allocatedQuantity == 4 and ignore:GetText() == "Restore")
+    ignore.scripts.OnClick(ignore)
+    assert(not UI.IsTrivial(3371) and #list.items == 5)
+    dropdown(reagentsPage, "Show ignored"):Choose(false)
+    local function searchMetadata(text)
+      reagentsPage.searchInput:SetText(text)
+      reagentsPage.searchInput.scripts.OnTextChanged(reagentsPage.searchInput)
+      reagentsPage.searchInput.scripts.OnUpdate(reagentsPage.searchInput, .3)
+      local turns = 0
+      while reagentsPage.searchWorker and reagentsPage.searchWorker.scripts.OnUpdate do
+        turns = turns + 1
+        assert(turns <= 30, "Metadata name search did not finish")
+        reagentsPage.searchWorker.scripts.OnUpdate(reagentsPage.searchWorker)
+      end
+    end
+    searchMetadata("Late herb")
+    assert(#list.items == 1 and list.items[1].item.id == 2452 and list.items[1].allocatedQuantity == 1,
+      "Resolved item name was not searchable without Core mutation")
+    searchMetadata("%"); assert(#list.items == 0)
+    searchMetadata(".*"); assert(#list.items == 0, "Metadata name search interpreted a Lua pattern")
+    searchMetadata("")
+    assert(tracer.Trace.Serialize(core.ledger.database) == before, "Ignore/Restore mutated Forever facts")
+    api.GetReagentSummaries = original
+  end
 
   local missingDropdown = environment.UIDropDownMenu_AddButton
   environment.UIDropDownMenu_AddButton = nil
