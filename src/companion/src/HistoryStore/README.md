@@ -28,6 +28,13 @@ All dimension keys are scoped to `GameContext`. Dimension-to-context constraints
 
 `WriteBatch` validates one complete `CraftHistory`, reconciles its dimensions and every craft, then commits the whole batch in one transaction. Validation failures and C02 conflicts return typed results without committing any writes; database failures and cancellation roll back through transaction disposal. Calls on one store instance remain serialized, and the store does not add import checkpoints or source records.
 
+Successful batch results expose `Observations`, the per-observation
+`CraftWriteResult` facts keyed by each returned observation's canonical identity.
+Enriched results also expose `PreviousObservation`, allowing callers to compare
+which evidence changed. Failed/rejected batches expose no committed observations.
+These transient reporting facts do not add database records, reads, schema
+changes, or new reconciliation/identity rules.
+
 The internal `__HistoryStoreMigration` table records the initialized schema
 version. No compatibility migrations are provided for old development databases.
 Unsupported schemas are rejected, not deleted or overwritten. Provenance,

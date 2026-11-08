@@ -121,46 +121,113 @@ initialized but empty database.
 
 With an explicit source file, behavior is unchanged: no configuration is needed,
 loaded, searched, or modified. With no source argument, the command loads shared
-settings, discovers and lists all Core ledgers, and imports each through that
+settings, discovers all Core ledgers, and imports each through that
 same C07 API into one database. Directory names **never** infer or override
 C04's source-derived GameContext. Each file has its own transaction; rejected
 or failed files do not roll back separately committed valid files. Processing
-continues across independent files, with complete per-file reports and final
-file/committed-craft totals. Totals count observations handled across files,
+continues across independent files, with a compact per-source summary and final
+committed-craft totals. Totals count observations handled across files,
 not unique database cardinality (use `status` for that).
 
 Partial success is explicit and returns nonzero. Any failed file or discovery
 error returns 3; otherwise a rejected file returns 2. Discovery warnings
 (including skipped links) and source coverage/evidence warnings do not fail
-an otherwise successful import or mark it partial; diagnostics and warning
-totals remain visible. No configured
+an otherwise successful import or mark it partial. Discovery diagnostics remain
+visible in both output modes. No configured
 root returns 1 and advises `artisanlogbook init`; malformed/unreadable/unsupported
 settings or no discovered ledgers return 3 without opening DuckDB.
 
-Reports include resolved paths, observed source craft count, committed
-inserted/already-present/enriched counts, rejected/conflicting count, dimension
-changes, diagnostics (including source locations), and coverage warnings.
-Warnings do not imply failure, but aggregate-only history is **not recovered**
-and is never counted as canonical crafts. Diagnostic text may contain private
-source information; do not upload raw terminal logs or SavedVariables.
+### Normal output
 
-Example using the **sanitized repository fixture**, not live user data
-(tables condensed):
+Installation imports show one table of new, existing, enriched, and outcome
+counts per source, without repeated full paths or low-level report tables.
+Labels use client-directory names only for presentation (`_retail_` becomes
+`Retail`, `_forever_` becomes `Forever`). Shared labels include the account
+directory and, when necessary, a deterministic installation number based on
+sorted configured roots. These labels never classify the canonical GameContext.
+Explicit-file imports show the filename and change summary without an
+installation table. First imports emphasize newly preserved observations.
+
+An unchanged successful installation reimport looks like this (illustrative,
+not live source data; table borders omitted):
 
 ```text
-Import successful.
-Observed source crafts       15
-Inserted crafts              15
-Already-present crafts        0
-Enriched crafts               0
-Rejected/conflicting crafts    0
-Inserted dimensions          20
-Enriched dimensions           0
-Aggregate-only history: 3 attempts lack retained detail.
-These are not canonical crafts and were not recovered.
+Artisan Logbook - Import
+Source     New   Existing   Enriched   Result
+Forever      0         30          0   successful
+Retail       0      2,702          0   successful
+
+Import complete - no changes.
+2,732 existing crafts / 0 new / 0 enriched
 ```
 
-On repeat import: inserted 0, already-present 15, enriched 0, dimension changes 0.
+Relevant source warnings/information are grouped by stable code and severity.
+Counts are **diagnostic occurrences**, not rejected crafts, unique affected
+crafts, or recovered attempts. The same occurrence exposed through C07's source
+and coverage views is counted once; separate equal occurrences remain separate.
+Group lines identify affected source labels. Unknown codes retain their original
+locations/messages in normal output, and errors/conflicts are never collapsed
+into warning counts.
+
+### Attribution and suppression
+
+C04 associates diagnostics emitted while mapping a complete grouped observation
+with its canonical `(Origin, Observation)` identity. It does not parse IDs from
+messages or locations, and it does not treat a local craft ID as globally unique.
+Schematic variation is directional: each occurrence belongs to the current
+craft's differing schematic snapshot, not to every craft sharing that recipe.
+C03 exposes per-observation committed reconciliation outcomes through C07;
+no diagnostic history, database schema change, or source mutation is needed.
+
+- Inserted crafts' diagnostics remain visible.
+- Already-present crafts' warnings/information are suppressed.
+- Enriched crafts' known diagnostics appear only when their relevant recipe,
+  output, reagent/completeness, or schematic evidence changed. Unrelated
+  enrichment does not repeat an unknown-recipe warning. New diagnostic codes
+  conservatively remain visible on enrichment.
+- Ledger-level lineage, legacy outcome, missing-rollup, and aggregate-only
+  notices appear when observations or dimensions commit changes, not on an
+  unchanged successful reimport with retained crafts.
+- Unattributed diagnostics, missing associations, and ledgers with no retained
+  observations remain visible conservatively: existing craft reconciliation
+  cannot establish prior ingestion of those conditions. Legacy clone lineage
+  uncertainty is unchanged; presentation cannot make independently diverged
+  ledgers safe to combine.
+- Rejected/failed imports and all errors, validation failures, conflicts,
+  source-read failures, and persistence failures are never suppressed.
+
+Enrichment comparisons match the underlying history contracts: output/reagent
+rows use order-independent value equality with occurrence multiplicity preserved
+(C01 also rejects duplicate canonical grains). Evidence uses C03's sequence
+equality, preserving multiplicity and C01's ordered output callbacks. C02 sorts
+and deduplicates evidence when merging two non-null collections, but can retain
+duplicates when one side is null; reporting does not assume uniqueness.
+
+Unknown recipes are valid incomplete evidence, **not rejected crafts**.
+Aggregate-only history is **not recovered** and is never counted as canonical
+crafts. Files that fail/reject are identified by full path with actionable
+details and an explicit no-commit statement. Other valid files remain committed;
+partial success and existing nonzero exit codes are preserved.
+
+### Verbose output
+
+`--verbose` works with installation and explicit-file imports:
+
+```text
+artisanlogbook import --verbose
+artisanlogbook import snapshot.lua --verbose
+```
+
+It adds full source/database paths, the existing detailed C07 craft/dimension
+counters, observed counts, all source/coverage diagnostics (including normally
+suppressed ones), original locations and messages, validation and reconciliation
+details, input/persistence failures, discovery diagnostics, per-file outcomes,
+aggregate coverage detail, and installation totals. It is presentation-only:
+parsing, identity, reconciliation, transaction boundaries, persistence, and exit
+codes are identical to normal mode.
+
+Diagnostic text, paths, and account labels may contain private source
+information; do not upload raw terminal logs or SavedVariables.
 
 ## Status
 

@@ -1,4 +1,5 @@
 using ArtisanLogbook.History;
+using ArtisanLogbook.HistoryStore;
 using ArtisanLogbook.SavedVariables;
 
 namespace ArtisanLogbook.ImportService;
@@ -28,4 +29,8 @@ public sealed record CompanionImportResult(
     IReadOnlyList<HistoryConflict> CraftConflicts,
     IReadOnlyList<DimensionConflict> DimensionConflicts,
     IReadOnlyList<CompanionImportDiagnostic> InputDiagnostics,
-    IReadOnlyList<CompanionImportDiagnostic> PersistenceDiagnostics);
+    IReadOnlyList<CompanionImportDiagnostic> PersistenceDiagnostics)
+{
+    /// <summary>Committed outcomes keyed by canonical observation identity, never source-local ID.</summary>
+    public IReadOnlyList<CraftWriteResult> Observations { get; init; } = [];
+}

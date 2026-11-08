@@ -23,6 +23,8 @@ public sealed record CraftWriteResult(
     IReadOnlyList<HistoryValidationError> ValidationErrors,
     IReadOnlyList<HistoryConflict> Conflicts)
 {
+    public CraftObservation? PreviousObservation { get; init; }
+
     public bool IsSuccessful => Status is CraftWriteStatus.Inserted
         or CraftWriteStatus.AlreadyPresent
         or CraftWriteStatus.Enriched;
@@ -58,6 +60,9 @@ public sealed record CraftHistoryBatchWriteResult(
     IReadOnlyList<HistoryConflict> CraftConflicts,
     IReadOnlyList<DimensionConflict> DimensionConflicts)
 {
+    /// <summary>Per-observation reconciliation facts, exposed only after the batch commits.</summary>
+    public IReadOnlyList<CraftWriteResult> Observations { get; init; } = [];
+
     public bool IsSuccessful => ValidationErrors.Count == 0 &&
         CraftConflicts.Count == 0 && DimensionConflicts.Count == 0;
 }
@@ -221,10 +226,12 @@ public sealed class HistoryStore : IDisposable
             int alreadyPresentCrafts = 0;
             int enrichedCrafts = 0;
             List<HistoryConflict> craftConflicts = [];
+            List<CraftWriteResult> observations = [];
             foreach (CraftObservation observation in history.Crafts)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 CraftWriteResult result = WriteObservation(observation, transaction);
+                observations.Add(result);
                 switch (result.Status)
                 {
                     case CraftWriteStatus.Inserted:
@@ -256,7 +263,8 @@ public sealed class HistoryStore : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             transaction.Commit();
             return new(insertedCrafts, alreadyPresentCrafts, enrichedCrafts,
-                insertedDimensions, enrichedDimensions, [], [], []);
+                insertedDimensions, enrichedDimensions, [], [], [])
+            { Observations = observations };
         }
     }
 
@@ -825,7 +833,7 @@ public sealed class HistoryStore : IDisposable
             return new(CraftWriteStatus.AlreadyPresent, existing, [], []);
 
         StoreObservation(reconciled, transaction, isUpdate: true);
-        return new(CraftWriteStatus.Enriched, reconciled, [], []);
+        return new(CraftWriteStatus.Enriched, reconciled, [], []) { PreviousObservation = existing };
     }
 
     private static (int Inserted, int Enriched) CountDimensionChanges(

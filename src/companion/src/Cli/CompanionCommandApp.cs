@@ -38,9 +38,11 @@ public static class CompanionCommandApp
                 .WithDescription("Interactively configure World of Warcraft installation roots (no import).")
                 .WithExample(["init"]);
             config.AddCommand<ImportCommand>("import")
-                .WithDescription("Import an explicit snapshot or all configured installation ledgers.")
+                .WithDescription("Import snapshots with concise change summaries; use --verbose for complete diagnostics.")
                 .WithExample(["import"])
                 .WithExample(["import", "ArtisanLogbook_Core.lua"])
+                .WithExample(["import", "--verbose"])
+                .WithExample(["import", "ArtisanLogbook_Core.lua", "--verbose"])
                 .WithExample(["import", "ArtisanLogbook_Core.lua", "--database", "history.duckdb"]);
             config.AddCommand<StatusCommand>("status")
                 .WithDescription("Show read-only history counts across all game contexts.")

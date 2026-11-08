@@ -11,11 +11,17 @@ public enum SavedVariablesDiagnosticSeverity
     Error
 }
 
+public enum SavedVariablesDiagnosticScope { Unattributed, Observation, Ledger }
+
 public sealed record SavedVariablesDiagnostic(
     SavedVariablesDiagnosticSeverity Severity,
     string Code,
     string Location,
-    string Message);
+    string Message)
+{
+    public SavedVariablesDiagnosticScope Scope { get; init; }
+    public CraftIdentity? ObservationIdentity { get; init; }
+}
 
 public sealed record SavedVariablesCoverage(long AggregateOnlyCraftCount, bool HasPrunedHistory);
 
@@ -103,7 +109,8 @@ public static class SavedVariablesReader
         if (legacyOutcomes)
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "legacy-outcome-coverage-corrected",
                 "ArtisanLogbookDB.outcomeVersion",
-                "Like the addon schema-1 migration, pre-outcome-2 false/set-completeness claims are unproven. Only positive proc/return evidence is promoted."));
+                "Like the addon schema-1 migration, pre-outcome-2 false/set-completeness claims are unproven. Only positive proc/return evidence is promoted.")
+            { Scope = SavedVariablesDiagnosticScope.Ledger });
 
         if (ledger.Get("dimensions") is not LuaTable && ledger.ContainsKey("dimensions"))
         {
@@ -170,7 +177,8 @@ public static class SavedVariablesReader
                 "ArtisanLogbookDB.crafts", "The detailed craft collection is absent; no individual crafts can be imported."));
         if (!ledger.ContainsKey("craftSeries"))
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "missing-rollups",
-                "ArtisanLogbookDB.craftSeries", "The historical rollup collection is absent."));
+                "ArtisanLogbookDB.craftSeries", "The historical rollup collection is absent.")
+            { Scope = SavedVariablesDiagnosticScope.Ledger });
         if (dimensions.Count == 0)
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "missing-dimensions",
                 "ArtisanLogbookDB.dimensions", "Dimension metadata is absent."));
@@ -250,6 +258,7 @@ public static class SavedVariablesReader
 
         foreach (IGrouping<string, LuaTable> group in GroupCraftRows(craftRows))
         {
+            int diagnosticStart = diagnostics.Count;
             LuaTable row = group.OrderBy(c => Long(c.Get("id")) ?? long.MaxValue).First();
             long? localCraftId = Long(row.Get("id"));
             string location = localCraftId is null
@@ -564,7 +573,8 @@ public static class SavedVariablesReader
             }
             if (crafts.Count == 0)
                 diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "legacy-identity-lineage",
-                    "ArtisanLogbookDB", "This ledger has no durable source-lineage identifier. Local craft IDs provide replay stability only; independently diverged cloned ledgers may collide."));
+                    "ArtisanLogbookDB", "This ledger has no durable source-lineage identifier. Local craft IDs provide replay stability only; independently diverged cloned ledgers may collide.")
+                { Scope = SavedVariablesDiagnosticScope.Ledger });
 
             DateTimeOffset recordedAt;
             double? timestamp = Number(row.Get("timestamp"));
@@ -736,6 +746,14 @@ public static class SavedVariablesReader
                 outputEvidence is null ? null : [outputEvidence],
                 configurationEvidence is null ? null : [configurationEvidence],
                 schematicEvidence));
+            // Attribute only after the complete grouped observation has a canonical identity.
+            for (int index = diagnosticStart; index < diagnostics.Count; index++)
+                if (diagnostics[index].Scope == SavedVariablesDiagnosticScope.Unattributed)
+                    diagnostics[index] = diagnostics[index] with
+                    {
+                        Scope = SavedVariablesDiagnosticScope.Observation,
+                        ObservationIdentity = craftIdentity
+                    };
         }
 
         long aggregateOnlyCount = CountAggregateOnly(ledger, sessions);
@@ -743,7 +761,8 @@ public static class SavedVariablesReader
         {
             diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "aggregate-only-history",
                 "ArtisanLogbookDB.craftSeries",
-                $"{aggregateOnlyCount} craft(s) are represented by historical rollups without individual detail. No craft observations were reconstructed from those totals."));
+                $"{aggregateOnlyCount} craft(s) are represented by historical rollups without individual detail. No craft observations were reconstructed from those totals.")
+            { Scope = SavedVariablesDiagnosticScope.Ledger });
         }
         CraftDimensions canonicalDimensions = new(
             characterDimensions, recipeDimensions, professionDimensions, itemDimensions, canonicalExpansions);

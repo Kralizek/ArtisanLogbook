@@ -65,6 +65,18 @@ string convertedText = exported.Content!;
 
 `SavedVariablesReader.Parse` supports ledger schema versions 1-5. It interprets persisted facts directly; it does not run Lua migrations or apply retention pruning. Schema-5 logical attempts import once, not once per child. Malformed output observations and summaries are explicit errors. Unknown game/character context and future schemas remain errors; unsupported observations are never silently classified.
 
+Reader diagnostics retain severity, code, location, and message, and additionally
+expose `Scope` (`Unattributed`, `Observation`, or `Ledger`) and optional
+`ObservationIdentity`. Diagnostics generated during a complete grouped craft
+mapping are associated only after its canonical identity is established; no
+location/message parsing or global uniqueness of local IDs is assumed. Schematic
+variation occurrences belong to the current differing craft snapshot. Legacy
+lineage/outcome, missing-rollup, and aggregate-only conditions are ledger-level.
+Other diagnostics remain unattributed if no confident mapping is available
+(including early mapping failures and missing collections).
+This is source attribution, not rejection status or a suppression policy.
+Original diagnostic evidence and existing lineage semantics remain unchanged.
+
 `CraftObservation.OutputEvidence` and `ConfigurationEvidence` are attached source-evidence sidecars, independent of canonical craft facts and excluded from canonical fact equality. Output evidence preserves ordered callbacks, per-callback measurements/returns, original timestamps, ambiguity and legacy IDs; configuration evidence preserves the original local key, request-time snapshot and craft-level coverage metadata. Reconciliation idempotently retains distinct evidence variants without reporting callback-order differences as craft conflicts; canonical output item/quality/quantity conflicts remain conflicts. An ambiguous repeated callback produces a canonical output row with unknown quantity, never zero or a guessed sum. Output completeness stays explicit and unknown unless the source states otherwise. Source-only items remain dimensioned, and explicit zero measurements remain zero.
 
 `RecipeSchematicEvidence` separately retains original request/result

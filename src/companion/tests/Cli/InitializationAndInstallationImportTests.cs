@@ -208,8 +208,8 @@ public sealed class InitializationAndInstallationImportTests
         {
             (int exit, string output) = await Run(["import"]);
             Assert.That(exit, Is.Zero, output);
-            Assert.That(output, Does.Contain("Discovered sources").And.Contain("Installation import totals")
-                .And.Contain("Installation import complete"));
+            Assert.That(output, Does.Contain("Source:").And.Contain("Installation import totals")
+                .And.Contain("Import complete"));
             Count(output, "Successful files", 3);
             Count(output, "Committed inserted crafts", i == 0 ? 3 : 0);
             Count(output, "Committed already-present crafts", i == 0 ? 0 : 3);
@@ -263,7 +263,7 @@ public sealed class InitializationAndInstallationImportTests
         {
             (int exit, string output) = await Run(["import"]);
             Assert.That(exit, Is.EqualTo(ExitCodes.Success), output);
-            Assert.That(output, Does.Contain("Warning (link-skipped)").And.Contain("Installation import complete")
+            Assert.That(output, Does.Contain("Warning (link-skipped)").And.Contain("Import complete")
                 .And.Not.Contain("partial success").And.Not.Contain("Incomplete installation import"));
             Count(output, "Discovery errors", 0);
             Count(output, "Discovery warnings", 1);
@@ -282,7 +282,7 @@ public sealed class InitializationAndInstallationImportTests
         File.WriteAllText(Path.Combine(_root, "_retail_", "Interface"), "unrelated");
         (int exit, string output) = await Run(["import"]);
         Assert.That(exit, Is.Zero, output);
-        Assert.That(output, Does.Contain("Warning (discovery-failed)").And.Contain("Installation import complete")
+        Assert.That(output, Does.Contain("Warning (discovery-failed)").And.Contain("Import complete")
             .And.Not.Contain("partial success"));
         Count(output, "Discovery errors", 0);
         Count(output, "Discovery warnings", 1);
@@ -327,7 +327,7 @@ public sealed class InitializationAndInstallationImportTests
             Assert.That(exit, Is.EqualTo(expectedExit), output);
             if (location == "unrelated")
             {
-                Assert.That(output, Does.Contain("Warning (discovery-failed)").And.Contain("Installation import complete")
+                Assert.That(output, Does.Contain("Warning (discovery-failed)").And.Contain("Import complete")
                     .And.Not.Contain("partial success"));
                 Count(output, "Successful files", 2);
             }
@@ -416,6 +416,7 @@ public sealed class InitializationAndInstallationImportTests
     {
         using TestConsole console = new();
         console.Width(240);
+        if (args[0] == "import") args = [.. args, "--verbose"];
         int exit = await CompanionCommandApp.Create(console, _paths, prompts, hints ?? []).RunAsync(args);
         return (exit, console.Output);
     }

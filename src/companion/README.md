@@ -9,11 +9,16 @@ The Companion reads source files without modifying them. Importing a snapshot ag
 | Command | What it does |
 | --- | --- |
 | `artisanlogbook init` | Configure a WoW installation root interactively |
-| `artisanlogbook import [source-file]` | Import one explicit snapshot, or discover snapshots using configured roots |
+| `artisanlogbook import [source-file] [--verbose]` | Import one explicit snapshot, or discover snapshots using configured roots |
 | `artisanlogbook status` | Show database status and craft counts without modifying the database |
 | `artisanlogbook --help` | Show available help |
 
 Both `import` and `status` accept `--database <path>` to override the default database location.
+
+Normal imports show concise change summaries and relevant new diagnostics;
+unchanged successful reimports suppress known historical warnings. Use
+`--verbose` for full paths, detailed counts, and all current diagnostics.
+Failures and discovery diagnostics remain visible in both modes.
 
 ## Get started
 
@@ -47,6 +52,14 @@ Alternatively, import one SavedVariables file explicitly:
 artisanlogbook import "/path/to/ArtisanLogbook_Core.lua"
 ```
 
+Both forms support complete diagnostic reporting:
+
+```text
+artisanlogbook import --verbose
+artisanlogbook import snapshot.lua --verbose
+artisanlogbook import --help
+```
+
 ## Scope and limitations
 
 The Companion currently provides initialization, importing, and read-only status. It does **not** provide a web interface, analytics dashboard, automatic synchronization, restoration into WoW, or a background service. Aggregate-only history cannot be recovered as individual crafts.
@@ -55,7 +68,7 @@ Imports may include locally sensitive character/account information. Avoid shari
 
 ## More information
 
-- [Command and configuration reference](../../docs/companion/cli.md): database paths, settings, discovery behavior, import and status details, and exit codes.
+- [Command and configuration reference](../../docs/companion/cli.md): database paths, settings, discovery behavior, import reporting and suppression, verbose output, status details, and exit codes.
 - [Contributing](../../CONTRIBUTING.md): build, tests, and local deployment.
 - [Runtime contracts](src/Runtime/README.md): implementation-facing application services.
 - [Main project](../../README.md).

@@ -74,7 +74,8 @@ public sealed class CompanionImportService
                 alreadyPresentCrafts: persisted.AlreadyPresentCrafts,
                 enrichedCrafts: persisted.EnrichedCrafts,
                 dimensionsInserted: persisted.InsertedDimensions,
-                dimensionsEnriched: persisted.EnrichedDimensions));
+                dimensionsEnriched: persisted.EnrichedDimensions) with
+            { Observations = persisted.Observations });
         }
         catch (OperationCanceledException)
         {
