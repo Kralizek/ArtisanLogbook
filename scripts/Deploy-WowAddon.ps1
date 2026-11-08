@@ -1,10 +1,9 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Both", "UI", "Core", "Tracer")]
-    [string]$Addon = "Both",
+    [ValidateSet("UI", "Core", "Tracer")]
+    [string[]]$Addon,
 
-    [ValidateSet("Retail", "Forever")]
-    [string]$Flavor = "Retail",
+    [string[]]$Flavor,
 
     [string]$WowPath
 )
@@ -17,29 +16,51 @@ $ArtifactName = "ArtisanLogbook-addon"
 $ConfigDirectory = Join-Path $env:LOCALAPPDATA "ArtisanLogbook"
 $ConfigPath = Join-Path $ConfigDirectory "deploy.json"
 
-function Get-FlavorConfiguration {
+function Get-FlavorConfigurations {
     param([string]$Path = (Join-Path $PSScriptRoot "../.flavors.yml"))
-
-    # Consume only the id/version scalars of the CI-validated flavor format.
     $id = $null
-    $versions = @{}
+    $versions = [ordered]@{}
     foreach ($line in Get-Content $Path) {
         if ($line -match '^\s*-\s+id:\s+([a-z][a-z0-9-]*)\s*(?:#.*)?$') {
             $id = $Matches[1]
-            if ($versions.ContainsKey($id)) { throw "Duplicate flavor '$id' in $Path." }
+            if ($versions.Contains($id)) { throw "Duplicate flavor '$id' in $Path." }
             $versions[$id] = $null
         }
         elseif ($id -and $line -match '^\s+version:\s+[''"]?(\d+)\.(\d+)\.(\d+)[''"]?\s*(?:#.*)?$') {
             $versions[$id] = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
         }
     }
-    $selected = $Flavor.ToLowerInvariant()
-    if (-not $versions[$selected]) { throw "Flavor '$selected' has no valid version in $Path." }
-    return [pscustomobject]@{
-        Id = $selected
-        Interface = $versions[$selected]
-        ClientDirectory = "_${selected}_"
-        Suffix = $(if ($selected -eq "retail") { "" } else { "-$selected" })
+    $requested = @($Flavor | Where-Object { $_ })
+    if ($requested.Count -eq 0) { $requested = @($versions.Keys) }
+    $seen = @{}
+    foreach ($name in $requested) {
+        $key = $name.ToLowerInvariant()
+        if (-not $versions.Contains($key) -or -not $versions[$key]) {
+            throw "Flavor '$name' has no valid version in $Path. Available: $($versions.Keys -join ', ')."
+        }
+        if ($seen[$key]) { continue }
+        $seen[$key] = $true
+        [pscustomobject]@{
+            Id = $key
+            Interface = $versions[$key]
+            ClientDirectory = "_${key}_"
+            Suffix = $(if ($key -eq "retail") { "" } else { "-$key" })
+        }
+    }
+}
+
+function Get-FlavorConfiguration {
+    $selected = @(Get-FlavorConfigurations)
+    if ($selected.Count -ne 1) { throw "Get-FlavorConfiguration requires one selected flavor." }
+    return $selected[0]
+}
+
+function Get-SelectedAddons {
+    $wanted = @($Addon | Where-Object { $_ })
+    if ($wanted.Count -eq 0) { $wanted = @("Core", "UI", "Tracer") }
+    $seen = @{}
+    foreach ($name in $wanted) {
+        if (-not $seen[$name]) { $seen[$name] = $true; $name }
     }
 }
 
@@ -199,36 +220,32 @@ function Get-WorkflowRunsForCommit {
 
 function Test-RunArtifact {
     param([Parameter(Mandatory)]$RunId)
-
     $json = & gh api "repos/$Repository/actions/runs/$RunId/artifacts?per_page=100"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to inspect artifacts for workflow run $RunId."
-    }
-
+    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect artifacts for workflow run $RunId." }
     $response = ($json -join "`n") | ConvertFrom-Json
-    if (@($response.artifacts | Where-Object {
-        $_.name -eq $ArtifactName -and -not $_.expired
-    }).Count -eq 0) { return $false }
-
-    $download = Join-Path ([IO.Path]::GetTempPath()) ("ArtisanLogbook-check-" + [Guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Path $download | Out-Null
-    try {
-        Invoke-Gh run download $RunId --repo $Repository --name $ArtifactName --dir $download
-        $archive = Join-Path $download "$archivePrefix$($flavorConfig.Suffix).zip"
-        if (-not (Test-Path $archive -PathType Leaf)) {
-            Write-Verbose "Run $RunId does not contain $Addon for $Flavor."
-            return $false
-        }
-        try {
-            Test-AddonArchive -Path $archive
-            return $true
-        }
-        catch {
-            Write-Warning "Run $RunId cannot be reused for $Flavor/$Addon`: $_"
-            return $false
-        }
+    if (@($response.artifacts | Where-Object { $_.name -eq $ArtifactName -and -not $_.expired }).Count -eq 0) {
+        return $false
     }
-    finally { Remove-Item -Recurse -Force $download }
+    $download = if ($script:artifactCache) { $script:artifactCache } else {
+        Join-Path ([IO.Path]::GetTempPath()) ("ArtisanLogbook-check-" + [Guid]::NewGuid().ToString("N"))
+    }
+    New-Item -ItemType Directory -Force -Path $download | Out-Null
+    try {
+        Get-ChildItem -Path $download -Force | Remove-Item -Recurse -Force
+        Invoke-Gh run download $RunId --repo $Repository --name $ArtifactName --dir $download
+        foreach ($target in @($script:targets)) {
+            $script:flavorConfig = $target.Flavor
+            $archive = Join-Path $download "$archivePrefix$($flavorConfig.Suffix).zip"
+            if (-not (Test-Path $archive -PathType Leaf)) { return $false }
+            try { Test-AddonArchive -Path $archive }
+            catch {
+                Write-Verbose "Run $RunId archive failed validation for $($flavorConfig.Id): $_"
+                return $false
+            }
+        }
+        return $true
+    }
+    finally { if (-not $script:artifactCache) { Remove-Item -Recurse -Force $download } }
 }
 
 function Find-ReusableRun {
@@ -292,12 +309,9 @@ function Copy-Addon {
 }
 
 function Get-AddonDirectories {
-    switch ($Addon) {
-        "UI"     { "ArtisanLogbook" }
-        "Core"   { "ArtisanLogbook_Core" }
-        "Tracer" { "ArtisanLogbook_Tracer" }
-        default  { "ArtisanLogbook_Core"; "ArtisanLogbook"; "ArtisanLogbook_Tracer" }
-    }
+    $names = @{ UI = "ArtisanLogbook"; Core = "ArtisanLogbook_Core"; Tracer = "ArtisanLogbook_Tracer" }
+    $selected = if ($script:selectedAddons) { $script:selectedAddons } else { @(Get-SelectedAddons) }
+    foreach ($name in $selected) { $names[$name] }
 }
 
 function Test-AddonArchive {
@@ -311,7 +325,7 @@ function Test-AddonArchive {
         foreach ($entry in $zip.Entries) {
             $name = $entry.FullName
             if ($name -match '\\|^/|:|(^|/)\.\.?(/|$)' -or
-                $name.Split('/')[0] -notin $directories -or $names.ContainsKey($name)) {
+                $name.Split('/')[0] -notin @('ArtisanLogbook_Core', 'ArtisanLogbook', 'ArtisanLogbook_Tracer') -or $names.ContainsKey($name)) {
                 throw "Unsafe, duplicate or unexpected archive entry '$name'. No addons were copied."
             }
             if (($entry.ExternalAttributes -shr 16 -band 0xF000) -eq 0xA000) {
@@ -354,97 +368,112 @@ function Install-AddonArchive {
 
 if ($MyInvocation.InvocationName -eq ".") { return }
 
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    throw "GitHub CLI (gh) is required."
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "GitHub CLI (gh) is required." }
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "Git is required." }
+
+$selectedFlavors = @(Get-FlavorConfigurations)
+$script:selectedAddons = @(Get-SelectedAddons)
+$selectedAddonCount = $script:selectedAddons.Count
+if ($selectedAddonCount -eq 0 -or $selectedFlavors.Count -eq 0) { throw "No deployment targets selected." }
+$requestedFlavorNames = @($Flavor)
+$requestedAddonNames = @($Addon)
+$script:targets = @()
+# Preflight every installation directory before downloading or modifying any addon.
+foreach ($config in $selectedFlavors) {
+    $script:Flavor = $config.Id
+    $root = Resolve-WowPath $WowPath
+    $destination = Join-Path (Join-Path (Join-Path $root $config.ClientDirectory) "Interface") "AddOns"
+    $script:targets += [pscustomobject]@{ Flavor = $config; Destination = $destination }
 }
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    throw "Git is required."
-}
+$script:Flavor = $requestedFlavorNames
+$script:Addon = $requestedAddonNames
 
 $branch = Get-CurrentBranch
 $sha = Get-CurrentSha
-$flavorConfig = Get-FlavorConfiguration
-$wowRoot = Resolve-WowPath $WowPath
-$addonsDirectory = Join-Path (Join-Path (Join-Path $wowRoot $flavorConfig.ClientDirectory) "Interface") "AddOns"
-if ($Flavor -eq "Forever" -and $Addon -in @("Both", "UI")) {
-    Write-Warning "Forever UI still needs live compatibility checks. Core + UI is sufficient; Tracer is optional."
-}
-
-$archivePrefix = switch ($Addon) {
-    "UI"     { "ArtisanLogbook" }
-    "Core"   { "ArtisanLogbook_Core" }
-    "Tracer" { "ArtisanLogbook_Tracer" }
-    default { "ArtisanLogbook-Bundle" }
-}
-$release = Find-ReleasePackage -Sha $sha -ArchivePrefix $archivePrefix
-$runId = $null
-
-if ($release) {
-    Write-Host "Reusing release $($release.Tag) for commit $sha ($($release.Asset))."
-}
-else {
-    $run = Find-ReusableRun -Sha $sha
-    if ($run) {
-        $runId = $run.databaseId
-        Write-Host "Reusing existing workflow run $runId for commit $sha."
-    }
-    else {
-        Write-Host "No reusable package found. Dispatching $Workflow for $branch ($sha)..."
-        $dispatchTime = [DateTimeOffset]::UtcNow
-        $dispatchOutput = & gh workflow run $Workflow --repo $Repository --ref $branch 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "gh workflow run failed with exit code $LASTEXITCODE."
-        }
-        $dispatchOutput | ForEach-Object { Write-Host $_ }
-
-        foreach ($line in $dispatchOutput) {
-            if ([string]$line -match '/actions/runs/(?<id>\d+)') {
-                $runId = $Matches.id
-                break
-            }
-        }
-        if (-not $runId) {
-            Write-Host "Workflow run ID was not returned by gh; locating the dispatched run..."
-            $runId = Wait-ForDispatchedRun -Branch $branch -Sha $sha -StartedAfter $dispatchTime
-        }
-    }
-
-    Write-Host "Waiting for workflow run $runId..."
-    Invoke-Gh run watch $runId --repo $Repository --exit-status
-    $runSha = Invoke-Gh run view $runId --repo $Repository --json headSha --jq '.headSha'
-    if (($runSha -join "").Trim() -ne $sha) {
-        throw "Workflow run $runId does not target commit $sha. The remote branch may have moved. No addons were copied."
-    }
-    if (-not (Test-RunArtifact -RunId $runId)) {
-        throw "Workflow run $runId completed without a usable '$ArtifactName' artifact."
+$archivePrefix = if ($selectedAddonCount -ne 1) { "ArtisanLogbook-Bundle" } else {
+    switch ($script:selectedAddons[0]) {
+        "UI" { "ArtisanLogbook" }
+        "Core" { "ArtisanLogbook_Core" }
+        "Tracer" { "ArtisanLogbook_Tracer" }
     }
 }
-
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("ArtisanLogbook-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $temp | Out-Null
-
+$script:artifactCache = $temp
 try {
+    # Release assets are selected only when exactly one flavor is requested.
+    # Multi-flavor deployment obtains the complete CI artifact once.
+    $release = $null
+    if ($script:targets.Count -eq 1) {
+        $script:flavorConfig = $script:targets[0].Flavor
+        $release = Find-ReleasePackage -Sha $sha -ArchivePrefix $archivePrefix
+    }
+    $runId = $null
     if ($release) {
-        Write-Host "Downloading release asset $($release.Asset)..."
+        Write-Host "Reusing release $($release.Tag) for commit $sha ($($release.Asset))."
         Invoke-Gh release download $release.Tag --repo $Repository --pattern $release.Asset --dir $temp
-        $archive = Join-Path $temp $release.Asset
     }
     else {
-        Write-Host "Downloading CI artifact from run $runId..."
-        Invoke-Gh run download $runId --repo $Repository --name $ArtifactName --dir $temp
-        $archiveName = "$archivePrefix$($flavorConfig.Suffix).zip"
-        $archive = Join-Path $temp $archiveName
-    }
-    if (-not (Test-Path $archive)) {
-        throw "Expected archive '$archive' was not downloaded."
+        $run = Find-ReusableRun -Sha $sha
+        if ($run) {
+            $runId = $run.databaseId
+            Write-Host "Reusing existing workflow run $runId for commit $sha."
+        }
+        else {
+            Write-Host "No reusable package found. Dispatching $Workflow for $branch ($sha)..."
+            $dispatchTime = [DateTimeOffset]::UtcNow
+            $dispatchOutput = & gh workflow run $Workflow --repo $Repository --ref $branch 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "gh workflow run failed with exit code $LASTEXITCODE." }
+            $dispatchOutput | ForEach-Object { Write-Host $_ }
+            foreach ($line in $dispatchOutput) {
+                if ([string]$line -match '/actions/runs/(?<id>\d+)') { $runId = $Matches.id; break }
+            }
+            if (-not $runId) {
+                $runId = Wait-ForDispatchedRun -Branch $branch -Sha $sha -StartedAfter $dispatchTime
+            }
+            Write-Host "Waiting for workflow run $runId..."
+            Invoke-Gh run watch $runId --repo $Repository --exit-status
+            $runSha = Invoke-Gh run view $runId --repo $Repository --json headSha --jq '.headSha'
+            if (($runSha -join "").Trim() -ne $sha) {
+                throw "Workflow run $runId does not target commit $sha. No addons were copied."
+            }
+            if (-not (Test-RunArtifact -RunId $runId)) {
+                throw "Workflow run $runId completed without valid archives for every selected target."
+            }
+        }
     }
 
-    Install-AddonArchive -Path $archive -Expanded (Join-Path $temp "expanded") -Destination $addonsDirectory
+    # Validate every selected archive and extract all targets before the first robocopy.
+    $staged = @()
+    foreach ($target in $script:targets) {
+        $script:flavorConfig = $target.Flavor
+        $script:Flavor = $flavorConfig.Id
+        $archive = if ($release) { Join-Path $temp $release.Asset } else {
+            Join-Path $temp "$archivePrefix$($flavorConfig.Suffix).zip"
+        }
+        if (-not (Test-Path $archive -PathType Leaf)) { throw "Missing archive '$archive'. No addons were copied." }
+        Test-AddonArchive -Path $archive
+        $expanded = Join-Path $temp ("expanded-" + $flavorConfig.Id)
+        Expand-Archive -Path $archive -DestinationPath $expanded -Force
+        foreach ($directory in @(Get-AddonDirectories)) {
+            if (-not (Test-Path (Join-Path $expanded $directory) -PathType Container)) {
+                throw "Archive missing directory '$directory'. No addons were copied."
+            }
+        }
+        $staged += [pscustomobject]@{ Flavor = $flavorConfig.Id; Expanded = $expanded; Destination = $target.Destination }
+    }
+    foreach ($target in $staged) {
+        foreach ($directory in @(Get-AddonDirectories)) {
+            $source = Join-Path $target.Expanded $directory
+            $destination = Join-Path $target.Destination $directory
+            Write-Host "Deploying $directory ($($target.Flavor)) -> $destination"
+            Copy-Addon -Source $source -Destination $destination
+        }
+    }
+    Write-Host ""
+    Write-Host "Deployed $($script:selectedAddons -join ', ') on $($selectedFlavors.Id -join ', ') from $branch ($sha)."
+    Write-Host "Switch to World of Warcraft and run /reload for each client."
 }
 finally {
     Remove-Item -Recurse -Force $temp
 }
-
-Write-Host ""
-Write-Host "Deployed $Addon for $Flavor from $branch ($sha)."
-Write-Host "Switch to World of Warcraft and run /reload."
