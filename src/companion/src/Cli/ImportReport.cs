@@ -77,6 +77,7 @@ internal static class ImportReport
                             console.WriteLine($"  {source.Label}: {diagnostic.Location}: {diagnostic.Message}");
             }
         }
+        if (verbose && report.InstallationImport) Totals(console, report);
         if (report.ExitCode != ExitCodes.Success)
             console.MarkupLine("[yellow]Incomplete import" +
                 (report.Sources.Any(source => source.Result.Outcome == CompanionImportOutcome.Successful)
@@ -87,7 +88,6 @@ internal static class ImportReport
         console.WriteLine(report.Inserted > 0
             ? $"{Count(report.Inserted)} new crafts preserved / {Count(report.Existing)} existing / {Count(report.Enriched)} enriched"
             : $"{Count(report.Existing)} existing crafts / {Count(report.Inserted)} new / {Count(report.Enriched)} enriched");
-        if (verbose && report.InstallationImport) Totals(console, report);
     }
 
     private static bool KnownCode(string code) => code is
