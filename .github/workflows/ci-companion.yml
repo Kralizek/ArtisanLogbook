@@ -28,6 +28,9 @@ jobs:
           global-json-file: src/companion/global.json
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lua5.1
+      - name: Verify scoped NuGet sources
+        run: |
+          dotnet nuget list source --configfile NuGet.Config
       - run: dotnet restore ArtisanLogbook.Companion.slnx
       - run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
       - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
