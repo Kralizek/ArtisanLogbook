@@ -121,7 +121,7 @@ SavedVariables first. Verify the same client build and API readiness:
    remainder is never counted and the new requests are independently captured.
 5. Stop tracing, export every page or back up the full Tracer SavedVariables.
    Reload and restart; verify Core facts persist, pending correlation is reset
-   and Tracer recording is paused.
+   and Tracer recording remains stopped after the explicit stop.
 
 Static/replay tests do not certify live Core behavior, native metadata readiness
 or latency, cross-profession signatures, unusual result ordering or other
@@ -171,7 +171,8 @@ migration, validation and artifact reuse. A deployment is not runtime certificat
 7. Close the profession, mark `after-close`, then `/al_trace stop`.
    `/al_trace export` opens the existing ten-record paged export. Copy **all**
    pages using the arrows; each is a Lua `return` table with contract version 2.
-8. `/reload` and confirm the trace is preserved and recording is paused.
+8. `/reload` and confirm the trace is preserved. Active recordings now resume
+   automatically; an explicitly stopped recording remains stopped.
    Exit/restart the client and check persistence again. The alternate full
    export is the `ArtisanLogbookTraceDB` SavedVariable in
    `_forever_\WTF\Account\<account>\SavedVariables\ArtisanLogbook_Tracer.lua`,
@@ -278,8 +279,10 @@ Confirm the actual client using `/dump GetBuildInfo()`; the client is
 authoritative. Every recording start also stores the actual build, interface,
 locale, character, realm, and capabilities.
 
-Open the tracer with `/al_trace`. Recording starts **paused** on every
-load/reload. Normal mode records craft-relevant events, submitted craft calls,
+Open the tracer with `/al_trace`. New and older databases without persisted
+recording intent start **Stopped**. `/al_trace start` or the Start button enables
+account-wide persistent recording; `/al_trace start verbose` includes quote and
+probe observations. Normal mode records craft-relevant events, submitted craft calls,
 and Core's optional read-only capture-decision context; quote and high-volume
 probe traffic is excluded. Toggle **Verbose: on** in the window to include quote
 and probe observations for the next recording. Turn it off again to return to
@@ -306,12 +309,92 @@ remain unchanged. **Purge Logbook DB** is a separately confirmed permanent delet
 of Logbook history and learned data; it does not clear Tracer data. **Clear
 Trace** only clears Tracer recordings and does not affect the Logbook.
 
-When the count or estimated-byte limit is reached, recording stops, preserves
-all existing evidence, and displays an explicit FULL state. Starting again
-requires stopping and clearing the trace; clearing is the only operation that
-discards stored records. Exports and the UI are limited to ten records per page;
+Recording has **no session record-count or byte-size cap**. Records are never
+rotated, overwritten, truncated or automatically discarded. Status reports
+Recording/Stopped, the active mode, current character, total events and estimated
+size. At 12 MiB estimated size it shows a warning, not a capacity limit or stop.
+Clearing is the only operation that discards stored records; it requires recording
+to be stopped and explicit confirmation. Exports and the UI are limited to ten records per page;
 use the page arrows to inspect or copy a large trace without placing the entire
 database in one EditBox. No third-party libraries or addons are required.
+
+### Persistent, multi-character recordings
+
+1. Enable **Artisan Logbook Tracer for every character involved**. It is optional,
+   disabled by default and independent of Core. No events are captured while
+   Tracer is disabled, absent or not yet initialized.
+2. Run `/al_trace start verbose` once (or `start normal`). Craft, add markers,
+   reload, log out/in, switch characters and restart the client as needed.
+   At `PLAYER_LOGIN`, an enabled saved intent automatically resumes the same
+   logical recording in its saved mode; no manual Start is needed.
+3. Run `/al_trace stop` or click Stop when finished. This persistently disables
+   automatic resumption. Reload or log out normally to write that change to disk.
+   Closing the window, reloading and normal logout are **not** stop requests.
+4. Back up the account-wide SavedVariables file after it has been written.
+   Multiple characters append to this one trace, with monotonically increasing
+   sequence numbers. Separate client flavors/accounts have separate files.
+
+`recordingEnabled`, `recordingMode` and `logicalSessionID` are additive
+SavedVariables settings. Each `TRACE_START` retains the existing metadata and
+adds `startReason` (`manual` or `automatic-resume`), `mode`, `logicalSessionID`
+and `segmentID`. The IDs use boundary sequence numbers, not game operation IDs.
+A manual Start after Stop creates a new logical session; each resumption creates
+a distinct segment in the existing session. Boundaries include character name
+and GUID, realm, client flavor/build/interface, addon version, login timing and
+mode; each record already includes wall-clock `timestamp` and client `elapsed`.
+Elapsed time resets with the client; sequence and wall-clock time, not elapsed
+alone, order a multi-login trace.
+
+On normal logout/reload, the original `PLAYER_LOGOUT` event is retained and
+followed by `TRACE_SEGMENT_END` with session/segment IDs. Neither disables intent.
+A crash or a disabled-addon interval may leave a segment without an end event.
+Resumption describes the newly loaded segment only: it does not manufacture
+events or imply continuous observation while Tracer was not loaded.
+
+SavedVariables are written by **WoW on reload/logout**, not continuously streamed
+to disk. Unlimited recording means no addon-imposed session cap, **not unlimited
+memory or guaranteed crash persistence**. Very large files can increase memory
+usage, startup/reload times and logout/save times, and can affect client stability.
+The displayed size is only an estimate, not exact Lua heap or on-disk size.
+Back up saved evidence periodically without clearing the active trace.
+
+Individual unsupported, secret, inaccessible or oversized payloads retain omission
+markers and warning reasons and do not stop capture. Genuine unrecoverable capture
+errors stop recording, preserve earlier events and sequence counters, report the
+failure in chat, and persistently disable intent to avoid automatic restart/error
+loops. Inspect `captureError` and `warnings`; fix the cause before explicitly
+starting again. Missing probes or a failed UI remain separately reported and do
+not disable raw event recording.
+
+#### Validation and in-game acceptance
+
+Lua 5.1 tests exercise persisted Start/Stop, repeated recorder/addon initialization,
+verbose resumption, multi-character boundaries, logout without a logical stop,
+monotonic sequences, legacy schema-2 defaults and schema-1 migration, captures
+past 10,000 events and a synthetic estimated-size crossing of 12 MiB, omission/
+capture-error recovery, confirmed stopped-only Clear, and ten-record export pages.
+Startup and event append do not scan retained history. Retail and Forever packages
+use the existing flavor matrix; no production capture/ledger semantics changed.
+
+The lifecycle uses existing compatible APIs plus `PLAYER_LOGIN` (initialization)
+and the already recorded `PLAYER_LOGOUT`. Source declarations reviewed on
+2026-11-08:
+
+- Retail 12.1.5.70783, interface 120105:
+  [SystemDocumentation.lua at 297d7aaaa736f346b3e036f38ee088eaf7f8c07f](https://github.com/Gethe/wow-ui-source/blob/297d7aaaa736f346b3e036f38ee088eaf7f8c07f/Interface/AddOns/Blizzard_APIDocumentationGenerated/SystemDocumentation.lua).
+- Forever 1.60.1.70862, interface 16001:
+  [SystemDocumentation.lua at 9dc84f0d3bbae1768ac3405b3716000bd93eda06](https://github.com/Gethe/wow-ui-source/blob/9dc84f0d3bbae1768ac3405b3716000bd93eda06/Interface/AddOns/Blizzard_APIDocumentationGenerated/SystemDocumentation.lua).
+
+Implementation uses the existing UI directly, without a new mock-up. Mocked UI
+tests do not establish visual fidelity or actual SavedVariables writes; browser
+simulation and real-client validation were not run. On each supported client,
+start verbose on character A, craft and mark, reload repeatedly, log out/in,
+switch to B and back to A, then restart normally. Verify automatic notifications,
+mode, character/build metadata and increasing boundary sequences. Stop, reload
+and verify no resumption or extra events. Inspect the on-disk file, pagination,
+warning/error states and Clear confirmation. Test with Core disabled as well.
+Large-file memory/save performance and actual crafting callback delivery still
+require in-game observation.
 
 ### Recipe metadata and recovery
 
@@ -420,8 +503,8 @@ Optional commands:
 refreshes status twice per second while visible, but does not
 overwrite export text as events arrive. Export refreshes the displayed data to
 the latest ten-record page. Click in the export text, select all, and copy.
-Use the page arrows to inspect and copy each page. Capture is bounded
-independently of rendering.
+Use the page arrows to inspect and copy each page. Only individual payloads and
+export pages are bounded; the recording session is not.
 
 ## Controlled Trace Collection
 
@@ -436,8 +519,8 @@ independently of rendering.
 3. Perform the intended craft through the normal game UI. Mark the observed
    outcome, including visible output quantity, quality, and proc messages.
    Keep recording for several seconds after completion to retain late callbacks.
-4. Stop, check `/al_trace status`, and inspect the export for `warnings`. Capacity
-   stops and omitted payloads mean the affected evidence is incomplete, not
+4. Stop, check `/al_trace status`, and inspect the export for `warnings`. Capture
+   errors and omitted payloads mean the affected evidence is incomplete, not
    evidence that the game omitted a field. Report these before proceeding.
 5. Copy every Export page, or preferably preserve the entire account-wide
    SavedVariables file after `/reload` or a normal logout. Include the first
@@ -455,12 +538,13 @@ independently of rendering.
    handled separately.
 
 Normal logout or `/reload` writes WoW SavedVariables. A crash or forced kill can
-lose the current session; this addon cannot force a disk flush. Reload pauses
-capture and a new Start creates another metadata boundary. Do not use reload
-mid-scenario unless testing that boundary intentionally.
+lose events and intent changes since the last save; this addon cannot force a
+disk flush. Reload resumes enabled recording with a distinct automatic boundary,
+but events cannot be observed while the addon is unloaded.
 
 The current file is under
-`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Tracer.lua` and
+`_retail_/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Tracer.lua` (Retail) or
+`_forever_/WTF/Account/<account>/SavedVariables/ArtisanLogbook_Tracer.lua` (Forever), and
 contains `ArtisanLogbookTraceDB`. This is account-wide, not a per-character
 file. Older versions declared this variable from Core and stored it in
 `ArtisanLogbook_Core.lua`; WoW loads and saves only variables declared in the
@@ -471,8 +555,8 @@ trace you want to keep, create or edit the Tracer SavedVariables file and copy
 the complete `ArtisanLogbookTraceDB = ...` assignment from the old Core file
 into it before launching WoW, retaining the original backup until the new trace
 is verified. See the [SavedVariables loading contract](https://warcraft.wiki.gg/wiki/SavedVariables).
-Do not import very large historical traces; archive the old file offline and
-start Tracer with a fresh trace instead. Never delete or edit the old ledger
+Very large historical traces can be retained, but back them up and account for
+their memory/load costs before importing. Never delete or edit the old ledger
 assignment. Raw traces can include character names, GUIDs, targets, hyperlinks, and order identifiers.
 The claimed-order probe stores only an allowlisted diagnostic snapshot, not
 full order names, GUIDs, notes, or hyperlinks. Review traces before sharing.
@@ -627,17 +711,17 @@ derived from a craft that consumes it. See
 direction. Unknown metadata remains absent until supported by game data and the
 schema review.
 
-Once 10,000 records are stored, a new trace cannot start until the evidence is
-exported and cleared. The limit is enforced during every capture, not just at
-recording start; the recorder stops accepting records at the limit and preserves
-the existing trace. The estimated byte total also has a 12 MiB cap; it is a
-payload-plus-overhead estimate, not an exact measurement of Lua heap or
-SavedVariables file size. Either limit causes an explicit stopped/full state.
-The database has no eviction: records remain until the user clears them. Normal
+There are no global record-count or estimated-byte limits. The database has no
+eviction: records remain until the user explicitly confirms Clear while stopped. Normal
 mode omits quote and high-volume probe observations; enable Verbose explicitly
 when investigating those paths. Existing trace schema-2 records are retained
 when loaded under the new Tracer owner if they are available to the loader; no
 automatic cross-addon SavedVariables migration is performed.
+Existing schema-2 databases need no schema/export version bump or history scan.
+Missing recording settings are initialized to disabled intent and normal mode;
+existing records, sequence numbers, timestamps and payloads are unchanged.
+Repeated initialization does not reset history. Active persisted intent appends
+one automatic `TRACE_START` boundary per initialization.
 Individual payloads have a 16 KiB serialized ceiling, 512 traversal-node budget,
 eight-level depth limit, and 2,048-byte per-string limit. Cycles, restricted
 values, unsupported types/keys, and limit violations are explicitly diagnosed
@@ -781,9 +865,9 @@ quotes/probes; otherwise use normal mode, which excludes them. Open the recipe
 first, then `/al_trace start verbose` (or `start normal`), mark
 `scenario-before`, choose reagents and concentration, wait for the quote,
 mark `scenario-click`, craft normally, mark `scenario-after`, and `/al_trace stop`.
-The 10,000-record and 12 MiB estimated-byte limits apply during capture in both
-modes. If either limit is reached, preserve the trace, export each page and
-clear only before a new scenario; report capacity or payload warnings. Preserve
+Neither mode has a session capacity limit. For a longer investigation, keep one
+recording active across scenarios/characters and distinguish them with markers
+instead of stopping. Report capture errors or payload warnings. Preserve
 every export page or the raw SavedVariables after a normal logout, including
 `TRACE_START` and build information. Note the UI-displayed allocation/quality,
 concentration quote, batch count, result/procs, and the sequence ranges of

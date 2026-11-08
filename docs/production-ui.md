@@ -1,7 +1,7 @@
 # Production UI
 
 `/al` and `/artisanlogbook` open Artisan Logbook. The draggable minimap book
-toggles the same window. Its angle, recipe pins, and trivial-reagent preferences
+toggles the same window. Its angle, recipe pins, and ignored-reagent preferences
 belong to `ArtisanLogbookUISettings`, never Core. Core owns the separate
 capture and public API; the optional, default-disabled Tracer addon provides
 `/al_trace`. Its raw export is not a portable craft export.
@@ -9,7 +9,7 @@ capture and public API; the optional, default-disabled Tracer addon provides
 `ArtisanLogbook` requires `ArtisanLogbook_Core` and reads facts through
 `ArtisanLogbookAPI` v1. Retention uses `ArtisanLogbookManagement`. The production
 UI neither accesses Core's private namespace nor reads/writes its SavedVariables.
-Core and the UI work with Tracer absent or disabled; Tracer also requires Core
+Core and the UI work with Tracer absent or disabled; Tracer can run independently
 and owns only its diagnostic SavedVariables. Confirmed destructive ledger
 maintenance is provided by Core's management API, never by Tracer. Storage,
 retention, and the durable outcomes introduced by #21 are unchanged. Additive API changes
@@ -18,6 +18,173 @@ with selection-wide totals. Recipe summaries also accept day-aligned time bounds
 These remain read-only API v1 catalogue queries; capture and storage are unchanged.
 
 ## Pages and navigation
+
+### Forever support and presentation evidence
+
+The existing production UI now initializes on Forever with Core API v1 and the
+management API, without Tracer or the standalone diagnostics inspector.
+Initial live acceptance on 1.60.1.70862 confirmed `/al`, the existing Blizzard-themed
+window, four crafts/four outputs/three recipes, the Defense two-craft batch,
+character/profession labels, activity graph and Recipes/Reagents aggregates.
+The fixes below are ready for another live pass, **not a release or full visual
+compatibility certification**.
+The accepted design is the existing Retail parchment, dark sidebar, tabs, item
+cells and navigation; no separate Forever pages or third-party dependencies are added.
+Forever publishing stays disabled by `release: false` in `.flavors.yml`.
+
+Target evidence: Forever **1.60.1.70862**, interface **16001**, project **18**;
+Gethe/wow-ui-source commit `9dc84f0d3bbae1768ac3405b3716000bd93eda06`.
+Retail source was resolved to `297d7aaaa736f346b3e036f38ee088eaf7f8c07f`
+(**12.1.5.70783**, configured interface **120105**).
+Source presence is distinct from runtime/visual verification. The Forever
+`Blizzard_SharedXML.toc`, `Blizzard_UIPanelTemplates.toc` and
+`Blizzard_Fonts_Shared.toc` route shared and family files, including the Mainline
+button/dropdown/frame templates and shared tab templates, with Camelot overrides.
+`BasicFrameTemplateWithInset` is declared in Mainline `UIPanelTemplates.xml`;
+`TabSystemButtonArtTemplate` in shared `TabSystemTemplates.xml`. These declarations
+do not by themselves prove the installed client's loading or appearance.
+
+The compatibility helpers retain native templates when usable. Missing basic
+window chrome falls back to the established dark surface, title and accessible
+close button; missing tab mixins use native panel buttons with selected highlights.
+Missing backdrop mixins use the existing parchment/dark surfaces.
+Missing scroll chrome uses a native ScrollFrame with bounded mouse-wheel scrolling
+and up/down controls. Other required template failures, missing dropdown primitives,
+tooltip/root/popup systems, or drawing primitives produce a chat/slash-command error
+with instructions to enable Blizzard UI addons, disable UI replacements and reload.
+Font construction retries with `GameFontNormal`. Item icons/links retain the
+existing guarded modern/legacy getters and question-mark/name fallbacks.
+Windows retain drag, clamping, viewport-based scale, Escape and close/reopen behavior.
+Mocked checks validate control logic, **not pixel layout, fonts, assets or live taint**.
+
+`UI.Supports` derives presentation decisions from the public capability projection,
+including a detached copy of Core's explicit measurement support. It does not
+inspect native result zeros, flavor-specific payloads or correlation evidence.
+`UI.FixedInputs` identifies schematic requirements, rather than measured consumption.
+Core still owns every correlation and confirmation decision. In particular, a
+confirmed craft whose material-return evidence is unverified remains a normal craft.
+
+| Screen | Public reads / management | Forever presentation |
+|---|---|---|
+| Overview | GetCraftSeries, GetRecipeOutcomes, GetCrafts, GetCharacters, GetProfessions | Confirmed crafts, total output, recipes crafted, activity chart and most-crafted recipes; unsupported outcome cards omitted and remaining cards reflowed |
+| Logbook | GetCrafts, GetCharacters, GetProfessions | Recipe/output, quantity, timestamp, character and profession; shared filters, scrolling and paging |
+| Recipes | GetRecipeSummaries, GetRecipeOutcomes, GetCrafts | Recorded recipes remain discoverable with sort/search/period filters; no proc-rate columns |
+| Reagents | GetReagentSummaries | Expected schematic quantities and craft history; no zero savings/return graphs |
+| Character / Profession | GetCraftSeries, GetCrafts, GetCharacters, GetProfessions | Persisted identities, activity and recipes; no equipment/stats prerequisite |
+| Recipe detail | GetRecipeOutcomes, GetCrafts, GetFacets, GetRecipeReagentStatistics, GetRecipeReagentRequirements and supported outcome queries | Output/activity/history and fixed reagents; unsupported quality/statistics sections omitted |
+| Reagent detail | GetReagentSummaries, GetCrafts, GetCraft | Expected requirements attributed to confirmed crafts, browsing/history/navigation; no inferred net consumption |
+| Craft detail / tooltips | GetCraft and supported recipe queries | Result and ingredients; unsupported result cards and configuration tab omitted |
+| Settings | Status, SetRetentionDays, supported Core analysis/discovery/repair and confirmed purge | Existing supported management; no new diagnostics/settings subsystem |
+
+All screens share Components' native buttons, dropdowns, text/item cells and scroll
+helpers. Recipe/reagent/population views use the shared tabbed content. Craft detail
+and the main window share window chrome; tooltips use GameTooltip. Required fixed
+reagents may be absent for unsupported recipes or unavailable metadata; an empty
+selection is not evidence that a recipe has no inputs.
+
+Unavailable is not zero: unsupported measurements are omitted; unobserved values
+are unavailable/dashes with explanations; incomplete observations are identified
+as partial; rates without a valid denominator are unavailable. An observed zero
+remains a zero where its observation coverage establishes it. Retail retains its
+existing supported quality, proc, concentration, configuration and return views.
+Fixed reagent quantities mean **expected recipe requirements attributed to confirmed
+crafts**, derived from schematics. They are **not independently measured bag
+consumption and not Resourcefulness savings or return evidence**.
+The nearby player-facing note is: "Quantities are calculated from recipe requirements,
+not measured inventory changes." Technical provenance belongs in reagent tooltips,
+not below an unrelated craft activity graph. The Forever Reagents catalogue shows
+distinct included reagents and per-item quantities, not a sum of unrelated units.
+
+### Contextual controls and item names
+
+Character and Profession controls use the unfiltered recorded dimensions for the
+page's stable identity scope (all data for catalogues, the opened recipe/character/
+profession for contextual pages). Current period, search and other selected controls
+do not narrow this visibility scope. Zero/singleton facets disappear; multiple
+values restore the controls on refresh. An active selection remains visible with
+an All option even if its value no longer belongs to the scope. Craft-type visibility
+uses recorded context populations and supported choices, not a Forever flavor check.
+Period, meaningful sorts, search and classification controls reflow into the vacated
+slots, including custom-date controls.
+Context summaries are shared across pages with the same stable dimension scope.
+Global character/profession choices use Core's durable identity indexes. Scoped
+choices and context counts require durable series queries on a cold scope; the
+retained-detail-only `GetFacets` API cannot replace them after pruning. Only the
+small resulting choices/counts are cached, not complete series projections.
+Period/search/preferences/navigation reuse that cache. Commits, repair, purge,
+changed history status and profession/world metadata events invalidate it.
+The large-history regression covers 25,000 occupied days and 400 revisits with
+zero additional historical projections; cold queries are still proportional to history.
+
+Item cells, output titles and item tooltips prefer Core's provided name. Missing
+names resolve through compatible modern/legacy WoW item APIs. Icon metadata can be
+available while the separate name cache is cold, so icons never establish that a
+name is unavailable permanently. Missing names use a temporary numeric fallback,
+request item data with at most three attempts per item/session, and refresh after
+`GET_ITEM_INFO_RECEIVED` or `ITEM_DATA_LOAD_RESULT`. Exceptions/failed responses
+allow an on-demand retry after five seconds; pending requests expire after thirty
+seconds. A later display lookup or navigation can retry, without timers or polling
+for item data. Exhausted requests retain a numeric fallback until cache/event
+success or reload; late successful events are accepted even after exhaustion.
+Event registration is guarded independently: both events are declared at the
+pinned Forever/Retail sources, but a client rejecting an optional event retains
+the other event and cached/on-demand name resolution with a clear notification.
+Display resolution is session-only and does not rewrite ledger facts or
+invent an output name from its recipe. Existing links and artwork are retained.
+
+### Forever live acceptance
+
+With WoW closed, back up the existing SavedVariables containing the four accepted
+crafts. Install this branch's Forever Core + UI archives (or the bundle) into
+`_forever_/Interface/AddOns`; do not install Retail archives there. On Windows use
+`Deploy-WowAddon.ps1 -Flavor Forever -Addon Core` and then `-Addon UI` (or `-Addon Both`).
+Tracer may remain disabled; the diagnostics inspector is not required.
+
+1. Enable Core and production UI; open `/al` and `/artisanlogbook`. Check no Lua
+   errors, readable parchment/labels, sidebar, close controls and selected tabs.
+2. Select All time. Confirm **4 crafts across 3 recipes**: Minor Mana Potion
+   (2331, output 2455) once, Elixir of Minor Defense (7183, output 5997) twice,
+   Elixir of Minor Strength (2329, output 2454) once.
+3. In Logbook, inspect both separate Defense batch entries, output quantities,
+   timestamps and result/ingredient views. Neither entry should appear failed
+   merely because material returns were not verified.
+4. Browse Recipes; confirm known output names rather than permanent IDs. Test the
+   compact Pin/Unpin and Hide/Show buttons without opening the row. Verify the sidebar,
+   detail buttons, independent pin/hide state and restoration of hidden recipes.
+   Inspect Defense's header: Alchemy appears once. Overview has no orphan reagent note.
+5. Browse Reagents: Peacebloom 3, Earthroot 1, Empty Vial 4, Silverleaf 3, Mageroyal 1
+   expected units, with five distinct reagents and no "Expected requirements: 12" KPI.
+   Ignore Empty Vial, confirm four included reagents, then Show ignored and Restore.
+   Craft ingredients must still contain the vial; recipe reagent views use the same
+   classification. Check the concise note and detailed tooltip on Reagents.
+6. Check singleton Character/Profession/Craft type controls are absent and remaining
+   controls have no vacant slots. With a second character/profession, confirm automatic
+   restoration; narrowing Period/Search must not hide available dimensions.
+7. Open Character and Profession, Overview and Craft History tabs. Confirm activity
+   and recipe totals remain meaningful with equipment, stats and buffs absent.
+8. Check Resourcefulness, Multicraft, Ingenuity, concentration, quality and
+   operation/configuration measurements are hidden rather than displayed as 0%.
+   Check no empty chart legends, blank sections or large abandoned card spaces.
+9. Check tooltips, unknown/cold-cache item names/icons, empty filters, long names,
+   scrolling, paging with a larger history, drag/clamping and smaller viewport/UI scale.
+10. Close/reopen with the close button, Escape and minimap book. Reload; history
+   and saved UI preferences must remain available. Do not purge or repair to test browsing.
+11. Repeat Core-only, Core + UI, and Core + UI + Tracer (optional) installations.
+    Record actual build, resolution/scale, screenshots and first Lua error if any.
+
+Focused **Retail smoke test**: enable same-version Core + UI without Tracer; open both
+slash commands, Overview/Logbook/Recipes/Reagents and entity/details/Settings; confirm
+observed quality, Resourcefulness, Multicraft, Ingenuity, concentration, returns,
+configuration/equipment/buffs and salvage outputs still appear on their existing
+screens. Exercise contextual filters with zero/one/multiple dimensions, paging, tabs,
+async item names, list/detail Pin/Hide and Ignore/Restore/Show ignored, scrolling, close/reopen
+and reload. Check measured zeros and incomplete evidence against known Retail fixtures.
+
+Automated acceptance uses a sanitized schema-5 fixture through real Core/public reads.
+It is not a substitute for the above installed-client checks. Live Forever/Retail and
+UIForever visual comparisons have not been run in this development environment;
+the initial Forever live results above were supplied by the player.
+Do not upload personal SavedVariables or repository code to a hosted simulator.
 
 Owned multi-output salvage appears as one history/detail craft. Result detail,
 history tooltips and quality populations include every observed output. Repeated
@@ -108,8 +275,8 @@ existing current-entry highlight without replacing the primary selection.
 | --- | --- |
 | Overview | Period, character, and profession filters; craft activity bars; crafts, output, concentration, Multicraft, recorded Resourcefulness proc rate over all selected crafts, known returned material units, and most-crafted recipe. No factual craft list. |
 | Logbook | Period/character/profession filters plus a multi-checkbox craft-visibility menu above a newest-first ledger. Show crafts from unknown recipes is disabled by default and applies to craft-history lists; enabling it includes unattributed crafts. Show hidden recipes includes hidden recipes in Logbook only. Recipe, Result, Character, Profession, Qty, Highlights. Exact timestamps remain in row tooltips. |
-| Recipes | Period/character/profession filters, search/clear controls and most-crafted default sorting. Rich recipe rows include a Hide checkbox and always include hidden recipes within the selected filters. |
-| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, recorded Input/Returned/Saved share columns and editable Ignore checkboxes. Saved share shows Core's same-craft matched ratio or a dash; its muted tooltip summarizes relevant coverage and matched sample without presenting broad population counts as item-specific. Item IDs live in native item tooltips, not row subtitles. |
+| Recipes | Contextual filters, search/clear controls and most-crafted default sorting. Rich recipe rows include compact independent Pin/Unpin and Hide/Show actions and always include hidden recipes within the selected filters. |
+| Reagents | Parchment catalogue with item/quality cells, professions, recipe counts, per-item inputs and Ignore/Restore actions; Show ignored reveals excluded rows. Supported Retail Returned/Saved share columns retain same-craft matched ratios or a dash; Forever shows expected requirements instead. Item IDs live in native item tooltips, not row subtitles. |
 | Character | Neutral helmet and class-colored identity, up to two icon-only profession links, summary, Overview and Craft History tabs. No profession labels or empty-slot placeholders; names are in tooltips. |
 | Profession | Profession identity, summary, Overview and Craft History tabs. Full-width most-crafted table rather than a long page containing history underneath. |
 | Recipe Detail | Identity, pin control, filters, summary, then attached Overview, Statistics, Craft History and Reagents tabs. |
@@ -229,12 +396,16 @@ navigation. Missing fields stay unresolved without polling or retrying on every
 render. A successful `GET_ITEM_INFO_RECEIVED` retries only the matching cached
 item's missing fields; `TRADE_SKILL_LIST_UPDATE` retries unresolved quality
 atlases when profession data updates. API errors retain safe fallbacks. Events
-repaint only matching reagent cells, including mounted cells on a hidden page,
-without re-querying aggregates or resetting filters/scroll. The cache is never
+repaint matching reagent cells, including mounted cells on a hidden page.
+Resolved names repaint mounted item cells/tables and matching reagent headings,
+without invalidating the production window or restarting its data queries.
+Applied reagent name searches alone debounce metadata bursts for 200 milliseconds
+before rebuilding matches, preserving their selection/filter/scroll state.
+Hidden searches refresh on reopening. The cache is never
 persisted or stored in Core, and contains no craft totals or trivial preferences.
 
-Filters are Period (All time by default), Character, Profession, Savings statistics
-(All, Ignored, Included), and literal case-insensitive name search. Search has
+Filters include Period (All time by default), contextual Character/Profession,
+Show ignored, and literal case-insensitive name search. Search has
 explicit search/clear buttons and Enter support, plus a short debounce. The typed
 term does not change a paging query until applied. Name is the default reagent
 sort; Most required, Most returned and Recipe count sort the full selection before
@@ -250,7 +421,8 @@ Headline totals and saved share come from `GetReagentSummaries`; the usage worke
 retained craft details only for chart/history drill-down, at most 100 crafts per frame.
 Changing the selection
 replaces pending calculations. Histories and recipe uses render 40 rows at a time.
-Metadata events repaint item artwork without restarting aggregate queries.
+Metadata events repaint item artwork; newly resolved names refresh applied display-name
+search without changing factual quantities.
 
 The two-color chart compares **recorded input quantities and returns on retained
 craft details**, shown as Input and Returned, with at most 60 buckets and quantity/date
@@ -284,22 +456,28 @@ shared tooltip is screen-clamped. There is no cross-material savings percentage.
 Recipe/profession associations describe recorded uses, not all game recipes
 capable of using the item.
 
-Ignore in savings statistics is editable on the standalone Reagent page, Reagents
-catalogue and Recipe Reagents tab. All three share `ArtisanLogbookUISettings.trivialReagents`
-and synchronized checkboxes. Craft inspection remains configuration-free.
-The checkbox tooltip explains that quantities and the overall
-Resourcefulness rate do not change; it excludes this reagent from useful-savings
-craft counts. Notifications update affected statistics immediately while preserving
-list positions. Filtering by Included/Ignored happens
-before pagination via generic included/excluded item IDs passed to Core; Core
-has no knowledge of UI classification. A toggled row may leave the current
-filtered population. Quantities are unaffected by classification.
+Ignore reagent / Restore reagent is editable on the standalone Reagent page,
+Reagents catalogue and Recipe Reagents tab. All three use the existing item-wide
+`ArtisanLogbookUISettings.trivialReagents` preference through the UI management
+boundary. Ignored rows are excluded by default; Show ignored reveals and visually
+marks them so they can be restored. Included/ignored counts explain the selection.
+This changes reagent-focused lists, aggregate units and useful-savings rankings,
+not recorded quantities, craft counts or factual Resourcefulness evidence.
+Craft inspection always retains complete ingredients, even for ignored items.
+Existing Retail useful-proc semantics and the legacy preference key remain compatible.
+Filtering happens before pagination via generic included/excluded item IDs passed
+to Core; Core's factual queries do not know about UI classification.
 
 This page contains no TSM, inventory, valuation, or Warband Bank integration.
 
 ## Pinned recipes
 
-Up to five recipes can be pinned/unpinned from Recipe Detail. Pins are sorted
+Up to five new recipes can be pinned from the Recipes list or Recipe Detail.
+Legacy stores with more than five pins remain fully visible and individually
+unpinnable; adding is blocked until fewer than five remain. A toggle changes only
+its selected entry and never rebuilds or truncates unrelated legacy preferences.
+Compact list icons have state-specific tooltips and do not propagate row clicks.
+Pins are sorted
 alphabetically by name, with recipe ID as a deterministic tie-breaker; there is
 no manual ordering. A sixth pin is rejected without replacing an existing pin.
 Pins use `ArtisanLogbookUISettings.pinnedRecipes`, keyed by recipe ID, with a small
@@ -312,10 +490,10 @@ when factual detail has expired. Newly committed metadata can refresh a pin.
 Hide from lists is a UI-only preference stored as positive recipe IDs in
 `ArtisanLogbookUISettings.hiddenRecipes`. Unlike pins, hidden recipes have no
 five-entry limit. The Recipes catalogue always lists hidden recipes under the
-current period/search/character/profession filters, so its Hide checkbox can
+current period/search/character/profession filters, so its Show action can
 restore them. Recipe Detail uses matching Hide recipe / Show recipe and Pin recipe /
 Unpin recipe buttons, with equal widths and an 8-unit gap. Its visibility button
-stays synchronized with the catalogue checkbox.
+stays synchronized with the catalogue icon; hiding and pinning are independent.
 
 Hidden recipes are omitted from most-crafted tables and the most-crafted tile,
 and from Logbook, Character, Profession, Recipe and Reagent craft histories.
@@ -578,10 +756,10 @@ pages and the modal while performing this checklist.
   its last entry; Settings must remain accessible. Inspect selected/hover states,
   full-name tooltips, class colors, and missing metadata fallbacks.
 - [ ] Test an empty account, an empty filtered population, no pins, and five pins.
-  Pin/unpin from Recipe Detail, reject a sixth, change catalogue filters, navigate
+  Pin/unpin from the Recipes list and Recipe Detail, reject a sixth, change catalogue filters, navigate
   directly from a pin, reload, and verify alphabetical order and persistence.
 - [ ] Hide/unhide recipes from catalogue and Detail. Recipes must keep listing
-  them; both checkboxes synchronize. Verify every ranked/history list, hide all,
+  them; list/detail actions synchronize without opening the row. Verify every ranked/history list, hide all,
   hidden-only pages before a visible craft, switching cached identities, pins,
   reload, and more than five hidden recipes. Totals and saved Core facts stay fixed.
 - [ ] Overview must have no craft list. Verify all filters, graph and totals,
@@ -610,9 +788,9 @@ pages and the modal while performing this checklist.
 - [ ] Open different Reagent pages while usage loads; verify the final chart,
   recipes and history belong to the current item. Exercise shared custom periods,
   all tabs, navigation back, list restoration, incomplete rates and pruning.
-- [ ] Toggle Ignore in savings statistics on a Reagent page. Verify immediate
-  useful-savings recalculation, unchanged quantities/overall Resourcefulness rate,
-  and a row leaving Trivial/Non-trivial selections. Reload to verify persistence.
+- [ ] Toggle Ignore reagent on list, recipe and Reagent pages. Verify immediate
+  included totals/useful-savings recalculation, unchanged craft ingredients and factual
+  Resourcefulness rate, Show ignored/Restore, and item-wide state. Reload to verify persistence.
   Prune a copy of history and verify durable returns remain without inventing
   missing allocation totals. Compare with the attached Reagents mockup.
 - [ ] Visit characters with 0, 1 and 2 recorded primary professions, including

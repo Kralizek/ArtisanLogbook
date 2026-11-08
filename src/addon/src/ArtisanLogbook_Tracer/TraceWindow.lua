@@ -25,7 +25,7 @@ function addon.CreateTraceWindow()
 
   local status = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   status:SetPoint("TOPLEFT", 20, -38)
-  status:SetSize(width - 40, 30)
+  status:SetSize(width - 40, 34)
   status:SetJustifyH("LEFT")
 
   local function button(text, offset, vertical, callback, buttonWidth)
@@ -79,20 +79,10 @@ function addon.CreateTraceWindow()
   pageLabel:SetSize(width - 340, 24)
   pageLabel:SetJustifyH("LEFT")
 
+  local verboseButton
   local function updateStatus()
-    local recorder = addon.recorder
-    local stopped = recorder.database.stoppedReason
-    local state = recorder.recording and "Recording" or "Paused"
-    if stopped == "capacity" then
-      state = "FULL: record limit reached; clear the trace to restart."
-    elseif stopped == "capacity-bytes" then
-      state = "FULL: byte limit reached; clear the trace to restart."
-    elseif stopped == "capture-error" then
-      state = "Stopped after a capture error; existing records are preserved."
-    end
-    status:SetText(string.format("%s | %d / %d events | %.0f / %.0f KiB estimated",
-      state, #recorder.database.records, addon.Trace.maxRecords,
-      recorder.database.bytes / 1024, addon.Trace.maxBytes / 1024))
+    status:SetText(addon.GetTraceStatus())
+    if verboseButton then verboseButton:SetText(addon.verbose and "Verbose: on" or "Verbose: off") end
   end
 
   function window:Refresh(resetPage)
@@ -117,8 +107,7 @@ function addon.CreateTraceWindow()
   end)
   button("Stop", 112, -72, function() addon.Stop(); window:Refresh() end)
   button("Export", 204, -72, function() window:Refresh(true) end)
-  local verboseButton
-  verboseButton = button("Verbose: off", 388, -72, function()
+  verboseButton = button(addon.verbose and "Verbose: on" or "Verbose: off", 408, -72, function()
     addon.verbose = not addon.verbose
     verboseButton:SetText(addon.verbose and "Verbose: on" or "Verbose: off")
     addon.Notify(addon.verbose and "Quote and probe capture enabled for the next recording." or
@@ -128,7 +117,7 @@ function addon.CreateTraceWindow()
     local payload = addon.Trace.Serialize({
       tracer = {
         recording = addon.recorder.recording == true,
-        verbose = addon.verbose == true,
+        verbose = addon.recorder.verbose == true,
         events = addon.capabilities.events,
         hooks = addon.capabilities.hooks,
         flavor = addon.capabilities.flavor,

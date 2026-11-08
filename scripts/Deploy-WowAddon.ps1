@@ -367,7 +367,7 @@ $flavorConfig = Get-FlavorConfiguration
 $wowRoot = Resolve-WowPath $WowPath
 $addonsDirectory = Join-Path (Join-Path (Join-Path $wowRoot $flavorConfig.ClientDirectory) "Interface") "AddOns"
 if ($Flavor -eq "Forever" -and $Addon -in @("Both", "UI")) {
-    Write-Warning "Forever production UI is not validated and will not initialize. Use Core + Tracer for ordinary fixed-input crafting capture."
+    Write-Warning "Forever production UI is ready for live acceptance, not released or visually validated. Core + UI is sufficient; Tracer is optional."
 }
 
 $archivePrefix = switch ($Addon) {

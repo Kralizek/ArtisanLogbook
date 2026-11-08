@@ -148,6 +148,7 @@ function Tooltip.Scope(filter, recipe)
 end
 
 local function measuredTotal(totals, metric, label)
+  if not UI.Supports(metric) then return end
   local count, crafts = totals[metric .. "ObservedCount"] or 0, totals.craftCount or 0
   local value = totals[metric]
   if count == 0 or value == nil then Tooltip.Row(label, "Not available", "muted"); return end
@@ -157,6 +158,7 @@ local function measuredTotal(totals, metric, label)
 end
 
 local function procRate(totals, metric, label, authoritative)
+  if not UI.Supports(metric) then return end
   local count, observed, crafts = totals[metric], totals[metric .. "ObservedCount"] or 0, totals.craftCount or 0
   if observed == 0 or count == nil then Tooltip.Row(label, "Not available", "muted"); return end
   local value = UI.Percent(count, observed)
@@ -172,7 +174,9 @@ function UI.RecipeTooltip(owner, recipe, filter)
   Tooltip.Begin(owner, UI.Name(recipe, "Unattributed recipe"))
   local context = {}
   if recipe and recipe.profession then context[#context + 1] = UI.Name(recipe.profession) end
-  if recipe and recipe.expansion then context[#context + 1] = UI.Name(recipe.expansion) end
+  if recipe and recipe.expansion and (not recipe.profession or UI.Name(recipe.expansion) ~= UI.Name(recipe.profession)) then
+    context[#context + 1] = UI.Name(recipe.expansion)
+  end
   Tooltip.Subtitle(table.concat(context, " - "))
   Tooltip.Scope(filter, recipe)
   if not recipe or not recipe.id then
@@ -204,7 +208,7 @@ function UI.RecipeTooltip(owner, recipe, filter)
   Tooltip.Row("Characters", UI.Number(characterCount, true) .. (unknownCharacters and " known" or ""),
     unknownCharacters and "partial" or "value")
   measuredTotal(totals, "outputQuantity", "Total produced")
-  if crafts > 0 then
+  if crafts > 0 and (UI.Supports("multicraft") or UI.Supports("resourcefulness") or UI.Supports("ingenuityRefund")) then
     Tooltip.Section("Crafting Outcomes")
     procRate(totals, "multicraftProcCount", "Multicraft procs")
     measuredTotal(totals, "multicraftBonus", "Extra output")
@@ -239,36 +243,44 @@ function UI.CraftTooltip(owner, craft)
   Tooltip.Row("Craft type", UI.ContextText(craft), craft.context and craft.context.kind ~= "unknown" and "value" or "muted")
   Tooltip.Row("Date", craft.timestamp and UI.DateTime(craft.timestamp, true) or "Not recorded",
     craft.timestamp and "value" or "muted")
-  Tooltip.Row("Quality", craft.outputQuality ~= nil and "Rank " .. craft.outputQuality or "Not recorded",
-    craft.outputQuality ~= nil and "value" or "muted")
-  Tooltip.Row("Concentration", craft.concentrationSpent ~= nil and UI.Number(craft.concentrationSpent, true) or "Not recorded",
-    craft.concentrationSpent ~= nil and "value" or "muted")
+  if UI.Supports("quality") then
+    Tooltip.Row("Quality", craft.outputQuality ~= nil and "Rank " .. craft.outputQuality or "Not recorded",
+      craft.outputQuality ~= nil and "value" or "muted")
+  end
+  if UI.Supports("concentrationSpent") then
+    Tooltip.Row("Concentration", craft.concentrationSpent ~= nil and UI.Number(craft.concentrationSpent, true) or "Not recorded",
+      craft.concentrationSpent ~= nil and "value" or "muted")
+  end
   Tooltip.Section("Results")
   if craft.outputs and #craft.outputs > 1 then
     for _, output in ipairs(craft.outputs) do
-      Tooltip.Row(UI.Name(output.item), UI.Number(output.quantity, true) ..
+      Tooltip.Row(UI.ItemDisplayName(output.item), UI.Number(output.quantity, true) ..
         (output.quantityAmbiguous and " observed; quantity uncertain" or ""), "value")
     end
   elseif not (craft.outputItem and craft.outputItem.name and craft.recipe and craft.recipe.name and
       craft.outputItem.name == craft.recipe.name) then
-    Tooltip.Row("Output", UI.Name(craft.outputItem, "Item not recorded"), craft.outputItem and "value" or "muted")
+    Tooltip.Row("Output", UI.ItemDisplayName(craft.outputItem, "Item not recorded"), craft.outputItem and "value" or "muted")
   end
   Tooltip.Row("Produced", craft.outputQuantity ~= nil and UI.Number(craft.outputQuantity, true) or "Not recorded",
     craft.outputQuantity ~= nil and "value" or "muted")
   local multicraft
   if craft.multicraftBonus ~= nil then multicraft = craft.multicraftBonus > 0 end
-  craftProc("Multicraft", multicraft,
-    craft.multicraftBonus and "+" .. UI.Number(craft.multicraftBonus, true) .. " extra")
+  if UI.Supports("multicraft") then
+    craftProc("Multicraft", multicraft, craft.multicraftBonus and "+" .. UI.Number(craft.multicraftBonus, true) .. " extra")
+  end
   local observed = craft.hasResourcefulnessProc
   local returns = {}
   for _, row in ipairs(UI.CraftIngredients(craft)) do
     if row.returned and row.returned > 0 then returns[#returns + 1] = row end
   end
   if #returns > 0 then observed = true end
-  craftProc("Resourcefulness", observed)
-  craftProc("Ingenuity", craft.hasIngenuityProc,
-    craft.ingenuityRefund and craft.ingenuityRefund > 0 and "+" .. UI.Number(craft.ingenuityRefund, true) .. " refunded")
-  if #returns > 0 then
+  if UI.Supports("resourcefulness") then craftProc("Resourcefulness", observed) end
+  if UI.Supports("ingenuityRefund") then
+    craftProc("Ingenuity", craft.hasIngenuityProc,
+      craft.ingenuityRefund and craft.ingenuityRefund > 0 and "+" .. UI.Number(craft.ingenuityRefund, true) .. " refunded")
+  end
+  if UI.FixedInputs() then Tooltip.Subtitle(UI.InputExplanation(), "muted") end
+  if UI.Supports("resourcefulness") and #returns > 0 then
     Tooltip.Section("Materials Returned")
     for index = 1, math.min(2, #returns) do
       local row = returns[index]
@@ -276,7 +288,7 @@ function UI.CraftTooltip(owner, craft)
     end
     if #returns > 2 then Tooltip.Subtitle("+" .. (#returns - 2) .. " more materials") end
   end
-  if craft.resourcefulnessComplete ~= true and (observed == true or #returns > 0) then
+  if UI.Supports("resourcefulness") and craft.resourcefulnessComplete ~= true and (observed == true or #returns > 0) then
     Tooltip.Subtitle("Returns partially recorded", "partial")
   end
   Tooltip.Show()

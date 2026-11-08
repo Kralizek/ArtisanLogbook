@@ -32,6 +32,11 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
   UI.RegisterHiddenRecipeCallback(function(recipeId)
     if page.recipe and page.recipe.id == recipeId then updateHiddenButton() end
   end)
+  UI.RegisterPinCallback(function(recipeId)
+    if page.recipe and page.recipe.id == recipeId then
+      pin:SetText(UI.IsPinned(recipeId) and "Unpin recipe" or "Pin recipe")
+    end
+  end)
   local history
   local outcomes = UI.RecipeOutcomes(content, width, function() history:Reload() end, height - 62, openReagent)
   page.outcomes = outcomes
@@ -77,7 +82,9 @@ function UI.RecipePage(page, width, height, openCraft, pinsChanged, openReagent)
     heading:SetText(UI.Name(recipe))
     local details = { "Recipe #" .. recipe.id }
     if recipe.profession then details[#details + 1] = UI.Name(recipe.profession) end
-    if recipe.expansion then details[#details + 1] = UI.Name(recipe.expansion) end
+    if recipe.expansion and (not recipe.profession or UI.Name(recipe.expansion) ~= UI.Name(recipe.profession)) then
+      details[#details + 1] = UI.Name(recipe.expansion)
+    end
     metadata:SetText(table.concat(details, "  -  "))
     icon:SetTexture(UI.RecipeIcon(recipe))
     pin:SetText(UI.IsPinned(recipe.id) and "Unpin recipe" or "Pin recipe")
@@ -204,7 +211,7 @@ end
 function UI.ConfigurationPanel(parent, x, y, width, height)
   local frame = CreateFrame("Frame", nil, parent)
   frame:SetPoint("TOPLEFT", x, y); frame:SetSize(width, height)
-  local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+  local scroll = UI.ScrollFrame(frame)
   scroll:SetPoint("TOPLEFT", 0, 0); scroll:SetSize(width - 24, height)
   local child = CreateFrame("Frame", nil, scroll)
   child:SetSize(width - 24, height)
@@ -333,7 +340,7 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
             cell = UI.ItemCell(child, roleWidth, bodyWidth - roleWidth)
             equipmentCells[index] = cell
           end
-          local item = { id = equipment.itemID, name = UI.ItemName(equipment.itemID), note = equipment.role }
+          local item = { id = equipment.itemID, note = equipment.role }
           cell:ClearAllPoints(); cell:SetPoint("TOPLEFT", roleWidth, -top); cell:SetWidth(bodyWidth - roleWidth)
           cell:Update(item); cell:Show()
           self.itemCells[#self.itemCells + 1] = { itemID = equipment.itemID, cell = cell, note = equipment.role }
@@ -381,7 +388,7 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
           reagentCells[index] = cell
         end
         cell:ClearAllPoints(); cell:SetPoint("TOPLEFT", 0, -top); cell:SetWidth(bodyWidth - 84)
-        cell:Update({ id = reagent.itemID, name = reagent.name, note = "Finishing reagent" }); cell:Show()
+        cell:Update({ id = reagent.itemID, note = "Finishing reagent" }); cell:Show()
         self.itemCells[#self.itemCells + 1] = { itemID = reagent.itemID, cell = cell, note = "Finishing reagent" }
         local amount = addText(top + 6, "x" .. UI.Number(reagent.quantity), 72, 18, true)
         amount:ClearAllPoints(); amount:SetPoint("TOPRIGHT", child, "TOPRIGHT", -4, -(top + 6)); amount:SetJustifyH("RIGHT")
@@ -404,7 +411,7 @@ function UI.ConfigurationPanel(parent, x, y, width, height)
   function frame:RefreshItem(itemID)
     for _, entry in ipairs(self.itemCells) do
       if entry.itemID == itemID then
-        entry.cell:Update({ id = itemID, name = UI.ItemName(itemID), note = entry.note })
+        entry.cell:Update({ id = itemID, note = entry.note })
       end
     end
   end
@@ -442,8 +449,9 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     elseif detail.craft then UI.CraftTooltip(self, detail.craft) end
   end)
   detail.iconHover = iconHover
-  local tabbed = UI.TabbedContent(detail, width - 24, math.max(240, height - 66), -64,
-    { "Result", "Ingredients", "Configuration" }, nil, "dark")
+  local tabNames = { "Result", "Ingredients" }
+  if UI.Supports("operationInfo") then tabNames[#tabNames + 1] = "Configuration" end
+  local tabbed = UI.TabbedContent(detail, width - 24, math.max(240, height - 66), -64, tabNames, nil, "dark")
   if type(tabbed.body.SetClipsChildren) == "function" then tabbed.body:SetClipsChildren(true) end
   for _, view in pairs(tabbed.views) do
     if type(view.SetClipsChildren) == "function" then view:SetClipsChildren(true) end
@@ -466,7 +474,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local function renderOutputs(craft)
     local lines = {}
     for _, output in ipairs(craft.outputs or {}) do
-      lines[#lines + 1] = UI.Name(output.item) .. " x" .. UI.Number(output.quantity) ..
+      lines[#lines + 1] = UI.ItemDisplayName(output.item) .. " x" .. UI.Number(output.quantity) ..
         (output.quantityAmbiguous and " (quantity uncertain)" or "")
     end
     local outputHeight = #lines > 1 and #lines * 36 + 8 or 0
@@ -504,17 +512,18 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
   local returnColor = { r = .45, g = .85, b = .45 }
   local shownCraft
   local ingredientWidth = ingredientView:GetWidth()
-  local materialWidth = (ingredientWidth - 24) * .43
-  local quantityWidth = (ingredientWidth - 24) * .17
+  local measuredReturns = UI.Supports("resourcefulness")
+  local materialWidth = (ingredientWidth - 24) * (measuredReturns and .43 or .62)
+  local quantityWidth = (ingredientWidth - 24) * (measuredReturns and .17 or .38)
   local netWidth = (ingredientWidth - 24) * .23
   local returnsWidth = (ingredientWidth - 24) - materialWidth - quantityWidth - netWidth
-  local ingredientList = UI.ScrollList(ingredientView, 0, 0, ingredientWidth, ingredientView:GetHeight() - 24, {
+  local ingredientColumns = {
     { title = "Material", width = materialWidth, value = function(row) return row.name end,
       create = function(owner, left) return UI.ItemCell(owner, left, materialWidth) end,
       update = function(cell, row)
         if row.qualityUnknown then UI.ReagentFamilyCell(cell, row.item, row.name) else UI.ReagentCell(cell, row.item) end
       end },
-    { title = "Required", width = quantityWidth, value = function(row)
+    { title = UI.FixedInputs() and "Expected" or "Required", width = quantityWidth, value = function(row)
       if row.required == nil then return "-" end
       local complete = shownCraft.inputComplete == true or shownCraft.grossRequirementsComplete == true
       return complete and UI.Number(row.required) or ("Known " .. UI.Number(row.required))
@@ -533,31 +542,38 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     { title = "Net used", width = netWidth, value = function(row)
       return UI.CraftIngredientNet(row, shownCraft)
     end, exact = function(row) local _, explanation = UI.CraftIngredientNet(row, shownCraft); return explanation end },
-  }, function(row) if openReagent and not row.qualityUnknown then goBack(); openReagent(row.item) end end,
+  }
+  if not measuredReturns then table.remove(ingredientColumns, 4); table.remove(ingredientColumns, 3) end
+  local noteHeight = UI.FixedInputs() and 64 or 24
+  local ingredientList = UI.ScrollList(ingredientView, 0, 0, ingredientWidth, ingredientView:GetHeight() - noteHeight,
+    ingredientColumns, function(row) if openReagent and not row.qualityUnknown then goBack(); openReagent(row.item) end end,
     "No ingredient details are available for this craft.")
   detail.returnedReagents = ingredientList
-  local ingredientNote = UI.Text(ingredientView, 4, -ingredientView:GetHeight() + 16, ingredientWidth - 36, 20,
+  local ingredientNote = UI.Text(ingredientView, 4, -ingredientView:GetHeight() + noteHeight - 4, ingredientWidth - 36, noteHeight - 4,
     "GameFontNormalSmall")
   ingredientNote:SetTextColor(.68, .65, .59)
   detail.inputEvidence = ingredientNote
 
   local configurationView = tabbed.views.Configuration
-  local configurationPanel = UI.ConfigurationPanel(configurationView, 0, 0,
+  local configurationPanel = configurationView and UI.ConfigurationPanel(configurationView, 0, 0,
     configurationView:GetWidth(), configurationView:GetHeight())
   detail.configurationList, detail.configurationPanel, detail.configurationTab = configurationPanel, configurationPanel,
     tabbed.buttons.Configuration
-  detail:RegisterEvent("GET_ITEM_INFO_RECEIVED")
-  detail:SetScript("OnEvent", function(_, event, itemID, success)
-    if event == "GET_ITEM_INFO_RECEIVED" and success and detail.craft then
-      configurationPanel:RefreshItem(itemID)
+  local fillResult
+  UI.RegisterItemCallback(detail, function(_, itemID)
+    if detail.craft then
+      if configurationPanel then configurationPanel:RefreshItem(itemID) end
       if detail.craft.outputItem and detail.craft.outputItem.id == itemID then
-        heading:SetText(UI.Elide(UI.ItemName(itemID), math.floor((width - 166) / 10)))
+        heading:SetText(UI.Elide(UI.ItemDisplayName(detail.craft.outputItem), math.floor((width - 166) / 10)))
         identity:SetTexture(UI.ItemIcon(itemID) or UI.RecipeIcon(detail.craft.recipe))
       end
-      for _, output in ipairs(detail.craft.outputs or {}) do
-        if output.item and output.item.id == itemID then output.item.name = UI.ItemName(itemID) end
-      end
       renderOutputs(detail.craft)
+      ingredientList:Append(UI.CraftIngredients(detail.craft), true)
+      if fillResult then
+        local scroll = resultScroll:GetVerticalScroll()
+        fillResult(detail.craft)
+        resultScroll:SetVerticalScroll(scroll)
+      end
     end
   end)
   detail:HookScript("OnHide", function()
@@ -593,7 +609,7 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
         "Return results weren't available for this craft.")
   end
 
-  local function fillResult(craft)
+  fillResult = function(craft)
     local quantity = craft.outputQuantity
     producedValue:SetText(quantity ~= nil and UI.Count(quantity, "item") or "-")
     local outputHeight = renderOutputs(craft)
@@ -630,7 +646,8 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
     local index = 0
     for _, key in ipairs(resultOrder) do
       local card, value = outcomeCards[key], values[key]
-      if value then
+      local metric = ({ concentration = "concentrationSpent", ingenuity = "ingenuityRefund" })[key] or key
+      if value and UI.Supports(metric) then
         local column = index % 2
         local row = math.floor(index / 2)
         card:ClearAllPoints(); card:SetPoint("TOPLEFT", column * (outcomeWidth + outcomeGap), -(resultTop + row * (outcomeCardHeight + outcomeGap)))
@@ -658,12 +675,11 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       producedValue:SetText("-")
       for _, card in pairs(outcomeCards) do card:Hide(); card.explanation = nil end
       ingredientList:Reset(); ingredientNote:SetText("")
-      configurationPanel:ShowCraft(nil)
-      configurationPanel:Show()
+      if configurationPanel then configurationPanel:ShowCraft(nil); configurationPanel:Show() end
       identity:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       return
     end
-    local itemName = craft.outputItem and (craft.outputItem.name or UI.ItemName(craft.outputItem.id)) or
+    local itemName = craft.outputItem and UI.ItemDisplayName(craft.outputItem) or
       UI.Name(craft.recipe, "Craft result")
     heading:SetText(UI.Elide(itemName, math.floor((width - 166) / 10)))
     local identityParts = {}
@@ -693,10 +709,10 @@ function UI.CraftDetail(parent, width, height, goBack, openReagent)
       note = "Return results weren't available; a dash doesn't mean none were returned."
     end
     if #rows == 0 then note = nil end
+    if UI.FixedInputs() then note = UI.InputExplanation() end
     ingredientNote:SetText(note or "")
     ingredientNote:Show()
-    configurationPanel:ShowCraft(craft)
-    configurationPanel:Show()
+    if configurationPanel then configurationPanel:ShowCraft(craft); configurationPanel:Show() end
     tabbed:Select("Result")
   end
   detail:Hide()

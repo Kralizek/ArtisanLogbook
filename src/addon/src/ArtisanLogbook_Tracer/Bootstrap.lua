@@ -18,9 +18,8 @@ function addon.Emit(event, ...)
   if not addon.recorder or not addon.recorder.recording then return false end
   local ok, captured, reason = pcall(addon.recorder.Capture, addon.recorder, event, ...)
   if not ok then
-    addon.recorder.recording = false
-    addon.recorder.database.stoppedReason = "capture-error"
-    addon.Notify("Capture stopped after an error; earlier evidence is preserved: " .. tostring(captured))
+    local _, failure = addon.recorder:Fail(captured)
+    addon.Notify(failure)
     return false
   elseif not captured then
     if reason then addon.Notify(reason) end
@@ -29,19 +28,14 @@ function addon.Emit(event, ...)
   return true
 end
 
-function addon.Start(verbose)
-  if not addon.recorder then
-    addon.Notify(addon.loadError or "Tracer is not initialized.")
-    return
-  end
-  if verbose ~= nil then addon.verbose = verbose end
+function addon.GetTraceMetadata()
   local version, build, buildDate, interface
   if type(GetBuildInfo) == "function" then
     local ok
     ok, version, build, buildDate, interface = pcall(GetBuildInfo)
     if not ok then addon.Notify("GetBuildInfo failed: " .. tostring(version)); version = nil end
   end
-  local ok, reason = addon.recorder:Start({
+  return {
     addonVersion = addon.GetMetadata("Version"),
     version = version,
     build = build,
@@ -52,21 +46,47 @@ function addon.Start(verbose)
     character = addon.ReadOptional(_G, "UnitName", "player"),
     characterGUID = addon.ReadOptional(_G, "UnitGUID", "player"),
     realm = addon.ReadOptional(_G, "GetRealmName"),
+    flavor = addon.capabilities.flavor,
     loginStartedAt = loginStartedAt,
     loginUptime = loginUptime,
     verbose = addon.verbose == true,
     capabilities = addon.capabilities,
     coreDiagnostics = addon.GetCoreDiagnostics(),
-  })
-  addon.recorder.verbose = addon.verbose == true
-  addon.Notify(ok and "Recording raw events." or reason)
+  }
+end
+
+function addon.Start(verbose)
+  if not addon.recorder then
+    addon.Notify(addon.loadError or "Tracer is not initialized.")
+    return
+  end
+  if addon.recorder.recording then addon.Notify("Already recording."); return end
+  if verbose ~= nil then addon.verbose = verbose end
+  local ok, reason = addon.recorder:Start(addon.GetTraceMetadata())
+  addon.Notify(ok and "Recording raw events until explicitly stopped." or reason)
 end
 
 function addon.Stop()
   if addon.recorder then
-    addon.recorder:Stop()
-    addon.Notify("Recording stopped.")
+    local ok, reason = addon.recorder:Stop()
+    addon.Notify(ok and "Recording stopped; automatic resumption disabled." or reason)
   end
+end
+
+function addon.GetTraceStatus()
+  local recorder = addon.recorder
+  if not recorder then return addon.loadError or "Tracer unavailable." end
+  local database = recorder.database
+  local status = string.format("%s | %s | %s | %d events | %.0f KiB estimated",
+    recorder.recording and "Recording" or "Stopped", database.recordingMode,
+    addon.ReadOptional(_G, "UnitName", "player") or "Character unavailable",
+    #database.records, database.bytes / 1024)
+  if database.stoppedReason == "capture-error" then
+    status = status .. "\nCapture error; automatic resumption disabled. See chat for details."
+  elseif database.bytes >= addon.Trace.largeTraceBytes then
+    status = status .. "\nLarge trace: memory and save/load times may increase; recording is not capped."
+  end
+  return status
 end
 
 function addon.Mark(label)
@@ -143,38 +163,57 @@ local function registerEvents(api)
     if not ok then addon.capabilities.unavailable[event] = tostring(registered) end
   end
   frame:SetScript("OnEvent", function(_, event, ...)
-    addon.Emit(event, ...)
+    local captured = addon.Emit(event, ...)
+    if captured and event == "PLAYER_LOGOUT" then
+      addon.Emit("TRACE_SEGMENT_END", {
+        logicalSessionID = addon.recorder.database.logicalSessionID,
+        segmentID = addon.recorder.segmentID,
+        reason = "PLAYER_LOGOUT",
+      })
+    end
   end)
 end
 
 lifecycle:RegisterEvent("ADDON_LOADED")
-lifecycle:SetScript("OnEvent", function(_, _, loadedName)
-  if loadedName ~= addonName then return end
-  lifecycle:UnregisterEvent("ADDON_LOADED")
+lifecycle:SetScript("OnEvent", function(_, event, loadedName)
+  if event == "ADDON_LOADED" then
+    if loadedName ~= addonName then return end
+    lifecycle:UnregisterEvent("ADDON_LOADED")
+    lifecycle:RegisterEvent("PLAYER_LOGIN")
+    return
+  end
+  lifecycle:UnregisterEvent("PLAYER_LOGIN")
   local existingDatabase = ArtisanLogbookTraceDB
   if type(wallClock) ~= "function" or type(elapsedClock) ~= "function" then
     addon.loadError = "Required clocks unavailable (GetServerTime/time and GetTimePreciseSec/GetTime)."
     addon.Notify(addon.loadError)
     return
   end
+  registerEvents(_G)
+  local registered, reason = addon.RegisterCoreObserver()
+  addon.capabilities.coreObserver = registered
+  if not registered then addon.Notify("Core diagnostic observer unavailable: " .. tostring(reason)) end
+  local probesOK, probeError = pcall(addon.RegisterDiagnosticProbes, _G, addon.Emit, function()
+    return addon.recorder ~= nil and addon.recorder.recording and addon.recorder.verbose == true
+  end)
+  if not probesOK then
+    addon.capabilities.unavailable.probes = tostring(probeError)
+    addon.Notify("Diagnostic probes unavailable; raw events remain enabled: " .. tostring(probeError))
+  end
+  addon.verbose = type(existingDatabase) == "table" and existingDatabase.recordingMode == "verbose"
   addon.recorder, addon.loadError = addon.Trace.New(existingDatabase, {
     wall = wallClock,
     elapsed = elapsedClock,
-  }, issecretvalue)
+  }, issecretvalue, addon.GetTraceMetadata())
   if not addon.recorder then
     addon.Notify(addon.loadError)
   else
     ArtisanLogbookTraceDB = addon.recorder.database
-    registerEvents(_G)
-    local registered, reason = addon.RegisterCoreObserver()
-    addon.capabilities.coreObserver = registered
-    if not registered then addon.Notify("Core diagnostic observer unavailable: " .. tostring(reason)) end
-    local probesOK, probeError = pcall(addon.RegisterDiagnosticProbes, _G, addon.Emit, function()
-      return addon.recorder ~= nil and addon.recorder.recording and addon.recorder.verbose == true
-    end)
-    if not probesOK then
-      addon.capabilities.unavailable.probes = tostring(probeError)
-      addon.Notify("Diagnostic probes unavailable; raw events remain enabled: " .. tostring(probeError))
+    addon.verbose = addon.recorder.verbose
+    if addon.loadError then
+      addon.Notify(addon.loadError)
+    elseif addon.recorder.recording then
+      addon.Notify("Automatically resumed " .. addon.recorder.database.recordingMode .. " recording.")
     end
     local ok, windowError = pcall(addon.CreateTraceWindow)
     addon.capabilities.window = ok
@@ -224,10 +263,7 @@ SlashCmdList.ARTISANLOGBOOKTRACE = function(message)
     addon.Notify("Verbose probes " .. (addon.verbose and "enabled." or "disabled.") ..
       " Start recording to apply the mode.")
   elseif command == "status" then
-    addon.Notify(addon.recorder and (addon.recorder.recording and "Recording." or
-      (addon.recorder.database.stoppedReason and
-        ("Full (" .. addon.recorder.database.stoppedReason .. ").") or "Not recording.")) or
-      (addon.loadError or "Tracer unavailable."))
+    addon.Notify(addon.GetTraceStatus())
   else
     addon.Notify(addon.loadError or
       "Use /al_trace [open|start [normal|verbose]|stop|mark <label>|probe [recipeID]|verbose|status|export].")

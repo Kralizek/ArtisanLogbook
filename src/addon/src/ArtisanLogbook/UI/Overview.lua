@@ -40,7 +40,9 @@ function UI.ReturnTotals(owner, recipes, filter, onResult)
     local outcomeFilter = { time = filter.time, characters = filter.characters, craftType = filter.craftType }
     local page = ArtisanLogbookAPI.GetRecipeReturnedReagents(recipe.id, outcomeFilter, { limit = 100, cursor = cursor })
     if not page then self:SetScript("OnUpdate", nil); onResult(nil); return end
-    for _, reagent in ipairs(page.returns) do total = total + reagent.returnedQuantity end
+    for _, reagent in ipairs(page.returns) do
+      if not UI.IsTrivial(reagent.item and reagent.item.id) then total = total + reagent.returnedQuantity end
+    end
     cursor = page.nextCursor
     if not cursor then index = index + 1 end
   end)
@@ -86,10 +88,12 @@ function UI.Stat(parent, title, icon, x, y, width)
   tile.value = UI.Text(tile, 0, -30, width, 20, "GameFontNormalLarge")
   tile.note = UI.Text(tile, 0, -52, width, 28)
   function tile:SetNumber(value, complete, note)
-    self.value:SetText(UI.Amount(value, complete))
-    self.note:SetText(note or "")
+    self.value:SetText(value == 0 and "0" or UI.Amount(value, complete))
+    self.note:SetText(note or (value ~= nil and not complete and "Partial total" or ""))
     self:SetScript("OnEnter", function(self)
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.title:GetText() .. ": " .. UI.AmountTooltip(value, complete))
+      local tooltip = value == 0 and not complete and
+        "0 observed; some crafts have no quantity, so the total may be higher." or UI.AmountTooltip(value, complete)
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetText(self.title:GetText() .. ": " .. tooltip)
       GameTooltip:Show()
     end)
     self:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -101,7 +105,7 @@ function UI.SummaryRow(parent, width, y, entries)
   local summary = CreateFrame("Frame", nil, parent)
   summary:SetSize(width, 80)
   summary:SetPoint("TOPLEFT", 0, y)
-  summary.tiles = {}
+  summary.tiles, summary.rules = {}, {}
   local weight = 0
   for _, entry in ipairs(entries) do weight = weight + (entry[3] or 1) end
   local unit = (width - (#entries - 1) * 16) / weight
@@ -114,10 +118,25 @@ function UI.SummaryRow(parent, width, y, entries)
       local rule = summary:CreateTexture(nil, "ARTWORK")
       rule:SetPoint("TOPLEFT", left - 8, -4); rule:SetSize(1, 64)
       rule:SetColorTexture(.35, .27, .14, .18)
+      summary.rules[#summary.rules + 1] = rule
     end
     left = left + tileWidth + 16
   end
   return summary
+end
+
+function UI.CompactSummary(summary, supported)
+  local tiles = {}
+  for _, index in ipairs(supported) do tiles[#tiles + 1] = summary.tiles[index] end
+  for _, tile in ipairs(summary.tiles) do tile:Hide() end
+  for _, rule in ipairs(summary.rules) do rule:Hide() end
+  local width = (summary:GetWidth() - (#tiles - 1) * 16) / #tiles
+  for index, tile in ipairs(tiles) do
+    tile:ClearAllPoints(); tile:SetPoint("TOPLEFT", (index - 1) * (width + 16), 0)
+    tile:SetWidth(width); tile.title:SetWidth(width - 24)
+    tile.value:SetWidth(width); tile.note:SetWidth(width)
+    tile:Show()
+  end
 end
 
 function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
@@ -128,6 +147,15 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
     { "Resourcefulness", "INV_Misc_Herb_19" }, { "Most crafted", "INV_Misc_Book_09", 2 },
   }
   local summary = UI.SummaryRow(parent, width, y, entries)
+  local supported = { 1, 2 }
+  for index, metric in ipairs({ "concentrationSpent", "multicraft", "resourcefulness" }) do
+    if UI.Supports(metric) then supported[#supported + 1] = index + 2 end
+  end
+  supported[#supported + 1] = 6
+  if #supported < #entries then UI.CompactSummary(summary, supported) end
+  if not UI.Supports("resourcefulness") then
+    summary.tiles[6].title:SetText("Recipes crafted")
+  end
   summary.returnedWorker = CreateFrame("Frame", nil, summary)
   summary.usefulWorker = CreateFrame("Frame", nil, summary)
   summary.generation = 0
@@ -232,6 +260,13 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
         GameTooltip:Show()
       end
     end)
+    if not UI.Supports("resourcefulness") then
+      local knownRecipes = 0
+      for _, row in ipairs(recipes) do if row.recipe then knownRecipes = knownRecipes + 1 end end
+      self.tiles[6].value:SetText(UI.Number(knownRecipes))
+      self.tiles[6].note:SetText(top and ("Most crafted: " .. UI.Name(top.recipe)) or emptyRecipeMessage)
+      return
+    end
     self.tiles[5].value:SetText("...")
     self.tiles[5].note:SetText("")
     self.tiles[5]:SetScript("OnEnter", nil)
@@ -255,6 +290,9 @@ function UI.ProductionSummary(parent, width, y, openRecipe, splitProfessions)
       end
       if summary.returnedQuantity ~= nil then
         GameTooltip:AddLine("Known returned material units: " .. UI.Number(summary.returnedQuantity), 1, 1, 1, true)
+      end
+      if #UI.TrivialItemIds() > 0 then
+        GameTooltip:AddLine("Useful procs and material units exclude ignored reagents; the recorded proc rate is unchanged.", 1, 1, 1, true)
       end
       GameTooltip:Show()
     end)
@@ -297,7 +335,7 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
   local characters, professions
   if kind ~= "Character" then
     characters = filters:Select("Character", {}, function(value)
-      state.character, state.profession = value, false; page:Refresh(true)
+      state.character = value; page:Refresh(true)
     end)
   end
   if kind ~= "Profession" then
@@ -387,11 +425,11 @@ function UI.PopulationPage(page, kind, width, height, navigate, openCraft)
     end)
   end
   function page:Refresh(reset, preserve)
-    local character = kind == "Character" and self.identity.key or state.character
+    filters:Scope(UI.Population(kind == "Character" and self.identity.key or nil,
+      kind == "Profession" and self.identity.skillLineId or nil))
     if characters then characters:Update(UI.Choices("characters"), state.character) end
     if professions then
-      local available = UI.Choices("professions", character)
-      if not UI.HasChoice(available, state.profession) then state.profession = false end
+      local available = UI.Choices("professions", nil, filters.scope)
       professions:Update(available, state.profession)
       status:SetText("")
     end

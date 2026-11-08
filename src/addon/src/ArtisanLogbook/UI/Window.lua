@@ -4,7 +4,7 @@ local API = ArtisanLogbookAPI
 local management = ArtisanLogbookManagement
 
 local function shell(name, title, parent, width, height)
-  local frame = CreateFrame("Frame", name, parent, "BasicFrameTemplateWithInset")
+  local frame = UI.WindowFrame(name, parent)
   frame:SetSize(width, height)
   frame:SetPoint("CENTER")
   frame:SetClampedToScreen(true)
@@ -345,7 +345,10 @@ function addon.CreateProductionWindow()
       return
     end
     local signature = status and (status.retainedCrafts .. ":" .. status.dailyRows)
-    if signature ~= self.dataSignature then self:Invalidate(); self.dataSignature = signature end
+    if signature ~= self.dataSignature then
+      UI.InvalidateFilterContexts()
+      self:Invalidate(); self.dataSignature = signature
+    end
     for _, page in pairs(pages) do page:Hide() end
     pages[name]:Open(identity)
     pages[name]:Show(); self.visiblePage = pages[name]
@@ -365,10 +368,12 @@ function addon.CreateProductionWindow()
     end
   end
   management.OnUnknownRecipesRepaired = function()
+    UI.InvalidateFilterContexts()
     window:Invalidate()
     if window:IsShown() then window:Refresh() end
   end
   management.OnLogbookPurged = function()
+    UI.InvalidateFilterContexts()
     window.dataSignature = nil
     window:Invalidate()
     repairAnalysis = nil
@@ -380,6 +385,9 @@ function addon.CreateProductionWindow()
   UI.RegisterHiddenRecipeCallback(function()
     window:Invalidate()
     if window:IsShown() then window:Refresh() end
+  end)
+  UI.RegisterPinCallback(function()
+    window:RefreshSidebar()
   end)
   UI.RegisterCraftVisibilityCallback(function()
     window:Invalidate()
@@ -404,9 +412,11 @@ function addon.CreateProductionWindow()
     self:Activate(self.activeTab, self.identity); escape:Show()
   end)
   API.RegisterCallback("CRAFT_COMMITTED", function(craft)
+    UI.InvalidateFilterContexts()
     if craft.recipe and UI.IsPinned(craft.recipe.id) then
-      ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id] = UI.CopyRecipe(craft.recipe,
-        ArtisanLogbookUISettings.pinnedRecipes[craft.recipe.id])
+      local previous
+      for _, pinned in ipairs(UI.Pins()) do if pinned.id == craft.recipe.id then previous = pinned end end
+      management.UpdatePinnedRecipe(UI.CopyRecipe(craft.recipe, previous))
     end
     window:Invalidate()
     if window:IsShown() then window:Refresh() end
@@ -414,6 +424,7 @@ function addon.CreateProductionWindow()
   window:RegisterEvent("TRADE_SKILL_LIST_UPDATE")
   window:RegisterEvent("PLAYER_ENTERING_WORLD")
   window:SetScript("OnEvent", function(self)
+    UI.InvalidateFilterContexts()
     self:Invalidate()
     self:SetScript("OnUpdate", function(self)
       self:SetScript("OnUpdate", nil)
@@ -432,9 +443,11 @@ function addon.CreateProductionWindow()
   local icon = launcher:GetNormalTexture()
   icon:ClearAllPoints(); icon:SetPoint("CENTER"); icon:SetSize(22, 22)
   icon:SetTexCoord(.08, .92, .08, .92)
-  local mask = launcher:CreateMaskTexture()
-  mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
-  mask:SetAllPoints(icon); icon:AddMaskTexture(mask)
+  if type(launcher.CreateMaskTexture) == "function" and type(icon.AddMaskTexture) == "function" then
+    local mask = launcher:CreateMaskTexture()
+    mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
+    mask:SetAllPoints(icon); icon:AddMaskTexture(mask)
+  end
   local border = launcher:CreateTexture(nil, "OVERLAY")
   border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
   border:SetSize(52, 52); border:SetPoint("TOPLEFT", launcher, "TOPLEFT", 0, 0)

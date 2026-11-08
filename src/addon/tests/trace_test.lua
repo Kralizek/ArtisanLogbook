@@ -54,50 +54,49 @@ test("callbacks remain separate and snapshots do not mutate", function()
   end
 end)
 
-test("hard record limit stops capture without discarding evidence and restarts after clear", function()
-  local original = Trace.maxRecords
-  Trace.maxRecords = 3
+test("recording passes 10000 events without stopping or discarding evidence", function()
   local recorder = assert(Trace.New(nil, clock))
   assert(recorder:Start({}))
-  assert(recorder:Capture("ONE") and recorder:Capture("TWO") == true)
-  assert(not recorder.recording and #recorder.database.records == Trace.maxRecords)
-  local accepted, reason = recorder:Capture("THREE")
-  assert(not accepted and reason and #recorder.database.records == Trace.maxRecords)
-  assert(recorder.database.stoppedReason == "capacity")
-  local ok, reason = recorder:Start({})
-  assert(not ok and reason and not recorder.recording)
-  assert(#recorder.database.records == Trace.maxRecords)
-  assert(recorder.database.nextSequence == Trace.maxRecords + 1)
+  for index = 1, 10001 do assert(recorder:Capture("EVENT", index)) end
+  assert(recorder.recording and recorder.database.recordingEnabled)
+  assert(#recorder.database.records == 10002 and recorder.database.nextSequence == 10003)
   local reloaded = assert(Trace.New(recorder.database, clock))
-  assert(not reloaded:Start({}) and #reloaded.database.records == Trace.maxRecords)
-  assert(recorder:Clear() and recorder:Start({}))
-  Trace.maxRecords = original
+  assert(reloaded.recording and #reloaded.database.records == 10003)
+  assert(decode(reloaded:Export(10001, 100)).records[3].sequence == 10003)
 end)
 
-test("existing evidence below record limit can resume after reload", function()
-  assert(Trace.maxRecords == 10000)
+test("schema 2 history defaults stopped and loads idempotently without loss", function()
   local records = {}
   for sequence = 1, 2 do
-    records[sequence] = { sequence = sequence, event = "NORMAL_EVENT", payload = "{}" }
+    records[sequence] = { sequence = sequence, event = "NORMAL_EVENT",
+      timestamp = 1799999900 + sequence, elapsed = sequence / 10,
+      payload = '{["n"]=1,[1]=false}', warnings = "old-warning" }
   end
   local database = { traceSchemaVersion = Trace.schemaVersion,
     traceExportVersion = Trace.exportVersion, nextSequence = 3,
-    records = records, bytes = 1024 }
+    records = records, bytes = 1024, stoppedReason = "capacity" }
   local recorder = assert(Trace.New(database, clock))
-  assert(not recorder.recording and recorder:Start({ character = "mock" }))
+  assert(not recorder.recording and not database.recordingEnabled)
+  assert(database.records == records and database.nextSequence == 3 and database.bytes == 1024)
+  local again = assert(Trace.New(database, clock))
+  assert(not again.recording and again.database == database)
+  local exported = decode(again:Export()).records
+  assert(exported[1].timestamp == 1799999901 and exported[1].elapsed == 0.1)
+  assert(exported[1].arguments[1] == false and exported[1].warnings == "old-warning")
+  assert(recorder:Start({ character = "mock" }))
   assert(database.stoppedReason == nil and #database.records == 3)
   assert(database.records[1] == records[1] and database.records[3].sequence == 3)
 end)
 
-test("estimated byte limit stops recording and preserves prior records", function()
+test("estimated bytes beyond 12 MiB do not stop capture or resumption", function()
   local recorder = assert(Trace.New(nil, clock))
   assert(recorder:Start({}))
-  recorder.database.bytes = Trace.maxBytes - 100
-  local count = #recorder.database.records
-  local accepted, reason = recorder:Capture("EVENT")
-  assert(not accepted and reason and not recorder.recording)
-  assert(#recorder.database.records == count and recorder.database.bytes == Trace.maxBytes - 100)
-  assert(recorder.database.stoppedReason == "capacity-bytes")
+  recorder.database.bytes = 12 * 1024 * 1024 - 100
+  assert(recorder:Capture("EVENT") and recorder.recording)
+  assert(recorder.database.bytes > 12 * 1024 * 1024)
+  local reloaded = assert(Trace.New(recorder.database, clock))
+  assert(reloaded.recording and reloaded:Capture("MORE"))
+  assert(#reloaded.database.records == 4 and not reloaded.database.stoppedReason)
 end)
 
 test("large payloads still count toward the estimated byte total", function()
@@ -108,17 +107,89 @@ test("large payloads still count toward the estimated byte total", function()
   assert(recorder.database.bytes - before == #recorder.database.records[2].payload + #"LARGE" + 512)
 end)
 
-test("reload is paused and clear does not reuse event sequence numbers", function()
+test("explicit stop survives reload and clear does not reuse event sequence numbers", function()
   local recorder = assert(Trace.New(nil, clock))
   recorder:Start({})
   assert(not recorder:Clear())
+  assert(recorder.database.recordingEnabled)
   recorder:Stop()
+  assert(not recorder.database.recordingEnabled)
   local reloaded = assert(Trace.New(recorder.database, clock))
   assert(not reloaded.recording)
   assert(#reloaded.database.records == 2)
   assert(reloaded:Clear())
   reloaded:Start({})
   assert(reloaded.database.records[1].sequence == 3)
+end)
+
+test("persistent verbose recording resumes with monotonic logical session boundaries", function()
+  local recorder = assert(Trace.New(nil, clock))
+  assert(recorder:Start({ character = "First", verbose = true }))
+  local database = recorder.database
+  local first = decode(recorder:Export()).records[1].arguments[1]
+  assert(first.startReason == "manual" and first.mode == "verbose")
+  assert(database.recordingEnabled and database.recordingMode == "verbose")
+  assert(recorder:Capture("KEEP", nil, false))
+  local saved = database.records[2]
+  local reloaded = assert(Trace.New(database, clock, nil, { character = "Second" }))
+  assert(reloaded.recording and reloaded.verbose and database.records[2] == saved)
+  local second = decode(reloaded:Export(3, 1)).records[1]
+  assert(second.sequence == 3 and second.arguments[1].mode == "verbose")
+  assert(second.arguments[1].logicalSessionID == first.logicalSessionID)
+  assert(second.arguments[1].segmentID ~= first.segmentID)
+  assert(second.arguments[1].startReason == "automatic-resume")
+  assert(second.arguments[1].character == "Second")
+  reloaded:Stop()
+  local stopped = assert(Trace.New(database, clock))
+  assert(not stopped.recording and stopped.verbose)
+  assert(stopped:Start())
+  assert(database.logicalSessionID ~= first.logicalSessionID and stopped.verbose)
+end)
+
+test("serialization errors record omission markers and keep capturing", function()
+  local fail = false
+  local recorder = assert(Trace.New(nil, clock, function()
+    if fail then error("inaccessible synthetic value") end
+    return false
+  end))
+  recorder:Start({})
+  fail = true
+  assert(recorder:Capture("INACCESSIBLE", {}) and recorder.recording)
+  local record = recorder.database.records[2]
+  assert(record.warnings == "inaccessible-value")
+  assert(decode("return " .. record.payload).traceOmitted == "inaccessible-value")
+  fail = false
+  assert(recorder:Capture("SUPPORTED", function() end))
+  assert(recorder.database.records[3].warnings == "function")
+  assert(recorder:Capture("AFTER", 123) and recorder.database.recordingEnabled)
+end)
+
+test("unrecoverable capture and resume failures preserve history and disable restart loops", function()
+  local broken = false
+  local failingClock = {
+    wall = function() if broken then error("clock failed") end; return 1800000000 end,
+    elapsed = clock.elapsed,
+  }
+  local recorder = assert(Trace.New(nil, failingClock))
+  recorder:Start({})
+  recorder:Capture("KEEP", 42)
+  local database = recorder.database
+  local saved, count, sequence, bytes = database.records[2], #database.records, database.nextSequence, database.bytes
+  broken = true
+  local accepted, reason = recorder:Capture("FAIL")
+  assert(not accepted and reason:find("clock failed", 1, true))
+  assert(not recorder.recording and not database.recordingEnabled)
+  assert(database.stoppedReason == "capture-error" and database.records[2] == saved)
+  assert(#database.records == count and database.nextSequence == sequence and database.bytes == bytes)
+  assert(not assert(Trace.New(database, failingClock)).recording)
+  broken = false
+  assert(recorder:Start({}))
+  broken = true
+  assert(not recorder:Stop() and not database.recordingEnabled)
+  database.recordingEnabled = true
+  local resumed, failure = Trace.New(database, failingClock)
+  assert(resumed and failure and not resumed.recording and not database.recordingEnabled)
+  assert(database.records[2] == saved)
 end)
 
 test("legacy trace contract names migrate without mutating the source table", function()
@@ -156,6 +227,15 @@ test("unsafe or oversized payloads produce explicit diagnostics", function()
   for index = 1, 1000 do wide[index] = index end
   payload, warnings = Trace.Serialize(wide)
   assert(#payload <= Trace.maxPayloadBytes and warnings ~= "")
+  local deep = {}
+  local child = deep
+  for _ = 1, 10 do child.next = {}; child = child.next end
+  payload, warnings = Trace.Serialize(deep)
+  assert(warnings:find("depth-limit", 1, true) and #payload <= Trace.maxPayloadBytes)
+  local large = {}
+  for index = 1, 10 do large[index] = string.rep("x", 1900) end
+  payload, warnings = Trace.Serialize(large)
+  assert(warnings:find("byte-limit", 1, true) and #payload <= Trace.maxPayloadBytes)
 end)
 
 test("exports are deterministic and preserve control characters", function()
