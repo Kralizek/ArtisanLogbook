@@ -123,9 +123,28 @@ public sealed class CompanionSettingsTests
                 Assert.That(document.RootElement.GetProperty("installationRoots").GetArrayLength(), Is.EqualTo(1));
             }
         });
-        for (int i = 0; i < 30; i++)
-            _store.Save(CompanionSettings.ForRoots(Path.Combine(_directory, i.ToString(System.Globalization.CultureInfo.InvariantCulture))));
-        await reader;
+        try
+        {
+            for (int i = 0; i < 30; i++)
+            {
+                byte[] before = File.ReadAllBytes(_store.FilePath);
+                try
+                {
+                    _store.Save(CompanionSettings.ForRoots(
+                        Path.Combine(_directory, i.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+                }
+                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+                {
+                    // Windows can deny replacement with concurrent handles; failure must preserve the previous file.
+                    Assert.That(File.ReadAllBytes(_store.FilePath), Is.EqualTo(before));
+                    Assert.That(Directory.GetFiles(_paths.DataDirectory), Is.EqualTo(new[] { _store.FilePath }));
+                }
+            }
+        }
+        finally { await reader; }
+        string finalRoot = Path.Combine(_directory, "after-readers");
+        _store.Save(CompanionSettings.ForRoots(finalRoot));
+        Assert.That(_store.Load().Settings!.InstallationRoots, Is.EqualTo(new[] { finalRoot }));
         Assert.That(Directory.GetFiles(_paths.DataDirectory), Is.EqualTo(new[] { _store.FilePath }));
     }
 
