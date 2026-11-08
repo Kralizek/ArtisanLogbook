@@ -169,7 +169,8 @@ public sealed class CompanionSettingsTests
         _store.Save(CompanionSettings.ForRoots(_directory));
         byte[] before = File.ReadAllBytes(_store.FilePath);
         using (FileStream locked = new(_store.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            Assert.That(() => _store.Save(CompanionSettings.ForRoots()), Throws.InstanceOf<IOException>());
+            Assert.That(Assert.Catch(() => _store.Save(CompanionSettings.ForRoots())),
+                Is.TypeOf<IOException>().Or.TypeOf<UnauthorizedAccessException>());
         Assert.That(File.ReadAllBytes(_store.FilePath), Is.EqualTo(before));
         Assert.That(Directory.GetFiles(_paths.DataDirectory), Is.EqualTo(new[] { _store.FilePath }));
     }

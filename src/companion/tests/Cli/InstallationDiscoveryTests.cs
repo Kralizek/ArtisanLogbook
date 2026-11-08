@@ -91,7 +91,13 @@ public sealed class InstallationDiscoveryTests
         IReadOnlyList<string> hints = InstallationDiscovery.DefaultHints(platform, _directory,
             Path.Combine(_directory, "program-files"), Path.Combine(_directory, "program-files-x86"), Path.GetPathRoot(_directory)!);
         Assert.That(hints.Count, Is.InRange(2, 4));
-        Assert.That(hints.All(Path.IsPathFullyQualified), Is.True);
+        if (platform == CompanionPlatform.MacOS)
+            Assert.That(hints, Is.EqualTo(new[]
+            {
+                "/Applications/World of Warcraft", Path.Combine(_directory, "Applications", "World of Warcraft")
+            }));
+        else
+            Assert.That(hints.All(Path.IsPathFullyQualified), Is.True);
         Assert.That(hints.Any(path => path.StartsWith(_directory, StringComparison.Ordinal)), Is.True);
     }
 
