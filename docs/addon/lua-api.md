@@ -3,7 +3,7 @@
 This document defines the stable, read-only Lua API introduced by issue #5.
 It is the consumer contract for the production UI and other addons. It is
 separate from the SavedVariables persistence schema documented in
-[storage-ledger.md](storage-ledger.md) and from any future portable AL1 export.
+[storage-ledger.md](storage.md) and from any future portable AL1 export.
 
 ## API v1
 
@@ -400,7 +400,7 @@ broad filters with few matches, but ordinary pages do not sort full history.
 Facets reuse secondary-index candidate populations with the appropriate
 self-exclusion; their counts may require traversing the full retained population.
 Indexes are runtime-only and rebuilt after startup retention, never persisted
-as another ledger. See [storage-ledger.md](storage-ledger.md) for details.
+as another ledger. See [storage-ledger.md](storage.md) for details.
 
 ### Recipe Outcomes
 
@@ -730,7 +730,7 @@ migrated from schema 1 with its format identity marker). Partial coverage reflec
 unknown observations, not invented zeros. Reload preserves coverage even when
 detailed facts have expired; it never replays facts into aggregates.
 Experimental prerelease formats are not supported upgrade sources; development
-users may need to reset SavedVariables. See [storage-ledger.md](storage-ledger.md)
+users may need to reset SavedVariables. See [storage-ledger.md](storage.md)
 for the format discriminator, migration and reset guidance.
 
 The shared dimensional filter has the same OR-within/AND-across semantics.
@@ -1005,7 +1005,7 @@ fabricated. Craft projections expose `sessionId` so a consumer can retrieve the
 associated session without a parallel persistence reader. Neither query modifies
 the ledger or creates sessions; schema and API version remain unchanged.
 
-Core's [diagnostics inspector](diagnostics-window.md) uses these safe read APIs.
+Core's [diagnostics inspector](diagnostics.md) uses these safe read APIs.
 
 ### Core diagnostic snapshot
 

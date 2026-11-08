@@ -9,7 +9,7 @@ tags:
 
 # Resourcefulness data integrity
 
-This document records the durable invariants and design boundaries of the schema-v3 Core recorder. The public Lua API is documented in [lua-api.md](lua-api.md); storage layout and retention in [storage-ledger.md](storage-ledger.md).
+This document records the durable invariants and design boundaries of the schema-v3 Core recorder. The public Lua API is documented in [lua-api.md](lua-api.md); storage layout and retention in [storage-ledger.md](storage.md).
 
 ## What a measurement means
 

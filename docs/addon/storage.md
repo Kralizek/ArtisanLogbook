@@ -39,7 +39,7 @@ request attribution without pretending the token is a game operation ID.
 Tokens are session-local, consumed only after successful result commitment,
 and reset on reload. Material-savings eligibility is false independently of
 personal request ownership; fixed inputs remain schematic requirements, not
-measured consumption. See [Forever capture](capture-tracer.md#first-forever-crafting-adapter)
+measured consumption. See [Forever capture](capture.md#first-forever-crafting-adapter)
 for admission, cancellation and unavailable mechanics.
 
 Moving Tracer's SavedVariables declaration from Core to Tracer does not copy
@@ -965,7 +965,7 @@ Persistent storage remains only `recipeOutputs` plus any item
 dimensions for newly confirmed outputs. Runtime diagnostics keep one small
 summary and a session learned-relationship count, never evidence histories or
 per-craft recovery state. Recovery itself needs no migration prompt or purge.
-See [Retail/Forever API findings](capture-tracer.md#recipe-metadata-and-recovery)
+See [Retail/Forever API findings](capture.md#recipe-metadata-and-recovery)
 for availability and security limits.
 
 Repair stages one copy of the database per batch, changes only proposed craft
