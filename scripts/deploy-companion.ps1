@@ -20,8 +20,12 @@ if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
 }
 
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\src\companion\src\Cli\Cli.csproj'))
+$nugetConfig = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\src\companion\NuGet.Config'))
 if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
     throw "Companion project not found: $project"
+}
+if (-not (Test-Path -LiteralPath $nugetConfig -PathType Leaf)) {
+    throw "Companion NuGet configuration not found: $nugetConfig"
 }
 $dotnet = (Get-Command dotnet -ErrorAction Stop).Source
 $destination = [IO.Path]::GetFullPath($InstallDirectory)
@@ -46,7 +50,7 @@ try {
         'publish', $project, '--configuration', $Configuration,
         '--runtime', 'win-x64', '--self-contained', 'true',
         '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
-        '-p:PublishTrimmed=false', '--output', $stage
+        '-p:PublishTrimmed=false', "-p:RestoreConfigFile=$nugetConfig", '--output', $stage
     )
     & $dotnet @publishArguments
     if ($LASTEXITCODE -ne 0) {
