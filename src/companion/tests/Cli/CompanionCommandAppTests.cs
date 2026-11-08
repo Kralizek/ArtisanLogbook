@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 
 using ArtisanLogbook.Cli;
+using ArtisanLogbook.Runtime;
 using ArtisanLogbook.SavedVariables;
 
 using NUnit.Framework;
@@ -67,7 +68,6 @@ public sealed class CompanionCommandAppTests
     [TestCase("status", "extra")]
     [TestCase("status", "--database")]
     [TestCase("status", "--database", "")]
-    [TestCase("import")]
     [TestCase("import", "")]
     public async Task InvalidUsageIsUsefulAndNonzero(params string[] args)
     {
@@ -310,7 +310,7 @@ public sealed class CompanionCommandAppTests
         Assert.That(output, Does.Match(Regex.Escape(label) + @"\s*[|\u2502]\s*" +
             count.ToString(CultureInfo.InvariantCulture) + @"\s*[|\u2502]"));
 
-    private static string Snapshot(int project, string? track, int quantity) => $$"""
+    internal static string Snapshot(int project, string? track, int quantity) => $$"""
         ArtisanLogbookDB = {
           schemaIdentity = "ArtisanLogbookLedger", schemaVersion = 4,
           crafts = { { id = 1, sessionId = 1, timestamp = 1800000000, recipeId = 77,

@@ -4,6 +4,7 @@
     <Project Path="src/Core/Core.csproj" />
     <Project Path="src/HistoryStore/HistoryStore.csproj" />
     <Project Path="src/ImportService/ImportService.csproj" />
+    <Project Path="src/Runtime/Runtime.csproj" />
     <Project Path="src/SavedVariables/SavedVariables.csproj" />
   </Folder>
   <Folder Name="/tests/">

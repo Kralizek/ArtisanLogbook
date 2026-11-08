@@ -1,6 +1,7 @@
 using System.Globalization;
 
 using ArtisanLogbook.HistoryStore;
+using ArtisanLogbook.Runtime;
 
 using Spectre.Console;
 using Spectre.Console.Cli;
