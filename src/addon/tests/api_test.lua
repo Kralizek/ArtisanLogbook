@@ -1065,13 +1065,13 @@ test("capabilities describe runtime support, not retained history", function()
   assert(api.GetVersion() == 1, "capability additions must not change the public API version")
   local capabilities = api.GetCapabilities()
   equal(capabilities, { flavor = "retail", craftResults = true, personalRequests = true, reagentAllocations = true,
-    operationInfo = true, fixedReagents = false,
+    operationInfo = true,
     events = { TRADE_SKILL_ITEM_CRAFTED_RESULT = true }, hooks = { CraftRecipe = true }, measurements = {} })
   capabilities.events.CHANGED = true
   capabilities.measurements.resourcefulness = true
   capabilities.fixedReagents = true
   local detached = api.GetCapabilities()
-  assert(detached.events.CHANGED == nil and detached.measurements.resourcefulness == nil and detached.fixedReagents == false)
+  assert(detached.events.CHANGED == nil and detached.measurements.resourcefulness == nil and detached.fixedReagents == nil)
   addon.adapter.capabilities.operationInfo = false
   assert(api.GetCapabilities().reagentAllocations == false)
   addon.adapter.capabilities.operationInfo = true

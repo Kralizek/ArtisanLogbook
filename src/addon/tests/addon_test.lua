@@ -5531,6 +5531,7 @@ end)()
   local capture = load(arg[3] or "src/ArtisanLogbook_Tracer", "ArtisanLogbook_Tracer")
   local lifecycle = frames[frameStart + 1]
   lifecycle.scripts.OnEvent(lifecycle, "ADDON_LOADED", "ArtisanLogbook_Tracer")
+  lifecycle.scripts.OnEvent(lifecycle, "PLAYER_LOGIN")
   local observer, records = core.diagnosticObserver, #capture.recorder.database.records
   local database, pending = core.ledger.database, core.ledger.pendingRecipeId
   environment.SlashCmdList.ARTISANLOGBOOKDEBUG()
