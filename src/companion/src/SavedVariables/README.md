@@ -74,7 +74,11 @@ data-only Lua payload. Candidate rows retain all their source fields; absent
 data-slot type/UI index stays absent. Historical snapshots are not promoted
 into one immutable recipe-slot dimension. Different known required quantities
 or candidate sets produce informational `historical-recipe-schematic-variation` notices while
-all snapshots survive. Malformed schematic lists still reject. Supplementary
+all distinct snapshots survive; duplicate native/retained copies do not repeat
+the same variance notice. Retained payload fields, request/craft identities,
+associations and consistency with the enclosing craft are validated. Malformed or
+sparse schematic collections and inconsistent evidence reject rather than
+being silently filtered. Supplementary
 metadata disagreement does not override or excuse contradictory canonical
 craft inputs/outputs, identities, timestamps, or outcomes.
 

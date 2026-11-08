@@ -13,6 +13,37 @@ namespace Tests.ImportService;
 public sealed class HistoricalSchematicImportTests
 {
     [Test]
+    public async Task MalformedSchematicCollectionRejectsTheWholeImportWithoutPersistingCrafts()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ArtisanLogbook.SchematicImport.Tests", Guid.NewGuid().ToString("N"));
+        string database = Path.Combine(directory, "history.duckdb");
+        string source = File.ReadAllText(Path.Combine(TestContext.CurrentContext.TestDirectory,
+            "Fixtures", "recipe-1236483-history.lua")).Replace(
+            """
+            reagentRequirements = { { source = "schematic", dataSlotIndex = 1,
+                    requiredQuantity = 2, candidateItemIDs = { 243599, 243600 } } }
+            """,
+            "reagentRequirements = { 5 }");
+        try
+        {
+            using (Store store = new(database))
+            {
+                CompanionImportResult result = await new CompanionImportService(store)
+                    .ImportSavedVariablesAsync(source);
+                Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Rejected));
+                Assert.That(result.SourceDiagnostics.Any(d =>
+                    d.Severity == SavedVariablesDiagnosticSeverity.Error &&
+                    d.Code == "invalid-recipe-schematic-evidence"), Is.True);
+                Assert.That(store.ReadStatus().TotalCraftCount, Is.Zero);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task ActualRecipePatternPreservesProvenanceVariantsAndStrictDimensionsAcrossReplayAndReopen()
     {
         string directory = Path.Combine(Path.GetTempPath(), "ArtisanLogbook.SchematicImport.Tests", Guid.NewGuid().ToString("N"));
@@ -30,7 +61,7 @@ public sealed class HistoricalSchematicImportTests
                 CompanionImportResult first = await new CompanionImportService(store).ImportSavedVariablesAsync(source);
                 Assert.That(first.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
                 Assert.That(first.InsertedCrafts, Is.EqualTo(3));
-                Assert.That(first.SourceDiagnostics.Count(d => d.Code == "historical-recipe-schematic-variation"), Is.EqualTo(3));
+                Assert.That(first.SourceDiagnostics.Count(d => d.Code == "historical-recipe-schematic-variation"), Is.EqualTo(1));
                 Assert.That(first.CoverageWarnings.Any(d => d.Code == "historical-recipe-schematic-variation"), Is.False);
                 AssertExplicitSlot(store, explicitSlot);
                 Assert.That(store.WriteDimensions(CraftDimensions.Empty with

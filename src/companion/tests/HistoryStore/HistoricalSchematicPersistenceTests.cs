@@ -64,6 +64,24 @@ public sealed class HistoricalSchematicPersistenceTests
         Assert.That(File.ReadAllBytes(_database), Is.EqualTo(before));
     }
 
+    [Test]
+    public void IncompleteCurrentVersionDatabaseIsRejectedWithoutModification()
+    {
+        using (Store store = new(_database)) store.Write(Craft());
+        using (DuckDBConnection connection = new($"Data Source={_database}"))
+        {
+            connection.Open();
+            using DuckDBCommand command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE Craft DROP COLUMN RecipeSchematicEvidenceJson";
+            command.ExecuteNonQuery();
+        }
+        byte[] before = File.ReadAllBytes(_database);
+
+        Assert.That(() => new Store(_database),
+            Throws.InvalidOperationException.With.Message.Contains("complete supported"));
+        Assert.That(File.ReadAllBytes(_database), Is.EqualTo(before));
+    }
+
     private static CraftObservation Craft() => new(new("source", "one"), new(GameProject.Retail),
         DateTimeOffset.UnixEpoch, 77, new("project:1:region:3:realm:1309:guid:Player-Sanitized"),
         Outputs: [new(99, null, 1)]);

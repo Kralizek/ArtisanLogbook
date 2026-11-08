@@ -103,6 +103,48 @@ public sealed class HistoryStoreStatusTests
         Assert.That(() => reader.ReadStatus(), Throws.InvalidOperationException.With.Message.Contains("unavailable"));
     }
 
+    [Test]
+    public void WriterInitializesOnlyAnExistingEmptyDuckDbFile()
+    {
+        Directory.CreateDirectory(_directory);
+        using (DuckDBConnection connection = new($"Data Source={_database}"))
+        {
+            connection.Open();
+        }
+
+        using Store store = new(_database);
+        Assert.That(store.ReadStatus().SchemaVersion, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void WriterRejectsForeignDuckDbWithoutChangingIt()
+    {
+        Directory.CreateDirectory(_directory);
+        using (DuckDBConnection connection = new($"Data Source={_database}"))
+        {
+            connection.Open();
+            using DuckDBCommand command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE Unrelated (Value INTEGER)";
+            command.ExecuteNonQuery();
+        }
+        byte[] before = File.ReadAllBytes(_database);
+
+        Assert.That(() => new Store(_database),
+            Throws.InvalidOperationException.With.Message.Contains("not an initialized"));
+        Assert.That(File.ReadAllBytes(_database), Is.EqualTo(before));
+    }
+
+    [Test]
+    public void WriterRejectsNonDuckDbFileWithoutChangingIt()
+    {
+        Directory.CreateDirectory(_directory);
+        byte[] before = [0x41, 0x4c, 0x42, 0x21, 0x00, 0xFF];
+        File.WriteAllBytes(_database, before);
+
+        Assert.That(() => new Store(_database), Throws.Exception);
+        Assert.That(File.ReadAllBytes(_database), Is.EqualTo(before));
+    }
+
     private static CraftObservation Craft(string id, GameContext game, DateTimeOffset timestamp) =>
         new(new("status-tests", id), game, timestamp, 77,
             new($"project:{(int)game.Project}:region:3:realm:1309:guid:Player-Sanitized"));

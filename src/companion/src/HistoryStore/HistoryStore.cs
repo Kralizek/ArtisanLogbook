@@ -68,6 +68,34 @@ public sealed class HistoryStore : IDisposable
     private const int CurrentSchemaVersion = 2;
     private const int EvidenceFormatVersion = 1;
     private const int UnknownDataSlotType = 0;
+    private static readonly IReadOnlyDictionary<string, string[]> RequiredColumns =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Character"] = ["ContextKey", "IdentityKey", "Name", "ClassFile"],
+            ["Craft"] =
+            [
+                "CraftKey", "ContextKey", "CharacterKey", "RecordedAt", "RecipeId",
+                "ProfessionId", "ProfessionExpansionKey", "ConcentrationSpent", "IngenuityRefund",
+                "ConcentrationCurrencyId", "HasIngenuityProc", "HasResourcefulnessProc", "MulticraftBonus",
+                "InputsComplete", "ResourcefulnessComplete", "OutputsComplete", "ReagentsObserved",
+                "OutputsObserved", "ProvenanceJson", "OutputEvidenceJson", "ConfigurationEvidenceJson",
+                "RecipeSchematicEvidenceJson", "EvidenceFormatVersion"
+            ],
+            ["CraftIdentity"] = ["IdentityOrigin", "IdentityObservation", "CraftKey"],
+            ["CraftOutput"] = ["CraftKey", "ItemId", "QualityKey", "Quality", "Quantity"],
+            ["CraftReagent"] = ["CraftKey", "ItemId", "AllocatedQuantity", "ReturnedQuantity"],
+            ["Expansion"] = ["ContextKey", "ExpansionKey", "Name"],
+            ["GameContext"] = ["ContextKey", "ProjectId", "ProgressionTrack"],
+            ["Item"] = ["ContextKey", "ItemId", "Name"],
+            ["Profession"] = ["ContextKey", "ProfessionId", "Name", "ParentId"],
+            ["Recipe"] = ["ContextKey", "RecipeId", "Name", "ProfessionId", "ProfessionExpansionKey", "MaxQuality"],
+            ["RecipeReagent"] =
+            [
+                "ContextKey", "RecipeId", "DataSlotTypeKey", "DataSlotIndex", "SlotIndex",
+                "ReagentType", "IsRequired", "RequiredQuantity", "CandidateItemIdsJson"
+            ],
+            ["__HistoryStoreMigration"] = ["Version", "AppliedAt"]
+        };
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -103,6 +131,14 @@ public sealed class HistoryStore : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
         }
 
+        bool initializeIfEmpty = false;
+        if (!readOnly)
+        {
+            initializeIfEmpty = !File.Exists(DatabasePath) || new FileInfo(DatabasePath).Length == 0;
+            if (!initializeIfEmpty)
+                initializeIfEmpty = InspectExistingDatabase(DatabasePath);
+        }
+
         DbConnectionStringBuilder connectionString = new()
         {
             ["Data Source"] = DatabasePath
@@ -114,7 +150,7 @@ public sealed class HistoryStore : IDisposable
         {
             _connection.Open();
             if (!readOnly)
-                InitializeSchema();
+                InitializeSchema(initializeIfEmpty);
         }
         catch
         {
@@ -379,23 +415,102 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    private void InitializeSchema()
+    private static bool InspectExistingDatabase(string databasePath)
     {
-        ExecuteNonQuery("""
-            CREATE TABLE IF NOT EXISTS __HistoryStoreMigration (
-                Version INTEGER PRIMARY KEY,
-                AppliedAt VARCHAR NOT NULL
-            )
-            """);
+        DbConnectionStringBuilder connectionString = new()
+        {
+            ["Data Source"] = databasePath,
+            ["access_mode"] = "READ_ONLY"
+        };
+        using DuckDBConnection connection = new(connectionString.ConnectionString);
+        connection.Open();
 
-        int version = SchemaVersion;
-        if (version != 0 && version != CurrentSchemaVersion)
+        if (UserObjectCount(connection) == 0)
+            return true;
+
+        ValidateInitializedSchema(connection);
+        return false;
+    }
+
+    private static void ValidateInitializedSchema(DbConnection connection)
+    {
+        HashSet<string> tables = [];
+        using (DbCommand command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'main' AND table_type = 'BASE TABLE'
+                """;
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                tables.Add(reader.GetString(0));
+        }
+        if (!RequiredColumns.Keys.All(tables.Contains))
+            throw new InvalidOperationException(
+                "The existing DuckDB file is not an initialized Artisan Logbook history database. " +
+                "Use a new database path and reimport SavedVariables. Old development databases are not migrated.");
+
+        int version;
+        long versionRows;
+        using (DbCommand command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT COUNT(*), COALESCE(MAX(Version), 0)
+                FROM __HistoryStoreMigration
+                """;
+            using DbDataReader reader = command.ExecuteReader();
+            reader.Read();
+            versionRows = reader.GetInt64(0);
+            version = reader.GetInt32(1);
+        }
+        if (versionRows != 1 || version != CurrentSchemaVersion)
             throw new InvalidOperationException(
                 $"Database schema version {version} is unsupported; expected {CurrentSchemaVersion}. " +
                 "Use a new database path and reimport SavedVariables. Old development databases are not migrated.");
 
-        if (version == 0)
+        Dictionary<string, HashSet<string>> columns = new(StringComparer.OrdinalIgnoreCase);
+        using (DbCommand command = connection.CreateCommand())
         {
+            command.CommandText = """
+                SELECT table_name, column_name FROM information_schema.columns
+                WHERE table_schema = 'main'
+                """;
+            using DbDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                string table = reader.GetString(0);
+                if (!columns.TryGetValue(table, out HashSet<string>? names))
+                    columns.Add(table, names = new(StringComparer.OrdinalIgnoreCase));
+                names.Add(reader.GetString(1));
+            }
+        }
+        if (RequiredColumns.Any(pair => !columns.TryGetValue(pair.Key, out HashSet<string>? names) ||
+            pair.Value.Any(column => !names.Contains(column))))
+            throw new InvalidOperationException(
+                "The existing DuckDB file does not contain the complete supported Artisan Logbook schema.");
+
+        bool hasSequence;
+        using (DbCommand command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT COUNT(*) FROM duckdb_sequences()
+                WHERE schema_name = 'main' AND sequence_name = 'CraftKeySequence'
+                """;
+            hasSequence = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+        }
+        if (!hasSequence)
+            throw new InvalidOperationException(
+                "The existing DuckDB file does not contain the complete supported Artisan Logbook schema.");
+    }
+
+    private void InitializeSchema(bool initializeIfEmpty)
+    {
+        long objectCount = UserObjectCount(_connection);
+        if (objectCount == 0)
+        {
+            if (!initializeIfEmpty)
+                throw new InvalidOperationException(
+                    "The database became empty while it was being opened; refusing to initialize an existing file.");
             using DbTransaction transaction = _connection.BeginTransaction();
             foreach (string statement in SchemaStatements())
                 ExecuteNonQuery(statement, transaction);
@@ -405,11 +520,35 @@ public sealed class HistoryStore : IDisposable
                 CurrentSchemaVersion,
                 DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             transaction.Commit();
+            return;
         }
+
+        ValidateInitializedSchema(_connection);
+    }
+
+    private static long UserObjectCount(DbConnection connection)
+    {
+        using DuckDBCommand command = (DuckDBCommand)connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                (SELECT COUNT(*) FROM information_schema.tables
+                 WHERE table_schema NOT IN ('information_schema', 'pg_catalog')) +
+                (SELECT COUNT(*) FROM duckdb_sequences()
+                 WHERE schema_name NOT IN ('information_schema', 'pg_catalog')) +
+                (SELECT COUNT(*) FROM information_schema.schemata
+                 WHERE schema_name NOT IN ('main', 'information_schema', 'pg_catalog'))
+            """;
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
     private static IReadOnlyList<string> SchemaStatements() =>
         [
+            """
+            CREATE TABLE __HistoryStoreMigration (
+                Version INTEGER PRIMARY KEY,
+                AppliedAt VARCHAR NOT NULL
+            )
+            """,
             """
             CREATE TABLE GameContext (
                 ContextKey VARCHAR PRIMARY KEY,

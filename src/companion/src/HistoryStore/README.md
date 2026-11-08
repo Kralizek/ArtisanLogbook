@@ -1,6 +1,6 @@
 # Companion History Store
 
-`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; a writer creates its parent directory and initializes the complete schema v2 directly. Old C03 development databases are unsupported; select a new database path and reimport SavedVariables. Dispose the store to close its connection. Calls on one store instance are serialized; callers should use a single writer per database because separate instances do not coordinate writes.
+`HistoryStore` is the C03 authoritative local history store. It uses embedded DuckDB and the database-independent C01/C02 contracts in Core. The host supplies a database file path; a writer creates its parent directory and initializes the complete schema v2 directly. Existing files are first inspected read-only and accepted for writing only when they have the complete supported schema; schema creation and its version marker commit atomically only for a new or genuinely empty database. Foreign and unsupported files are rejected without modification. Old C03 development databases are unsupported; select a new database path and reimport SavedVariables. Dispose the store to close its connection. Calls on one store instance are serialized; callers should use a single writer per database because separate instances do not coordinate writes.
 
 ## Physical schema (version 2)
 
