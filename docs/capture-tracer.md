@@ -153,7 +153,7 @@ From a checkout of the feature branch on Windows, with authenticated `gh` and Gi
 
 The destination is `<root>\_forever_\Interface\AddOns`. Retail remains the
 default and uses `<root>\_retail_\Interface\AddOns`. Both can share a root.
-See [local deployment](../README.md#local-packaging-and-deployment) for path
+See [local deployment](addon-deployment.md#local-windows-deployment) for path
 migration, validation and artifact reuse. A deployment is not runtime certification.
 
 1. Restart Forever after the first installation. Enable **Artisan Logbook
