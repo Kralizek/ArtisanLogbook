@@ -18,7 +18,7 @@ bash src/addon/scripts/package.sh
 python3 -m unittest discover -s src/addon/tests -p 'package_test.py'
 ```
 
-On Windows, use `scripts/Deploy-WowAddon.ps1` for local game deployment. See [addon deployment](docs/addon-deployment.md) for flavors, paths, and packaging.
+On Windows, use `scripts/Deploy-WowAddon.ps1` for local game deployment. See [addon deployment](docs/addon/deployment.md) for flavors, paths, and packaging.
 
 ## Companion development
 

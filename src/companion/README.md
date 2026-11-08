@@ -55,7 +55,7 @@ Imports may include locally sensitive character/account information. Avoid shari
 
 ## More information
 
-- [Command and configuration reference](../../docs/companion-reference.md): database paths, settings, discovery behavior, import and status details, and exit codes.
+- [Command and configuration reference](../../docs/companion/cli.md): database paths, settings, discovery behavior, import and status details, and exit codes.
 - [Contributing](../../CONTRIBUTING.md): build, tests, and local deployment.
 - [Runtime contracts](src/Runtime/README.md): implementation-facing application services.
 - [Main project](../../README.md).
