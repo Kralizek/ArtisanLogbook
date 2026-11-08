@@ -857,7 +857,7 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
-    public void SchemaThreeReagentRequirementsBecomeRecipeSlotsWithoutInventingUnavailableFields()
+    public void SchemaThreeReagentRequirementsRemainHistoricalEvidenceWithoutInventingUnavailableFields()
     {
         SavedVariablesImportResult imported = SavedVariablesReader.Parse("""
             return { schemaVersion = 4, schemaIdentity = "ArtisanLogbookLedger",
@@ -885,23 +885,27 @@ public class SavedVariablesAdapterTests
             """);
 
         Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
-        RecipeReagentSlot[] slots = imported.History!.Dimensions.RecipeReagentSlots
-            .OrderBy(slot => slot.DataSlotIndex)
-            .ToArray();
+        LuaTable firstSnapshot = (LuaTable)LuaDataParser.Parse(imported.History!.Crafts[0]
+            .RecipeSchematicEvidence!.Single().Payload).Assignments["CraftRecipeSchematicEvidence"]!;
+        LuaTable request = (LuaTable)firstSnapshot.Get("request")!;
+        LuaTable fixedSlot = ((LuaTable)request.Get("fixedReagents")!).Values.OfType<LuaTable>().Single();
+        LuaTable alternativeSlot = ((LuaTable)request.Get("requirements")!).Values.OfType<LuaTable>().Single();
+        LuaTable secondSnapshot = (LuaTable)LuaDataParser.Parse(imported.History.Crafts[1]
+            .RecipeSchematicEvidence!.Single().Payload).Assignments["CraftRecipeSchematicEvidence"]!;
+        LuaTable result = (LuaTable)secondSnapshot.Get("craft")!;
+        LuaTable resultSlot = ((LuaTable)result.Get("reagentRequirements")!).Values.OfType<LuaTable>().Single();
 
         Assert.Multiple(() =>
         {
-            Assert.That(slots, Has.Length.EqualTo(3));
-            Assert.That(slots[0].DataSlotType, Is.EqualTo(RecipeReagentDataSlotType.Reagent));
-            Assert.That(slots[0].ReagentType, Is.EqualTo(RecipeReagentType.Basic));
-            Assert.That(slots[0].IsRequired, Is.True);
-            Assert.That(slots[0].RequiredQuantity, Is.EqualTo(3));
-            Assert.That(slots[0].CandidateItemIds, Is.EqualTo(new[] { 44 }));
-            Assert.That(slots[1].DataSlotType, Is.Null);
-            Assert.That(slots[1].CandidateItemIds, Is.EqualTo(new[] { 45, 46 }));
-            Assert.That(slots[1].RequiredQuantity, Is.EqualTo(2));
-            Assert.That(slots[2].RecipeId, Is.EqualTo(124));
-            Assert.That(slots[2].CandidateItemIds, Is.EqualTo(new[] { 47, 48 }));
+            Assert.That(imported.History.Dimensions.RecipeReagentSlots, Is.Empty);
+            Assert.That(fixedSlot.Get("requiredQuantity"), Is.EqualTo(3d));
+            Assert.That(fixedSlot.Get("itemId"), Is.EqualTo(44d));
+            Assert.That(alternativeSlot.Get("requiredQuantity"), Is.EqualTo(2d));
+            Assert.That(((LuaTable)alternativeSlot.Get("candidateItemIDs")!).Values, Is.EqualTo(new[] { 45d, 46d }));
+            Assert.That(result.Get("recipeId"), Is.EqualTo(124d));
+            Assert.That(((LuaTable)resultSlot.Get("candidateItemIDs")!).Values, Is.EqualTo(new[] { 47d, 48d }));
+            Assert.That(resultSlot.ContainsKey("dataSlotType"), Is.False);
+            Assert.That(resultSlot.ContainsKey("slotIndex"), Is.False);
         });
     }
 

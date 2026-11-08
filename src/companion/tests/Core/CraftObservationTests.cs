@@ -12,6 +12,22 @@ public class CraftObservationTests
     private static readonly CharacterIdentity Character = new("project:1:region:3:realm:1309:guid:Player-1309-12345678");
 
     [Test]
+    public void SchematicEvidenceRequiresSourceAndPayloadButDoesNotChangeCanonicalFactEquality()
+    {
+        CraftObservation craft = new(Identity, Game, DateTimeOffset.UnixEpoch, 123, Character);
+        CraftObservation badSource = craft with { RecipeSchematicEvidence = [new("", "snapshot")] };
+        CraftObservation badPayload = craft with { RecipeSchematicEvidence = [new("source", " ")] };
+        CraftObservation empty = craft with { RecipeSchematicEvidence = [] };
+        Assert.Multiple(() =>
+        {
+            Assert.That(HistoryValidator.Validate([badSource]).Select(e => e.Field), Does.Contain("RecipeSchematicEvidence"));
+            Assert.That(HistoryValidator.Validate([badPayload]).Select(e => e.Field), Does.Contain("RecipeSchematicEvidence"));
+            Assert.That(HistoryValidator.Validate([empty]).Select(e => e.Field), Does.Contain("RecipeSchematicEvidence"));
+            Assert.That(craft with { RecipeSchematicEvidence = [new("source", "snapshot")] }, Is.EqualTo(craft));
+        });
+    }
+
+    [Test]
     public void CallbackEvidenceIsSeparateFromCanonicalFactsAndCompatibleVariantsReconcile()
     {
         CraftOutputObservation observation = new(new(10, 1, 2), DateTimeOffset.UnixEpoch,

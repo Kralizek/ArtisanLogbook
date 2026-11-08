@@ -19,6 +19,13 @@ CompanionImportResult fileResult = await importer.ImportSavedVariablesFileAsync(
 
 Both entry points parse once with `SavedVariablesReader`, use C01 validation and C02 reconciliation through C03, and persist the canonical craft observations and explicit dimensions. They never promote rollups to crafts or infer recipe requirements from consumed reagents. The caller owns and disposes the `HistoryStore`.
 
+Historical request/result schematics are supplemental craft-attached evidence,
+not immutable recipe catalog dimensions. Well-formed historical variants are
+retained and C04 reports variation warnings. Malformed evidence and canonical
+craft contradictions still reject atomically. Replays union schematic evidence
+idempotently; evidence-only additions can enrich a craft without adding another
+canonical observation.
+
 The report includes the outcome, source craft-observation count, inserted/already-present/enriched/rejected craft counts, C03 dimension insert/enrichment counts, C04 diagnostics and coverage, C01 validation errors, C02 craft/dimension conflicts, file-input diagnostics, and persistence-failure diagnostics. Warnings do not change a successful outcome. `Coverage.AggregateOnlyCraftCount` and `CoverageWarnings` disclose craft history represented only by retained rollups; those totals are not imported as individual crafts. Dimension counts cover canonical dimensions returned by C04; they do not include minimal identities the store creates only to satisfy craft references.
 
 ## Atomicity and failure behavior

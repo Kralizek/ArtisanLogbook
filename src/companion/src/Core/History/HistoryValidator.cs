@@ -97,6 +97,11 @@ public static class HistoryValidator
             foreach (CraftConfigurationEvidence evidence in craft.ConfigurationEvidence ?? [])
                 if (string.IsNullOrWhiteSpace(evidence.SourceId) || evidence.LocalKey is <= 0 || string.IsNullOrWhiteSpace(evidence.Payload))
                     errors.Add(new(craft.Identity, "ConfigurationEvidence", "Configuration evidence requires a source identity, valid optional local key, and payload."));
+            if (craft.RecipeSchematicEvidence is { Count: 0 })
+                errors.Add(new(craft.Identity, "RecipeSchematicEvidence", "A schematic evidence collection cannot be empty."));
+            foreach (CraftRecipeSchematicEvidence evidence in craft.RecipeSchematicEvidence ?? [])
+                if (string.IsNullOrWhiteSpace(evidence.SourceId) || string.IsNullOrWhiteSpace(evidence.Payload))
+                    errors.Add(new(craft.Identity, "RecipeSchematicEvidence", "Schematic evidence requires a source identity and payload."));
         }
         return errors;
     }

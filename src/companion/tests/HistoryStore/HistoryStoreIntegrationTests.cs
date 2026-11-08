@@ -109,7 +109,7 @@ public sealed class HistoryStoreIntegrationTests
 
         using (Store store = new(_databasePath))
         {
-            Assert.That(store.SchemaVersion, Is.EqualTo(1));
+            Assert.That(store.SchemaVersion, Is.EqualTo(2));
             foreach (CraftObservation observation in expected)
                 Assert.That(store.Write(observation).Status, Is.EqualTo(CraftWriteStatus.Inserted));
         }

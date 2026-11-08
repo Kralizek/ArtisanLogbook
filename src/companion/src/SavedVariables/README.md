@@ -67,6 +67,40 @@ string convertedText = exported.Content!;
 
 `CraftObservation.OutputEvidence` and `ConfigurationEvidence` are attached source-evidence sidecars, independent of canonical craft facts and excluded from canonical fact equality. Output evidence preserves ordered callbacks, per-callback measurements/returns, original timestamps, ambiguity and legacy IDs; configuration evidence preserves the original local key, request-time snapshot and craft-level coverage metadata. Reconciliation idempotently retains distinct evidence variants without reporting callback-order differences as craft conflicts; canonical output item/quality/quantity conflicts remain conflicts. An ambiguous repeated callback produces a canonical output row with unknown quantity, never zero or a guessed sum. Output completeness stays explicit and unknown unless the source states otherwise. Source-only items remain dimensioned, and explicit zero measurements remain zero.
 
+`RecipeSchematicEvidence` separately retains original request/result
+`fixedReagents`, `requirements`, `reagentRequirements`, source record references,
+timestamps, and supplementary completeness/observation fields in a deterministic
+data-only Lua payload. Candidate rows retain all their source fields; absent
+data-slot type/UI index stays absent. Historical snapshots are not promoted
+into one immutable recipe-slot dimension. Different known required quantities
+or candidate sets produce informational `historical-recipe-schematic-variation` notices while
+all distinct snapshots survive; duplicate native/retained copies do not repeat
+the same variance notice. Retained payload fields, request/craft identities,
+associations and consistency with the enclosing craft are validated. Malformed or
+sparse schematic collections and inconsistent evidence reject rather than
+being silently filtered. Supplementary
+metadata disagreement does not override or excuse contradictory canonical
+craft inputs/outputs, identities, timestamps, or outcomes.
+
+Request-originated requirements retain a separate `request` section with its
+original request ID, timestamp and fields. The `craft` section retains the
+request association but does not acquire `reagentRequirements` when the source
+had none. Direct craft requirements stay in the `craft` section; no request
+association is manufactured. Explicitly empty direct lists remain empty even
+when the associated request contains requirements; absent lists remain absent.
+These origin distinctions survive persistence and
+every supported round trip, including distinct variants for the same craft.
+The sanitized `recipe-1236483-history.lua` regression fixture reproduces the
+October 12 versus October 19-20 quantities, candidate sets and timestamps
+without real character/session identities.
+
+Supported regeneration serializes every schematic evidence variant under
+`companionRecipeSchematicEvidence` on the detailed craft; it does not choose one
+variant to publish as a native recipe requirement. Reparse validates these
+payloads through the same schematic validation path and verifies exact evidence
+retention. Pruned detailed crafts still have the existing explicit retention
+warning; full evidence remains in authoritative Companion history.
+
 Craft/request links must agree on session and recipe before request-only input fallback is permitted; orphan reagent references and malformed collection members fail explicitly. That fallback includes both allocation slots and fixed reagents without inventing returns. Recipe dimension enrichment remains independent of per-craft classification, and profession parents use `companionParent` because the actual loader rejects native `parentId`/`professionId` fields on profession rows.
 
 The current source supplies `projectId` on each session, but has no trusted progression-track field. The adapter reads a `companionProgressionTrack` session extension only when it was explicitly serialized by this adapter; it never infers a track from the build, version, date, or profession expansion. Existing ledgers without `projectId` cannot be safely classified.

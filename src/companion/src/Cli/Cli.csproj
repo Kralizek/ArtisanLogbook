@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>artisanlogbook</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <PackageId>ArtisanLogbook.Companion</PackageId>
+    <ToolCommandName>artisanlogbook</ToolCommandName>
+    <Version>0.1.0</Version>
+    <Description>Local crafting history preservation for Artisan Logbook.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Spectre.Console" />
+    <PackageReference Include="Spectre.Console.Cli" />
+    <PackageReference Include="Spectre.Console.Cli.Extensions.DependencyInjection" />
+    <ProjectReference Include="../ImportService/ImportService.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
