@@ -42,7 +42,7 @@ public sealed class CompanionCommandAppTests
         Assert.Multiple(() =>
         {
             Assert.That(exit, Is.EqualTo(ExitCodes.Success));
-            Assert.That(output, Does.Contain("USAGE:").And.Contain("import").And.Contain("status"));
+            Assert.That(output, Does.Contain("USAGE:").And.Contain("import").And.Contain("status").And.Contain("serve"));
             Assert.That(File.Exists(_paths.ResolveDatabase(null)), Is.False);
         });
     }
@@ -69,6 +69,13 @@ public sealed class CompanionCommandAppTests
     [TestCase("status", "--database")]
     [TestCase("status", "--database", "")]
     [TestCase("import", "")]
+    [TestCase("serve", "--port", "0")]
+    [TestCase("serve", "--port", "65536")]
+    [TestCase("serve", "--port", "invalid")]
+    [TestCase("serve", "--reconciliation-interval", "0")]
+    [TestCase("serve", "--reconciliation-interval", "86401")]
+    [TestCase("serve", "--monitoring", "invalid")]
+    [TestCase("serve", "--database", "")]
     public async Task InvalidUsageIsUsefulAndNonzero(params string[] args)
     {
         (int exit, string output) = await Run(args);
@@ -261,6 +268,7 @@ public sealed class CompanionCommandAppTests
 
     [TestCase("status")]
     [TestCase("import")]
+    [TestCase("serve")]
     public async Task WriterLockInAnotherProcessProducesActionableFailure(string command)
     {
         using Store writer = new(_database);

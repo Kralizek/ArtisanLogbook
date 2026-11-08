@@ -11,7 +11,7 @@ This document covers the current Companion CLI in more detail. Start at the [Com
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/ArtisanLogbook/Companion/history.duckdb` |
 
 Linux ignores empty or relative `XDG_DATA_HOME`, as required by XDG conventions.
-`--database` completely overrides the default. Import creates parent directories
+`--database` completely overrides the default. Import and serve create parent directories
 and initializes the complete schema v2 directly. Old C03 development databases
 are unsupported: use a new database path and reimport SavedVariables. No old
 database is migrated, deleted, or overwritten. Status uses DuckDB's read-only access mode, does not
@@ -38,8 +38,8 @@ usage error rather than waiting for input.
 
 `settings.json` lives beside the **default** `history.duckdb` in the per-user
 directory listed above. `--database` does not relocate settings. Schema version 1
-contains only an integer `version` and an `installationRoots` array of normalized
-absolute paths. It has no credentials, account IDs, character IDs, flavor
+requires an integer `version` and an `installationRoots` array of normalized
+absolute paths, with optional `monitoring` and `http` objects. It has no credentials, account IDs, character IDs, flavor
 settings, or database overrides. For example on Linux:
 
 ```json
@@ -47,13 +47,20 @@ settings, or database overrides. For example on Linux:
   "version": 1,
   "installationRoots": [
     "/games/World of Warcraft"
-  ]
+  ],
+  "monitoring": {
+    "enabled": false,
+    "reconciliationIntervalSeconds": 60
+  },
+  "http": {
+    "preferredPort": 48721
+  }
 }
 ```
 
 The model and discovery support multiple roots now. This wizard manages the
-first root and preserves any additional roots. There is no `config set/get`
-command. Settings use strict, human-readable JSON; missing, duplicate, unknown,
+first root and preserves additional roots and monitoring/HTTP preferences. There is no `config set/get`
+command. Settings use strict, human-readable JSON; missing required, duplicate, unknown,
 malformed, relative, or unsupported-version fields are not silently defaulted.
 Missing settings instruct the user to initialize; unreadable, malformed, or
 unsupported settings require explicit backup/repair or a compatible Companion.
@@ -69,6 +76,63 @@ rename support; this is not a power-loss guarantee on every filesystem. Settings
 paths are structurally validated on load; filesystem availability is checked
 during initialization/discovery so an offline installation is reported rather
 than erased.
+
+The settings version remains **1**; there is no migration. Existing files with
+only `version` and `installationRoots` load unchanged. Omitted monitoring settings
+mean **disabled**, with a 60-second future reconciliation interval; omitted HTTP
+settings mean preferred port **48721**. An omitted property inside either object
+also uses its built-in default. Explicit `null` objects are invalid. Intervals
+must be integers from **1 through 86400 seconds**; ports must be integers from
+**1 through 65535**. Unknown and duplicate properties are rejected at every level.
+Saving includes the additive preferences; merely loading or serving never saves.
+
+## Serve
+
+```text
+al serve
+al serve --database history.duckdb --port 48722
+al serve --monitoring false --reconciliation-interval 120
+```
+
+`serve` alone constructs and owns the .NET Generic Host (`WebApplication`).
+`init`, `import`, `status`, help, and version remain short-lived and do not build
+or start a host. The existing `al` deployment alias invokes the same executable.
+Framework-dependent installations now require the ASP.NET Core 10 runtime as
+well as .NET 10; the SDK and self-contained Windows deployment supply it.
+
+Configuration precedence is **invocation CLI overrides > persisted settings >
+built-in defaults**. `--database` continues selecting the database independently
+of settings. `--monitoring <BOOL>`, `--reconciliation-interval <SECONDS>`, and
+`--port <PORT>` override only the current invocation and never persist. Invalid
+CLI options return 1. Invalid, unreadable, or unsupported persisted settings
+return 3 even if overrides would otherwise mask their invalid values. With no
+settings file, serve uses defaults and no installation roots without creating
+settings; `init` is not a prerequisite.
+
+Startup validates configuration and opens one writable C03 History Store, shared
+with C07. Offline installations, absent SavedVariables, and empty craft history
+are supported. No discovery scan or import is triggered by startup. C06 monitoring
+is not implemented, so an enabled preference is reported but performs no work.
+There are no watcher, reconciliation timer, import scheduler, or fake statistics.
+
+Kestrel binds **IPv4 loopback only** (`127.0.0.1`) on the effective preferred port.
+There are no HTTP endpoints or static browser assets; requests return 404 and
+startup does not advertise a browser URL. An occupied port currently fails
+startup with exit 3; use `--port` to choose another port. Port fallback, `/api/v1/`
+endpoints, **MinimalOpenAPI**, and bundled assets at `/` belong to C11/C12.
+No OpenAPI generator or authentication infrastructure is installed yet.
+
+The process stays active without a browser. Ctrl+C, SIGTERM, or normal host
+shutdown stops hosted work and disposes the writer, releasing database ownership.
+Transactional writes retain C03's serialization, commit, and cancellation rollback
+behavior. Failed startup also disposes acquired resources. Forced termination
+cannot guarantee graceful disposal; DuckDB's WAL/transaction guarantees still apply.
+
+DuckDB's native process-level file lock is authoritative: no ownership file,
+database/WAL deletion, IPC, or HTTP forwarding is used. A second `serve`, or a
+manual `import`/`status` in another process, fails clearly while the writer owns
+the selected database. Stop serve and retry. Different databases are independent,
+although each host must use an available port.
 
 ## Installation and SavedVariables discovery
 
@@ -249,20 +313,23 @@ Retail         1            (unspecified)        15
 For a missing database, status returns success and advises importing a snapshot.
 For locks, close other Companion/DuckDB processes using this database and retry.
 Do not delete the database or its WAL. Commands do not coordinate with other
-processes or start a host, watcher, server, or background service.
+processes. `status` never starts a host, watcher, server, or background service.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| 0 | Successful init/import/status/help/version; also canceled init and missing-database status |
+| 0 | Successful init/import/status/help/version, clean serve shutdown; also canceled init and missing-database status |
 | 1 | CLI parsing/settings-validation error, missing installation configuration, or noninteractive init |
 | 2 | Import rejected: malformed/unsupported source, validation, or conflict |
 | 3 | Failed operation: source read, permissions, database/lock/schema/configuration failure, no ledgers, or incomplete discovery |
 
 ## Operational boundaries
 
-The commands do not start a service, monitor files, synchronize automatically, or recover aggregate-only history that has already lost per-craft detail. Only one process should write to a DuckDB file at a time. Do not delete a database's write-ahead log to resolve a lock.
+Only `serve` starts the local application host. No command monitors files,
+synchronizes automatically, or recovers aggregate-only history that has already
+lost per-craft detail. Only one process should write to a DuckDB file at a time.
+Do not delete a database's write-ahead log to resolve a lock.
 
 Source snapshots can contain private game account or character data. Back them up, and share only sanitized fixtures or redacted diagnostics.
 

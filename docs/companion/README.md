@@ -1,6 +1,8 @@
 # Companion documentation
 
-The [Artisan Logbook Companion](../../src/companion/README.md) is a separate .NET CLI that imports addon SavedVariables into a local DuckDB history database.
+The [Artisan Logbook Companion](../../src/companion/README.md) is a .NET CLI that
+imports addon SavedVariables into a local DuckDB history database and owns the
+long-running local application through `serve`.
 
 ## Getting started
 
