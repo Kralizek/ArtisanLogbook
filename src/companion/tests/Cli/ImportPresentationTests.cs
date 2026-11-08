@@ -132,6 +132,129 @@ public sealed class ImportPresentationTests
             .Sources.Single().VisibleDiagnostics, Has.Count.EqualTo(1));
     }
 
+    [TestCase("Outputs", "partial-output", false)]
+    [TestCase("Reagents", "invalid-reagent-allocation", false)]
+    [TestCase("OutputEvidence", "partial-output", true)]
+    [TestCase("RecipeSchematicEvidence", "historical-recipe-schematic-variation", true)]
+    public void EqualLengthCollectionsWithDifferentMultiplicitiesDoNotHideDiagnostics(
+        string collection, string code, bool valid)
+    {
+        CraftOutput outputA = new(99, null, 1);
+        CraftOutput outputB = new(100, null, 1);
+        CraftReagent reagentA = new(99, 1, null);
+        CraftReagent reagentB = new(100, 1, null);
+        CraftOutputEvidence evidenceA = new("sanitized-source",
+            [new(outputA, Craft.RecordedAt, new(), [])]);
+        CraftOutputEvidence evidenceB = new("sanitized-source",
+            [new(outputB, Craft.RecordedAt, new(), [])]);
+        CraftRecipeSchematicEvidence schematicA = new("sanitized-source", "payload-a");
+        CraftRecipeSchematicEvidence schematicB = new("sanitized-source", "payload-b");
+        (CraftObservation before, CraftObservation after) = collection switch
+        {
+            "Outputs" => (Craft with { Outputs = [outputA, outputA, outputB] },
+                Craft with { Outputs = [outputA, outputB, outputB] }),
+            "Reagents" => (Craft with { Reagents = [reagentA, reagentA, reagentB] },
+                Craft with { Reagents = [reagentA, reagentB, reagentB] }),
+            "OutputEvidence" => (Craft with { OutputEvidence = [evidenceA, evidenceA, evidenceB] },
+                Craft with { OutputEvidence = [evidenceA, evidenceB, evidenceB] }),
+            "RecipeSchematicEvidence" => (Craft with { RecipeSchematicEvidence = [schematicA, schematicA, schematicB] },
+                Craft with { RecipeSchematicEvidence = [schematicA, schematicB, schematicB] }),
+            _ => throw new ArgumentOutOfRangeException(nameof(collection))
+        };
+        Assert.That(HistoryValidator.Validate([before]).Count == 0, Is.EqualTo(valid));
+        Assert.That(HistoryValidator.Validate([after]).Count == 0, Is.EqualTo(valid));
+        if (!valid)
+        {
+            Assert.That(before, Is.Not.EqualTo(after), "C01 canonical equality preserves row multiplicity.");
+            Assert.That(HistoryValidator.Validate([before]).Single().Field, Is.EqualTo(collection),
+                "Duplicate canonical grains cannot reach a successful C03 commit.");
+        }
+        AssertEnrichmentVisibility(before, after, code, true);
+    }
+
+    [TestCase("Outputs", "partial-output", false)]
+    [TestCase("Reagents", "invalid-reagent-allocation", false)]
+    [TestCase("OutputEvidence", "partial-output", true)]
+    [TestCase("RecipeSchematicEvidence", "historical-recipe-schematic-variation", true)]
+    public void CollectionOrderingMatchesCanonicalRowsAndPersistedEvidence(
+        string collection, string code, bool visible)
+    {
+        CraftOutput outputA = new(99, null, 1);
+        CraftOutput outputB = new(100, null, 1);
+        CraftReagent reagentA = new(99, 1, null);
+        CraftReagent reagentB = new(100, 1, null);
+        CraftOutputEvidence evidenceA = new("sanitized-source",
+            [new(outputA, Craft.RecordedAt, new(), [])]);
+        CraftOutputEvidence evidenceB = new("sanitized-source",
+            [new(outputB, Craft.RecordedAt, new(), [])]);
+        CraftRecipeSchematicEvidence schematicA = new("sanitized-source", "payload-a");
+        CraftRecipeSchematicEvidence schematicB = new("sanitized-source", "payload-b");
+        (CraftObservation before, CraftObservation after) = collection switch
+        {
+            "Outputs" => (Craft with { Outputs = [outputA, outputB] }, Craft with { Outputs = [outputB, outputA] }),
+            "Reagents" => (Craft with { Reagents = [reagentA, reagentB] }, Craft with { Reagents = [reagentB, reagentA] }),
+            "OutputEvidence" => (Craft with { OutputEvidence = [evidenceA, evidenceB] },
+                Craft with { OutputEvidence = [evidenceB, evidenceA] }),
+            "RecipeSchematicEvidence" => (Craft with { RecipeSchematicEvidence = [schematicA, schematicB] },
+                Craft with { RecipeSchematicEvidence = [schematicB, schematicA] }),
+            _ => throw new ArgumentOutOfRangeException(nameof(collection))
+        };
+        Assert.That(HistoryValidator.Validate([before]), Is.Empty);
+        Assert.That(HistoryValidator.Validate([after]), Is.Empty);
+        AssertEnrichmentVisibility(before, after, code, visible);
+    }
+
+    [Test]
+    public void OutputEvidenceComparisonPreservesCallbackOrderAndMultiplicity()
+    {
+        CraftOutputObservation callbackA = new(new(99, null, 1), Craft.RecordedAt, new(), []);
+        CraftOutputObservation callbackB = new(new(100, null, 1), Craft.RecordedAt, new(), []);
+        CraftOutputEvidence evidence = new("sanitized-source", [callbackA, callbackA, callbackB]);
+        CraftObservation before = Craft with { OutputEvidence = [evidence] };
+        foreach (IReadOnlyList<CraftOutputObservation> callbacks in new IReadOnlyList<CraftOutputObservation>[]
+        {
+            [callbackA, callbackB, callbackB], [callbackA, callbackB, callbackA]
+        })
+        {
+            CraftObservation after = Craft with { OutputEvidence = [evidence with { Callbacks = callbacks }] };
+            Assert.That(HistoryValidator.Validate([after]), Is.Empty);
+            AssertEnrichmentVisibility(before, after, "partial-output", true);
+        }
+        AssertEnrichmentVisibility(before, Craft with
+        {
+            OutputEvidence = [evidence with
+            { Callbacks = evidence.Callbacks.ToArray() }]
+        }, "partial-output", false);
+    }
+
+    [TestCase("partial-output")]
+    [TestCase("invalid-reagent-allocation")]
+    [TestCase("historical-recipe-schematic-variation")]
+    public void UnknownAndObservedEmptyCollectionsRemainDistinct(string code)
+    {
+        CraftObservation after = code switch
+        {
+            "partial-output" => Craft with { Outputs = [] },
+            "invalid-reagent-allocation" => Craft with { Reagents = [] },
+            _ => Craft with { RecipeSchematicEvidence = [] }
+        };
+        AssertEnrichmentVisibility(Craft, after, code, true);
+        AssertEnrichmentVisibility(Craft, Craft, code, false);
+        AssertEnrichmentVisibility(after, after, code, false);
+    }
+
+    private static void AssertEnrichmentVisibility(
+        CraftObservation before, CraftObservation after, string code, bool visible)
+    {
+        CompanionImportResult result = Result(CraftWriteStatus.Enriched, [Warning(code)]) with
+        {
+            Observations = [new(CraftWriteStatus.Enriched, after, [], []) { PreviousObservation = before }]
+        };
+        ImportSourcePresentation source = ImportReportingTests.Present(result).Sources.Single();
+        Assert.That(source.VisibleDiagnostics.Count, Is.EqualTo(visible ? 1 : 0));
+        Assert.That(source.Diagnostics.Single().ObservationIdentity, Is.EqualTo(after.Identity));
+    }
+
     [Test]
     public void ErrorConflictAndValidationDetailsRemainVisibleAndAreNotGroupedWithWarnings()
     {

@@ -107,21 +107,30 @@ internal sealed class ImportPresentation
         {
             "unknown-recipe" or "recipe-recovered" => before.RecipeId != after.RecipeId,
             "partial-output" => before.OutputsComplete != after.OutputsComplete ||
-                !Same(before.Outputs, after.Outputs) || !Same(before.OutputEvidence, after.OutputEvidence),
+                !SameRows(before.Outputs, after.Outputs, output => (output.ItemId, output.Quality, output.Quantity)) ||
+                !SameEvidence(before.OutputEvidence, after.OutputEvidence),
             "invalid-reagent-item" or "invalid-reagent-allocation" or "invalid-reagent-return" =>
                 before.InputsComplete != after.InputsComplete ||
                 before.ResourcefulnessComplete != after.ResourcefulnessComplete ||
-                !Same(before.Reagents, after.Reagents),
+                !SameRows(before.Reagents, after.Reagents,
+                    reagent => (reagent.ItemId, reagent.AllocatedQuantity, reagent.ReturnedQuantity)),
             "historical-recipe-schematic-variation" or "unknown-recipe-reagent-slot" or
                 "recipe-reagent-slot-without-recipe" =>
-                before.RecipeId != after.RecipeId || !Same(before.RecipeSchematicEvidence, after.RecipeSchematicEvidence),
+                before.RecipeId != after.RecipeId || !SameEvidence(before.RecipeSchematicEvidence, after.RecipeSchematicEvidence),
             _ => true
         };
     }
 
-    private static bool Same<T>(IReadOnlyList<T>? before, IReadOnlyList<T>? after) =>
+    // Match C01's order-independent canonical row equality without discarding occurrences.
+    private static bool SameRows<T, TKey>(
+        IReadOnlyList<T>? before, IReadOnlyList<T>? after, Func<T, TKey> key)
+        where TKey : IComparable<TKey> =>
         before is null || after is null ? before is null && after is null :
-            before.Count == after.Count && before.ToHashSet().SetEquals(after);
+            before.Select(key).Order().SequenceEqual(after.Select(key).Order());
+
+    // C03 compares persisted evidence sequences, including C01's ordered callback equality.
+    private static bool SameEvidence<T>(IReadOnlyList<T>? before, IReadOnlyList<T>? after) =>
+        before is null || after is null ? before is null && after is null : before.SequenceEqual(after);
 
     private static string[] Labels(IReadOnlyList<string> paths, IReadOnlyList<string>? roots)
     {
