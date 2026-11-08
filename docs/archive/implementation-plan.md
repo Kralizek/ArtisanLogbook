@@ -26,9 +26,9 @@ storage. Packaging and mocked tests are not in-game installation or verification
 Addon implementation/tests live beneath `src/addon/`; shared product documentation
 lives under the repository-level `docs/` directory so addon, exporter, and web
 documentation can coexist. See
-[capture-tracer.md](capture-tracer.md) for the PR #3 evidence register and
-[storage-ledger.md](storage-ledger.md) for the issue #4/#12 storage contract and
-[lua-api.md](lua-api.md) for the issue #5 public consumer contract.
+[capture-tracer.md](../addon/capture.md) for the PR #3 evidence register and
+[storage-ledger.md](../addon/storage.md) for the issue #4/#12 storage contract and
+[lua-api.md](../addon/lua-api.md) for the issue #5 public consumer contract.
 
 Current distribution (issue #47) separates production capture/storage/API in
 `ArtisanLogbook_Core`, the dependent production UI in `ArtisanLogbook`, and the
@@ -46,7 +46,7 @@ on Tracer.
    UI responsibilities without adding empty speculative modules.
 3. **Durable storage (issue #4):** evidence-backed craft/reagent schema,
    dimension registry, monotonic identities, independent versioning, validated loading,
-   and safe retention. Implemented; see [storage-ledger.md](storage-ledger.md).
+   and safe retention. Implemented; see [storage-ledger.md](../addon/storage.md).
 4. **Additional Retail capture:** implement pre-craft facts, verified reagent
   allocation, and order/recraft context as evidence becomes available. Successful
   Ingenuity proc/refund behavior is now verified from the Ogrim export and is used
@@ -86,7 +86,7 @@ Tests and documentation accompany each slice rather than being deferred.
   historical grain from enriched dimensions. Development users may need to back
   up and reset SavedVariables; unsupported data is refused without mutation.
   Keep current atomic capture, finite measurement checks, aggregate consistency,
-  and exact-integer counter exhaustion safeguards. See [storage-ledger.md](storage-ledger.md).
+  and exact-integer counter exhaustion safeguards. See [storage-ledger.md](../addon/storage.md).
 - Updated by the issue #5 runtime indexing/retention decision: default
   `retentionDays = 60`, with no `maxCrafts` threshold. Maintain durable daily
   craft-count/output/Multicraft/concentration and verified Ingenuity proc/applied-refund
@@ -119,7 +119,7 @@ Tests and documentation accompany each slice rather than being deferred.
 ## Dimension Model
 
 The durable storage slice implements this model in
-[storage-ledger.md](storage-ledger.md). Keep expansion/era classification on
+[storage-ledger.md](../addon/storage.md). Keep expansion/era classification on
 dimensions rather than duplicating it across craft or reagent facts:
 
 - Add an append-only `ExpansionDimension` (or equivalent era dimension) with
@@ -169,7 +169,7 @@ Do not add `GetRecipeStats` or `GetObservedCost` to the first stable contract.
 Derived analytics, valuation, material provenance, intermediate crafts, and
 inventory accounting remain deliberately unresolved.
 
-See [lua-api.md](lua-api.md) for the exact v1 contract.
+See [lua-api.md](../addon/lua-api.md) for the exact v1 contract.
 
 ## UI and Integrations
 

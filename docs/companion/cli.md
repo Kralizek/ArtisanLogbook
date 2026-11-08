@@ -1,6 +1,6 @@
-# Companion command and configuration reference
+# Companion CLI reference
 
-This document covers the current Companion CLI in more detail. Start at the [Companion README](../src/companion/README.md) for installation and quick usage.
+This document covers the current Companion CLI in more detail. Start at the [Companion README](../../src/companion/README.md) for installation and quick usage.
 
 ## Database location
 
@@ -201,4 +201,4 @@ Source snapshots can contain private game account or character data. Back them u
 
 ## Implementation reference
 
-For service ownership and runtime contracts, see [Companion Runtime](../src/companion/src/Runtime/README.md). Development tests and CI instructions live in [CONTRIBUTING](../CONTRIBUTING.md).
+For service ownership and runtime contracts, see [Companion Runtime](../../src/companion/src/Runtime/README.md). Development tests and CI instructions live in [CONTRIBUTING](../../CONTRIBUTING.md).
