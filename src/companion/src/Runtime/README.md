@@ -108,7 +108,12 @@ settings lines for SavedVariables monitoring, its configured-but-inactive
 reconciliation interval, and the HTTP preferred port. Disabled monitoring is
 reported as `SavedVariables monitoring: off`; enabled is explicitly marked as
 configured but not implemented. The port line also clarifies that no API
-endpoints are available. Database paths and installation roots are not logged.
+endpoints are available. Startup also logs each configured WoW game directory
+and its detected direct client-directory flavor names, or `(none detected)`.
+This bounded layout check does not require SavedVariables to exist. Game
+directory paths are shown explicitly for startup diagnostics; history database
+paths remain unlogged. Flavor directory names are presentation labels only and
+never establish a saved craft's GameContext.
 
 ## Extension points
 

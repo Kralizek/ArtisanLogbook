@@ -9,6 +9,7 @@ namespace ArtisanLogbook.Runtime;
 internal sealed class CompanionRuntimeLifecycle(
     IServiceProvider services, CompanionApplicationStatus status, IHostApplicationLifetime lifetime,
     CompanionRuntimeConfiguration configuration, CompanionWorkAdmission admission,
+    InstallationDiscovery discovery,
     ILogger<CompanionRuntimeLifecycle> logger) : IHostedLifecycleService, IDisposable
 {
     private Store? _store;
@@ -45,6 +46,7 @@ internal sealed class CompanionRuntimeLifecycle(
             _store = services.GetRequiredService<Store>();
             _store.ReadStatus();
             status.DatabaseOpened(_store);
+            LogInstallationFlavors();
             admission.Open();
             cancellationToken.ThrowIfCancellationRequested();
             return;
@@ -60,6 +62,32 @@ internal sealed class CompanionRuntimeLifecycle(
             await CleanupFailedStartupAsync();
             throw;
         }
+    }
+
+    private void LogInstallationFlavors()
+    {
+        IReadOnlyList<string> roots = configuration.EffectiveSettings.InstallationRoots;
+        if (roots.Count == 0)
+        {
+            logger.LogInformation("Game directory: not configured.");
+            return;
+        }
+
+        InstallationFlavorDiscoveryResult result = discovery.DiscoverFlavors(roots);
+        foreach (string root in roots)
+        {
+            string[] flavors = result.Flavors
+                .Where(flavor => InstallationDiscovery.PathComparer.Equals(flavor.InstallationRoot, root))
+                .Select(flavor => flavor.Name)
+                .ToArray();
+            logger.LogInformation("Game directory: {GameDirectory}", root);
+            logger.LogInformation("Available flavors: {AvailableFlavors}",
+                flavors.Length == 0 ? "(none detected)" : string.Join(", ", flavors));
+        }
+
+        foreach (DiscoveryDiagnostic diagnostic in result.Diagnostics)
+            logger.LogWarning("Game directory discovery issue {DiagnosticCode} at {Path}: {Message}",
+                diagnostic.Code, diagnostic.Path, diagnostic.Message);
     }
 
     public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;

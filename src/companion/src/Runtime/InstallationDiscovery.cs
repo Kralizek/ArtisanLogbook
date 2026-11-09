@@ -8,6 +8,10 @@ public sealed record DiscoveryResult(IReadOnlyList<string> Paths, IReadOnlyList<
 {
     public bool HasErrors => Diagnostics.Any(diagnostic => diagnostic.Severity == DiscoverySeverity.Error);
 }
+/// <summary>A discovered client-directory label; it does not determine the history GameContext.</summary>
+public sealed record InstallationFlavor(string InstallationRoot, string Name);
+public sealed record InstallationFlavorDiscoveryResult(
+    IReadOnlyList<InstallationFlavor> Flavors, IReadOnlyList<DiscoveryDiagnostic> Diagnostics);
 
 /// <summary>Bounded layout inspection. Directory names locate sources, never establish GameContext.</summary>
 public sealed class InstallationDiscovery
@@ -46,6 +50,21 @@ public sealed class InstallationDiscovery
             diagnostics.AddRange(result.Diagnostics);
         }
         return new(roots.ToArray(), diagnostics);
+    }
+
+    public InstallationFlavorDiscoveryResult DiscoverFlavors(IEnumerable<string> roots)
+    {
+        List<InstallationFlavor> flavors = [];
+        List<DiscoveryDiagnostic> diagnostics = [];
+        HashSet<string> visited = new(PathComparer);
+        foreach (string root in roots)
+        {
+            string? normalized = Normalize(root, diagnostics);
+            if (normalized is null || !visited.Add(normalized)) continue;
+            flavors.AddRange(Flavors(normalized, diagnostics)
+                .Select(path => new InstallationFlavor(normalized, Path.GetFileName(path))));
+        }
+        return new(flavors, diagnostics);
     }
 
     public DiscoveryResult DiscoverSavedVariables(IEnumerable<string> roots)

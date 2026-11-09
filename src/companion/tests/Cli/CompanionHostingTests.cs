@@ -79,6 +79,8 @@ public sealed class CompanionHostingTests
                 Assert.That(running.Configuration.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(monitoring ?? false));
                 Assert.That(running.CriticalFailure, Is.Null);
                 Assert.That(_runtimeLogs, Does.Contain("Artisan Logbook Companion started."));
+                Assert.That(_runtimeLogs, Does.Contain($"Game directory: {Path.Combine(_directory, "offline")}"));
+                Assert.That(_runtimeLogs, Does.Contain("Available flavors: (none detected)"));
                 Assert.That(_runtimeLogs, Does.Contain(monitoring is true
                     ? "SavedVariables monitoring: on (configured; not implemented in this release)"
                     : "SavedVariables monitoring: off"));
@@ -103,6 +105,28 @@ public sealed class CompanionHostingTests
         using Store reopened = new(_database);
         Assert.That(reopened.ReadStatus().TotalCraftCount, Is.Zero);
         Assert.That(await File.ReadAllBytesAsync(_settings.FilePath), Is.EqualTo(before));
+    }
+
+    [Test]
+    public async Task StartupShowsConfiguredGameDirectoryAndDetectedFlavorsWithoutSavedVariables()
+    {
+        string root = Path.Combine(_directory, "World of Warcraft");
+        string classic = Path.Combine(root, "_classic_");
+        string retail = Path.Combine(root, "_retail_");
+        Directory.CreateDirectory(Path.Combine(classic, "WTF", "Account"));
+        Directory.CreateDirectory(Path.Combine(retail, "WTF", "Account"));
+        _settings.Save(CompanionSettings.ForRoots(root));
+        Assert.That(new InstallationDiscovery().DiscoverSavedVariables([root]).Paths, Is.Empty);
+
+        await using WebApplication app = Build();
+        await app.StartAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(_runtimeLogs, Does.Contain($"Game directory: {root}"));
+            Assert.That(_runtimeLogs, Does.Contain("Available flavors: _classic_, _retail_"));
+            Assert.That(app.Services.GetRequiredService<Store>().ReadStatus().TotalCraftCount, Is.Zero);
+        });
+        await app.StopAsync();
     }
 
     [Test]
