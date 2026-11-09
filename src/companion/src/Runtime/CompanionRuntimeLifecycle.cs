@@ -29,7 +29,7 @@ internal sealed class CompanionRuntimeLifecycle(
         return Task.CompletedTask;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -39,17 +39,17 @@ internal sealed class CompanionRuntimeLifecycle(
             status.DatabaseOpened(_store);
             admission.Open();
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return;
         }
         catch (OperationCanceledException)
         {
-            CloseDatabase();
+            await CleanupFailedStartupAsync();
             throw;
         }
         catch (Exception exception)
         {
             status.Fail("database-startup-failed", "Cannot initialize the history database.", exception);
-            CloseDatabase();
+            await CleanupFailedStartupAsync();
             throw;
         }
     }
@@ -70,6 +70,15 @@ internal sealed class CompanionRuntimeLifecycle(
         CloseDatabase();
         status.Transition(CompanionLifecycleState.Stopped);
         logger.LogInformation("Artisan Logbook Companion stopped; database ownership released.");
+    }
+
+    private async Task CleanupFailedStartupAsync()
+    {
+        // Admission may have opened before startup failed or was canceled.
+        // Never close the shared store until every accepted lease is released.
+        admission.StopAccepting();
+        await admission.DrainAsync();
+        CloseDatabase();
     }
 
     private void BeginStopping()
