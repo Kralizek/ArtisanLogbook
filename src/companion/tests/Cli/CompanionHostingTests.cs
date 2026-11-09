@@ -248,6 +248,35 @@ public sealed class CompanionHostingTests
     }
 
     [Test]
+    public async Task CanceledStartupDrainsAlreadyAdmittedWorkBeforeCleanup()
+    {
+        await using WebApplication app = Build();
+        CompanionRuntimeLifecycle lifecycle = app.Services.GetServices<IHostedService>()
+            .OfType<CompanionRuntimeLifecycle>().Single();
+        CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
+
+        // Model the interleaving in which startup cancellation is observed after
+        // admission opened and another operation already acquired a lease.
+        admission.Open();
+        IDisposable lease = admission.Admit();
+        using CancellationTokenSource cancellation = new();
+        cancellation.Cancel();
+        Task starting = lifecycle.StartAsync(cancellation.Token);
+        try
+        {
+            Assert.That(starting.IsCompleted, Is.False,
+                "Startup cleanup must wait for the admitted operation.");
+            Assert.That(() => admission.Admit(), Throws.InvalidOperationException);
+        }
+        finally
+        {
+            lease.Dispose();
+        }
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await starting);
+        Assert.That(() => admission.Admit(), Throws.InvalidOperationException);
+    }
+
+    [Test]
     public async Task FailedStartupWaitsForAdmittedWorkBeforeHostDisposal()
     {
         WebApplicationBuilder builder = Builder();
