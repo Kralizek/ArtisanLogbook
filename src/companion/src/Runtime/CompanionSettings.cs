@@ -6,9 +6,22 @@ public sealed record CompanionSettings
 
     public required int Version { get; init; }
     public required IReadOnlyList<string> InstallationRoots { get; init; }
+    public MonitoringSettings Monitoring { get; init; } = new();
+    public HttpSettings Http { get; init; } = new();
 
     public static CompanionSettings ForRoots(params string[] roots) =>
         new() { Version = CurrentVersion, InstallationRoots = roots };
+}
+
+public sealed record MonitoringSettings
+{
+    public bool Enabled { get; init; }
+    public int ReconciliationIntervalSeconds { get; init; } = 60;
+}
+
+public sealed record HttpSettings
+{
+    public int PreferredPort { get; init; } = 48721;
 }
 
 public enum SettingsStatus { Loaded, Missing, Invalid, Unsupported, Unreadable }

@@ -49,7 +49,7 @@ public sealed class InitCommand(
             string[] roots = new[] { validation.Paths[0] }
                 .Concat(loaded.Settings?.InstallationRoots.Skip(1) ?? [])
                 .Distinct(InstallationDiscovery.PathComparer).ToArray();
-            CompanionSettings proposed = CompanionSettings.ForRoots(roots);
+            CompanionSettings proposed = (loaded.Settings ?? CompanionSettings.ForRoots()) with { InstallationRoots = roots };
             Table table = new Table().AddColumn("Proposed configuration").AddColumn("Value");
             table.AddRow("Schema version", "1");
             table.AddRow("Settings file", Markup.Escape(settingsStore.FilePath));

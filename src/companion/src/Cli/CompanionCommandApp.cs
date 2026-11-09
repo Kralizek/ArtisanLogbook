@@ -48,6 +48,10 @@ public static class CompanionCommandApp
                 .WithDescription("Show read-only history counts across all game contexts.")
                 .WithExample(["status"])
                 .WithExample(["status", "--database", "history.duckdb"]);
+            config.AddCommand<ServeCommand>("serve")
+                .WithDescription("Run the Companion host until stopped (no HTTP API or automatic imports yet).")
+                .WithExample(["serve"])
+                .WithExample(["serve", "--database", "history.duckdb"]);
             config.SetExceptionHandler((exception, _) =>
             {
                 console.MarkupLine($"[red]Error:[/] {Markup.Escape(exception.Message)}");

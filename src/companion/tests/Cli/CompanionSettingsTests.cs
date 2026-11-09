@@ -63,6 +63,16 @@ public sealed class CompanionSettingsTests
     [TestCase("""{"version":1,"installationRoots":["relative"]}""", SettingsStatus.Invalid)]
     [TestCase("""{"version":1,"installationRoots":[],"other":true}""", SettingsStatus.Invalid)]
     [TestCase("""{"version":1,"version":1,"installationRoots":[]}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":null}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"http":null}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"enabled":"true"}}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"other":true}}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"enabled":true,"enabled":false}}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"reconciliationIntervalSeconds":0}}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"reconciliationIntervalSeconds":86401}}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"http":{"preferredPort":0}}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"http":{"preferredPort":65536}}""", SettingsStatus.Invalid)]
+    [TestCase("""{"version":1,"installationRoots":[],"http":{"other":1}}""", SettingsStatus.Invalid)]
     public void InvalidOrUnsupportedSettingsAreNeverOverwritten(string json, SettingsStatus status)
     {
         Directory.CreateDirectory(_paths.DataDirectory);
@@ -74,6 +84,98 @@ public sealed class CompanionSettingsTests
         Assert.That(() => _store.Save(CompanionSettings.ForRoots(_directory)), Throws.TypeOf<CompanionSettingsException>());
         Assert.That(File.ReadAllBytes(_store.FilePath), Is.EqualTo(before));
         Assert.That(File.Exists(_paths.ResolveDatabase(null)), Is.False);
+    }
+
+    [Test]
+    public void LegacyVersionOneLoadsDefaultsWithoutModification()
+    {
+        Directory.CreateDirectory(_paths.DataDirectory);
+        const string json = """{"version":1,"installationRoots":[]}""";
+        File.WriteAllText(_store.FilePath, json);
+        CompanionSettings settings = _store.Load().Settings!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(CompanionSettings.CurrentVersion, Is.EqualTo(1));
+            Assert.That(settings.Monitoring.Enabled, Is.False);
+            Assert.That(settings.Monitoring.ReconciliationIntervalSeconds, Is.EqualTo(60));
+            Assert.That(settings.Http.PreferredPort, Is.EqualTo(48721));
+            Assert.That(File.ReadAllText(_store.FilePath), Is.EqualTo(json));
+        });
+    }
+
+    [Test]
+    public void PreferencesRoundTripAndInvocationOverridesNeverPersist()
+    {
+        CompanionSettings settings = CompanionSettings.ForRoots(_directory) with
+        {
+            Monitoring = new() { Enabled = true, ReconciliationIntervalSeconds = 120 },
+            Http = new() { PreferredPort = 12345 }
+        };
+        _store.Save(settings);
+        SettingsLoadResult loaded = _store.Load();
+        Assert.That(loaded.Settings!.Monitoring, Is.EqualTo(settings.Monitoring));
+        Assert.That(loaded.Settings.Http, Is.EqualTo(settings.Http));
+        byte[] before = File.ReadAllBytes(_store.FilePath);
+        CompanionRuntimeConfiguration persisted = CompanionRuntimeConfiguration.Resolve(_paths, _store);
+        Assert.That(persisted.EffectiveSettings.Monitoring, Is.EqualTo(settings.Monitoring));
+        Assert.That(persisted.EffectiveSettings.Http, Is.EqualTo(settings.Http));
+        Assert.That(persisted.PersistedPreferences!.Monitoring, Is.EqualTo(settings.Monitoring));
+        Assert.That(persisted.PersistedPreferences.Http, Is.EqualTo(settings.Http));
+        Assert.That(persisted.PersistedPreferences.InstallationRoots, Is.EqualTo(settings.InstallationRoots));
+        Assert.That(persisted.InvocationOverrides, Is.EqualTo(new CompanionInvocationOverrides()));
+        CompanionRuntimeConfiguration effective = CompanionRuntimeConfiguration.Resolve(
+            _paths, _store, "override.duckdb", false, 30, 23456);
+        Assert.Multiple(() =>
+        {
+            Assert.That(effective.DatabasePath, Is.EqualTo(Path.Combine(_directory, "override.duckdb")));
+            Assert.That(effective.EffectiveSettings.Monitoring.Enabled, Is.False);
+            Assert.That(effective.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds, Is.EqualTo(30));
+            Assert.That(effective.EffectiveSettings.Http.PreferredPort, Is.EqualTo(23456));
+            Assert.That(effective.PersistedPreferences!.Monitoring, Is.EqualTo(settings.Monitoring));
+            Assert.That(effective.PersistedPreferences.Http, Is.EqualTo(settings.Http));
+            Assert.That(effective.InvocationOverrides, Is.EqualTo(new CompanionInvocationOverrides("override.duckdb", false, 30, 23456)));
+            Assert.That(File.ReadAllBytes(_store.FilePath), Is.EqualTo(before));
+            Assert.That(_store.Load().Revision, Is.EqualTo(loaded.Revision));
+        });
+    }
+
+    [TestCase(0, 48721)]
+    [TestCase(86401, 48721)]
+    [TestCase(60, 0)]
+    [TestCase(60, 65536)]
+    public void InvalidRuntimePreferencesCannotBeSaved(int interval, int port)
+    {
+        CompanionSettings settings = CompanionSettings.ForRoots() with
+        {
+            Monitoring = new() { ReconciliationIntervalSeconds = interval },
+            Http = new() { PreferredPort = port }
+        };
+        Assert.That(() => _store.Save(settings), Throws.ArgumentException);
+        Assert.That(File.Exists(_store.FilePath), Is.False);
+    }
+
+    [TestCase(null, false, true)]
+    [TestCase(false, false, false)]
+    [TestCase(true, true, true)]
+    public void NewSavedSnapshotCannotDiscardInvocationOverride(bool? invocation, bool firstEffective, bool updatedEffective)
+    {
+        CompanionRuntimeConfiguration initial = CompanionRuntimeConfiguration.Resolve(_paths, _store, monitoring: invocation);
+        Assert.That(initial.PersistedPreferences, Is.Null);
+        Assert.That(initial.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(firstEffective));
+        CompanionSettings saved = CompanionSettings.ForRoots() with { Monitoring = new() { Enabled = true } };
+        CompanionRuntimeConfiguration updated = initial.WithPersistedPreferences(saved);
+        Assert.Multiple(() =>
+        {
+            Assert.That(updated.PersistedPreferences!.Monitoring.Enabled, Is.True);
+            Assert.That(updated.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(updatedEffective));
+            Assert.That(updated.InvocationOverrides.Monitoring, Is.EqualTo(invocation));
+            Assert.That(updated.InvocationOverrides, Is.SameAs(initial.InvocationOverrides));
+            Assert.That(File.Exists(_store.FilePath), Is.False, "Pure resolution is not runtime mutation or persistence.");
+            Assert.That(CompanionSettings.CurrentVersion, Is.EqualTo(1));
+        });
+        CompanionRuntimeConfiguration disabled = updated.WithPersistedPreferences(
+            saved with { Monitoring = new() { Enabled = false } });
+        Assert.That(disabled.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(invocation ?? false));
     }
 
     [Test]

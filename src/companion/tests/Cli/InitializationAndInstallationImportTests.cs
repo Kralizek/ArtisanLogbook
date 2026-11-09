@@ -93,7 +93,12 @@ public sealed class InitializationAndInstallationImportTests
     public async Task RepeatInitializationPreselectsExistingRootPreservesAdditionalRootsAndNeverOpensDatabase()
     {
         string other = Path.Combine(_directory, "second");
-        _settings.Save(CompanionSettings.ForRoots(_root, other));
+        CompanionSettings original = CompanionSettings.ForRoots(_root, other) with
+        {
+            Monitoring = new() { Enabled = true, ReconciliationIntervalSeconds = 300 },
+            Http = new() { PreferredPort = 54321 }
+        };
+        _settings.Save(original);
         using (Store store = new(_paths.ResolveDatabase(null))) { }
         byte[] database = await File.ReadAllBytesAsync(_paths.ResolveDatabase(null));
         for (int i = 0; i < 2; i++)
@@ -103,6 +108,8 @@ public sealed class InitializationAndInstallationImportTests
             Assert.That(exit, Is.Zero, output);
             Assert.That(prompts.Current, Is.EqualTo(_root));
             Assert.That(_settings.Load().Settings!.InstallationRoots, Is.EqualTo(new[] { _root, other }));
+            Assert.That(_settings.Load().Settings!.Monitoring, Is.EqualTo(original.Monitoring));
+            Assert.That(_settings.Load().Settings!.Http, Is.EqualTo(original.Http));
         }
         Assert.That(await File.ReadAllBytesAsync(_paths.ResolveDatabase(null)), Is.EqualTo(database));
     }

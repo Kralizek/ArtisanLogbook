@@ -1,11 +1,14 @@
 # Companion application runtime services (C06/C10)
 
-This library has no Spectre, DuckDB, host, or addon dependencies. The CLI is its
-first consumer; future monitoring and web hosts should use these same services.
+This library composes C03/C07 and the ASP.NET Core shared framework for C10.
+Settings, paths, and discovery remain independent of host execution and Spectre.
+The existing CLI is the sole application entry point: only `serve` builds a host.
 
 - `ApplicationPaths`: one shared per-user data directory, default history path,
   settings path, and working-directory-relative explicit path resolution.
-- `CompanionSettings`: schema version 1 and multiple absolute installation roots.
+- `CompanionSettings`: schema version 1, multiple absolute installation roots,
+  optional monitoring preferences (disabled, 60 seconds), and HTTP preferences
+  (port 48721). Older version-1 files load without migration or writes.
 - `CompanionSettingsStore.Load()`: structured `Loaded`, `Missing`, `Invalid`,
   `Unsupported`, or `Unreadable` result, diagnostic, and opaque revision.
   Loading never creates files. Root availability is checked by discovery, not
@@ -26,6 +29,9 @@ first consumer; future monitoring and web hosts should use these same services.
   failures are errors; incidental client-candidate/addon-layout inspection
   failures and skipped links are warnings. All remain explicit. Consumers
   should use `HasErrors`, not diagnostic count, to determine incomplete discovery.
+- `DiscoverFlavors(roots)`: reports only client directories containing the
+  ArtisanLogbook Core addon's own TOC file; ordinary client folders and
+  unrelated addons do not count as an ArtisanLogbook installation.
 
 All discovery results are read-only inspections. They do not parse sources,
 establish game identity, import, or prove WoW has finished saving. Only C04
@@ -36,7 +42,130 @@ Directory/ledger links are not followed, including installation-root ancestors.
 Normalized aliases are deduplicated using the OS comparer; hard-link identity,
 case-insensitive Unix volume detection, and adversarial concurrent filesystem
 replacement are not supported. No recursive scan, watcher, periodic work, file
-archive, or background service is introduced.
+archive, or monitoring worker is introduced.
+
+## Host composition and ownership
+
+`serve` resolves `CompanionRuntimeConfiguration`, constructs a
+`WebApplication.CreateEmptyBuilder`, calls `ConfigureCompanionHost(configuration)`
+and `AddArtisanLogbookCompanion(paths, configuration)`, builds the application,
+and awaits `RunCompanionAsync()`. Empty-builder configuration deliberately avoids
+an unrelated appsettings/environment configuration pipeline. Explicit precedence
+is CLI overrides, persisted Companion settings, then defaults. Invalid persisted
+settings fail before overrides are applied; missing settings use defaults without
+being saved. All settings writers continue using the single settings store.
+
+`CompanionRuntimeConfiguration` is an invocation snapshot, not a settings document:
+`PersistedPreferences` retains the loaded user preference snapshot (null if no
+settings file), `InvocationOverrides` retains each explicitly supplied CLI value
+(null means not supplied), and `EffectiveSettings` is the validated resolved
+result. Defaults for omitted JSON properties are applied by the existing settings
+model. A saved false and a CLI false remain distinguishable, even when they
+produce the same effective value. `WithPersistedPreferences` is pure resolution
+of a new saved snapshot with the original invocation overrides; it neither saves
+nor changes the running host. There is no hot reload in C10.
+
+Future browser controls must save user preferences through
+`CompanionSettingsStore`, then explicitly resolve the effective snapshot with
+the retained overrides. Precedence remains **invocation overrides > persisted
+user preferences > defaults**. Public controls must deliberately report both
+saved preference and effective value, and whether an invocation override is
+active. For example, with `--monitoring false`, saving enabled should report
+"preference saved; monitoring remains disabled by invocation override", never
+claim that effective monitoring was enabled. The opposite override is symmetric.
+
+Registration provides paths, invocation configuration, settings access,
+installation discovery, one singleton C03 writer, singleton C07 importer, and
+`CompanionApplicationStatus`. Duplicate history ownership registration is rejected.
+`CompanionRuntimeLifecycle` uses standard `IHostedLifecycleService` and
+`IHostApplicationLifetime`: startup opens and verifies C03 before successful host
+startup; ApplicationStarted reports Running, ApplicationStopping reports Stopping,
+and StoppedAsync closes the database after all workers' StopAsync calls. Disposal
+also closes the writer after partial startup failures. C03's transaction gate
+ensures disposal cannot race an in-progress transactional write. No database,
+source, or craft semantics have changed.
+
+DuckDB locking, not a second lock/ownership persistence system, rejects other
+processes. Short-lived CLI commands retain their own existing open/dispose
+behavior and actionable contention errors; they do not forward requests.
+
+`CompanionApplicationStatus.Read()` returns the entry application's informational
+version, startup UTC time, lifecycle state, effective configuration, database
+availability/schema version, canonical count, and current critical failure.
+Both `CompanionStatus` and its provider are assembly-internal. They are operational
+models for Runtime composition, **not approved HTTP response contracts**. Future
+C06/C11 services implemented in this project can consume them; separate component
+assemblies must not expose them by widening visibility without a deliberate
+boundary decision. C11 must map selected fields to public, versioned DTOs.
+Never automatically serialize the internal status or configuration: database
+paths, installation roots, configuration internals, and sensitive operational
+information are not public API data. No external DTOs or serialization machinery
+are introduced here.
+Counts are queried via C03 `ReadStatus()` on every read; no duplicate history
+state or monitoring statistics are maintained. Startup/status failures are
+explicit and structured `ILogger` records use failure codes and exception types,
+not raw sources, account IDs, or installation paths. Detailed command failures
+remain available to diagnose configuration/schema/ownership problems.
+Startup emits the application-started event separately from concise effective
+settings lines for SavedVariables monitoring, its configured-but-inactive
+reconciliation interval, and the HTTP preferred port. Disabled monitoring is
+reported as `SavedVariables monitoring: off`; enabled is explicitly marked as
+configured but not implemented. The port line also clarifies that no API
+endpoints are available. Startup also logs each configured WoW game directory
+and the direct client flavors where
+`Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc` exists, or
+`(none detected)`. Other client directories and unrelated addons are not
+listed. This bounded check does not require SavedVariables to exist. Game
+directory paths are shown explicitly for startup diagnostics; history database
+paths remain unlogged. Flavor directory names are presentation labels only and
+never establish a saved craft's GameContext.
+
+## Extension points
+
+The same WebApplication already owns embedded Kestrel on IPv4 loopback.
+There are no routes/assets or advertised browser URL. Occupied ports currently
+fail startup; C11 will add free-port fallback in host configuration and register
+versioned `/api/v1/` Minimal API endpoints after Build and before Run, with the
+selected **MinimalOpenAPI** implementation (not Swashbuckle/NSwag). C12 will serve
+bundled static assets at `/`. Neither requires another host or executable.
+
+C06 will register hosted monitoring workers after runtime registration and use
+the same settings/discovery services and shared C07 importer. New runtime import
+requests must use `CompanionRuntimeImports`, which holds a
+`CompanionWorkAdmission.Admit()` lease around the existing C07 operation. Before
+startup and once stopping begins, admission rejects explicitly with a logged
+error and an exception. A future worker coordinating longer-lived work may hold
+a lease itself and call shared C07 directly for **already admitted** work. Hold
+the lease through commit/rollback and release it in `using`/`finally`; do not
+re-admit existing work during shutdown. Manual CLI imports still use C07 directly
+and are unaffected.
+
+The [.NET 10 Generic Host lifecycle implementation](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.Hosting/src/Internal/Host.cs)
+stops in reverse registration order within each phase: all `StoppingAsync` hooks,
+`ApplicationStopping`, all `StopAsync` calls, then all `StoppedAsync` hooks.
+Shutdown errors are aggregated rather than skipping later phases. Runtime closes
+admission in its StoppingAsync hook and in ApplicationStopping (which may be
+signaled first by external termination), and waits for outstanding leases in
+StoppedAsync before disposing C03. Workers must stop admitting new work when
+shutdown begins and drain in StopAsync; they must not defer database work to
+StoppedAsync. The guarantee does not depend on sequential StopAsync execution.
+
+Pass request/worker cancellation tokens into C07. The host's shutdown token can
+cancel worker work, but stopping does not immediately cancel every admitted
+request or dispose its connection. Drain waits even if the shutdown token is
+canceled, allowing admitted transactional work to commit or roll back before
+ownership is released. RunCompanionAsync also closes admission and drains in
+finally before host disposal after startup/shutdown failure. Workers must observe
+cancellation and release leases; an uncooperative worker can delay graceful
+shutdown, and forced termination still relies on DuckDB transactional safety.
+Always run/stop the host before disposal; DI disposal alone is not worker
+shutdown. No queue, scheduler, or persistent admission state is introduced.
+
+Monitoring remains explicitly opt-in; no monitoring or
+automatic imports run in this foundation, even with the enabled preference.
+Future operational status can extend `CompanionStatus` with real source,
+reconciliation, import, and sync information. No scheduler, channel, persistent
+checkpoint, or dynamic configuration framework is pre-created.
 
 See the [Companion guide](../../README.md) for command flow, configuration
 locations, diagnostics, and operational limitations.

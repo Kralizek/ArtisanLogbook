@@ -11,9 +11,10 @@ The Companion reads source files without modifying them. Importing a snapshot ag
 | `artisanlogbook init` | Configure a WoW installation root interactively |
 | `artisanlogbook import [source-file] [--verbose]` | Import one explicit snapshot, or discover snapshots using configured roots |
 | `artisanlogbook status` | Show database status and craft counts without modifying the database |
+| `artisanlogbook serve` | Run the local Companion host until Ctrl+C or termination |
 | `artisanlogbook --help` | Show available help |
 
-Both `import` and `status` accept `--database <path>` to override the default database location.
+`import`, `status`, and `serve` accept `--database <path>` to override the default database location.
 
 Normal imports show concise change summaries and relevant new diagnostics;
 unchanged successful reimports suppress known historical warnings. Use
@@ -44,6 +45,7 @@ This installs a local `al` command alias; it is **not a published end-user insta
 al init
 al import
 al status
+al serve
 ```
 
 Alternatively, import one SavedVariables file explicitly:
@@ -62,7 +64,16 @@ artisanlogbook import --help
 
 ## Scope and limitations
 
-The Companion currently provides initialization, importing, and read-only status. It does **not** provide a web interface, analytics dashboard, automatic synchronization, restoration into WoW, or a background service. Aggregate-only history cannot be recovered as individual crafts.
+The Companion provides initialization, importing, read-only status, and a
+long-running local host. `serve` owns the database until shutdown; other processes
+cannot import or inspect it while that writer is active. Stop the host before
+using manual database commands. Monitoring defaults to disabled, and this release
+does not perform automatic imports even when the monitoring preference is enabled.
+
+The host binds loopback only, but has no HTTP API or browser pages yet and does
+not advertise a dashboard URL. It does **not** provide a web interface, analytics
+dashboard, automatic synchronization, restoration into WoW, or OS service
+installation. Aggregate-only history cannot be recovered as individual crafts.
 
 Imports may include locally sensitive character/account information. Avoid sharing raw SavedVariables or diagnostic logs.
 

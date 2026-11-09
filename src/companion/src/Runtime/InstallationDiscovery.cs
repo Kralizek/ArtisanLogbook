@@ -8,6 +8,10 @@ public sealed record DiscoveryResult(IReadOnlyList<string> Paths, IReadOnlyList<
 {
     public bool HasErrors => Diagnostics.Any(diagnostic => diagnostic.Severity == DiscoverySeverity.Error);
 }
+/// <summary>A client label with ArtisanLogbook Core installed; it does not determine history GameContext.</summary>
+public sealed record InstallationFlavor(string InstallationRoot, string Name);
+public sealed record InstallationFlavorDiscoveryResult(
+    IReadOnlyList<InstallationFlavor> Flavors, IReadOnlyList<DiscoveryDiagnostic> Diagnostics);
 
 /// <summary>Bounded layout inspection. Directory names locate sources, never establish GameContext.</summary>
 public sealed class InstallationDiscovery
@@ -46,6 +50,28 @@ public sealed class InstallationDiscovery
             diagnostics.AddRange(result.Diagnostics);
         }
         return new(roots.ToArray(), diagnostics);
+    }
+
+    /// <summary>Discovers client directories containing the ArtisanLogbook Core addon's TOC file.</summary>
+    public InstallationFlavorDiscoveryResult DiscoverFlavors(IEnumerable<string> roots)
+    {
+        List<InstallationFlavor> flavors = [];
+        List<DiscoveryDiagnostic> diagnostics = [];
+        HashSet<string> visited = new(PathComparer);
+        foreach (string root in roots)
+        {
+            string? normalized = Normalize(root, diagnostics);
+            if (normalized is null || !visited.Add(normalized)) continue;
+            foreach (string flavor in Flavors(normalized, diagnostics))
+            {
+                string coreAddon = Path.Combine(flavor, "Interface", "AddOns", "ArtisanLogbook_Core");
+                string coreToc = Path.Combine(coreAddon, "ArtisanLogbook_Core.toc");
+                if (SafeDirectory(coreAddon, diagnostics, optional: true, failureSeverity: DiscoverySeverity.Warning) &&
+                    SafeFile(coreToc, diagnostics, optional: true, failureSeverity: DiscoverySeverity.Warning))
+                    flavors.Add(new(normalized, Path.GetFileName(flavor)));
+            }
+        }
+        return new(flavors, diagnostics);
     }
 
     public DiscoveryResult DiscoverSavedVariables(IEnumerable<string> roots)
@@ -178,6 +204,33 @@ public sealed class InstallationDiscovery
             }
             if ((attributes & FileAttributes.Directory) == 0)
                 throw new IOException("Expected a directory.");
+            return true;
+        }
+        catch (Exception exception) when (optional && exception is FileNotFoundException or DirectoryNotFoundException) { return false; }
+        catch (Exception exception) when (IsFileSystemFailure(exception))
+        {
+            diagnostics.Add(Failure(path, exception, failureSeverity));
+            return false;
+        }
+    }
+
+    private static bool SafeFile(
+        string path, List<DiscoveryDiagnostic> diagnostics, bool optional = false,
+        DiscoverySeverity failureSeverity = DiscoverySeverity.Error)
+    {
+        try
+        {
+            FileAttributes attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                diagnostics.Add(Link(path));
+                return false;
+            }
+            if ((attributes & FileAttributes.Directory) != 0)
+            {
+                diagnostics.Add(new(path, "invalid-source-path", "Expected a regular file.", failureSeverity));
+                return false;
+            }
             return true;
         }
         catch (Exception exception) when (optional && exception is FileNotFoundException or DirectoryNotFoundException) { return false; }
