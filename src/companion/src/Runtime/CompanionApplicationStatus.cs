@@ -12,7 +12,8 @@ public enum CompanionLifecycleState { Created, Starting, Running, Stopping, Stop
 
 public sealed record CompanionFailure(string Code, string Message);
 
-public sealed record CompanionStatus(
+/// <summary>Internal operational snapshot, not an HTTP contract. C11 must map to versioned public DTOs.</summary>
+internal sealed record CompanionStatus(
     string ApplicationVersion,
     DateTimeOffset? StartupTime,
     CompanionLifecycleState LifecycleState,
@@ -23,7 +24,7 @@ public sealed record CompanionStatus(
     CompanionFailure? CriticalFailure);
 
 /// <summary>Operational status; canonical counts are queried from C03, never cached.</summary>
-public sealed class CompanionApplicationStatus(
+internal sealed class CompanionApplicationStatus(
     CompanionRuntimeConfiguration configuration, IHostEnvironment environment, ILogger<CompanionApplicationStatus> logger)
 {
     private readonly object _gate = new();

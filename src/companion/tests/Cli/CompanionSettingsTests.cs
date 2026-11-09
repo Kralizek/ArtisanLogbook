@@ -117,16 +117,23 @@ public sealed class CompanionSettingsTests
         Assert.That(loaded.Settings.Http, Is.EqualTo(settings.Http));
         byte[] before = File.ReadAllBytes(_store.FilePath);
         CompanionRuntimeConfiguration persisted = CompanionRuntimeConfiguration.Resolve(_paths, _store);
-        Assert.That(persisted.Settings.Monitoring, Is.EqualTo(settings.Monitoring));
-        Assert.That(persisted.Settings.Http, Is.EqualTo(settings.Http));
+        Assert.That(persisted.EffectiveSettings.Monitoring, Is.EqualTo(settings.Monitoring));
+        Assert.That(persisted.EffectiveSettings.Http, Is.EqualTo(settings.Http));
+        Assert.That(persisted.PersistedPreferences!.Monitoring, Is.EqualTo(settings.Monitoring));
+        Assert.That(persisted.PersistedPreferences.Http, Is.EqualTo(settings.Http));
+        Assert.That(persisted.PersistedPreferences.InstallationRoots, Is.EqualTo(settings.InstallationRoots));
+        Assert.That(persisted.InvocationOverrides, Is.EqualTo(new CompanionInvocationOverrides()));
         CompanionRuntimeConfiguration effective = CompanionRuntimeConfiguration.Resolve(
             _paths, _store, "override.duckdb", false, 30, 23456);
         Assert.Multiple(() =>
         {
             Assert.That(effective.DatabasePath, Is.EqualTo(Path.Combine(_directory, "override.duckdb")));
-            Assert.That(effective.Settings.Monitoring.Enabled, Is.False);
-            Assert.That(effective.Settings.Monitoring.ReconciliationIntervalSeconds, Is.EqualTo(30));
-            Assert.That(effective.Settings.Http.PreferredPort, Is.EqualTo(23456));
+            Assert.That(effective.EffectiveSettings.Monitoring.Enabled, Is.False);
+            Assert.That(effective.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds, Is.EqualTo(30));
+            Assert.That(effective.EffectiveSettings.Http.PreferredPort, Is.EqualTo(23456));
+            Assert.That(effective.PersistedPreferences!.Monitoring, Is.EqualTo(settings.Monitoring));
+            Assert.That(effective.PersistedPreferences.Http, Is.EqualTo(settings.Http));
+            Assert.That(effective.InvocationOverrides, Is.EqualTo(new CompanionInvocationOverrides("override.duckdb", false, 30, 23456)));
             Assert.That(File.ReadAllBytes(_store.FilePath), Is.EqualTo(before));
             Assert.That(_store.Load().Revision, Is.EqualTo(loaded.Revision));
         });
@@ -145,6 +152,30 @@ public sealed class CompanionSettingsTests
         };
         Assert.That(() => _store.Save(settings), Throws.ArgumentException);
         Assert.That(File.Exists(_store.FilePath), Is.False);
+    }
+
+    [TestCase(null, false, true)]
+    [TestCase(false, false, false)]
+    [TestCase(true, true, true)]
+    public void NewSavedSnapshotCannotDiscardInvocationOverride(bool? invocation, bool firstEffective, bool updatedEffective)
+    {
+        CompanionRuntimeConfiguration initial = CompanionRuntimeConfiguration.Resolve(_paths, _store, monitoring: invocation);
+        Assert.That(initial.PersistedPreferences, Is.Null);
+        Assert.That(initial.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(firstEffective));
+        CompanionSettings saved = CompanionSettings.ForRoots() with { Monitoring = new() { Enabled = true } };
+        CompanionRuntimeConfiguration updated = initial.WithPersistedPreferences(saved);
+        Assert.Multiple(() =>
+        {
+            Assert.That(updated.PersistedPreferences!.Monitoring.Enabled, Is.True);
+            Assert.That(updated.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(updatedEffective));
+            Assert.That(updated.InvocationOverrides.Monitoring, Is.EqualTo(invocation));
+            Assert.That(updated.InvocationOverrides, Is.SameAs(initial.InvocationOverrides));
+            Assert.That(File.Exists(_store.FilePath), Is.False, "Pure resolution is not runtime mutation or persistence.");
+            Assert.That(CompanionSettings.CurrentVersion, Is.EqualTo(1));
+        });
+        CompanionRuntimeConfiguration disabled = updated.WithPersistedPreferences(
+            saved with { Monitoring = new() { Enabled = false } });
+        Assert.That(disabled.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(invocation ?? false));
     }
 
     [Test]

@@ -6,6 +6,7 @@
     <AssemblyName>ArtisanLogbook.Companion.Runtime</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Tests.Cli" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../ImportService/ImportService.csproj" />
   </ItemGroup>
