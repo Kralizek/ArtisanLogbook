@@ -99,8 +99,8 @@ assemblies must not expose them by widening visibility without a deliberate
 boundary decision. C11 must map selected fields to public, versioned DTOs.
 Never automatically serialize the internal status or configuration: database
 paths, installation roots, configuration internals, and sensitive operational
-information are not public API data. No external DTOs or serialization machinery
-are introduced here.
+information are not public API data. Public DTOs are generated from the C11 OpenAPI contract in `Api/`
+(see `docs/companion/api.md`) and mapped from these internal types.
 Counts are queried via C03 `ReadStatus()` on every read; no duplicate history
 state or monitoring statistics are maintained. Startup/status failures are
 explicit and structured `ILogger` records use failure codes and exception types,
@@ -108,10 +108,10 @@ not raw sources, account IDs, or installation paths. Detailed command failures
 remain available to diagnose configuration/schema/ownership problems.
 Startup emits the application-started event separately from concise effective
 settings lines for SavedVariables monitoring, its configured-but-inactive
-reconciliation interval, and the HTTP preferred port. Disabled monitoring is
+reconciliation interval, and the HTTP preferred port; once started it logs the
+actual listening URL (`HTTP API listening on ...`). Disabled monitoring is
 reported as `SavedVariables monitoring: off`; enabled is explicitly marked as
-configured but not implemented. The port line also clarifies that no API
-endpoints are available. Startup also logs each configured WoW game directory
+configured but not implemented. Startup also logs each configured WoW game directory
 and the direct client flavors where
 `Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc` exists, or
 `(none detected)`. Other client directories and unrelated addons are not

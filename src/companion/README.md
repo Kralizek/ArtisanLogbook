@@ -70,8 +70,9 @@ cannot import or inspect it while that writer is active. Stop the host before
 using manual database commands. Monitoring defaults to disabled, and this release
 does not perform automatic imports even when the monitoring preference is enabled.
 
-The host binds loopback only, but has no HTTP API or browser pages yet and does
-not advertise a dashboard URL. It does **not** provide a web interface, analytics
+The host binds loopback only and serves the [local HTTP API](../../docs/companion/api.md)
+(`/api/v1`, OpenAPI at `/openapi/v1.yaml`); the URL is printed at startup. It has no
+browser pages yet. It does **not** provide a web interface, analytics
 dashboard, automatic synchronization, restoration into WoW, or OS service
 installation. Aggregate-only history cannot be recovered as individual crafts.
 
@@ -79,6 +80,7 @@ Imports may include locally sensitive character/account information. Avoid shari
 
 ## More information
 
+- [Local HTTP API](../../docs/companion/api.md): endpoints, port selection, curl examples, and local security model.
 - [Command and configuration reference](../../docs/companion/cli.md): database paths, settings, discovery behavior, import reporting and suppression, verbose output, status details, and exit codes.
 - [Contributing](../../CONTRIBUTING.md): build, tests, and local deployment.
 - [Runtime contracts](src/Runtime/README.md): implementation-facing application services.

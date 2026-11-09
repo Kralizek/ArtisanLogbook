@@ -7,7 +7,24 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Tests.Cli" />
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="MinimalOpenAPI" />
     <ProjectReference Include="../ImportService/ImportService.csproj" />
+    <OpenApi Include="Api/Contracts/openapi.yaml" Namespace="CompanionApi" PublishAs="/openapi/v1.yaml"
+             DisplayName="Artisan Logbook Companion API" DisplayVersion="1.0.0"
+             ExcludeStatusCodesFromHandlers="403;413;415;500" />
   </ItemGroup>
+  <PropertyGroup>
+    <_ApiContractPath>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', 'Api', 'Contracts', 'openapi.yaml'))</_ApiContractPath>
+    <_ApiContractSchemaId>$([System.Math]::Abs($([MSBuild]::StableStringHash('$(_ApiContractPath)'))))</_ApiContractSchemaId>
+  </PropertyGroup>
+
+  <!-- MinimalOpenAPI only copies schemas into the producing project's output; flow the contract to consuming projects. -->
+  <ItemGroup>
+    <Content Include="Api/Contracts/openapi.yaml" Link="openapi/schemas/$(_ApiContractSchemaId)/openapi.yaml" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

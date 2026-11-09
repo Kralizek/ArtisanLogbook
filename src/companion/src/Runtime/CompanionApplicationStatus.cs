@@ -21,7 +21,8 @@ internal sealed record CompanionStatus(
     int? DatabaseSchemaVersion,
     long? CanonicalCraftCount,
     CompanionRuntimeConfiguration Configuration,
-    CompanionFailure? CriticalFailure);
+    CompanionFailure? CriticalFailure,
+    IReadOnlyList<ArtisanLogbook.HistoryStore.GameContextCraftCount>? CanonicalContexts = null);
 
 /// <summary>Operational status; canonical counts are queried from C03, never cached.</summary>
 internal sealed class CompanionApplicationStatus(
@@ -41,6 +42,7 @@ internal sealed class CompanionApplicationStatus(
         {
             int? schema = null;
             long? count = null;
+            IReadOnlyList<ArtisanLogbook.HistoryStore.GameContextCraftCount>? contexts = null;
             bool available = false;
             if (_store is not null)
             {
@@ -49,6 +51,7 @@ internal sealed class CompanionApplicationStatus(
                     var history = _store.ReadStatus();
                     schema = history.SchemaVersion;
                     count = history.TotalCraftCount;
+                    contexts = history.Contexts;
                     available = true;
                 }
                 catch (Exception exception) when (exception is DbException or IOException or InvalidOperationException)
@@ -56,7 +59,7 @@ internal sealed class CompanionApplicationStatus(
                     Fail("database-status-failed", "Cannot read canonical history status.", exception);
                 }
             }
-            return new(_version, _startupTime, _state, available, schema, count, configuration, _failure);
+            return new(_version, _startupTime, _state, available, schema, count, configuration, _failure, contexts);
         }
     }
 

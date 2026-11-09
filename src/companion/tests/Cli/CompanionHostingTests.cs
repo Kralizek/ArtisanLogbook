@@ -85,9 +85,10 @@ public sealed class CompanionHostingTests
                     ? "SavedVariables monitoring: on (configured; not implemented in this release)"
                     : "SavedVariables monitoring: off"));
                 Assert.That(_runtimeLogs, Does.Contain("Reconciliation interval: 60 seconds (inactive until monitoring is implemented)."));
-                Assert.That(_runtimeLogs, Does.Contain("HTTP preferred port: 48721 (API endpoints are not available in this release)."));
+                Assert.That(_runtimeLogs, Has.Some.Matches<string>(line =>
+                    line.StartsWith("HTTP API listening on http://127.0.0.1:", StringComparison.Ordinal) && line.EndsWith("(preferred port 48721).", StringComparison.Ordinal)));
                 Assert.That(_runtimeLogs, Does.Not.Contain("Artisan Logbook Companion started. Monitoring preference: False."));
-                Assert.That(app.Services.GetServices<IHostedService>().Count(), Is.EqualTo(2));
+                Assert.That(app.Services.GetServices<IHostedService>().Count(), Is.EqualTo(3));
                 Assert.That(app.Services.GetRequiredService<IServer>().Features
                     .Get<IServerAddressesFeature>()!.Addresses.Single(), Does.StartWith("http://127.0.0.1:"));
             });
@@ -95,7 +96,7 @@ public sealed class CompanionHostingTests
             string address = app.Services.GetRequiredService<IServer>().Features
                 .Get<IServerAddressesFeature>()!.Addresses.Single();
             Assert.That((await http.GetAsync(address + "/")).StatusCode, Is.EqualTo(System.Net.HttpStatusCode.NotFound));
-            Assert.That((await http.GetAsync(address + "/api/v1/status")).StatusCode, Is.EqualTo(System.Net.HttpStatusCode.NotFound));
+            Assert.That((await http.GetAsync(address + "/api/v1/status")).StatusCode, Is.EqualTo(System.Net.HttpStatusCode.OK));
             await app.StopAsync();
             Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopped));
             Assert.That(status.Read().DatabaseAvailable, Is.False);
@@ -515,7 +516,7 @@ public sealed class CompanionHostingTests
     }
 
     [Test]
-    public async Task OccupiedPortFailsStartupAndDisposalReleasesDatabase()
+    public async Task OccupiedPortFallsBackToLoopbackPortAndDisposalReleasesDatabase()
     {
         using TcpListener occupied = new(IPAddress.Loopback, 0);
         occupied.Start();
@@ -530,10 +531,13 @@ public sealed class CompanionHostingTests
         Store store;
         await using (WebApplication app = builder.Build())
         {
-            Assert.CatchAsync<IOException>(async () => await app.RunCompanionAsync());
+            await app.StartAsync();
             store = app.Services.GetRequiredService<Store>();
-            Assert.That(app.Services.GetRequiredService<CompanionApplicationStatus>().Read().CriticalFailure!.Code,
-                Is.EqualTo("host-failed"));
+            string address = app.Services.GetRequiredService<IServer>().Features
+                .Get<IServerAddressesFeature>()!.Addresses.Single();
+            Assert.That(address, Does.StartWith("http://127.0.0.1:").And.Not.EndWith(":" + port));
+            Assert.That(app.Services.GetRequiredService<ArtisanLogbook.Runtime.CompanionHttpEndpoint>().FallbackUsed, Is.True);
+            await app.StopAsync();
         }
         Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
         await using WebApplication retry = Build();
@@ -558,13 +562,16 @@ public sealed class CompanionHostingTests
                 if (line is null) Assert.Fail(startup + await errors);
                 startup += line + "\n";
             }
-            startup += await server.StandardOutput.ReadLineAsync(timeout.Token) + "\n";
-            startup += await server.StandardOutput.ReadLineAsync(timeout.Token) + "\n";
-            startup += await server.StandardOutput.ReadLineAsync(timeout.Token) + "\n";
+            while (!startup.Contains("Artisan Logbook API:", StringComparison.Ordinal))
+            {
+                string? line = await server.StandardOutput.ReadLineAsync(timeout.Token);
+                if (line is null) Assert.Fail(startup + await errors);
+                startup += line + "\n";
+            }
             Assert.That(startup, Does.Contain("SavedVariables monitoring: off")
                 .And.Contain("Reconciliation interval: 60 seconds")
-                .And.Contain("HTTP preferred port: 48721"));
-            Assert.That(startup, Does.Not.Contain("http://"));
+                .And.Contain("HTTP API listening on http://127.0.0.1:")
+                .And.Contain("/api/v1"));
             foreach (string command in new[] { "serve", "status", "import" })
             {
                 string[] arguments = command == "import"

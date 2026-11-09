@@ -49,9 +49,10 @@ public static class CompanionCommandApp
                 .WithExample(["status"])
                 .WithExample(["status", "--database", "history.duckdb"]);
             config.AddCommand<ServeCommand>("serve")
-                .WithDescription("Run the Companion host until stopped (no HTTP API or automatic imports yet).")
+                .WithDescription("Run the Companion host and local HTTP API until stopped (no automatic imports yet).")
                 .WithExample(["serve"])
-                .WithExample(["serve", "--database", "history.duckdb"]);
+                .WithExample(["serve", "--database", "history.duckdb"])
+                .WithExample(["serve", "--port", "48721"]);
             config.SetExceptionHandler((exception, _) =>
             {
                 console.MarkupLine($"[red]Error:[/] {Markup.Escape(exception.Message)}");
