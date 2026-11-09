@@ -17,7 +17,7 @@ public static class CompanionHostingExtensions
         this WebApplicationBuilder builder, CompanionRuntimeConfiguration configuration)
     {
         builder.WebHost.UseKestrel()
-            .UseUrls(FormattableString.Invariant($"http://127.0.0.1:{configuration.Settings.Http.PreferredPort}"));
+            .UseUrls(FormattableString.Invariant($"http://127.0.0.1:{configuration.EffectiveSettings.Http.PreferredPort}"));
         builder.Host.UseConsoleLifetime();
         builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
@@ -41,12 +41,18 @@ public static class CompanionHostingExtensions
                 .Fail("host-failed", "The Companion host could not start or continue running.", exception);
             throw;
         }
+        finally
+        {
+            CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
+            admission.StopAccepting();
+            await admission.DrainAsync();
+        }
     }
 
     public static IServiceCollection AddArtisanLogbookCompanion(
         this IServiceCollection services, ApplicationPaths paths, CompanionRuntimeConfiguration configuration)
     {
-        CompanionSettingsStore.Validate(configuration.Settings);
+        CompanionSettingsStore.Validate(configuration.EffectiveSettings);
         if (services.Any(service => service.ServiceType == typeof(Store)))
             throw new InvalidOperationException("Companion history ownership has already been registered for this host.");
         if (!Path.IsPathFullyQualified(configuration.DatabasePath))
@@ -58,6 +64,8 @@ public static class CompanionHostingExtensions
         services.AddSingleton<Store>(_ => new Store(configuration.DatabasePath));
         services.AddSingleton<CompanionImportService>();
         services.AddSingleton<CompanionApplicationStatus>();
+        services.AddSingleton<CompanionWorkAdmission>();
+        services.AddSingleton<CompanionRuntimeImports>();
         services.AddHostedService<CompanionRuntimeLifecycle>();
         return services;
     }

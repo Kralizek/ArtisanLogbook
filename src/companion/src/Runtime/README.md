@@ -52,6 +52,25 @@ is CLI overrides, persisted Companion settings, then defaults. Invalid persisted
 settings fail before overrides are applied; missing settings use defaults without
 being saved. All settings writers continue using the single settings store.
 
+`CompanionRuntimeConfiguration` is an invocation snapshot, not a settings document:
+`PersistedPreferences` retains the loaded user preference snapshot (null if no
+settings file), `InvocationOverrides` retains each explicitly supplied CLI value
+(null means not supplied), and `EffectiveSettings` is the validated resolved
+result. Defaults for omitted JSON properties are applied by the existing settings
+model. A saved false and a CLI false remain distinguishable, even when they
+produce the same effective value. `WithPersistedPreferences` is pure resolution
+of a new saved snapshot with the original invocation overrides; it neither saves
+nor changes the running host. There is no hot reload in C10.
+
+Future browser controls must save user preferences through
+`CompanionSettingsStore`, then explicitly resolve the effective snapshot with
+the retained overrides. Precedence remains **invocation overrides > persisted
+user preferences > defaults**. Public controls must deliberately report both
+saved preference and effective value, and whether an invocation override is
+active. For example, with `--monitoring false`, saving enabled should report
+"preference saved; monitoring remains disabled by invocation override", never
+claim that effective monitoring was enabled. The opposite override is symmetric.
+
 Registration provides paths, invocation configuration, settings access,
 installation discovery, one singleton C03 writer, singleton C07 importer, and
 `CompanionApplicationStatus`. Duplicate history ownership registration is rejected.
@@ -70,6 +89,15 @@ behavior and actionable contention errors; they do not forward requests.
 `CompanionApplicationStatus.Read()` returns the entry application's informational
 version, startup UTC time, lifecycle state, effective configuration, database
 availability/schema version, canonical count, and current critical failure.
+Both `CompanionStatus` and its provider are assembly-internal. They are operational
+models for Runtime composition, **not approved HTTP response contracts**. Future
+C06/C11 services implemented in this project can consume them; separate component
+assemblies must not expose them by widening visibility without a deliberate
+boundary decision. C11 must map selected fields to public, versioned DTOs.
+Never automatically serialize the internal status or configuration: database
+paths, installation roots, configuration internals, and sensitive operational
+information are not public API data. No external DTOs or serialization machinery
+are introduced here.
 Counts are queried via C03 `ReadStatus()` on every read; no duplicate history
 state or monitoring statistics are maintained. Startup/status failures are
 explicit and structured `ILogger` records use failure codes and exception types,
@@ -86,9 +114,38 @@ selected **MinimalOpenAPI** implementation (not Swashbuckle/NSwag). C12 will ser
 bundled static assets at `/`. Neither requires another host or executable.
 
 C06 will register hosted monitoring workers after runtime registration and use
-the same settings/discovery services and shared C07 importer. Workers must honor
-ApplicationStopping and stop/drain transactional work in StopAsync before the
-runtime closes C03. Monitoring remains explicitly opt-in; no monitoring or
+the same settings/discovery services and shared C07 importer. New runtime import
+requests must use `CompanionRuntimeImports`, which holds a
+`CompanionWorkAdmission.Admit()` lease around the existing C07 operation. Before
+startup and once stopping begins, admission rejects explicitly with a logged
+error and an exception. A future worker coordinating longer-lived work may hold
+a lease itself and call shared C07 directly for **already admitted** work. Hold
+the lease through commit/rollback and release it in `using`/`finally`; do not
+re-admit existing work during shutdown. Manual CLI imports still use C07 directly
+and are unaffected.
+
+The [.NET 10 Generic Host lifecycle implementation](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.Hosting/src/Internal/Host.cs)
+stops in reverse registration order within each phase: all `StoppingAsync` hooks,
+`ApplicationStopping`, all `StopAsync` calls, then all `StoppedAsync` hooks.
+Shutdown errors are aggregated rather than skipping later phases. Runtime closes
+admission in its StoppingAsync hook and in ApplicationStopping (which may be
+signaled first by external termination), and waits for outstanding leases in
+StoppedAsync before disposing C03. Workers must stop admitting new work when
+shutdown begins and drain in StopAsync; they must not defer database work to
+StoppedAsync. The guarantee does not depend on sequential StopAsync execution.
+
+Pass request/worker cancellation tokens into C07. The host's shutdown token can
+cancel worker work, but stopping does not immediately cancel every admitted
+request or dispose its connection. Drain waits even if the shutdown token is
+canceled, allowing admitted transactional work to commit or roll back before
+ownership is released. RunCompanionAsync also closes admission and drains in
+finally before host disposal after startup/shutdown failure. Workers must observe
+cancellation and release leases; an uncooperative worker can delay graceful
+shutdown, and forced termination still relies on DuckDB transactional safety.
+Always run/stop the host before disposal; DI disposal alone is not worker
+shutdown. No queue, scheduler, or persistent admission state is introduced.
+
+Monitoring remains explicitly opt-in; no monitoring or
 automatic imports run in this foundation, even with the enabled preference.
 Future operational status can extend `CompanionStatus` with real source,
 reconciliation, import, and sync information. No scheduler, channel, persistent

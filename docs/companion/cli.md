@@ -109,6 +109,12 @@ return 3 even if overrides would otherwise mask their invalid values. With no
 settings file, serve uses defaults and no installation roots without creating
 settings; `init` is not a prerequisite.
 
+Internally, saved preferences and invocation overrides are retained separately
+from the effective configuration. Future browser preference changes cannot
+discard an explicit invocation override: controls must distinguish "preference
+saved" from "effective monitoring changed". Runtime preference mutation and hot
+reload are not implemented yet.
+
 Startup validates configuration and opens one writable C03 History Store, shared
 with C07. Offline installations, absent SavedVariables, and empty craft history
 are supported. No discovery scan or import is triggered by startup. C06 monitoring
@@ -124,6 +130,9 @@ No OpenAPI generator or authentication infrastructure is installed yet.
 
 The process stays active without a browser. Ctrl+C, SIGTERM, or normal host
 shutdown stops hosted work and disposes the writer, releasing database ownership.
+New runtime import requests are rejected once stopping begins; already admitted
+work may complete or roll back before the writer is disposed. Shutdown cancellation
+is passed to workers, not used to prematurely close the database beneath them.
 Transactional writes retain C03's serialization, commit, and cancellation rollback
 behavior. Failed startup also disposes acquired resources. Forced termination
 cannot guarantee graceful disposal; DuckDB's WAL/transaction guarantees still apply.

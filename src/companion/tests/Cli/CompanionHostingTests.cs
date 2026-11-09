@@ -4,8 +4,10 @@ using System.Net;
 using System.Net.Sockets;
 
 using ArtisanLogbook.Cli;
+using ArtisanLogbook.History;
 using ArtisanLogbook.ImportService;
 using ArtisanLogbook.Runtime;
+using ArtisanLogbook.SavedVariables;
 
 using DuckDB.NET.Data;
 
@@ -71,7 +73,7 @@ public sealed class CompanionHostingTests
                 Assert.That(running.DatabaseAvailable, Is.True);
                 Assert.That(running.DatabaseSchemaVersion, Is.EqualTo(store.SchemaVersion));
                 Assert.That(running.CanonicalCraftCount, Is.Zero);
-                Assert.That(running.Configuration.Settings.Monitoring.Enabled, Is.EqualTo(monitoring ?? false));
+                Assert.That(running.Configuration.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(monitoring ?? false));
                 Assert.That(running.CriticalFailure, Is.Null);
                 Assert.That(app.Services.GetServices<IHostedService>().Count(), Is.EqualTo(2));
                 Assert.That(app.Services.GetRequiredService<IServer>().Features
@@ -103,7 +105,7 @@ public sealed class CompanionHostingTests
             await app.StartAsync();
             Store store = app.Services.GetRequiredService<Store>();
             Assert.That(app.Services.GetRequiredService<Store>(), Is.SameAs(store));
-            CompanionImportService importer = app.Services.GetRequiredService<CompanionImportService>();
+            CompanionRuntimeImports importer = app.Services.GetRequiredService<CompanionRuntimeImports>();
             Assert.That((await importer.ImportSavedVariablesFileAsync(source)).Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
             Assert.That(store.ReadStatus().TotalCraftCount, Is.EqualTo(1));
             Assert.That(app.Services.GetRequiredService<CompanionApplicationStatus>().Read().CanonicalCraftCount, Is.EqualTo(1));
@@ -183,6 +185,181 @@ public sealed class CompanionHostingTests
         }
         using Store reopened = new(_database);
         Assert.That(reopened.ReadStatus().TotalCraftCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void OperationalStatusIsNotAnExportedApiContract()
+    {
+        Assert.That(typeof(CompanionStatus).IsVisible, Is.False);
+        Assert.That(typeof(CompanionApplicationStatus).IsVisible, Is.False);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ShutdownRejectsNewWorkWhileAdmittedWorkerCompletesOrCancels(bool cancel)
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.AddSingleton<ControlledDrainWorker>();
+        builder.Services.AddHostedService(provider => provider.GetRequiredService<ControlledDrainWorker>());
+        await using (WebApplication app = builder.Build())
+        {
+            CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
+            Assert.That(() => admission.Admit(), Throws.InvalidOperationException);
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await app.Services.GetRequiredService<CompanionRuntimeImports>().ImportSavedVariablesAsync(
+                    CompanionCommandAppTests.Snapshot(1, null, 1)));
+            await app.StartAsync();
+            Store store = app.Services.GetRequiredService<Store>();
+            ControlledDrainWorker worker = app.Services.GetRequiredService<ControlledDrainWorker>();
+            using CancellationTokenSource shutdown = new();
+            Task stopping = app.StopAsync(shutdown.Token);
+            await worker.Stopping.Task;
+            Assert.That(stopping.IsCompleted, Is.False);
+            Assert.That(() => admission.Admit(), Throws.InvalidOperationException);
+            Assert.That(store.ReadStatus().TotalCraftCount, Is.Zero, "The admitted worker still owns an open store.");
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await app.Services.GetRequiredService<CompanionRuntimeImports>().ImportSavedVariablesAsync(
+                    CompanionCommandAppTests.Snapshot(1, null, 1)));
+            if (cancel) shutdown.Cancel();
+            worker.Finish.SetResult();
+            await stopping;
+            Assert.That(worker.Canceled, Is.EqualTo(cancel));
+            Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
+        }
+        using Store reopened = new(_database);
+        Assert.That(reopened.ReadStatus().TotalCraftCount, Is.EqualTo(cancel ? 0 : 1));
+    }
+
+    [Test]
+    public async Task ShutdownFailureStillDrainsAndReleasesWriter()
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.AddHostedService<FailingStopWorker>();
+        await using (WebApplication app = builder.Build())
+        {
+            await app.StartAsync();
+            Assert.ThrowsAsync<InvalidOperationException>(async () => await app.StopAsync());
+            Assert.That(() => app.Services.GetRequiredService<Store>().ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
+            Assert.That(() => app.Services.GetRequiredService<CompanionWorkAdmission>().Admit(), Throws.InvalidOperationException);
+        }
+        using Store reopened = new(_database);
+        Assert.That(reopened.ReadStatus().TotalCraftCount, Is.Zero);
+    }
+
+    [Test]
+    public async Task FailedStartupWaitsForAdmittedWorkBeforeHostDisposal()
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.AddSingleton<AdmittingStartupFailure>();
+        builder.Services.AddHostedService(provider => provider.GetRequiredService<AdmittingStartupFailure>());
+        Store store;
+        await using (WebApplication app = builder.Build())
+        {
+            AdmittingStartupFailure worker = app.Services.GetRequiredService<AdmittingStartupFailure>();
+            Task running = app.RunCompanionAsync();
+            await worker.Admitted.Task;
+            store = app.Services.GetRequiredService<Store>();
+            try
+            {
+                Assert.That(running.IsCompleted, Is.False, "Failure cleanup must drain before DI disposes the writer.");
+                Assert.That(store.ReadStatus().TotalCraftCount, Is.Zero);
+                Assert.That(() => app.Services.GetRequiredService<CompanionWorkAdmission>().Admit(), Throws.InvalidOperationException);
+            }
+            finally
+            {
+                worker.Lease!.Dispose();
+            }
+            Assert.ThrowsAsync<InvalidOperationException>(async () => await running);
+        }
+        Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
+        using Store reopened = new(_database);
+    }
+
+    [Test]
+    public async Task DrainWaitsForLeaseEvenAfterWorkersStopAndShutdownTokenIsCanceled()
+    {
+        await using WebApplication app = Build();
+        await app.StartAsync();
+        Store store = app.Services.GetRequiredService<Store>();
+        CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
+        IDisposable lease = admission.Admit();
+        using CancellationTokenSource cancellation = new();
+        Task stopping = app.StopAsync(cancellation.Token);
+        try
+        {
+            Assert.That(stopping.IsCompleted, Is.False);
+            cancellation.Cancel();
+            Assert.That(stopping.IsCompleted, Is.False);
+            Assert.That(store.ReadStatus().TotalCraftCount, Is.Zero);
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await app.Services.GetRequiredService<CompanionRuntimeImports>().ImportSavedVariablesFileAsync("unused.lua"));
+            var result = await app.Services.GetRequiredService<CompanionImportService>().ImportSavedVariablesAsync(
+                CompanionCommandAppTests.Snapshot(1, null, 1));
+            Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
+        }
+        finally
+        {
+            lease.Dispose();
+        }
+        await stopping;
+        Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
+        using Store reopened = new(_database);
+        Assert.That(reopened.ReadStatus().TotalCraftCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ShutdownCancellationRollsBackAnAdmittedTransactionBeforeReleasingOwnership()
+    {
+        await using WebApplication app = Build();
+        await app.StartAsync();
+        Store store = app.Services.GetRequiredService<Store>();
+        CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
+        CraftHistory parsed = SavedVariablesReader.Parse(CompanionCommandAppTests.Snapshot(1, null, 1)).History!;
+        TaskCompletionSource written = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource continueTransaction = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using CancellationTokenSource cancellation = new();
+        CraftHistory history = parsed with
+        {
+            Crafts = new EnumerationCallbackList(parsed.Crafts, () =>
+            {
+                if (store.ReadStatus().TotalCraftCount == 0) return;
+                written.TrySetResult();
+                continueTransaction.Task.GetAwaiter().GetResult();
+            })
+        };
+        Task transaction = Task.Run(() =>
+        {
+            using IDisposable lease = admission.Admit();
+            store.WriteBatch(history, cancellation.Token);
+        });
+        Task stopping = Task.CompletedTask;
+        try
+        {
+            await written.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            stopping = app.StopAsync(cancellation.Token);
+            Assert.That(stopping.IsCompleted, Is.False);
+            Assert.That(() => admission.Admit(), Throws.InvalidOperationException);
+            cancellation.Cancel();
+        }
+        finally
+        {
+            continueTransaction.TrySetResult();
+        }
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await transaction);
+        await stopping;
+        Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
+        using Store reopened = new(_database);
+        Assert.That(reopened.ReadStatus().TotalCraftCount, Is.Zero);
+        CraftDimensions dimensions = reopened.ReadDimensions();
+        Assert.Multiple(() =>
+        {
+            Assert.That(dimensions.Characters, Is.Empty);
+            Assert.That(dimensions.Recipes, Is.Empty);
+            Assert.That(dimensions.Professions, Is.Empty);
+            Assert.That(dimensions.Items, Is.Empty);
+            Assert.That(dimensions.Expansions, Is.Empty);
+            Assert.That(dimensions.RecipeReagentSlots, Is.Empty);
+        });
     }
 
     [Test]
@@ -400,15 +577,83 @@ public sealed class CompanionHostingTests
     }
 
     private sealed class DrainOnStopWorker(
-        CompanionImportService importer, CompanionApplicationStatus status) : IHostedService
+        CompanionImportService importer, CompanionApplicationStatus status, CompanionWorkAdmission admission) : IHostedService
     {
-        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        private IDisposable? _lease;
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            _lease = admission.Admit();
+            return Task.CompletedTask;
+        }
         public async Task StopAsync(CancellationToken cancellationToken)
         {
+            using IDisposable lease = _lease!;
             Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopping));
             var result = await importer.ImportSavedVariablesAsync(
                 CompanionCommandAppTests.Snapshot(1, null, 1), cancellationToken: cancellationToken);
             Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
         }
+    }
+
+    private sealed class ControlledDrainWorker(CompanionWorkAdmission admission, CompanionImportService importer) : IHostedService
+    {
+        public TaskCompletionSource Stopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Finish { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Canceled { get; private set; }
+        private IDisposable? _lease;
+
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            _lease = admission.Admit();
+            return Task.CompletedTask;
+        }
+
+        public async Task StopAsync(CancellationToken cancellationToken)
+        {
+            using IDisposable lease = _lease!;
+            Stopping.SetResult();
+            await Finish.Task;
+            try
+            {
+                var result = await importer.ImportSavedVariablesAsync(
+                    CompanionCommandAppTests.Snapshot(1, null, 1), cancellationToken: cancellationToken);
+                Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Canceled = true;
+            }
+        }
+    }
+
+    private sealed class FailingStopWorker : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken) => throw new InvalidOperationException("Controlled shutdown failure.");
+    }
+
+    private sealed class AdmittingStartupFailure(CompanionWorkAdmission admission) : IHostedService
+    {
+        public TaskCompletionSource Admitted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public IDisposable? Lease { get; private set; }
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            Lease = admission.Admit();
+            Admitted.SetResult();
+            throw new InvalidOperationException("Startup failed with admitted work still unwinding.");
+        }
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class EnumerationCallbackList(IReadOnlyList<CraftObservation> crafts, Action completed) : IReadOnlyList<CraftObservation>
+    {
+        public int Count => crafts.Count;
+        public CraftObservation this[int index] => crafts[index];
+        public IEnumerator<CraftObservation> GetEnumerator()
+        {
+            foreach (CraftObservation craft in crafts) yield return craft;
+            completed();
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

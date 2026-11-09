@@ -8,7 +8,8 @@ namespace ArtisanLogbook.Runtime;
 
 internal sealed class CompanionRuntimeLifecycle(
     IServiceProvider services, CompanionApplicationStatus status, IHostApplicationLifetime lifetime,
-    CompanionRuntimeConfiguration configuration, ILogger<CompanionRuntimeLifecycle> logger) : IHostedLifecycleService, IDisposable
+    CompanionRuntimeConfiguration configuration, CompanionWorkAdmission admission,
+    ILogger<CompanionRuntimeLifecycle> logger) : IHostedLifecycleService, IDisposable
 {
     private Store? _store;
     private CancellationTokenRegistration _started;
@@ -22,9 +23,9 @@ internal sealed class CompanionRuntimeLifecycle(
         {
             status.Transition(CompanionLifecycleState.Running);
             logger.LogInformation("Artisan Logbook Companion started. Monitoring preference: {MonitoringEnabled}. " +
-                "Source monitoring and the HTTP API are not implemented in this release.", configuration.Settings.Monitoring.Enabled);
+                "Source monitoring and the HTTP API are not implemented in this release.", configuration.EffectiveSettings.Monitoring.Enabled);
         });
-        _stopping = lifetime.ApplicationStopping.Register(() => status.Transition(CompanionLifecycleState.Stopping));
+        _stopping = lifetime.ApplicationStopping.Register(BeginStopping);
         return Task.CompletedTask;
     }
 
@@ -36,6 +37,7 @@ internal sealed class CompanionRuntimeLifecycle(
             _store = services.GetRequiredService<Store>();
             _store.ReadStatus();
             status.DatabaseOpened(_store);
+            admission.Open();
             cancellationToken.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -53,19 +55,32 @@ internal sealed class CompanionRuntimeLifecycle(
     }
 
     public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StoppingAsync(CancellationToken cancellationToken)
+    {
+        BeginStopping();
+        return Task.CompletedTask;
+    }
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public Task StoppedAsync(CancellationToken cancellationToken)
+    public async Task StoppedAsync(CancellationToken cancellationToken)
     {
+        BeginStopping();
+        // Shutdown cancellation must not close C03 beneath admitted work still unwinding.
+        await admission.DrainAsync();
         CloseDatabase();
         status.Transition(CompanionLifecycleState.Stopped);
         logger.LogInformation("Artisan Logbook Companion stopped; database ownership released.");
-        return Task.CompletedTask;
+    }
+
+    private void BeginStopping()
+    {
+        admission.StopAccepting();
+        status.Transition(CompanionLifecycleState.Stopping);
     }
 
     private void CloseDatabase()
     {
+        admission.StopAccepting();
         status.DatabaseClosed();
         _store?.Dispose();
         _store = null;
@@ -73,6 +88,7 @@ internal sealed class CompanionRuntimeLifecycle(
 
     public void Dispose()
     {
+        BeginStopping();
         _started.Dispose();
         _stopping.Dispose();
         CloseDatabase();
