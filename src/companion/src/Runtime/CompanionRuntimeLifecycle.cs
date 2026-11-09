@@ -81,7 +81,7 @@ internal sealed class CompanionRuntimeLifecycle(
                 .Select(flavor => flavor.Name)
                 .ToArray();
             logger.LogInformation("Game directory: {GameDirectory}", root);
-            logger.LogInformation("Available flavors: {AvailableFlavors}",
+            logger.LogInformation("ArtisanLogbook Core installed flavors: {InstalledFlavors}",
                 flavors.Length == 0 ? "(none detected)" : string.Join(", ", flavors));
         }
 

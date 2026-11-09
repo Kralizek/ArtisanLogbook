@@ -29,6 +29,9 @@ The existing CLI is the sole application entry point: only `serve` builds a host
   failures are errors; incidental client-candidate/addon-layout inspection
   failures and skipped links are warnings. All remain explicit. Consumers
   should use `HasErrors`, not diagnostic count, to determine incomplete discovery.
+- `DiscoverFlavors(roots)`: reports only client directories containing the
+  ArtisanLogbook Core addon's own TOC file; ordinary client folders and
+  unrelated addons do not count as an ArtisanLogbook installation.
 
 All discovery results are read-only inspections. They do not parse sources,
 establish game identity, import, or prove WoW has finished saving. Only C04
@@ -109,8 +112,10 @@ reconciliation interval, and the HTTP preferred port. Disabled monitoring is
 reported as `SavedVariables monitoring: off`; enabled is explicitly marked as
 configured but not implemented. The port line also clarifies that no API
 endpoints are available. Startup also logs each configured WoW game directory
-and its detected direct client-directory flavor names, or `(none detected)`.
-This bounded layout check does not require SavedVariables to exist. Game
+and the direct client flavors where
+`Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc` exists, or
+`(none detected)`. Other client directories and unrelated addons are not
+listed. This bounded check does not require SavedVariables to exist. Game
 directory paths are shown explicitly for startup diagnostics; history database
 paths remain unlogged. Flavor directory names are presentation labels only and
 never establish a saved craft's GameContext.
