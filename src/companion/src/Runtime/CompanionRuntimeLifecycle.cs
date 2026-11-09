@@ -88,7 +88,7 @@ internal sealed class CompanionRuntimeLifecycle(
 
     public void Dispose()
     {
-        BeginStopping();
+        admission.StopAccepting();
         _started.Dispose();
         _stopping.Dispose();
         CloseDatabase();

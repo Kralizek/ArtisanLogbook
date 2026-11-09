@@ -89,6 +89,7 @@ public sealed class CompanionHostingTests
             Assert.That(status.Read().DatabaseAvailable, Is.False);
             Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
         }
+        Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopped));
         using Store reopened = new(_database);
         Assert.That(reopened.ReadStatus().TotalCraftCount, Is.Zero);
         Assert.That(await File.ReadAllBytesAsync(_settings.FilePath), Is.EqualTo(before));
