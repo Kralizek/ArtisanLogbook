@@ -26,18 +26,39 @@ ADDON_FLAVOR=forever bash src/addon/scripts/package.sh
 
 ## Local Windows deployment
 
-`scripts/Deploy-WowAddon.ps1` deploys the combined bundle by default. To deploy a single addon or target another client:
+The engineering deployment script `scripts/Deploy-WowAddon.ps1` deploys **all configured
+client flavors** and **all three addons** when called without selectors. Both
+`-Flavor` and `-Addon` accept one or more comma-separated values:
 
 ```powershell
-.\scripts\Deploy-WowAddon.ps1
-.\scripts\Deploy-WowAddon.ps1 -Addon Tracer
-.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon Core
-.\scripts\Deploy-WowAddon.ps1 -Flavor Forever -Addon UI
+.\scripts\Deploy-WowAddon.ps1                                  # Retail + Forever; Core + UI + Tracer
+.\scripts\Deploy-WowAddon.ps1 -Flavor Retail                   # All addons on Retail
+.\scripts\Deploy-WowAddon.ps1 -Flavor Forever                  # All addons on Forever
+.\scripts\Deploy-WowAddon.ps1 -Addon Core                      # Core on all flavors
+.\scripts\Deploy-WowAddon.ps1 -Addon Core,UI                   # Core and UI on all flavors
+.\scripts\Deploy-WowAddon.ps1 -Flavor Retail,Forever -Addon UI,Tracer
 ```
 
-The `-WowPath` option refers to the **WoW installation root**, not `Interface/AddOns`. Retail installs under `_retail_/Interface/AddOns`; Forever installs under `_forever_/Interface/AddOns`. The selected client directory must exist.
+Omitting a selector means all configured values; there are no special `Both` or
+`All` sentinel values. Flavor names are read from [`.flavors.yml`](../../.flavors.yml).
+The complete target matrix is validated before any addon is copied. A successful
+CI deployment downloads one workflow artifact and extracts the selected flavor
+archives from it. Multi-addon selections use the bundle archive but install
+only the requested addon directories. Multi-flavor deployments use a same-commit
+CI artifact; single-flavor deployments can also reuse a matching release asset.
 
-The script saves its local configuration at `%LOCALAPPDATA%\ArtisanLogbook\deploy.json`, with per-flavor roots. It validates downloaded archives and client interface metadata before extracting them. Invalid configuration is not silently overwritten.
+The `-WowPath` option refers to the **WoW installation root**, not
+`Interface/AddOns`. Retail installs under `_retail_/Interface/AddOns`;
+Forever installs under `_forever_/Interface/AddOns`. Every selected client
+directory must exist before copying begins.
+
+The script saves its local configuration at
+`%LOCALAPPDATA%\ArtisanLogbook\deploy.json` with independently configured
+per-flavor roots, preserving legacy values and unrelated fields. It checks
+archives, TOC interface versions, and flavor markers before any copying. It uses
+mirroring to remove obsolete installed addon files. An invalid configuration
+is never silently overwritten. Tracer is deployed by default because this is
+engineering tooling; installation does not enable Tracer in-game.
 
 For manual installs, place the extracted Core and UI addon directories directly inside the relevant client's `Interface/AddOns` folder while WoW is closed.
 
@@ -45,7 +66,7 @@ For manual installs, place the extracted Core and UI addon directories directly 
 
 Retail is the primary release target. Forever support is limited: ordinary personal crafts with deterministic output and fixed required reagents are supported, but Retail-only crafting mechanics and many advanced operations are not. Fixed reagent quantities inferred from schematics are **not** independently measured consumption or evidence of material savings.
 
-Forever is presently a validation/testing flavor, not a certified published release. See [production UI](ui.md#forever-live-acceptance) and [Forever capture notes](capture.md#first-forever-crafting-adapter) for test coverage and limitations.
+Forever is eligible for beta publishing, but remains subject to live compatibility testing. See [production UI](ui.md#forever-live-acceptance) and [Forever capture notes](capture.md#first-forever-crafting-adapter) for test coverage and limitations.
 
 Flavor definitions live in [`.flavors.yml`](../../.flavors.yml). Flavors with `release: false` may be packaged for testing but are not published to GitHub releases or CurseForge.
 

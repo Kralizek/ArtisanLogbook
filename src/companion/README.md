@@ -35,7 +35,7 @@ dotnet run --project src/Cli/Cli.csproj -c Release -- --help
 On Windows, a local development deployment script is available from the repository root:
 
 ```powershell
-.\scripts\deploy-companion.ps1
+.\scripts\Deploy-Companion.ps1
 ```
 
 This installs a local `al` command alias; it is **not a published end-user installer**. Open a new terminal after installation and run:
