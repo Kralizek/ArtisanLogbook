@@ -3,6 +3,7 @@ using System.ComponentModel;
 using ArtisanLogbook.Runtime;
 
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -20,7 +21,7 @@ public sealed class ServeSettings : DatabaseSettings
     public int? ReconciliationIntervalSeconds { get; init; }
 
     [CommandOption("--port <PORT>")]
-    [Description("Override the loopback host port (1-65535; default 48721). No HTTP routes yet.")]
+    [Description("Preferred loopback API port (1-65535; default 48721); an OS-assigned port is used if it is taken.")]
     public int? Port { get; init; }
 
     public override ValidationResult Validate()
@@ -33,7 +34,7 @@ public sealed class ServeSettings : DatabaseSettings
     }
 }
 
-public sealed class ServeCommand(ApplicationPaths paths, CompanionSettingsStore settingsStore) : AsyncCommand<ServeSettings>
+public sealed class ServeCommand(ApplicationPaths paths, CompanionSettingsStore settingsStore, IAnsiConsole console) : AsyncCommand<ServeSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, ServeSettings settings)
     {
@@ -47,6 +48,12 @@ public sealed class ServeCommand(ApplicationPaths paths, CompanionSettingsStore 
         builder.ConfigureCompanionHost(configuration);
         builder.Services.AddArtisanLogbookCompanion(paths, configuration);
         await using WebApplication app = builder.Build();
+        app.Lifetime.ApplicationStarted.Register(() =>
+        {
+            string? url = app.Services.GetRequiredService<CompanionHttpEndpoint>().ListeningUrl;
+            if (url is not null)
+                console.WriteLine($"Artisan Logbook API: {url}/api/v1 (OpenAPI: {url}/openapi/v1.yaml)");
+        });
         await app.RunCompanionAsync();
         return ExitCodes.Success;
     }

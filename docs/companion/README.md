@@ -7,6 +7,7 @@ long-running local application through `serve`.
 ## Getting started
 
 - [Companion overview and quick start](../../src/companion/README.md) — capabilities, building and primary commands.
+- [Local HTTP API](api.md) — endpoints, port selection, curl examples and the local security model.
 - [CLI and configuration reference](cli.md) — initialization, database paths, importing, status, discovery and exit codes.
 
 ## Technical reference

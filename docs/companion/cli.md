@@ -121,12 +121,11 @@ are supported. No discovery scan or import is triggered by startup. C06 monitori
 is not implemented, so an enabled preference is reported but performs no work.
 There are no watcher, reconciliation timer, import scheduler, or fake statistics.
 
-Kestrel binds **IPv4 loopback only** (`127.0.0.1`) on the effective preferred port.
-There are no HTTP endpoints or static browser assets; requests return 404 and
-startup does not advertise a browser URL. An occupied port currently fails
-startup with exit 3; use `--port` to choose another port. Port fallback, `/api/v1/`
-endpoints, **MinimalOpenAPI**, and bundled assets at `/` belong to C11/C12.
-No OpenAPI generator or authentication infrastructure is installed yet.
+Kestrel binds **IPv4 loopback only** (`127.0.0.1`) on the effective preferred port,
+falling back to an OS-assigned loopback port only when that port is already in use.
+The actual URL is printed at startup. The local `/api/v1/` HTTP API and its
+OpenAPI document are described in [Local HTTP API](api.md). Bundled browser assets
+at `/` belong to C12.
 
 The process stays active without a browser. Ctrl+C, SIGTERM, or normal host
 shutdown stops hosted work and disposes the writer, releasing database ownership.
