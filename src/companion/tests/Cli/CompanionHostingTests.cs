@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 using NUnit.Framework;
 
@@ -31,6 +32,7 @@ public sealed class CompanionHostingTests
     private ApplicationPaths _paths = null!;
     private CompanionSettingsStore _settings = null!;
     private string _database = null!;
+    private List<string> _runtimeLogs = null!;
 
     [SetUp]
     public void SetUp()
@@ -40,6 +42,7 @@ public sealed class CompanionHostingTests
         _paths = new(CompanionPlatform.Linux, _directory, _directory, null, _directory);
         _settings = new(_paths);
         _database = _paths.ResolveDatabase(null);
+        _runtimeLogs = [];
     }
 
     [TearDown]
@@ -75,6 +78,13 @@ public sealed class CompanionHostingTests
                 Assert.That(running.CanonicalCraftCount, Is.Zero);
                 Assert.That(running.Configuration.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(monitoring ?? false));
                 Assert.That(running.CriticalFailure, Is.Null);
+                Assert.That(_runtimeLogs, Does.Contain("Artisan Logbook Companion started."));
+                Assert.That(_runtimeLogs, Does.Contain(monitoring is true
+                    ? "SavedVariables monitoring: on (configured; not implemented in this release)"
+                    : "SavedVariables monitoring: off"));
+                Assert.That(_runtimeLogs, Does.Contain("Reconciliation interval: 60 seconds (inactive until monitoring is implemented)."));
+                Assert.That(_runtimeLogs, Does.Contain("HTTP preferred port: 48721 (API endpoints are not available in this release)."));
+                Assert.That(_runtimeLogs, Does.Not.Contain("Artisan Logbook Companion started. Monitoring preference: False."));
                 Assert.That(app.Services.GetServices<IHostedService>().Count(), Is.EqualTo(2));
                 Assert.That(app.Services.GetRequiredService<IServer>().Features
                     .Get<IServerAddressesFeature>()!.Addresses.Single(), Does.StartWith("http://127.0.0.1:"));
@@ -520,6 +530,12 @@ public sealed class CompanionHostingTests
                 if (line is null) Assert.Fail(startup + await errors);
                 startup += line + "\n";
             }
+            startup += await server.StandardOutput.ReadLineAsync(timeout.Token) + "\n";
+            startup += await server.StandardOutput.ReadLineAsync(timeout.Token) + "\n";
+            startup += await server.StandardOutput.ReadLineAsync(timeout.Token) + "\n";
+            Assert.That(startup, Does.Contain("SavedVariables monitoring: off")
+                .And.Contain("Reconciliation interval: 60 seconds")
+                .And.Contain("HTTP preferred port: 48721"));
             Assert.That(startup, Does.Not.Contain("http://"));
             foreach (string command in new[] { "serve", "status", "import" })
             {
@@ -594,6 +610,7 @@ public sealed class CompanionHostingTests
         CompanionRuntimeConfiguration configuration = CompanionRuntimeConfiguration.Resolve(_paths, _settings);
         builder.ConfigureCompanionHost(configuration);
         builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Logging.AddProvider(new CapturingLoggerProvider(_runtimeLogs));
         builder.Services.AddArtisanLogbookCompanion(
             _paths, configuration);
         return builder;
@@ -604,6 +621,23 @@ public sealed class CompanionHostingTests
         public Task StartAsync(CancellationToken cancellationToken) =>
             throw new InvalidOperationException("Controlled startup failure.");
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class CapturingLoggerProvider(List<string> messages) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(messages);
+        public void Dispose() { }
+    }
+
+    private sealed class CapturingLogger(List<string> messages) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (IsEnabled(logLevel)) lock (messages) messages.Add(formatter(state, exception));
+        }
     }
 
     private sealed class DrainOnStopWorker(

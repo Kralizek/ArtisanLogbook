@@ -103,6 +103,12 @@ state or monitoring statistics are maintained. Startup/status failures are
 explicit and structured `ILogger` records use failure codes and exception types,
 not raw sources, account IDs, or installation paths. Detailed command failures
 remain available to diagnose configuration/schema/ownership problems.
+Startup emits the application-started event separately from concise effective
+settings lines for SavedVariables monitoring, its configured-but-inactive
+reconciliation interval, and the HTTP preferred port. Disabled monitoring is
+reported as `SavedVariables monitoring: off`; enabled is explicitly marked as
+configured but not implemented. The port line also clarifies that no API
+endpoints are available. Database paths and installation roots are not logged.
 
 ## Extension points
 

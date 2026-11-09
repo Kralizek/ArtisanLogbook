@@ -22,8 +22,16 @@ internal sealed class CompanionRuntimeLifecycle(
         _started = lifetime.ApplicationStarted.Register(() =>
         {
             status.Transition(CompanionLifecycleState.Running);
-            logger.LogInformation("Artisan Logbook Companion started. Monitoring preference: {MonitoringEnabled}. " +
-                "Source monitoring and the HTTP API are not implemented in this release.", configuration.EffectiveSettings.Monitoring.Enabled);
+            logger.LogInformation("Artisan Logbook Companion started.");
+            logger.LogInformation("SavedVariables monitoring: {MonitoringState}",
+                configuration.EffectiveSettings.Monitoring.Enabled
+                    ? "on (configured; not implemented in this release)"
+                    : "off");
+            logger.LogInformation("Reconciliation interval: {ReconciliationIntervalSeconds} seconds " +
+                "(inactive until monitoring is implemented).",
+                configuration.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds);
+            logger.LogInformation("HTTP preferred port: {PreferredPort} (API endpoints are not available in this release).",
+                configuration.EffectiveSettings.Http.PreferredPort);
         });
         _stopping = lifetime.ApplicationStopping.Register(BeginStopping);
         return Task.CompletedTask;
