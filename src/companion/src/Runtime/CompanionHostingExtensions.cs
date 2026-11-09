@@ -3,6 +3,7 @@ using ArtisanLogbook.ImportService;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -12,12 +13,14 @@ namespace ArtisanLogbook.Runtime;
 
 public static class CompanionHostingExtensions
 {
-    /// <summary>Configure the embedded loopback host; C11 will add fallback and HTTP routes here.</summary>
+    /// <summary>Configure the embedded loopback host: the preferred port, or an OS-assigned loopback port when it is owned elsewhere.</summary>
     public static WebApplicationBuilder ConfigureCompanionHost(
         this WebApplicationBuilder builder, CompanionRuntimeConfiguration configuration)
     {
-        builder.WebHost.UseKestrel()
-            .UseUrls(FormattableString.Invariant($"http://127.0.0.1:{configuration.EffectiveSettings.Http.PreferredPort}"));
+        CompanionHttpEndpoint endpoint = CompanionHttpEndpoint.Select(configuration.EffectiveSettings.Http.PreferredPort);
+        builder.Services.AddSingleton(endpoint);
+        builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = LocalApiSecurityMiddleware.MaxRequestBodyBytes)
+            .UseUrls(endpoint.RequestedUrl);
         builder.Host.UseConsoleLifetime();
         builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
@@ -57,6 +60,7 @@ public static class CompanionHostingExtensions
             throw new InvalidOperationException("Companion history ownership has already been registered for this host.");
         if (!Path.IsPathFullyQualified(configuration.DatabasePath))
             throw new ArgumentException("The runtime database path must be absolute.", nameof(configuration));
+        services.TryAddSingleton(new CompanionHttpEndpoint(configuration.EffectiveSettings.Http.PreferredPort, false));
         services.AddSingleton(paths);
         services.AddSingleton(configuration);
         services.AddSingleton<CompanionSettingsStore>();
@@ -67,6 +71,7 @@ public static class CompanionHostingExtensions
         services.AddSingleton<CompanionWorkAdmission>();
         services.AddSingleton<CompanionRuntimeImports>();
         services.AddHostedService<CompanionRuntimeLifecycle>();
+        services.AddCompanionApi();
         return services;
     }
 }

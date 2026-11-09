@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -31,8 +33,7 @@ internal sealed class CompanionRuntimeLifecycle(
             logger.LogInformation("Reconciliation interval: {ReconciliationIntervalSeconds} seconds " +
                 "(inactive until monitoring is implemented).",
                 configuration.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds);
-            logger.LogInformation("HTTP preferred port: {PreferredPort} (API endpoints are not available in this release).",
-                configuration.EffectiveSettings.Http.PreferredPort);
+            ReportListeningUrl();
         });
         _stopping = lifetime.ApplicationStopping.Register(BeginStopping);
         return Task.CompletedTask;
@@ -62,6 +63,23 @@ internal sealed class CompanionRuntimeLifecycle(
             await CleanupFailedStartupAsync();
             throw;
         }
+    }
+
+    private void ReportListeningUrl()
+    {
+        CompanionHttpEndpoint endpoint = services.GetRequiredService<CompanionHttpEndpoint>();
+        string? address = services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault();
+        if (address is null)
+        {
+            logger.LogWarning("The HTTP listening address could not be determined.");
+            return;
+        }
+        endpoint.Resolved(address.TrimEnd('/'));
+        if (endpoint.FallbackUsed)
+            logger.LogWarning("HTTP preferred port {PreferredPort} is unavailable; using an OS-assigned port instead.",
+                endpoint.PreferredPort);
+        logger.LogInformation("HTTP API listening on {ListeningUrl} (preferred port {PreferredPort}).",
+            endpoint.ListeningUrl, endpoint.PreferredPort);
     }
 
     private void LogInstallationFlavors()

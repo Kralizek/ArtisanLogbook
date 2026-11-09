@@ -1,0 +1,481 @@
+openapi: 3.0.3
+info:
+  title: Artisan Logbook Companion local API
+  version: 1.0.0
+  description: >
+    Loopback-only management API of the Artisan Logbook Companion. State-changing requests must be
+    application/json and carry the X-Artisan-Logbook-Client header. Import operation identifiers are
+    process-local and are not durable across Companion restarts.
+servers:
+  - url: http://127.0.0.1:48721
+    description: Preferred port; the actual port is printed by `artisanlogbook serve`.
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: Basic application health
+      tags: [Operations]
+      responses:
+        "200":
+          description: The Companion is running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "403":
+          description: Host or Origin rejected by the local security policy.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The Companion is not running (starting, stopping or failed).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      summary: Runtime status and canonical history summary
+      tags: [Operations]
+      responses:
+        "200":
+          description: Current operational status. Unavailable values are null, never invented.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [applicationVersion, state, database]
+                properties:
+                  applicationVersion:
+                    type: string
+                  state:
+                    $ref: "#/components/schemas/LifecycleState"
+                  startedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  database:
+                    type: object
+                    required: [available, schemaVersion]
+                    properties:
+                      available:
+                        type: boolean
+                      schemaVersion:
+                        type: integer
+                        format: int32
+                        nullable: true
+                  history:
+                    type: object
+                    description: Canonical craft counts; null when the database is unavailable.
+                    nullable: true
+                    required: [craftCount, gameContexts]
+                    properties:
+                      craftCount:
+                        type: integer
+                        format: int64
+                      gameContexts:
+                        type: array
+                        items:
+                          type: object
+                          required: [project, progressionTrack, craftCount]
+                          properties:
+                            project:
+                              type: integer
+                              format: int32
+                              description: Blizzard WOW_PROJECT_ID of the GameContext.
+                            projectName:
+                              type: string
+                              nullable: true
+                              description: Known project name, null for unnamed future projects.
+                            progressionTrack:
+                              type: string
+                              nullable: true
+                            craftCount:
+                              type: integer
+                              format: int64
+                  failure:
+                    $ref: "#/components/schemas/Failure"
+        "403":
+          description: Host or Origin rejected by the local security policy.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/sources:
+    get:
+      operationId: listSources
+      summary: Discover configured SavedVariables sources
+      description: Read-only. Source identifiers are stable for a given file location but say nothing about GameContext.
+      tags: [Sources]
+      responses:
+        "200":
+          description: Currently discovered sources and discovery diagnostics.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sources, diagnostics]
+                properties:
+                  sources:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Source"
+                  diagnostics:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SourceDiagnostic"
+        "403":
+          description: Host or Origin rejected by the local security policy.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/imports:
+    get:
+      operationId: listImports
+      summary: List recent manual import operations
+      description: Newest first. Operations are process-local and bounded.
+      tags: [Imports]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Recent operations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operations]
+                properties:
+                  operations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ImportOperation"
+        "400":
+          description: Invalid query parameter.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Host or Origin rejected by the local security policy.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      operationId: startImport
+      summary: Start an asynchronous manual import
+      description: >
+        Imports one discovered source, or every currently discovered source when sourceId is omitted.
+        Requires Content-Type application/json and the X-Artisan-Logbook-Client header.
+      tags: [Imports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                sourceId:
+                  type: string
+                  nullable: true
+                  maxLength: 64
+                  description: Server-issued source identifier from GET /api/v1/sources.
+      responses:
+        "202":
+          description: Accepted. Poll the Location header for the result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportOperation"
+        "400":
+          description: Invalid request body or source identifier format.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Host, Origin, Fetch-Metadata or client-header check failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The source identifier does not belong to a currently discovered source.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: No sources are discovered, or a requested source already has an active import.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: Request body too large.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: Content-Type is not application/json.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: Import scheduling capacity is exhausted; retry later.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The application is starting, stopping or the database is unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/imports/{id}:
+    get:
+      operationId: getImport
+      summary: Retrieve an import operation
+      tags: [Imports]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportOperation"
+        "403":
+          description: Host or Origin rejected by the local security policy.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Unknown or evicted operation, or an operation from a previous process.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+components:
+  schemas:
+    LifecycleState:
+      type: string
+      enum: [Created, Starting, Running, Stopping, Stopped, Failed]
+    Health:
+      type: object
+      required: [status, state]
+      properties:
+        status:
+          type: string
+          enum: [Healthy, Unhealthy]
+        state:
+          $ref: "#/components/schemas/LifecycleState"
+    Failure:
+      type: object
+      nullable: true
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    Source:
+      type: object
+      required: [id, client, fileName, sizeBytes, modifiedAt]
+      properties:
+        id:
+          type: string
+          description: Opaque, stable identifier derived from the source location.
+        client:
+          type: string
+          description: Client directory label (for example _retail_). It is not a GameContext.
+        fileName:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+          nullable: true
+        modifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+    SourceDiagnostic:
+      type: object
+      required: [severity, code, message]
+      properties:
+        severity:
+          type: string
+          enum: [Warning, Error]
+        code:
+          type: string
+        message:
+          type: string
+    ImportDiagnostic:
+      type: object
+      required: [category, code, message]
+      properties:
+        category:
+          type: string
+          description: Origin of the diagnostic (source, coverage, validation, conflict, dimension-conflict, input, persistence, operation).
+        code:
+          type: string
+        message:
+          type: string
+    ImportSourceResult:
+      type: object
+      required: [sourceId, status, outcome, counts, diagnostics, diagnosticsTruncated]
+      properties:
+        sourceId:
+          type: string
+        status:
+          type: string
+          enum: [Queued, Running, Completed, Failed, Cancelled]
+        outcome:
+          type: string
+          nullable: true
+          enum: [Successful, Rejected, Failed]
+          description: C07 outcome; null until the source finished.
+        counts:
+          type: object
+          nullable: true
+          required: [observations, inserted, alreadyPresent, enriched, rejectedOrConflicting, dimensionsInserted, dimensionsEnriched]
+          properties:
+            observations:
+              type: integer
+              format: int32
+            inserted:
+              type: integer
+              format: int32
+            alreadyPresent:
+              type: integer
+              format: int32
+            enriched:
+              type: integer
+              format: int32
+            rejectedOrConflicting:
+              type: integer
+              format: int32
+            dimensionsInserted:
+              type: integer
+              format: int32
+            dimensionsEnriched:
+              type: integer
+              format: int32
+        diagnostics:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportDiagnostic"
+        diagnosticsTruncated:
+          type: boolean
+    ImportOperation:
+      type: object
+      required: [id, status, outcome, requestedSourceId, createdAt, startedAt, completedAt, sources, diagnostics]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Process-local identifier; not durable across restarts.
+        status:
+          type: string
+          enum: [Queued, Running, Completed, Failed, Cancelled]
+        outcome:
+          type: string
+          nullable: true
+          enum: [Successful, Partial, Failed]
+          description: Aggregate of source outcomes; null until finished.
+        requestedSourceId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportSourceResult"
+        diagnostics:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportDiagnostic"
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+        detail:
+          type: string
+          nullable: true
+        instance:
+          type: string
+          nullable: true
+        code:
+          type: string
+          nullable: true
+          description: Stable machine-readable error code.
