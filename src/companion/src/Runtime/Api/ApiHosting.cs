@@ -1,3 +1,5 @@
+using System.Reactive.Concurrency;
+
 using ArtisanLogbook.CompanionApi.Endpoints;
 
 using Microsoft.AspNetCore.Builder;
@@ -6,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 using MinimalOpenAPI;
@@ -24,6 +27,12 @@ internal static class CompanionApiHosting
         services.AddSingleton<ImportOperationLimits>();
         services.AddSingleton<ImportOperations>();
         services.AddHostedService(provider => provider.GetRequiredService<ImportOperations>());
+        services.AddSingleton<MonitoringCheckpointStore>();
+        services.AddSingleton<IMonitoringCheckpointPersistence>(provider =>
+            provider.GetRequiredService<MonitoringCheckpointStore>());
+        services.TryAddSingleton<IScheduler>(_ => Scheduler.Default);
+        services.AddSingleton<SourceMonitor>();
+        services.AddHostedService(provider => provider.GetRequiredService<SourceMonitor>());
         services.AddTransient<IStartupFilter, CompanionApiStartupFilter>();
         return services;
     }

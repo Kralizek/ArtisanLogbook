@@ -42,7 +42,8 @@ Directory/ledger links are not followed, including installation-root ancestors.
 Normalized aliases are deduplicated using the OS comparer; hard-link identity,
 case-insensitive Unix volume detection, and adversarial concurrent filesystem
 replacement are not supported. No recursive scan, watcher, periodic work, file
-archive, or monitoring worker is introduced.
+archive, or state mutation is performed by discovery itself. The hosted C06
+monitor uses these bounded discovery results during reconciliation.
 
 ## Host composition and ownership
 
@@ -107,11 +108,10 @@ explicit and structured `ILogger` records use failure codes and exception types,
 not raw sources, account IDs, or installation paths. Detailed command failures
 remain available to diagnose configuration/schema/ownership problems.
 Startup emits the application-started event separately from concise effective
-settings lines for SavedVariables monitoring, its configured-but-inactive
-reconciliation interval, and the HTTP preferred port; once started it logs the
-actual listening URL (`HTTP API listening on ...`). Disabled monitoring is
-reported as `SavedVariables monitoring: off`; enabled is explicitly marked as
-configured but not implemented. Startup also logs each configured WoW game directory
+settings lines for SavedVariables monitoring, its reconciliation interval, and
+the HTTP preferred port; once started it logs the actual listening URL
+(`HTTP API listening on ...`). Disabled monitoring is reported as
+`SavedVariables monitoring: off`; enabled is reported as `on`. Startup also logs each configured WoW game directory
 and the direct client flavors where
 `Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc` exists, or
 `(none detected)`. Other client directories and unrelated addons are not
@@ -120,25 +120,77 @@ directory paths are shown explicitly for startup diagnostics; history database
 paths remain unlogged. Flavor directory names are presentation labels only and
 never establish a saved craft's GameContext.
 
-## Extension points
+## Hosted monitoring and API
 
-The same WebApplication already owns embedded Kestrel on IPv4 loopback.
-There are no routes/assets or advertised browser URL. Occupied ports currently
-fail startup; C11 will add free-port fallback in host configuration and register
-versioned `/api/v1/` Minimal API endpoints after Build and before Run, with the
-selected **MinimalOpenAPI** implementation (not Swashbuckle/NSwag). C12 will serve
-bundled static assets at `/`. Neither requires another host or executable.
+C06 is an opt-in `SourceMonitor` hosted in the existing `serve` application. It
+does not create another host, database writer, or import queue. The versioned
+`/api/v1/monitoring` endpoints are authored in `Api/Contracts/openapi.yaml` and
+implemented with the same MinimalOpenAPI generator, local request security, and
+Problem Details behavior as C11.
 
-C06 will register hosted monitoring workers after runtime registration and use
-the same settings/discovery services and shared C07 importer. New runtime import
-requests must use `CompanionRuntimeImports`, which holds a
-`CompanionWorkAdmission.Admit()` lease around the existing C07 operation. Before
-startup and once stopping begins, admission rejects explicitly with a logged
-error and an exception. A future worker coordinating longer-lived work may hold
-a lease itself and call shared C07 directly for **already admitted** work. Hold
-the lease through commit/rollback and release it in `using`/`finally`; do not
-re-admit existing work during shutdown. Manual CLI imports still use C07 directly
-and are unaffected.
+`SourceMonitor` uses a shared invalidation stream rather than long-lived groups
+per source. Each installation root has a recursive `FileSystemWatcher`; typed
+events identify the source location, and `GroupByUntil`/`Throttle` coalesce
+events independently by stable source ID while expiring quiet groups. Root
+watcher failures retry with bounded exponential delay. An injected Rx scheduler
+drives periodic reconciliation, debounce, retry, and stabilization timers.
+Filesystem events only request work: periodic discovery and SHA-256 snapshots
+recover missed events and determine whether content changed.
+
+One `Concat`-serialized Rx pass consumes invalidations. A one-bit pending flag
+retains at most one follow-up pass while a scan is active, so event bursts do not
+become an unbounded queue and a change during a scan is not lost. `Switch`
+disposes watcher/timer subscriptions on runtime disable, enable, or shutdown.
+Pass failures are contained and retried; watcher and worker failures remain
+visible in status diagnostics.
+
+Successful file imports return the SHA-256 fingerprint calculated from the
+exact stable byte snapshot consumed by C07. `MonitoringCheckpointStore` persists
+observed and ingested fingerprints, availability, pending state, and retry time
+atomically outside canonical craft history. Import-completion notifications
+remain in a bounded source-keyed pending map until their effects are durable.
+If that map overflows, the monitor reconciles current files and may safely
+re-import; it never invents a successful checkpoint. A changed file remains
+pending when a source is busy, capacity is exhausted, or a retry is deferred.
+Manual and automatic work share C11 `ImportOperations`, source admission,
+capacity limits, C10 shutdown handling, and the single C07 execution path.
+
+Settings updates persist through `CompanionSettingsStore` before changing the
+effective runtime state. CLI invocation overrides remain authoritative.
+Disabling prevents new automatic submissions; accepted imports retain C11's
+shutdown behavior. At shutdown the monitor disposes subscriptions and awaits
+checkpoint work before C10 releases the shared writer.
+
+## C06 architecture comparison
+
+This experiment was implemented from `master`; [PR #72](https://github.com/Kralizek/ArtisanLogbook/pull/72)
+was used only as a behavioral reference. Counts below compare the core monitor
+and checkpoint code at PR #72's latest revision (`b9b9426`) with this experiment.
+Code lines exclude blank and comment-only lines; the Rx total includes the
+48-line stable-snapshot reader extracted for C07's exact-byte fingerprint.
+
+| Criterion | PR #72 | Rx experiment |
+|---|---|---|
+| Core production code | 970 code lines (monitor and checkpoint store) | 964 (monitor, checkpoint store, snapshot reader): only 6 fewer |
+| Monitor synchronization | 4 lock objects, a bounded signal channel, and a pass semaphore | 2 lock objects; Rx `Concat` serializes passes and a one-bit pending flag bounds invalidations |
+| Scheduling and recovery | Explicit worker, signal draining, and timer coordination | `Merge`, `GroupByUntil`/`Throttle`, `Concat`, `Switch`, and `RetryWhen`; retry policy and application state remain explicit |
+| Source management | Explicit watcher coordination | Shared invalidation stream with expiring per-source groups; root watcher recovery remains explicit |
+| Checkpoint correctness | Explicit durable state | Still explicit and nearly the same size (91 vs. 92 code lines); Rx does not simplify completion ordering or durable persistence |
+| Testability | Real-time coordination tests | Injected scheduler supports virtual-time periodic/debounce/retry tests |
+| Dependencies | No Rx dependency | Adds `System.Reactive` at runtime and `Microsoft.Reactive.Testing` in tests |
+
+The experiment removes some bespoke stream coordination and reduces the number
+of synchronization objects, but the measured production-code reduction is
+negligible. Durable checkpoint ordering, import admission, overflow recovery,
+and lifecycle state still require explicit application code; Rx also adds
+operator semantics and a production dependency that maintainers must understand.
+The recommendation is to **retain PR #72 as the implementation baseline** and
+consider a narrowly scoped scheduler/coalescing improvement only if it can be
+shown to simplify those specific paths without adopting a second coordination
+model. The Rx rewrite is useful as a virtual-time testing reference, but it does
+not demonstrate a material maintainability improvement overall.
+
+## Host lifecycle
 
 The [.NET 10 Generic Host lifecycle implementation](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.Hosting/src/Internal/Host.cs)
 stops in reverse registration order within each phase: all `StoppingAsync` hooks,
@@ -159,13 +211,7 @@ finally before host disposal after startup/shutdown failure. Workers must observ
 cancellation and release leases; an uncooperative worker can delay graceful
 shutdown, and forced termination still relies on DuckDB transactional safety.
 Always run/stop the host before disposal; DI disposal alone is not worker
-shutdown. No queue, scheduler, or persistent admission state is introduced.
-
-Monitoring remains explicitly opt-in; no monitoring or
-automatic imports run in this foundation, even with the enabled preference.
-Future operational status can extend `CompanionStatus` with real source,
-reconciliation, import, and sync information. No scheduler, channel, persistent
-checkpoint, or dynamic configuration framework is pre-created.
+shutdown.
 
 See the [Companion guide](../../README.md) for command flow, configuration
 locations, diagnostics, and operational limitations.

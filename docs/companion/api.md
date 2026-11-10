@@ -1,7 +1,8 @@
 # Companion local HTTP API
 
 `artisanlogbook serve` hosts a versioned, loopback-only HTTP API (`/api/v1`) for
-operational visibility, source discovery, and asynchronous manual imports. It is
+operational visibility, source discovery, asynchronous manual imports, and opt-in
+SavedVariables monitoring. It is
 implemented with ASP.NET Core Minimal APIs and **MinimalOpenAPI**: the contract in
 `src/companion/src/Runtime/Api/Contracts/openapi.yaml` generates the endpoint
 base classes, and the same document is published by the running host.
@@ -31,7 +32,10 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 | GET | `/api/v1/health` | 200 when running, 503 while starting, stopping or failed |
 | GET | `/api/v1/status` | Version, lifecycle state, start time, database availability and schema version, canonical craft count and per-GameContext counts, safe failure info |
 | GET | `/api/v1/sources` | Discovered SavedVariables sources with stable ids (`src_…`) and discovery diagnostics |
-| GET | `/api/v1/imports?limit=N` | Recent import operations (1–100, default 20), newest first |
+| GET | `/api/v1/monitoring` | Monitoring state and safe operational diagnostics |
+| PUT | `/api/v1/monitoring` | Persist monitoring enablement and reconciliation interval |
+| POST | `/api/v1/monitoring/reconcile` | Request immediate reconciliation |
+| GET | `/api/v1/imports?limit=N` | Recent manual and automatic import operations (1–100, default 20), newest first |
 | GET | `/api/v1/imports/{id}` | One operation, or 404 |
 | POST | `/api/v1/imports` | Start an import; returns 202 with `Location` |
 | GET | `/openapi/v1.yaml` | OpenAPI 3.0 document |
@@ -81,10 +85,23 @@ The API is a privileged local interface and defends against browser-driven acces
 - Only `Host` values `127.0.0.1`, `localhost` and `[::1]` are accepted (DNS-rebinding defense).
 - Requests with a cross-site `Sec-Fetch-Site` or a foreign `Origin` are rejected with 403. CORS is not enabled, so browsers cannot read responses cross-origin.
 - `POST` requires the `X-Artisan-Logbook-Client` header (any non-empty value), which cross-site forms cannot send and which forces a CORS preflight that is denied, plus `Content-Type: application/json`, a `Content-Length` and a body of at most 4 KiB. Other methods return 405.
+- `PUT` uses the same client-header, JSON content-type and 4 KiB body requirements as `POST`.
 - Clients cannot supply paths; unknown or malformed source ids are rejected.
 - Responses carry `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.
 
-Terminal tools and local scripts only need to send the client header on `POST`.
+Monitoring is disabled by default. `PUT /api/v1/monitoring` only changes the
+monitoring preference and interval; it does not change installation roots or
+invocation-level overrides. Enabling triggers startup-style reconciliation.
+`POST /api/v1/monitoring/reconcile` returns an acknowledgement only; imports may
+still be queued or running. Filesystem events are hints, with periodic scans as
+the recovery path.
+
+Automatic and manual imports use the same bounded C11 import coordinator and
+per-source admission. `GET /api/v1/imports` reports each operation's `origin`.
+Completed C07 reads carry a SHA-256 fingerprint of the exact byte snapshot
+ingested; monitoring persists that fingerprint separately from canonical craft
+history. Terminal tools and local scripts need the client header on `POST` and
+`PUT` requests.
 
 ## Operational behavior
 
