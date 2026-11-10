@@ -220,9 +220,10 @@ public sealed class SpectreLoggingTests
         Assert.That(writer.ToString().Contains('\x1b'), Is.False);
     }
 
-    [Test]
+    [TestCase(false)]
+    [TestCase(true)]
     [NonParallelizable]
-    public void CapableTerminalUsesColorAndHangingIndentWrappingWithoutInterpretingMarkup()
+    public void CapableTerminalUsesColorAndHangingIndentWrappingWithoutInterpretingMarkup(bool verbose)
     {
         using CiEnvironment environment = new(false);
         using StringWriter writer = new();
@@ -234,7 +235,7 @@ public sealed class SpectreLoggingTests
             Out = new ControlledOutput(writer, true, 44)
         });
         console.Profile.Capabilities.Interactive = true;
-        using ServiceProvider services = CreateServices(console);
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = verbose);
         ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
         logger.LogWarning("[red]literal[/] followed by enough words to wrap onto another line");
         logger.LogInformation("next entry");
@@ -242,11 +243,36 @@ public sealed class SpectreLoggingTests
         string text = Regex.Replace(rendered, @"\u001b\[[0-?]*[ -/]*[@-~]", "");
 
         Assert.That(rendered.Contains('\x1b'), Is.True);
-        Assert.That(text, Does.Contain("WRN [red]literal[/]").And.Contain("INF next entry"));
+        Assert.That(text, Does.Contain(verbose ? "WRN [red]literal[/]" : "Warning: [red]literal[/]")
+            .And.Contain(verbose ? "INF next entry" : "next entry"));
         string[] lines = text.Split('\n');
         Assert.That(lines.Any(line => line.StartsWith("             ", StringComparison.Ordinal)
             && line.Trim().Length > 0), Is.True, text);
         Assert.That(lines.All(line => line.TrimEnd('\r').Length <= 44), Is.True, text);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    [NonParallelizable]
+    public void NormalEventIconsRespectUnicodeCapability(bool unicode)
+    {
+        using CiEnvironment environment = new(false);
+        using StringWriter writer = new();
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            Interactive = InteractionSupport.Yes,
+            Out = new ControlledOutput(writer, true)
+        });
+        console.Profile.Capabilities.Interactive = true;
+        console.Profile.Capabilities.Unicode = unicode;
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = false);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("ArtisanLogbook.Runtime.SourceMonitor")
+            .LogInformation(ArtisanLogbook.Runtime.MonitoringEvents.Enabled,
+                "Monitoring enabled: {RootCount} roots, {IntervalSeconds} seconds.", 1, 60);
+        string text = Regex.Replace(writer.ToString(), @"\u001b\[[0-?]*[ -/]*[@-~]", "");
+        Assert.That(text, Does.Contain(unicode ? "✓  Monitoring active" : "OK Monitoring active").And.Contain("Every 60s"));
+        Assert.That(text.Contains('✓'), Is.EqualTo(unicode));
     }
 
     [Test]
@@ -268,12 +294,16 @@ public sealed class SpectreLoggingTests
         Assert.That(writer.ToString().Contains('\x1b'), Is.False);
     }
 
-    [TestCase(false, "\n")]
-    [TestCase(false, "\r\n")]
-    [TestCase(true, "\n")]
-    [TestCase(true, "\r\n")]
+    [TestCase(false, "\n", false)]
+    [TestCase(false, "\r\n", false)]
+    [TestCase(true, "\n", false)]
+    [TestCase(true, "\r\n", false)]
+    [TestCase(false, "\n", true)]
+    [TestCase(false, "\r\n", true)]
+    [TestCase(true, "\n", true)]
+    [TestCase(true, "\r\n", true)]
     [NonParallelizable]
-    public void RedirectedOrNoninteractiveLogsDoNotWrapLongUrlsAtTerminalWidth(bool terminal, string newline)
+    public void RedirectedOrNoninteractiveLogsDoNotWrapLongUrlsAtTerminalWidth(bool terminal, string newline, bool verbose)
     {
         using CiEnvironment environment = new(false);
         using StringWriter writer = new() { NewLine = newline };
@@ -283,15 +313,16 @@ public sealed class SpectreLoggingTests
             Interactive = InteractionSupport.No,
             Out = new ControlledOutput(writer, terminal, 24)
         });
-        using ServiceProvider services = CreateServices(console);
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = verbose);
         const string url = "https://localhost:48721/api/v1/history?source=long-source-identifier&filter=crafts";
         services.GetRequiredService<ILoggerFactory>().CreateLogger("Long.Worker.Category")
             .LogInformation(new EventId(99, "Request"), "Request {Url}", url);
 
         string[] lines = writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.That(lines, Has.Length.EqualTo(2));
-        Assert.That(lines[0], Does.EndWith("INF Request " + url));
-        Assert.That(lines[1], Is.EqualTo("  category=Long.Worker.Category event=99/Request Url=" + url));
+        Assert.That(lines, Has.Length.EqualTo(verbose ? 2 : 1));
+        Assert.That(lines[0], Does.EndWith((verbose ? "INF " : "i  ") + "Request " + url));
+        if (verbose)
+            Assert.That(lines[1], Is.EqualTo("  category=Long.Worker.Category event=99/Request Url=" + url));
         Assert.That(writer.ToString().Contains('\x1b'), Is.False);
     }
 
@@ -356,7 +387,7 @@ public sealed class SpectreLoggingTests
             Assert.That(providers.OfType<SpectreConsoleLoggerProvider>().Count(), Is.EqualTo(1));
             Assert.That(providers, Does.Contain(other));
             services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").LogInformation("one entry");
-            Assert.That(Regex.Matches(console.Output, "INF one entry"), Has.Count.EqualTo(1));
+            Assert.That(Regex.Matches(console.Output, "one entry"), Has.Count.EqualTo(1));
             Assert.That(other.Messages, Is.EqualTo(1));
         }
         Assert.DoesNotThrow(() => console.WriteLine("still usable"));
@@ -369,7 +400,11 @@ public sealed class SpectreLoggingTests
         collection.AddLogging(logging =>
         {
             configure?.Invoke(logging);
-            logging.AddSpectreConsole(console, options);
+            logging.AddSpectreConsole(console, settings =>
+            {
+                settings.Verbose = true;
+                options?.Invoke(settings);
+            });
         });
         return collection.BuildServiceProvider();
     }

@@ -96,6 +96,7 @@ al serve
 al serve --database history.duckdb --port 48722
 al serve --monitoring false --reconciliation-interval 120
 al serve --monitoring true
+al serve --verbose
 ```
 
 `serve` alone constructs and owns the .NET Generic Host (`WebApplication`).
@@ -132,12 +133,62 @@ modifies SavedVariables; removed sources do not remove canonical history.
 
 `serve` uses a synchronous Spectre.Console logging provider in the CLI project;
 Runtime and monitoring services retain standard structured `ILogger<T>` templates.
-Interactive ANSI terminals get muted timestamps, compact colored severities,
-restrained icons, and contextual properties below each message. Logs scroll
-normally; there is no dashboard or screen clearing. Redirected output, CI, and
-terminals without ANSI support use readable timestamped plain text. Messages,
-properties, scopes and exceptions are rendered as literal text with terminal
-control characters sanitized. Concurrent entries are rendered atomically.
+The default **normal** presentation is an operational console, not a property dump:
+muted timestamps, consistent outcome/activity icons, a human-readable event, and
+an optional indented context line. For example:
+
+```text
+ARTISAN LOGBOOK  /  COMPANION
+19:48:30  OK Monitoring active
+             Every 60s
+19:48:30  OK Server ready
+             http://127.0.0.1:48721
+19:48:31  -> Sources discovered
+             2 sources · Retail · Forever · Up to date · 550ms
+19:49:31  -> Reconciliation complete
+             2 sources · Up to date · 550ms
+19:49:45  -> Import queued · Retail
+19:49:46  OK Import completed · Retail
+             +3 new observations · 2,739 existing
+```
+
+Capable interactive terminals use green success marks, cyan activity arrows,
+amber warnings and red errors; timestamps and secondary text are muted.
+Redirected output, CI, and non-ANSI terminals use plain text and ASCII indicators
+(`OK`, `->`, `!`, `X`, `-`) without wrapping long URLs to terminal width. Logs
+scroll normally, with no dashboard, animation, panels or screen clearing.
+All external values are literal text, never trusted markup; terminal controls
+are sanitized. Complete entries remain atomic under concurrent logging.
+
+The CLI's stateless `CompanionLogPresenter` selects and formats known stable
+event IDs using their original structured properties, never by parsing a message.
+Routine startup metadata and initial watcher readiness are not repeated on the
+normal console. The actual listening event reports readiness only after startup;
+the completed discovery report supplies source counts and labels. These can arrive
+in different orders; there is no buffered startup aggregator or inferred readiness.
+An idle periodic reconciliation still emits a compact heartbeat. Outstanding
+imports/retries and source-read problems are not reported as "Up to date."
+
+Imports identify the discovered client (for example Retail or Forever), not a
+reverse-engineered source hash or assumed GameContext. When a client has multiple
+sources, labels add the installation name, then account only if needed to
+disambiguate; indistinguishable names add a short identifier. Recognized routine events never
+dump full source IDs or operation GUIDs. Log labels are populated during existing
+discovery and passed as structured metadata; logging does not query the filesystem
+or database, and API responses do not expose these internal labels.
+
+Use **`serve --verbose`** for diagnostic presentation: original messages,
+categories, event IDs, structured properties, scopes, and detailed exceptions.
+The flag sets Debug as the default minimum through standard .NET logging options;
+explicit category/provider level configuration still takes precedence.
+`Logging__SpectreConsole__Verbose=true` enables the same presentation through
+configuration without changing the configured minimum level. Debug requires
+`Logging__LogLevel__Default=Debug` or a category-specific equivalent.
+Normal mode still shows explicitly enabled Debug events, unexpected warnings,
+errors and critical events through a generic fallback. Exception messages and
+inner causes remain visible normally; stack traces are available in verbose mode.
+Selection only affects this console provider: the original event, properties,
+level and exception remain available to other registered logging providers.
 
 Information events describe enabled/disabled monitoring, effective interval and
 root count, watcher readiness/recovery, meaningful reconciliation summaries,
@@ -165,9 +216,11 @@ registration replaces the framework console provider without clearing other
 logging providers.
 
 Set `Logging__SpectreConsole__IncludeScopes=true` to include logging scopes
-(off by default), or `Logging__SpectreConsole__ForcePlainText=true` to request
+(off by default, enabled by `--verbose`), or `Logging__SpectreConsole__ForcePlainText=true` to request
 plain text even in an ANSI terminal. Provider-specific filters use the standard
 `Logging__SpectreConsole__LogLevel__<category>` keys.
+If console rendering or output fails, the provider reports the failure and the
+sanitized plain entry to stderr instead of aborting monitoring or an import.
 
 ### HTTP and shutdown
 

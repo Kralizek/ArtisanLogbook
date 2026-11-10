@@ -56,6 +56,14 @@ public sealed class CompanionCommandAppTests
     }
 
     [Test]
+    public async Task ServeHelpExplainsVerbosePresentationAndStandardFiltering()
+    {
+        (int exit, string output) = await Run("serve", "--help");
+        Assert.That(exit, Is.Zero);
+        Assert.That(output, Does.Contain("--verbose").And.Contain("diagnostic").And.Contain("logging filters"));
+    }
+
+    [Test]
     public async Task VersionUsesExecutablePackageVersion()
     {
         (int exit, string output) = await Run("--version");

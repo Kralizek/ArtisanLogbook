@@ -28,16 +28,26 @@ public sealed class SpectreConsoleLoggerProvider(
         Exception? exception, Func<TState, Exception?, string> formatter)
     {
         SpectreConsoleLoggerOptions settings = options.CurrentValue;
-        string message = Sanitize(formatter(state, exception));
+        IEnumerable<KeyValuePair<string, object?>>? properties = state as IEnumerable<KeyValuePair<string, object?>>;
+        ConsoleEntry? entry = settings.Verbose ? new(formatter(state, exception)) :
+            CompanionLogPresenter.Present(category, level, eventId, properties, () => formatter(state, exception));
+        if (entry is null && exception is not null)
+            entry = new(formatter(state, exception), Tone: ConsoleTone.Error);
+        if (entry is null) return;
+        string message = Sanitize(entry.Message);
         string prefix = $"{DateTimeOffset.Now:HH:mm:ss} {LevelLabel(level)}";
-        StringBuilder context = new();
-        context.Append("category=").Append(Sanitize(category))
-            .Append(" event=").Append(eventId.Id.ToString(CultureInfo.InvariantCulture));
-        if (eventId.Name is not null)
-            context.Append('/').Append(Sanitize(eventId.Name));
-        AppendProperties(context, state);
-
-        List<string> lines = [message, context.ToString()];
+        List<string> lines = [message];
+        if (entry.Detail is { Length: > 0 } detail) lines.Add(Sanitize(detail));
+        if (settings.Verbose)
+        {
+            StringBuilder context = new();
+            context.Append("category=").Append(Sanitize(category))
+                .Append(" event=").Append(eventId.Id.ToString(CultureInfo.InvariantCulture));
+            if (eventId.Name is not null)
+                context.Append('/').Append(Sanitize(eventId.Name));
+            AppendProperties(context, state);
+            lines.Add(context.ToString());
+        }
         if (settings.IncludeScopes)
         {
             scopeProvider.ForEachScope((scope, output) =>
@@ -49,31 +59,92 @@ public sealed class SpectreConsoleLoggerProvider(
             }, lines);
         }
         if (exception is not null)
-            lines.Add(Sanitize(exception.ToString()));
+            lines.Add(Sanitize(settings.Verbose ? exception.ToString() : ExceptionSummary(exception)));
 
         bool plain = settings.ForcePlainText || !console.Profile.Capabilities.Ansi
             || !console.Profile.Out.IsTerminal || !console.Profile.Capabilities.Interactive
             || IsContinuousIntegration();
-        // Keep entry separators consistent with sanitized multiline content on every platform.
-        string output = string.Join("\n", lines.Select((line, index) => index == 0
-            ? prefix + " " + Indent(line, "             ")
-            : "  " + Indent(line, "  "))) + "\n";
-        Grid heading = new Grid()
-            .AddColumn(new GridColumn { Width = 12, NoWrap = true, Padding = new Padding(0, 0, 1, 0) })
-            .AddColumn(new GridColumn { Padding = new Padding(0) })
-            .AddRow(new Text(prefix, LevelStyle(level)), new Text(message));
+        bool unicode = !plain && console.Profile.Capabilities.Unicode;
+        string icon = Icon(entry.Tone, unicode);
+        string timestamp = $"{DateTimeOffset.Now:HH:mm:ss}";
+        string normalPrefix = timestamp + "  " + icon.PadRight(2) + " ";
+        string continuation = new(' ', normalPrefix.Length);
+        // Keep LF entry separators and unwrapped URLs on every platform, regardless of writer.NewLine.
+        string output = settings.Verbose
+            ? string.Join("\n", lines.Select((line, index) => index == 0
+                ? prefix + " " + Indent(line, "             ") : "  " + Indent(line, "  "))) + "\n"
+            : normalPrefix + Indent(message, continuation) + "\n" +
+                string.Concat(lines.Skip(1).Select(line => continuation + Indent(line, continuation) + "\n"));
+        Grid heading = settings.Verbose
+            ? new Grid()
+                .AddColumn(new GridColumn { Width = 12, NoWrap = true, Padding = new Padding(0, 0, 1, 0) })
+                .AddColumn(new GridColumn { Padding = new Padding(0) })
+                .AddRow(new Text(prefix, LevelStyle(level)), new Text(message))
+            : new Grid()
+                .AddColumn(new GridColumn { Width = 8, NoWrap = true, Padding = new Padding(0, 0, 2, 0) })
+                .AddColumn(new GridColumn { Width = 2, NoWrap = true, Padding = new Padding(0, 0, 1, 0) })
+                .AddColumn(new GridColumn { Padding = new Padding(0) })
+                .AddRow(new Text(timestamp, Style.Parse("grey")), new Text(icon, ToneStyle(entry.Tone)), new Text(message));
         IRenderable rendered = new Rows(new[] { (IRenderable)heading }.Concat(lines.Skip(1)
-            .Select(line => new Padder(new Text(line, Style.Parse("grey")), new Padding(2, 0, 0, 0)))));
+            .Select(line => new Padder(new Text(line, Style.Parse("grey")),
+                new Padding(settings.Verbose ? 2 : normalPrefix.Length, 0, 0, 0)))));
 
         // State formatting and exception traversal can execute caller code; only rendering is serialized.
-        lock (renderLock)
+        try
         {
-            if (plain)
-                console.Profile.Out.Writer.Write(output);
-            else
-                console.Write(rendered);
+            lock (renderLock)
+            {
+                if (plain)
+                    console.Profile.Out.Writer.Write(output);
+                else
+                    console.Write(rendered);
+            }
+        }
+        catch (Exception failure) when (failure is IOException or ObjectDisposedException or InvalidOperationException or ArgumentException)
+        {
+            // Report broken output without recursively logging or aborting an import/monitoring operation.
+            try
+            {
+                lock (renderLock)
+                    System.Console.Error.Write("Companion console output failed (" + failure.GetType().Name + ").\n" + output);
+            }
+            catch (Exception fallback) when (fallback is IOException or ObjectDisposedException)
+            {
+                System.Diagnostics.Trace.TraceError("Companion console and stderr output failed: {0}; {1}",
+                    failure.GetType().Name, fallback.GetType().Name);
+            }
         }
     }
+
+    private static string ExceptionSummary(Exception exception)
+    {
+        StringBuilder summary = new(exception.GetType().Name + ": " + exception.Message);
+        for (Exception? inner = exception.InnerException; inner is not null; inner = inner.InnerException)
+            summary.Append("\nCaused by ").Append(inner.GetType().Name).Append(": ").Append(inner.Message);
+        return summary.ToString();
+    }
+
+    private static string Icon(ConsoleTone tone, bool unicode) => (tone, unicode) switch
+    {
+        (ConsoleTone.Success, true) => "✓",
+        (ConsoleTone.Activity, true) => "↻",
+        (ConsoleTone.Queued, true) => "→",
+        (ConsoleTone.Success, false) => "OK",
+        (ConsoleTone.Activity or ConsoleTone.Queued, false) => "->",
+        (ConsoleTone.Warning, _) => "!",
+        (ConsoleTone.Error, _) => "X",
+        (ConsoleTone.Idle, _) => "-",
+        _ => "i"
+    };
+
+    private static Style ToneStyle(ConsoleTone tone) => Style.Parse(tone switch
+    {
+        ConsoleTone.Success => "green",
+        ConsoleTone.Activity or ConsoleTone.Queued => "cyan",
+        ConsoleTone.Warning => "yellow",
+        ConsoleTone.Error => "red",
+        _ => "grey"
+    });
 
     private static bool AppendProperties(StringBuilder text, object? state)
     {

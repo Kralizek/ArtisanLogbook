@@ -27,6 +27,10 @@ public sealed class ServeSettings : DatabaseSettings
     [Description("Preferred loopback API port (1-65535; default 48721); an OS-assigned port is used if it is taken.")]
     public int? Port { get; init; }
 
+    [CommandOption("--verbose")]
+    [Description("Show diagnostic log details and enable Debug by default (standard logging filters still apply).")]
+    public bool Verbose { get; init; }
+
     public override ValidationResult Validate()
     {
         if (ReconciliationIntervalSeconds is < 1 or > 86400)
@@ -51,15 +55,18 @@ public sealed class ServeCommand(ApplicationPaths paths, CompanionSettingsStore 
         builder.ConfigureCompanionHost(configuration);
         builder.Configuration.AddEnvironmentVariables();
         builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
-        builder.Logging.AddSpectreConsole(console);
+        if (settings.Verbose) builder.Logging.SetMinimumLevel(LogLevel.Debug);
+        builder.Logging.AddSpectreConsole(console, options =>
+        {
+            if (settings.Verbose)
+            {
+                options.Verbose = true;
+                options.IncludeScopes = true;
+            }
+        });
         builder.Services.AddArtisanLogbookCompanion(paths, configuration);
         await using WebApplication app = builder.Build();
-        app.Lifetime.ApplicationStarted.Register(() =>
-        {
-            string? url = app.Services.GetRequiredService<CompanionHttpEndpoint>().ListeningUrl;
-            if (url is not null)
-                console.WriteLine($"Artisan Logbook API: {url}/api/v1 (OpenAPI: {url}/openapi/v1.yaml)");
-        });
+        console.WriteLine("ARTISAN LOGBOOK  /  COMPANION");
         await app.RunCompanionAsync();
         return ExitCodes.Success;
     }
