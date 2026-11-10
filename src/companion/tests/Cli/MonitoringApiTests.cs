@@ -159,6 +159,29 @@ public sealed class MonitoringApiTests
         Assert.That(host.Monitor.Read().Phase, Is.EqualTo(MonitoringPhase.Disabled));
     }
 
+    [Test]
+    public async Task MonitoringPutPreservesExternalRootChangesWithoutPartiallyHotReloadingThem()
+    {
+        await using MonitoringTestHost host = new();
+        string original = host.Ledger();
+        await host.StartAsync();
+        string otherRoot = Path.Combine(host.DirectoryPath, "OtherWoW");
+        string other = Path.Combine(otherRoot, "_classic_", "WTF", "Account", "B", "SavedVariables", "ArtisanLogbook_Core.lua");
+        Directory.CreateDirectory(Path.GetDirectoryName(other)!);
+        File.WriteAllText(other, CompanionCommandAppTests.Snapshot(2, null, 1));
+        host.Settings.Save(CompanionSettings.ForRoots(otherRoot));
+        using HttpResponseMessage response = await Send(host, HttpMethod.Put, "/api/v1/monitoring",
+            """{"enabled":true,"reconciliationIntervalSeconds":5}""");
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(host.Settings.Load().Settings!.InstallationRoots, Is.EqualTo(new[] { otherRoot }));
+        Assert.That(host.Monitor.Read().Configuration.EffectiveSettings.InstallationRoots, Is.EqualTo(new[] { host.Root }));
+        JsonElement sources = JsonDocument.Parse(await host.Http.GetStringAsync("/api/v1/sources")).RootElement.GetProperty("sources");
+        Assert.That(sources.GetArrayLength(), Is.EqualTo(1));
+        Assert.That(sources[0].GetProperty("id").GetString(), Is.EqualTo(SourceCatalog.IdFor(original)));
+        await MonitoringTestHost.Eventually(() => host.Checkpoints.Read().Document.Sources.GetValueOrDefault(SourceCatalog.IdFor(original))?.Successful is not null);
+        Assert.That(host.Checkpoints.Read().Document.Sources.ContainsKey(SourceCatalog.IdFor(other)), Is.False);
+    }
+
     [TestCase("PUT", "/api/v1/monitoring", """{"enabled":true,"reconciliationIntervalSeconds":5}""")]
     [TestCase("POST", "/api/v1/monitoring/reconcile", "{}")]
     public async Task ControlEndpointsRetainLocalSecurityPolicy(string method, string path, string body)

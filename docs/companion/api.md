@@ -104,7 +104,9 @@ through the existing settings store before changing the effective configuration.
 Invalid requests return 400; invalid/unsupported/concurrently changed settings
 return 409 `settings-conflict`; persistence failure returns 503
 `settings-save-failed`. A failed save does not change the running configuration.
-There is no implicit settings-file hot reload.
+Only monitoring preferences are applied at runtime. Other externally changed
+settings are preserved in the saved file, but installation roots and HTTP binding
+remain invocation-scoped until restart; there is no partial settings-file hot reload.
 
 Enabling starts discovery immediately. Source-specific filesystem bursts are
 coalesced for 250 ms, and the configured periodic interval recovers missed

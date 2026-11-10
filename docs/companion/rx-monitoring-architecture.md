@@ -313,3 +313,14 @@ clearer local reasoning boundaries and a small explicit scheduling policy.
 The simplification claim is specifically about the amount of behavior that must
 be understood together, not zero synchronization or minimum total lines.
 Comparison with the other experiments comes after this checkpoint.
+
+### Post-assessment contract consistency check
+
+The comparison prompted a check of runtime preference scope. The monitoring PUT
+now applies only monitoring preferences to the running configuration, while
+preserving externally changed roots/HTTP preferences on disk. This prevents a
+partial hot reload in which new watcher roots disagree with C11's startup-scoped
+source catalog. An HTTP integration regression covers both the preserved settings
+file and the unchanged running discovery scope. This is a local contract fix,
+not code imported from a reference implementation; the pre-comparison checkpoint
+above remains recorded unchanged.

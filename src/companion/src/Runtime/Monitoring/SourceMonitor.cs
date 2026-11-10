@@ -88,7 +88,10 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
             if (!loaded.CanSave) throw new CompanionSettingsException(loaded.Diagnostic!);
             CompanionSettings saved = (loaded.Settings ?? CompanionSettings.ForRoots()) with { Monitoring = preferences };
             _settings.Save(saved, cancellationToken, loaded);
-            CompanionRuntimeConfiguration resolved = current.Configuration.WithPersistedPreferences(saved);
+            CompanionSettings runningPreferences = (current.Configuration.PersistedPreferences ?? CompanionSettings.ForRoots())
+                with
+            { Monitoring = preferences };
+            CompanionRuntimeConfiguration resolved = current.Configuration.WithPersistedPreferences(runningPreferences);
             bool changed = !SameOptions(Options(current), Options(current with { Configuration = resolved }));
             _state = current with
             {
