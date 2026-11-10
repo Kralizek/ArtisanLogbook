@@ -33,4 +33,5 @@ public sealed record CompanionImportResult(
 {
     /// <summary>Committed outcomes keyed by canonical observation identity, never source-local ID.</summary>
     public IReadOnlyList<CraftWriteResult> Observations { get; init; } = [];
+    public string? SourceFingerprint { get; init; }
 }

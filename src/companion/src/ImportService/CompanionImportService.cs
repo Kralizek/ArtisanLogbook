@@ -13,7 +13,6 @@ namespace ArtisanLogbook.ImportService;
 /// <summary>Orchestrates SavedVariables parsing, validation, reconciliation, and atomic persistence.</summary>
 public sealed class CompanionImportService
 {
-    private const long MaximumSnapshotBytes = 64L * 1024 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     private readonly HistoryStoreClient _historyStore;
@@ -107,21 +106,21 @@ public sealed class CompanionImportService
         cancellationToken.ThrowIfCancellationRequested();
 
         string fullPath;
-        byte[] snapshot;
+        SavedVariablesFileSnapshot snapshot;
         try
         {
             fullPath = Path.GetFullPath(path);
-            snapshot = await ReadStableSnapshotAsync(fullPath, cancellationToken).ConfigureAwait(false);
+            snapshot = await SavedVariablesSnapshotReader.ReadAsync(fullPath, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             throw;
         }
-        catch (SourceTooLargeException exception)
+        catch (SavedVariablesSnapshotTooLargeException exception)
         {
             return FileInputFailure(CompanionImportOutcome.Rejected, "source-too-large", exception.Message);
         }
-        catch (StableSnapshotException exception)
+        catch (SavedVariablesSnapshotUnstableException exception)
         {
             return FileInputFailure(CompanionImportOutcome.Failed, "source-changed-during-read", exception.Message);
         }
@@ -134,58 +133,17 @@ public sealed class CompanionImportService
         string content;
         try
         {
-            content = StrictUtf8.GetString(snapshot);
+            content = StrictUtf8.GetString(snapshot.Bytes);
         }
         catch (DecoderFallbackException exception)
         {
             return FileInputFailure(CompanionImportOutcome.Rejected, "invalid-source-encoding", exception.Message);
         }
 
-        return await ImportSavedVariablesAsync(content, fullPath, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task<byte[]> ReadStableSnapshotAsync(
-        string path,
-        CancellationToken cancellationToken)
-    {
-        FileInfo before = new(path);
-        before.Refresh();
-        if (!before.Exists)
-            throw new FileNotFoundException("The SavedVariables file does not exist.", path);
-
-        await using FileStream stream = new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            81920,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-        long lengthBefore = stream.Length;
-        DateTime lastWriteBefore = before.LastWriteTimeUtc;
-        if (lengthBefore > MaximumSnapshotBytes)
-            throw new SourceTooLargeException(
-                $"The SavedVariables file exceeds the {MaximumSnapshotBytes} byte import limit.");
-
-        using MemoryStream buffer = new((int)Math.Min(lengthBefore, int.MaxValue));
-        byte[] chunk = new byte[81920];
-        while (true)
-        {
-            int read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
-            if (read == 0) break;
-            if (buffer.Length + read > MaximumSnapshotBytes)
-                throw new SourceTooLargeException(
-                    $"The SavedVariables file exceeds the {MaximumSnapshotBytes} byte import limit.");
-            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-        }
-
-        before.Refresh();
-        long lengthAfter = stream.Length;
-        if (buffer.Length != lengthBefore || lengthAfter != lengthBefore ||
-            before.Length != lengthBefore || before.LastWriteTimeUtc != lastWriteBefore)
-            throw new StableSnapshotException(
-                "The SavedVariables file changed while it was being read; retry after the write settles.");
-
-        return buffer.ToArray();
+        CompanionImportResult result = await ImportSavedVariablesAsync(content, fullPath, cancellationToken).ConfigureAwait(false);
+        return result.Outcome == CompanionImportOutcome.Successful
+            ? result with { SourceFingerprint = snapshot.Fingerprint }
+            : result;
     }
 
     private static CompanionImportResult Failure(
@@ -254,7 +212,4 @@ public sealed class CompanionImportService
             persistenceDiagnostics ?? []);
     }
 
-    private sealed class SourceTooLargeException(string message) : IOException(message);
-
-    private sealed class StableSnapshotException(string message) : IOException(message);
 }
