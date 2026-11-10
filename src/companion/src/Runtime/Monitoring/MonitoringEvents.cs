@@ -18,6 +18,9 @@ public static class MonitoringEvents
     public static readonly EventId FileChanged = new(6030, nameof(FileChanged));
     public static readonly EventId WatcherUnavailable = new(6031, nameof(WatcherUnavailable));
     public static readonly EventId WatcherReady = new(6032, nameof(WatcherReady));
+    public static readonly EventId WatcherSubscribed = new(6033, nameof(WatcherSubscribed));
+    public static readonly EventId WatcherDisposed = new(6034, nameof(WatcherDisposed));
+    public static readonly EventId WatcherNativeError = new(6035, nameof(WatcherNativeError));
     public static readonly EventId CheckpointSaveFailed = new(6040, nameof(CheckpointSaveFailed));
     public static readonly EventId CheckpointSaveRecovered = new(6041, nameof(CheckpointSaveRecovered));
     public static readonly EventId AutomaticImportAdmitted = new(6050, nameof(AutomaticImportAdmitted));

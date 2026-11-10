@@ -44,11 +44,24 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
     private IObservable<SourceInvalidation> RecoveringRoot(string root) => Observable.Defer(() =>
     {
         bool unavailable = false;
+        int attempt = 0;
+        bool ready = false;
         string rootId = SourceCatalog.IdFor(root);
-        return Observable.Defer(() => WatchRoot(root))
+        return Observable.Defer(() =>
+            {
+                int subscription = ++attempt;
+                ready = false;
+                logger.LogDebug(MonitoringEvents.WatcherSubscribed,
+                    "Subscribing filesystem watcher for {RootId} ({RootLabel}), attempt {WatcherAttempt}.",
+                    rootId, root, subscription);
+                return Observable.Defer(() => WatchRoot(root)).Finally(() => logger.LogDebug(MonitoringEvents.WatcherDisposed,
+                    "Filesystem watcher subscription disposed for {RootId} ({RootLabel}), attempt {WatcherAttempt}.",
+                    rootId, root, subscription));
+            })
             .Do(change =>
             {
                 if (change.Reason != SourceChangeReason.WatcherReady) return;
+                ready = true;
                 logger.LogInformation(MonitoringEvents.WatcherReady,
                     "Filesystem watcher {WatcherState} for {RootId} ({RootLabel}).",
                     unavailable ? "recovered" : "ready", rootId, root);
@@ -61,7 +74,9 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
                     logger.LogWarning(MonitoringEvents.WatcherUnavailable,
                         "Filesystem watcher unavailable for {RootId} ({RootLabel}, {ExceptionType}); retrying every {RetrySeconds} seconds; periodic discovery remains active.",
                         rootId, root, exception.GetType().Name, WatcherRetry.TotalSeconds);
-                logger.LogDebug(exception, "Filesystem watcher failure detail for {RootId}.", rootId);
+                logger.LogDebug(exception,
+                    "Filesystem watcher failure detail for {RootId} ({RootLabel}): {ExceptionType}, HResult {HResult}, stage {WatcherStage}, attempt {WatcherAttempt}.",
+                    rootId, root, exception.GetType().Name, exception.HResult, ready ? "Watching" : "Subscription", attempt);
                 unavailable = true;
                 return Observable.Return(new SourceInvalidation(SourceChangeReason.WatcherUnavailable, rootId))
                     .Concat(Observable.Empty<SourceInvalidation>().DelaySubscription(WatcherRetry, scheduler));
@@ -83,6 +98,14 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
                     h => watcher.Renamed += h, h => watcher.Renamed -= h).Select(e => (FileSystemEventArgs)e.EventArgs),
                 Observable.FromEventPattern<ErrorEventHandler, ErrorEventArgs>(
                     h => watcher.Error += h, h => watcher.Error -= h)
+                    .Do(e =>
+                    {
+                        Exception exception = e.EventArgs.GetException();
+                        logger.LogDebug(MonitoringEvents.WatcherNativeError,
+                            "Native filesystem watcher error for {RootId} ({RootLabel}): {ExceptionType}, HResult {HResult}, buffer {BufferBytes} bytes, recursive {Recursive}, filters {NotifyFilter}.",
+                            SourceCatalog.IdFor(root), root, exception.GetType().Name, exception.HResult,
+                            watcher.InternalBufferSize, watcher.IncludeSubdirectories, watcher.NotifyFilter);
+                    })
                     .SelectMany(e => Observable.Throw<FileSystemEventArgs>(e.EventArgs.GetException())));
             IDisposable subscription = events.SelectMany(change => Paths(change)
                 .Select(path => Invalidate(root, path, change.ChangeType))
@@ -99,7 +122,7 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
             return subscription;
         }));
 
-    private static FileSystemWatcher CreateWatcher(string root)
+    protected virtual FileSystemWatcher CreateWatcher(string root)
     {
         for (DirectoryInfo? ancestor = new(root); ancestor is not null; ancestor = ancestor.Parent)
             if ((File.GetAttributes(ancestor.FullName) & FileAttributes.ReparsePoint) != 0)

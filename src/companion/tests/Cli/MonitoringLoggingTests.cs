@@ -1,7 +1,10 @@
+using System.Reactive.Linq;
+
 using ArtisanLogbook.ImportService;
 using ArtisanLogbook.Runtime;
 
 using Microsoft.Extensions.Logging;
+using Microsoft.Reactive.Testing;
 
 using NUnit.Framework;
 
@@ -152,6 +155,54 @@ public sealed class MonitoringLoggingTests
         CapturedLog recovery = Events(host, MonitoringEvents.WatcherReady).Single();
         Assert.That(recovery.Level, Is.EqualTo(LogLevel.Information));
         Assert.That(recovery.Properties["WatcherState"], Is.EqualTo("recovered"));
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void WatcherDiagnosticsDistinguishNativeOverflowFromSubscriptionFailureAndDisposeBeforeRetry(bool native)
+    {
+        TestScheduler scheduler = new();
+        CapturingLoggerProvider logs = new();
+        DiagnosticFeed feed = new(scheduler, logs.CreateLogger<SourceChangeFeed>(), native);
+        using var requests = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
+        using IDisposable subscription = feed.Observe(["/controlled"], TimeSpan.FromMinutes(1), requests).Subscribe();
+        if (native) feed.Watcher!.Fail(new InternalBufferOverflowException("controlled native overflow"));
+        CapturedLog failure = logs.Entries.Single(log => log.Properties.ContainsKey("WatcherStage"));
+        Assert.That(failure.Properties["WatcherStage"], Is.EqualTo(native ? "Watching" : "Subscription"));
+        Assert.That(failure.Exception, Is.InstanceOf(native ? typeof(InternalBufferOverflowException) : typeof(UnauthorizedAccessException)));
+        Assert.That(failure.Properties["RootLabel"], Is.EqualTo("/controlled"));
+        Assert.That(failure.Properties["HResult"], Is.EqualTo(failure.Exception!.HResult));
+        Assert.That(logs.Entries.Count(log => log.Event == MonitoringEvents.WatcherNativeError), Is.EqualTo(native ? 1 : 0));
+        Assert.That(logs.Entries.Count(log => log.Event == MonitoringEvents.WatcherDisposed), Is.EqualTo(1));
+        if (native) Assert.That(feed.Watcher!.IsDisposed, Is.True);
+        scheduler.AdvanceBy(SourceChangeFeed.WatcherRetry.Ticks);
+        Assert.That(logs.Entries.Count(log => log.Event == MonitoringEvents.WatcherSubscribed), Is.EqualTo(2));
+        subscription.Dispose();
+        scheduler.AdvanceBy(TimeSpan.FromMinutes(1).Ticks);
+        Assert.That(logs.Entries.Count(log => log.Event == MonitoringEvents.WatcherSubscribed), Is.EqualTo(2));
+        Assert.That(logs.Entries.Count(log => log.Event == MonitoringEvents.WatcherDisposed), Is.EqualTo(2));
+    }
+
+    private sealed class DiagnosticFeed(TestScheduler scheduler, ILogger<SourceChangeFeed> logger, bool native)
+        : SourceChangeFeed(scheduler, logger)
+    {
+        public DiagnosticWatcher? Watcher { get; private set; }
+        protected override FileSystemWatcher CreateWatcher(string root)
+        {
+            if (!native) throw new UnauthorizedAccessException("controlled subscription failure");
+            return Watcher = new DiagnosticWatcher();
+        }
+    }
+
+    private sealed class DiagnosticWatcher() : FileSystemWatcher(System.IO.Path.GetTempPath())
+    {
+        public bool IsDisposed { get; private set; }
+        public void Fail(Exception exception) => OnError(new(exception));
+        protected override void Dispose(bool disposing)
+        {
+            IsDisposed = true;
+            base.Dispose(disposing);
+        }
     }
 
     [Test]
