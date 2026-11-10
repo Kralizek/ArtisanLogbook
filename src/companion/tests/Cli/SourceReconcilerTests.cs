@@ -239,6 +239,37 @@ public sealed class SourceReconcilerTests
     }
 
     [Test]
+    public async Task CheckpointTerminalizationFailureForOneSourceFailsTheWholeOperation()
+    {
+        await using ReconciliationHarness harness = new();
+        harness.Files.Ledger("_retail_", "A");
+        harness.Files.Ledger("_classic_", "B", project: 2);
+        await harness.StartAsync();
+        harness.Imports.ReturnNullFingerprintOnCall(2);
+
+        ImportSubmission submission = harness.Operations.Submit(null);
+        Assert.That(submission.Rejection, Is.Null);
+        await MonitoringTestHost.Eventually(() =>
+            harness.IsStopping && harness.Operations.Get(submission.Operation!.Id)?.CompletedAt is not null);
+        await harness.Operations.StopAsync(CancellationToken.None);
+
+        ImportOperationSnapshot failedOperation = harness.Operations.Get(submission.Operation!.Id)!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.Imports.Calls, Is.EqualTo(2));
+            Assert.That(failedOperation.Sources, Has.Count.EqualTo(2));
+            Assert.That(failedOperation.Sources[0].Status, Is.EqualTo(ImportOperationStatus.Completed));
+            Assert.That(failedOperation.Sources[1].Status, Is.EqualTo(ImportOperationStatus.Failed));
+            Assert.That(failedOperation.Status, Is.EqualTo(ImportOperationStatus.Failed));
+            Assert.That(failedOperation.Outcome, Is.EqualTo(ImportOperationOutcome.Failed));
+            Assert.That(harness.Checkpoints.Read().Document.Sources[failedOperation.Sources[0].SourceId]
+                .Successful?.Outcome, Is.EqualTo(CheckpointAttemptOutcome.Successful));
+            Assert.That(harness.Checkpoints.Read().Document.Sources[failedOperation.Sources[1].SourceId]
+                .LastAttempt?.Outcome, Is.EqualTo(CheckpointAttemptOutcome.Pending));
+        });
+    }
+
+    [Test]
     public async Task EvictedOperationsDoNotLoseManualReceiptsWhilePersistenceFails()
     {
         await using ReconciliationHarness harness = new(new(MaxRetainedOperations: 1));

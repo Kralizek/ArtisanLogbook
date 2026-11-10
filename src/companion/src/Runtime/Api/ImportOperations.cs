@@ -233,7 +233,7 @@ public sealed class ImportOperations(
                         lock (_gate) _activeSources.Remove(source.Source.Id);
                     }
                 }
-                lock (_gate) Finish(operation);
+                lock (_gate) Finish(operation, fail: checkpointFailure);
 
                 if (checkpointFailure)
                 {
@@ -371,10 +371,10 @@ public sealed class ImportOperations(
         }
     }
 
-    private void Finish(OperationState operation)
+    private void Finish(OperationState operation, bool fail = false)
     {
         foreach (SourceState source in operation.Sources) _activeSources.Remove(source.Source.Id);
-        operation.Finish();
+        operation.Finish(fail);
         Trim();
     }
 
@@ -479,12 +479,17 @@ public sealed class ImportOperations(
 
         public void AddFailure(string code, string message) => _diagnostics.Add(new("operation", code, message));
 
-        public void Finish()
+        public void Finish(bool fail = false)
         {
             foreach (SourceState source in Sources.Where(source => source.Status == ImportOperationStatus.Queued))
                 source.Cancel("application-stopping", "The application is stopping; the source was not imported.");
             int successful = Sources.Count(source => source.Outcome == CompanionImportOutcome.Successful);
-            if (Sources.Any(source => source.Status == ImportOperationStatus.Cancelled))
+            if (fail)
+            {
+                Status = ImportOperationStatus.Failed;
+                Outcome = ImportOperationOutcome.Failed;
+            }
+            else if (Sources.Any(source => source.Status == ImportOperationStatus.Cancelled))
             {
                 Status = ImportOperationStatus.Cancelled;
             }

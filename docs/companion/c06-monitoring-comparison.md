@@ -195,9 +195,9 @@ it never pretends that observing an event is a transaction acknowledgement.
   implementation parity. Serial inspection of many sources costs real I/O and
   quiet time; no throughput improvement is claimed.
 - Existing accepted imports continue after disabling in all candidates. This
-  experiment preserves C11's public import contract rather than adding the
-  reference branches' manual/automatic origin field. Its monitoring response
-  instead explicitly separates saved preferences, effective values and overrides.
+  experiment preserves C11's shared import worker while exposing `Manual` and
+  `Automatic` origins in operation snapshots and the versioned import API. Its
+  monitoring response also separates saved preferences, effective values and overrides.
 - Invalid checkpoint metadata fails startup here instead of proceeding with an
   empty map. This preserves unsupported/corrupt metadata but reduces availability;
   operators must follow the documented backup/reset procedure.
