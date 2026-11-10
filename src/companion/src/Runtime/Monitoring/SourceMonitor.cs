@@ -236,10 +236,11 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
                     ((reasons & visibleTriggers) != SourceChangeReason.None || report.SubmittedImports > 0 || healthChanged)
                     ? LogLevel.Information : LogLevel.Debug;
                 _logger.Log(level, MonitoringEvents.ReconciliationCompleted,
-                    "Reconciliation completed: {DiscoveredSources} sources, {SubmittedImports} imports queued, {DurationMs} ms ({TriggerReasons}); {DiagnosticCount} diagnostics ({DiagnosticCodes}), {PendingSources} sources pending retry or import.",
+                    "Reconciliation completed: {DiscoveredSources} sources, {SubmittedImports} imports queued, {DurationMs} ms ({TriggerReasons}); {DiagnosticCount} diagnostics ({DiagnosticCodes}), {PendingSources} sources pending retry or import. Sources: {SourceLabels}; affected: {AffectedSourceLabels}",
                     report.DiscoveredSources, report.SubmittedImports, duration.ElapsedMilliseconds, trigger,
                     report.Diagnostics.Count, string.Join(", ", report.Diagnostics.Select(diagnostic => diagnostic.Code).Distinct()),
-                    _checkpoints.Read().Document.Sources.Values.Count(source => source.NeedsReconciliation));
+                    _checkpoints.Read().Document.Sources.Values.Count(source => source.NeedsReconciliation),
+                    report.SourceLabels, report.AffectedSourceLabels);
             }
             catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested) { }
         }

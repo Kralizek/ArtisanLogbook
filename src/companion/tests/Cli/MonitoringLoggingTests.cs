@@ -11,6 +11,25 @@ namespace Tests.Cli;
 public sealed class MonitoringLoggingTests
 {
     [Test]
+    public async Task PartialMultiSourceImportHasAnExplicitAggregateEvent()
+    {
+        await using MonitoringTestHost host = new();
+        host.Ledger("_retail_", "VALID");
+        host.Ledger("_forever_", "INCOMPLETE", content: "ArtisanLogbookDB = {");
+        await host.StartAsync();
+        ImportSubmission submission = host.Operations.Submit(null);
+        Assert.That(submission.Rejection, Is.Null);
+        await Logged(host, MonitoringEvents.ImportPartiallyCompleted);
+        CapturedLog partial = Events(host, MonitoringEvents.ImportPartiallyCompleted).Single();
+        Assert.That(partial.Properties["SuccessfulSources"], Is.EqualTo(1));
+        Assert.That(partial.Properties["SourceCount"], Is.EqualTo(2));
+        Assert.That(partial.Properties["OperationId"], Is.EqualTo(submission.Operation!.Id));
+        Assert.That(host.Operations.Get(submission.Operation.Id)!.Outcome, Is.EqualTo(ImportOperationOutcome.Partial));
+        Assert.That(Events(host, MonitoringEvents.ImportCompleted).Select(log => log.Properties["SourceLabel"]),
+            Is.EquivalentTo(new[] { "_retail_", "_forever_" }));
+    }
+
+    [Test]
     public async Task LifecycleDescribesEffectiveOptionsAndLiveDisable()
     {
         await using MonitoringTestHost host = new();

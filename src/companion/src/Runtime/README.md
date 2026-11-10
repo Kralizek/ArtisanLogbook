@@ -125,6 +125,14 @@ directory paths are shown explicitly for startup diagnostics; history database
 paths remain unlogged. Flavor directory names are presentation labels only and
 never establish a saved craft's GameContext.
 
+`CompanionEvents` and `MonitoringEvents` expose stable log identities for console
+and other log consumers, not HTTP contracts. The CLI's normal presenter condenses
+startup metadata into monitoring status, actual server readiness, and completed
+source discovery. `serve --verbose` retains the full diagnostic startup records.
+Discovered sources carry internal log labels, disambiguated only when needed;
+the same metadata enriches admission, completion and reconciliation records
+without changing ingestion decisions or exposing labels through API DTOs.
+
 ## Extension points
 
 The same WebApplication owns embedded Kestrel on IPv4 loopback, with free-port

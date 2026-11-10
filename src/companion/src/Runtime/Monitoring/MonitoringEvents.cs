@@ -2,7 +2,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ArtisanLogbook.Runtime;
 
-internal static class MonitoringEvents
+public static class MonitoringEvents
 {
     public static readonly EventId Enabled = new(6000, nameof(Enabled));
     public static readonly EventId Disabled = new(6001, nameof(Disabled));
@@ -22,4 +22,5 @@ internal static class MonitoringEvents
     public static readonly EventId CheckpointSaveRecovered = new(6041, nameof(CheckpointSaveRecovered));
     public static readonly EventId AutomaticImportAdmitted = new(6050, nameof(AutomaticImportAdmitted));
     public static readonly EventId ImportCompleted = new(6051, nameof(ImportCompleted));
+    public static readonly EventId ImportPartiallyCompleted = new(6052, nameof(ImportPartiallyCompleted));
 }

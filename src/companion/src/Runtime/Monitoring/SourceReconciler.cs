@@ -7,7 +7,11 @@ namespace ArtisanLogbook.Runtime;
 
 internal sealed record MonitoringDiagnostic(string Code, string Message, string? SourceId = null);
 internal sealed record ReconciliationReport(
-    DateTimeOffset At, int DiscoveredSources, int SubmittedImports, IReadOnlyList<MonitoringDiagnostic> Diagnostics);
+    DateTimeOffset At, int DiscoveredSources, int SubmittedImports, IReadOnlyList<MonitoringDiagnostic> Diagnostics)
+{
+    public IReadOnlyList<string> SourceLabels { get; init; } = [];
+    public IReadOnlyList<string> AffectedSourceLabels { get; init; } = [];
+}
 
 /// <summary>One explicit operation, independent of watchers, Rx subscriptions and HTTP.</summary>
 internal class SourceReconciler(
@@ -37,8 +41,8 @@ internal class SourceReconciler(
                 catch (SourceSnapshotException exception)
                 {
                     _logger.LogDebug(MonitoringEvents.SourceInspectionFailed, exception,
-                        "Source {SourceId} cannot yet provide a snapshot ({DiagnosticCode}); inspection will retry.",
-                        source.Id, exception.Code);
+                        "Source {SourceId} ({SourceLabel}) cannot yet provide a snapshot ({DiagnosticCode}); inspection will retry.",
+                        source.Id, source.LogLabel, exception.Code);
                     checkpoints.InspectionFailed(source.Id, exception.Code, now);
                     diagnostics.Add(new(exception.Code, "The source could not be inspected; it will be retried.", source.Id));
                     continue;
@@ -67,7 +71,8 @@ internal class SourceReconciler(
                 {
                     submitted++;
                     _logger.LogInformation(MonitoringEvents.AutomaticImportAdmitted,
-                        "Automatic import admitted for {SourceId} ({OperationId}).", source.Id, submission.Operation!.Id);
+                        "Automatic import admitted for {SourceId} ({OperationId}, {SourceLabel}).",
+                        source.Id, submission.Operation!.Id, source.LogLabel);
                 }
                 else if (submission.Rejection != ImportRejection.Unchanged)
                 {
@@ -83,6 +88,12 @@ internal class SourceReconciler(
                     "Monitoring metadata capacity is exhausted; this source was not admitted.", source.Id));
             }
         }
-        return new(now, discovered.Sources.Count, submitted, diagnostics.ToArray());
+        HashSet<string> affectedSources = diagnostics.Select(diagnostic => diagnostic.SourceId).OfType<string>().ToHashSet();
+        return new(now, discovered.Sources.Count, submitted, diagnostics.ToArray())
+        {
+            SourceLabels = discovered.Sources.Select(source => source.LogLabel).ToArray(),
+            AffectedSourceLabels = discovered.Sources.Where(source => affectedSources.Contains(source.Id))
+                .Select(source => source.LogLabel).ToArray()
+        };
     }
 }

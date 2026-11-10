@@ -3,7 +3,10 @@ using System.Text;
 
 namespace ArtisanLogbook.Runtime;
 
-public sealed record DiscoveredSource(string Id, string Path, string Client, string FileName, long? SizeBytes, DateTimeOffset? ModifiedAt);
+public sealed record DiscoveredSource(string Id, string Path, string Client, string FileName, long? SizeBytes, DateTimeOffset? ModifiedAt)
+{
+    internal string LogLabel { get; init; } = "";
+}
 public sealed record SourceCatalogDiagnostic(DiscoverySeverity Severity, string Code, string Message);
 public sealed record SourceCatalogSnapshot(IReadOnlyList<DiscoveredSource> Sources, IReadOnlyList<SourceCatalogDiagnostic> Diagnostics);
 
@@ -49,7 +52,7 @@ public sealed class SourceCatalog(CompanionRuntimeConfiguration configuration, I
         if (configuration.EffectiveSettings.InstallationRoots.Count == 0)
             diagnostics.Add(new(DiscoverySeverity.Warning, "no-installation-roots",
                 "No installation roots are configured; run `artisanlogbook init`."));
-        return new(sources, diagnostics);
+        return new(SourceLogLabels.Apply(sources), diagnostics);
     }
 
     public static string IdFor(string path)

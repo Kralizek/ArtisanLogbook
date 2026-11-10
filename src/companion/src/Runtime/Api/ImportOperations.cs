@@ -274,7 +274,8 @@ public sealed class ImportOperations(
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Import of source {SourceId} failed unexpectedly.", source.Source.Id);
+                logger.LogError(exception, "Import of source {SourceId} ({SourceLabel}) failed unexpectedly.",
+                    source.Source.Id, source.Source.LogLabel);
                 lock (_gate)
                     source.Fail("import-failed", "The source could not be imported; see the Companion log.");
             }
@@ -289,16 +290,22 @@ public sealed class ImportOperations(
             if (result is not null)
             {
                 logger.LogInformation(MonitoringEvents.ImportCompleted,
-                    "Import completed for {SourceId} ({OperationId}, {Origin}): {Outcome}; {Observations} observations, {Inserted} inserted, {AlreadyPresent} already present, {Enriched} enriched, {RejectedOrConflicting} rejected or conflicting.",
-                    source.Source.Id, operation.Id, operation.Origin, result.Outcome,
+                    "Import completed for {SourceId} ({OperationId}, {Origin}, {SourceLabel}): {Outcome}; {Observations} observations, {Inserted} inserted, {AlreadyPresent} already present, {Enriched} enriched, {RejectedOrConflicting} rejected or conflicting. Diagnostics: {DiagnosticCodes}",
+                    source.Source.Id, operation.Id, operation.Origin, source.Source.LogLabel, result.Outcome,
                     result.TotalSourceCraftObservations, result.InsertedCrafts, result.AlreadyPresentCrafts,
-                    result.EnrichedCrafts, result.RejectedOrConflictingCrafts);
+                    result.EnrichedCrafts, result.RejectedOrConflictingCrafts,
+                    string.Join(", ", source.Diagnostics.Select(diagnostic => diagnostic.Code).Distinct()));
                 if (result.Outcome != CompanionImportOutcome.Successful)
                     logger.LogDebug("Import diagnostics for {SourceId}: {DiagnosticCodes}.",
                         source.Source.Id, string.Join(", ", source.Diagnostics.Select(diagnostic => diagnostic.Code)));
             }
         }
         lock (_gate) Finish(operation);
+        if (operation.Outcome == ImportOperationOutcome.Partial)
+            logger.LogInformation(MonitoringEvents.ImportPartiallyCompleted,
+                "Import operation {OperationId} partially completed: {SuccessfulSources} of {SourceCount} sources imported.",
+                operation.Id, operation.Sources.Count(source => source.Outcome == CompanionImportOutcome.Successful),
+                operation.Sources.Count);
     }
 
     private void CompleteAttempt(SourceState source)

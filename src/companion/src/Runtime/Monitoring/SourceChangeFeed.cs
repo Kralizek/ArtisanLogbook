@@ -50,8 +50,8 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
             {
                 if (change.Reason != SourceChangeReason.WatcherReady) return;
                 logger.LogInformation(MonitoringEvents.WatcherReady,
-                    "Filesystem watcher {WatcherState} for {RootId}.",
-                    unavailable ? "recovered" : "ready", rootId);
+                    "Filesystem watcher {WatcherState} for {RootId} ({RootLabel}).",
+                    unavailable ? "recovered" : "ready", rootId, root);
                 unavailable = false;
             })
             .Catch<SourceInvalidation, Exception>(exception =>
@@ -59,8 +59,8 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
                 if (!IsFileSystemFailure(exception)) return Observable.Throw<SourceInvalidation>(exception);
                 if (!unavailable)
                     logger.LogWarning(MonitoringEvents.WatcherUnavailable,
-                        "Filesystem watcher unavailable for {RootId} ({ExceptionType}); retrying every {RetrySeconds} seconds; periodic discovery remains active.",
-                        rootId, exception.GetType().Name, WatcherRetry.TotalSeconds);
+                        "Filesystem watcher unavailable for {RootId} ({RootLabel}, {ExceptionType}); retrying every {RetrySeconds} seconds; periodic discovery remains active.",
+                        rootId, root, exception.GetType().Name, WatcherRetry.TotalSeconds);
                 logger.LogDebug(exception, "Filesystem watcher failure detail for {RootId}.", rootId);
                 unavailable = true;
                 return Observable.Return(new SourceInvalidation(SourceChangeReason.WatcherUnavailable, rootId))
