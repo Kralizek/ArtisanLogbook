@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 
 namespace ArtisanLogbook.Runtime;
 
+internal sealed class CheckpointCapacityException() : InvalidOperationException("Monitoring checkpoint source capacity is exhausted.");
+
 internal sealed record CheckpointSnapshot(
     CheckpointDocument Document, long Revision = 0, long AcknowledgedRevision = 0, string? PersistenceFailure = null)
 {
@@ -22,9 +24,19 @@ internal sealed class MonitoringCheckpoints : IDisposable
 
     public MonitoringCheckpoints(MonitoringCheckpointStore store, int maximumSources = MaximumSources)
     {
+        if (maximumSources is < 1 or > MaximumSources)
+            throw new ArgumentOutOfRangeException(nameof(maximumSources));
         _store = store;
         _maximumSources = maximumSources;
-        _state = new(store.Load());
+        CheckpointDocument document = store.Load();
+        if (document.Sources.Count > maximumSources)
+            throw new IOException("Persisted monitoring checkpoints exceed the configured source capacity.");
+        var recovered = document.Sources.ToImmutableDictionary(pair => pair.Key, pair =>
+            pair.Value.LastAttempt is { Outcome: CheckpointAttemptOutcome.Pending } attempt
+                ? pair.Value with { LastAttempt = attempt with { Outcome = CheckpointAttemptOutcome.Cancelled }, RetryAfter = null }
+                : pair.Value);
+        bool interrupted = document.Sources.Any(pair => pair.Value.LastAttempt?.Outcome == CheckpointAttemptOutcome.Pending);
+        _state = new(document with { Sources = recovered }, Revision: interrupted ? 1 : 0);
     }
 
     public event EventHandler? CompletionRecorded;
@@ -81,6 +93,11 @@ internal sealed class MonitoringCheckpoints : IDisposable
             Set(id, GetOrCreate(id) with { InspectionFailure = code, RetryAfter = now + RetryDelay });
     }
 
+    public void Defer(string id, DateTimeOffset now)
+    {
+        lock (_gate) Set(id, GetOrCreate(id) with { RetryAfter = now + RetryDelay });
+    }
+
     public void Complete(string id, long sequence, CheckpointAttemptOutcome outcome, string? fingerprint, DateTimeOffset now)
     {
         if (outcome == CheckpointAttemptOutcome.Successful && fingerprint is null)
@@ -121,6 +138,7 @@ internal sealed class MonitoringCheckpoints : IDisposable
 
     public async Task FlushAsync(CancellationToken cancellationToken = default)
     {
+        if (!Read().IsDirty) return;
         // Serializes file replacements, not imports or event delivery. Completions remain free to update state.
         await _persistence.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -146,7 +164,7 @@ internal sealed class MonitoringCheckpoints : IDisposable
     {
         if (_state.Document.Sources.TryGetValue(id, out SourceCheckpoint? checkpoint)) return checkpoint;
         if (_state.Document.Sources.Count >= _maximumSources)
-            throw new InvalidOperationException("Monitoring checkpoint source capacity is exhausted.");
+            throw new CheckpointCapacityException();
         return new();
     }
 

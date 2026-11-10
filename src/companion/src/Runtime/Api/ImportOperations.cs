@@ -11,7 +11,7 @@ namespace ArtisanLogbook.Runtime;
 
 public enum ImportOperationStatus { Queued, Running, Completed, Failed, Cancelled }
 public enum ImportOperationOutcome { Successful, Partial, Failed }
-public enum ImportRejection { InvalidSourceId, UnknownSource, NoSources, SourceBusy, CapacityExceeded, Stopping }
+public enum ImportRejection { InvalidSourceId, UnknownSource, NoSources, SourceBusy, CapacityExceeded, Stopping, Unchanged, CheckpointCapacityExceeded }
 
 public sealed record ImportDiagnosticInfo(string Category, string Code, string Message);
 public sealed record ImportCounts(
@@ -101,13 +101,28 @@ public sealed class ImportOperations(
             return ImportSubmission.Reject(ImportRejection.NoSources);
         }
 
+        return Admit(sources, sourceId, CancellationToken.None);
+    }
+
+    internal ImportSubmission Submit(DiscoveredSource source, string fingerprint, CancellationToken cancellationToken) =>
+        Admit([source], source.Id, cancellationToken, fingerprint);
+
+    private ImportSubmission Admit(IReadOnlyList<DiscoveredSource> sources, string? sourceId, CancellationToken cancellationToken,
+        string? fingerprint = null)
+    {
         lock (_gate)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!_accepting) return ImportSubmission.Reject(ImportRejection.Stopping);
             if (sources.Any(source => _activeSources.Contains(source.Id)))
                 return ImportSubmission.Reject(ImportRejection.SourceBusy);
-            if (!_checkpoints.TryReserve(sources.Select(source => source.Id).ToArray(), _clock.Now, out var attempts))
+            if (fingerprint is not null &&
+                _checkpoints.Read().Document.Sources.GetValueOrDefault(sourceId!)?.Successful?.Fingerprint == fingerprint)
+                return ImportSubmission.Reject(ImportRejection.Unchanged);
+            if (_queue.Reader.Count >= Math.Max(1, limits.MaxActiveOperations))
                 return ImportSubmission.Reject(ImportRejection.CapacityExceeded);
+            if (!_checkpoints.TryReserve(sources.Select(source => source.Id).ToArray(), _clock.Now, out var attempts))
+                return ImportSubmission.Reject(ImportRejection.CheckpointCapacityExceeded);
             OperationState operation = new(Guid.NewGuid(), sourceId, DateTimeOffset.UtcNow, sources, attempts);
             if (!_queue.Writer.TryWrite(operation))
             {

@@ -205,6 +205,8 @@ internal sealed class StartImportEndpoint(ImportOperations operations) : StartIm
                     "A requested source already has a queued or running import.")),
                 ImportRejection.CapacityExceeded => new Status429Problem(ApiMapping.Problem(429, "import-capacity-exceeded",
                     "Too many imports are queued; retry later.")),
+                ImportRejection.CheckpointCapacityExceeded => new Status429Problem(ApiMapping.Problem(429, "checkpoint-capacity-exceeded",
+                    "Monitoring metadata capacity is exhausted. Reconcile configured sources or reduce the import batch.")),
                 _ => new Status503Problem(ApiMapping.Problem(503, "application-stopping",
                     "The Companion is stopping and is not accepting new imports."))
             });

@@ -13,6 +13,8 @@ internal sealed record SourceCheckpoint(
     string? InspectionFailure = null)
 {
     public bool RequiresImport => Observed is not null && Observed != Successful?.Fingerprint;
+    public bool NeedsReconciliation => RequiresImport || InspectionFailure is not null ||
+        (Observed is null && LastAttempt?.Outcome == CheckpointAttemptOutcome.Failed);
 
     public bool IsEligible(DateTimeOffset now) => RequiresImport && (RetryAfter is null || RetryAfter <= now);
 

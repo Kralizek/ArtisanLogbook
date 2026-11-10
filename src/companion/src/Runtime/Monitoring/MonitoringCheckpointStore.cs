@@ -29,6 +29,9 @@ internal class MonitoringCheckpointStore(string path)
         if (bytes is null) return CheckpointDocument.Empty;
         try
         {
+            using JsonDocument json = JsonDocument.Parse(bytes);
+            if (CompanionSettingsStore.HasDuplicateProperties(json.RootElement))
+                throw new JsonException("Duplicate checkpoint properties are not allowed.");
             CheckpointDocument document = JsonSerializer.Deserialize<CheckpointDocument>(bytes, JsonOptions)
                 ?? throw new JsonException("Expected a checkpoint document.");
             Validate(document);
@@ -101,13 +104,17 @@ internal class MonitoringCheckpointStore(string path)
             foreach (ImportReceipt receipt in new[] { checkpoint.Successful, checkpoint.LastAttempt }.OfType<ImportReceipt>())
             {
                 if (receipt.Sequence <= 0 || receipt.Sequence > document.NextSequence ||
-                    !Enum.IsDefined(receipt.Outcome) || !ValidFingerprint(receipt.Fingerprint))
+                    !Enum.IsDefined(receipt.Outcome) || !ValidFingerprint(receipt.Fingerprint) ||
+                    (receipt.Outcome == CheckpointAttemptOutcome.Successful && receipt.Fingerprint is null))
                     throw new ArgumentException("Invalid import receipt.");
             }
             if (checkpoint.Successful is { } success &&
                 (success.Outcome != CheckpointAttemptOutcome.Successful || success.Fingerprint is null ||
                  success.Sequence > (checkpoint.LastAttempt?.Sequence ?? 0)))
                 throw new ArgumentException("Invalid successful import checkpoint.");
+            if (checkpoint.LastAttempt is { Outcome: CheckpointAttemptOutcome.Successful } latest &&
+                checkpoint.Successful != latest)
+                throw new ArgumentException("The latest successful receipt must be retained.");
         }
     }
 

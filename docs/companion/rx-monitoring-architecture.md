@@ -170,3 +170,24 @@ complete sidecar remains valid and restart conservatively reimports.
 - Changing debounce policy must require no knowledge of DuckDB. Changing
   checkpoint persistence/retry rules must require no knowledge of subscriptions.
   Implementation and tests will be evaluated against these boundaries.
+
+## Implementation findings
+
+- Status is a plain immutable snapshot behind the monitor's one lock.
+  Configuration invalidations use a non-replaying subject; a synchronized Rx
+  stream resolves current settings, rather than replaying potentially reordered
+  configuration snapshots. No observer is invoked while the state lock is held.
+  Using a
+  `BehaviorSubject` as both status storage and input introduced a reproducible
+  startup lock inversion between its subscription lock and the status lock.
+  Removing that feedback path fixed the cause without adding a scheduler thread
+  or another synchronization primitive. Hosted startup and competing
+  watcher/request regression tests cover both directions of the lock boundary.
+- C11 rechecks an automatic request's inspected fingerprint under its existing
+  admission lock. Otherwise a manual import completing between inspection and
+  admission could cause a redundant automatic import from a stale decision.
+- Full-queue rejection happens before reserving an attempt sequence. Fairness
+  orders sources by actual admission, not by unsuccessful attempts to enqueue.
+- Restart converts persisted pending attempts to cancelled/retryable metadata,
+  never success. This also allows absent interrupted sources to be pruned once
+  the recovery transition is durable.

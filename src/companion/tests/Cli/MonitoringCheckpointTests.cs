@@ -41,6 +41,18 @@ public sealed class MonitoringCheckpointTests
         Assert.That(checkpoint.Complete(checkpoint.LastAttempt, TimeSpan.Zero), Is.EqualTo(checkpoint));
     }
 
+    [Test]
+    public void ReappearanceOfPreviouslyIngestedBytesDoesNotRemainPendingAfterAnUnrelatedFailure()
+    {
+        SourceCheckpoint checkpoint = new(SecondHash);
+        checkpoint = checkpoint.Complete(new(1, FirstHash, CheckpointAttemptOutcome.Successful, Now), TimeSpan.Zero);
+        checkpoint = checkpoint.Complete(new(2, SecondHash, CheckpointAttemptOutcome.Failed, Now), TimeSpan.Zero);
+        checkpoint = checkpoint.Observe(FirstHash);
+        Assert.That(checkpoint.NeedsReconciliation, Is.False);
+        Assert.That(checkpoint.Successful!.Fingerprint, Is.EqualTo(FirstHash));
+        Assert.That(checkpoint.LastAttempt!.Outcome, Is.EqualTo(CheckpointAttemptOutcome.Failed));
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task UnsuccessfulImportDoesNotAdvanceSuccessAndCanRetry(bool cancelled)
@@ -136,6 +148,18 @@ public sealed class MonitoringCheckpointTests
     }
 
     [Test]
+    public void DefaultCapacityAdmits4096SourcesButRejectsThe4097thWithoutMutation()
+    {
+        using MonitoringCheckpoints checkpoints = new(new MemoryStore());
+        string[] ids = Enumerable.Range(0, 4096).Select(i => SourceCatalog.IdFor($"/source-{i}")).ToArray();
+        Assert.That(checkpoints.TryReserve(ids, Now, out var attempts), Is.True);
+        Assert.That(attempts, Has.Count.EqualTo(4096));
+        CheckpointSnapshot before = checkpoints.Read();
+        Assert.That(checkpoints.TryReserve([Other], Now, out _), Is.False);
+        Assert.That(checkpoints.Read(), Is.EqualTo(before));
+    }
+
+    [Test]
     public async Task RestartDoesNotManufactureSuccessFromAnInterruptedAttempt()
     {
         MemoryStore store = new();
@@ -178,6 +202,30 @@ public sealed class MonitoringCheckpointTests
         Assert.Throws<InvalidOperationException>(() =>
             checkpoints.Complete(Source, sequence, CheckpointAttemptOutcome.Successful, null, Now));
         Assert.That(checkpoints.Read().Document.Sources[Source].Successful, Is.Null);
+    }
+
+    [Test]
+    public async Task NothingToPersistDoesNotTurnAnExpiredShutdownDeadlineIntoFailure()
+    {
+        MemoryStore store = new();
+        using MonitoringCheckpoints checkpoints = new(store);
+        await checkpoints.FlushAsync(new CancellationToken(canceled: true));
+        Assert.That(store.SaveCount, Is.Zero);
+    }
+
+    [TestCase("""{"version":1,"version":1,"nextSequence":0,"sources":{}}""")]
+    [TestCase("""{"version":1,"nextSequence":0,"sources":null}""")]
+    [TestCase("""{"version":1,"nextSequence":0,"sources":{},"unknown":true}""")]
+    public void MalformedCheckpointDocumentsAreExplicitFailures(string json)
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"ArtisanLogbook.Checkpoint-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, json);
+            Assert.Throws<IOException>(() => new MonitoringCheckpointStore(path).Load());
+            Assert.That(File.ReadAllText(path), Is.EqualTo(json));
+        }
+        finally { File.Delete(path); }
     }
 
     [Test]

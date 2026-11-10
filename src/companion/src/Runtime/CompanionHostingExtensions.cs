@@ -77,6 +77,10 @@ public static class CompanionHostingExtensions
         services.AddSingleton<CompanionWorkAdmission>();
         services.AddSingleton<CompanionRuntimeImports>();
         services.AddHostedService<CompanionRuntimeLifecycle>();
+        services.AddSingleton<SourceChangeFeed>();
+        services.AddSingleton<SourceReconciler>();
+        services.AddSingleton<SourceMonitor>();
+        services.AddHostedService(provider => provider.GetRequiredService<SourceMonitor>());
         services.AddCompanionApi();
         return services;
     }
