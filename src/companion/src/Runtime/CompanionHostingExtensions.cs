@@ -70,8 +70,8 @@ public static class CompanionHostingExtensions
         services.AddSingleton<CompanionApplicationStatus>();
         services.AddSingleton<CompanionWorkAdmission>();
         services.AddSingleton<CompanionRuntimeImports>();
-        services.AddHostedService<CompanionRuntimeLifecycle>();
         services.AddCompanionApi();
+        services.AddHostedService<CompanionRuntimeLifecycle>();
         return services;
     }
 }
