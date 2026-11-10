@@ -75,8 +75,10 @@ curl -s $BASE/api/v1/imports/<id>
 An import is accepted immediately (202) and runs on a bounded background worker,
 independent of the request. Operations move through `Queued`, `Running`, then
 `Completed`, `Failed` or `Cancelled`; `outcome` (`Successful`, `Partial`, `Failed`)
-and per-source counts and diagnostics mirror the C07 import result. Re-importing an
-unchanged source is idempotent (observations are reported as already present).
+and per-source counts and diagnostics mirror the C07 import result. The `origin`
+field is `Manual` for explicit HTTP imports and `Automatic` for imports admitted by
+monitoring. Re-importing an unchanged source is idempotent (observations are
+reported as already present).
 
 ## Monitoring
 

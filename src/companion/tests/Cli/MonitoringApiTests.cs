@@ -59,6 +59,46 @@ public sealed class MonitoringApiTests
         Assert.That(host.Imports.Calls, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task ManualAndAutomaticOriginsAppearInImportPostListAndDetailResponses()
+    {
+        await using MonitoringTestHost host = new();
+        string source = host.Ledger();
+        string sourceId = SourceCatalog.IdFor(source);
+        await host.StartAsync();
+
+        using HttpResponseMessage manualResponse = await Send(host, HttpMethod.Post, "/api/v1/imports",
+            $$"""{"sourceId":"{{sourceId}}"}""");
+        Assert.That(manualResponse.StatusCode, Is.EqualTo(HttpStatusCode.Accepted));
+        JsonElement manual = await Json(manualResponse);
+        string manualId = manual.GetProperty("id").GetString()!;
+        Assert.That(manual.GetProperty("origin").GetString(), Is.EqualTo("Manual"));
+        await MonitoringTestHost.Eventually(() => host.Operations.Get(Guid.Parse(manualId))?.CompletedAt is not null);
+        File.AppendAllText(source, "\n-- changed after manual import");
+
+        host.Preferences(true);
+        await MonitoringTestHost.Eventually(() => host.Operations.List(100)
+            .Any(operation => operation.Origin == ImportOrigin.Automatic && operation.CompletedAt is not null));
+        await host.Settled();
+        JsonElement list = await Json(await host.Http.GetAsync("/api/v1/imports?limit=100"));
+        JsonElement[] operations = list.GetProperty("operations").EnumerateArray().ToArray();
+        JsonElement listedManual = operations.Single(operation => operation.GetProperty("id").GetString() == manualId);
+        JsonElement automatic = operations.Single(operation => operation.GetProperty("origin").GetString() == "Automatic");
+        Assert.That(listedManual.GetProperty("origin").GetString(), Is.EqualTo("Manual"));
+
+        string automaticId = automatic.GetProperty("id").GetString()!;
+        JsonElement manualDetail = await Json(await host.Http.GetAsync($"/api/v1/imports/{manualId}"));
+        JsonElement automaticDetail = await Json(await host.Http.GetAsync($"/api/v1/imports/{automaticId}"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(manualDetail.GetProperty("origin").GetString(), Is.EqualTo("Manual"));
+            Assert.That(automatic.GetProperty("origin").GetString(), Is.EqualTo("Automatic"));
+            Assert.That(automaticDetail.GetProperty("origin").GetString(), Is.EqualTo("Automatic"));
+            Assert.That(host.Imports.Calls, Is.EqualTo(2), "both origins use the same import worker");
+            Assert.That(host.Imports.MaximumActive, Is.EqualTo(1));
+        });
+    }
+
     [TestCase(1)]
     [TestCase(86400)]
     public async Task IntervalBoundaryValuesArePersisted(int interval)

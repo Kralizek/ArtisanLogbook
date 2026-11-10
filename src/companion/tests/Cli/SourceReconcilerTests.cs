@@ -89,6 +89,7 @@ public sealed class SourceReconcilerTests
         ImportSubmission manual = harness.Operations.Submit(SourceCatalog.IdFor(source));
         CompanionImportResult ingested = await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.That(manual.Rejection, Is.Null);
+        Assert.That(manual.Operation!.Origin, Is.EqualTo(ImportOrigin.Manual));
         Assert.That(harness.Operations.Submit(SourceCatalog.IdFor(source)).Rejection, Is.EqualTo(ImportRejection.SourceBusy));
         File.AppendAllText(source, "\n--later bytes");
         Assert.That((await harness.Reconcile()).SubmittedImports, Is.Zero);
@@ -101,8 +102,62 @@ public sealed class SourceReconcilerTests
         Assert.That(pending.RequiresImport, Is.True);
         Assert.That((await harness.Reconcile()).SubmittedImports, Is.EqualTo(1));
         await harness.WaitForImports(2);
+        Assert.That(harness.Operations.List(100).Single(operation => operation.Id != manual.Operation.Id).Origin,
+            Is.EqualTo(ImportOrigin.Automatic));
         Assert.That(harness.Checkpoints.Read().Document.Sources[SourceCatalog.IdFor(source)].Successful!.Fingerprint, Is.EqualTo(observed));
         Assert.That(harness.Imports.MaximumActive, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task UnexpectedWorkerFailureFinalizesPendingAttemptsAndKeepsTheWorkerUsable()
+    {
+        await using ReconciliationHarness harness = new();
+        harness.Files.Ledger("_retail_", "A");
+        harness.Files.Ledger("_classic_", "B", project: 2);
+        harness.Files.Ledger("_other_client_", "C", project: 3);
+        await harness.StartAsync();
+        int completions = 0;
+        EventHandler injectedFailure = (_, _) =>
+        {
+            if (Interlocked.Increment(ref completions) == 2)
+                throw new IOException("injected checkpoint notification failure");
+        };
+        harness.Checkpoints.CompletionRecorded += injectedFailure;
+
+        ImportSubmission submission = harness.Operations.Submit(null);
+        Assert.That(submission.Rejection, Is.Null);
+        ImportOperationSnapshot accepted = submission.Operation!;
+        await MonitoringTestHost.Eventually(
+            () => harness.Operations.Get(accepted.Id)?.CompletedAt is not null);
+        harness.Checkpoints.CompletionRecorded -= injectedFailure;
+
+        ImportOperationSnapshot failedOperation = harness.Operations.Get(accepted.Id)!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.Imports.Calls, Is.EqualTo(2), "the exception must escape the source-local catch");
+            Assert.That(failedOperation.Sources.Take(2).Select(source => source.Status),
+                Is.All.EqualTo(ImportOperationStatus.Completed));
+            Assert.That(failedOperation.Sources.Last().Status, Is.EqualTo(ImportOperationStatus.Failed));
+            Assert.That(failedOperation.Sources.All(source => source.Status is not
+                (ImportOperationStatus.Queued or ImportOperationStatus.Running)), Is.True);
+            Assert.That(failedOperation.Outcome, Is.EqualTo(ImportOperationOutcome.Partial));
+            Assert.That(failedOperation.Origin, Is.EqualTo(ImportOrigin.Manual));
+        });
+
+        foreach (ImportSourceSnapshot source in failedOperation.Sources)
+        {
+            Assert.That(harness.Operations.IsSourceActive(source.SourceId), Is.False);
+            SourceCheckpoint checkpoint = harness.Checkpoints.Read().Document.Sources[source.SourceId];
+            Assert.That(checkpoint.LastAttempt!.Outcome, Is.Not.EqualTo(CheckpointAttemptOutcome.Pending));
+            Assert.That(checkpoint.Successful?.Outcome, Is.EqualTo(
+                source.Status == ImportOperationStatus.Completed ? CheckpointAttemptOutcome.Successful : null));
+        }
+
+        ImportSubmission retry = harness.Operations.Submit(failedOperation.Sources.Last().SourceId);
+        Assert.That(retry.Rejection, Is.Null);
+        await harness.WaitForImports(3);
+        Assert.That(harness.Operations.Get(retry.Operation!.Id)!.Sources.Single().Status,
+            Is.EqualTo(ImportOperationStatus.Completed));
     }
 
     [Test]

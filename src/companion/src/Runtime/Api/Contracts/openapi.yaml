@@ -659,12 +659,16 @@ components:
           type: boolean
     ImportOperation:
       type: object
-      required: [id, status, outcome, requestedSourceId, createdAt, startedAt, completedAt, sources, diagnostics]
+      required: [id, origin, status, outcome, requestedSourceId, createdAt, startedAt, completedAt, sources, diagnostics]
       properties:
         id:
           type: string
           format: uuid
           description: Process-local identifier; not durable across restarts.
+        origin:
+          type: string
+          enum: [Manual, Automatic]
+          description: Manual for explicitly requested imports; Automatic for monitoring-triggered imports.
         status:
           type: string
           enum: [Queued, Running, Completed, Failed, Cancelled]

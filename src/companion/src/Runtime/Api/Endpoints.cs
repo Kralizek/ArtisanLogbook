@@ -31,6 +31,8 @@ internal static class ApiMapping
     public static ImportOperation Map(ImportOperationSnapshot operation) => new()
     {
         Id = operation.Id,
+        Origin = (CompanionApi.Contracts.ImportOperationOrigin)Enum.Parse(
+            typeof(CompanionApi.Contracts.ImportOperationOrigin), operation.Origin.ToString()),
         Status = Map(operation.Status),
         Outcome = operation.Outcome switch
         {

@@ -87,6 +87,8 @@ public sealed class CompanionApiTests
         string document = await response.Content.ReadAsStringAsync();
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(document, Does.Contain("openapi: 3.0.3").And.Contain("/api/v1"));
+        Assert.That(document, Does.Contain("enum: [Manual, Automatic]")
+            .And.Contain("Manual for explicitly requested imports"));
 
         string[] documented = Regex.Matches(document, @"^  (/api/v1/\S+):$", RegexOptions.Multiline)
             .Select(match => match.Groups[1].Value).Order().ToArray();
