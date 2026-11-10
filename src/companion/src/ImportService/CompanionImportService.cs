@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Security;
+using System.Security.Cryptography;
 using System.Text;
 
 using ArtisanLogbook.History;
@@ -141,7 +142,11 @@ public sealed class CompanionImportService
             return FileInputFailure(CompanionImportOutcome.Rejected, "invalid-source-encoding", exception.Message);
         }
 
-        return await ImportSavedVariablesAsync(content, fullPath, cancellationToken).ConfigureAwait(false);
+        CompanionImportResult result = await ImportSavedVariablesAsync(content, fullPath, cancellationToken)
+            .ConfigureAwait(false);
+        return result.Outcome == CompanionImportOutcome.Successful
+            ? result with { SourceFingerprint = Convert.ToHexString(SHA256.HashData(snapshot)).ToLowerInvariant() }
+            : result;
     }
 
     private static async Task<byte[]> ReadStableSnapshotAsync(

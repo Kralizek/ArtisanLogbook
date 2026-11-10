@@ -10,7 +10,8 @@ namespace ArtisanLogbook.Runtime;
 
 public enum ImportOperationStatus { Queued, Running, Completed, Failed, Cancelled }
 public enum ImportOperationOutcome { Successful, Partial, Failed }
-public enum ImportRejection { InvalidSourceId, UnknownSource, NoSources, SourceBusy, CapacityExceeded, Stopping }
+public enum ImportOperationOrigin { Manual, Automatic }
+public enum ImportRejection { InvalidSourceId, UnknownSource, NoSources, SourceBusy, CapacityExceeded, MonitoringDisabled, Stopping }
 
 public sealed record ImportDiagnosticInfo(string Category, string Code, string Message);
 public sealed record ImportCounts(
@@ -18,9 +19,10 @@ public sealed record ImportCounts(
     int DimensionsInserted, int DimensionsEnriched);
 public sealed record ImportSourceSnapshot(
     string SourceId, ImportOperationStatus Status, CompanionImportOutcome? Outcome, ImportCounts? Counts,
-    IReadOnlyList<ImportDiagnosticInfo> Diagnostics, bool DiagnosticsTruncated);
+    IReadOnlyList<ImportDiagnosticInfo> Diagnostics, bool DiagnosticsTruncated, string? SourceFingerprint = null);
 public sealed record ImportOperationSnapshot(
-    Guid Id, ImportOperationStatus Status, ImportOperationOutcome? Outcome, string? RequestedSourceId,
+    Guid Id, ImportOperationStatus Status, ImportOperationOutcome? Outcome, ImportOperationOrigin Origin,
+    string? RequestedSourceId,
     DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt,
     IReadOnlyList<ImportSourceSnapshot> Sources, IReadOnlyList<ImportDiagnosticInfo> Diagnostics);
 public sealed record ImportSubmission(ImportOperationSnapshot? Operation, ImportRejection? Rejection)
@@ -52,6 +54,7 @@ public sealed class ImportOperations(
     private Task _worker = Task.CompletedTask;
     private CancellationTokenRegistration _stopping;
     private bool _accepting;
+    private bool _automaticEnabled;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -74,17 +77,25 @@ public sealed class ImportOperations(
 
     private void StopAccepting()
     {
-        lock (_gate) _accepting = false;
+        lock (_gate)
+        {
+            _accepting = false;
+            _automaticEnabled = false;
+        }
         _queue.Writer.TryComplete();
     }
 
-    public ImportSubmission Submit(string? sourceId)
+    public event Action<ImportOperationSnapshot>? OperationCompleted;
+
+    public ImportSubmission Submit(string? sourceId, ImportOperationOrigin origin = ImportOperationOrigin.Manual)
     {
         if (sourceId is not null && !SourceCatalog.IsWellFormedId(sourceId))
             return ImportSubmission.Reject(ImportRejection.InvalidSourceId);
         lock (_gate)
         {
             if (!_accepting) return ImportSubmission.Reject(ImportRejection.Stopping);
+            if (origin == ImportOperationOrigin.Automatic && !_automaticEnabled)
+                return ImportSubmission.Reject(ImportRejection.MonitoringDisabled);
         }
 
         IReadOnlyList<DiscoveredSource> sources = catalog.Discover().Sources;
@@ -101,9 +112,11 @@ public sealed class ImportOperations(
         lock (_gate)
         {
             if (!_accepting) return ImportSubmission.Reject(ImportRejection.Stopping);
+            if (origin == ImportOperationOrigin.Automatic && !_automaticEnabled)
+                return ImportSubmission.Reject(ImportRejection.MonitoringDisabled);
             if (sources.Any(source => _activeSources.Contains(source.Id)))
                 return ImportSubmission.Reject(ImportRejection.SourceBusy);
-            OperationState operation = new(Guid.NewGuid(), sourceId, DateTimeOffset.UtcNow, sources);
+            OperationState operation = new(Guid.NewGuid(), sourceId, origin, DateTimeOffset.UtcNow, sources);
             if (!_queue.Writer.TryWrite(operation))
                 return ImportSubmission.Reject(ImportRejection.CapacityExceeded);
             _operations[operation.Id] = operation;
@@ -112,6 +125,19 @@ public sealed class ImportOperations(
             Trim();
             return ImportSubmission.Accept(operation.Snapshot());
         }
+    }
+
+    public ImportSubmission SubmitAutomatic(string sourceId) =>
+        Submit(sourceId, ImportOperationOrigin.Automatic);
+
+    public bool IsSourceActive(string sourceId)
+    {
+        lock (_gate) return _activeSources.Contains(sourceId);
+    }
+
+    public void SetAutomaticEnabled(bool enabled)
+    {
+        lock (_gate) _automaticEnabled = enabled && _accepting;
     }
 
     public ImportOperationSnapshot? Get(Guid id)
@@ -152,12 +178,15 @@ public sealed class ImportOperations(
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Import operation {OperationId} failed unexpectedly.", operation.Id);
+                logger.LogError("Import operation {OperationId} failed unexpectedly ({FailureType}).",
+                    operation.Id, exception.GetType().Name);
                 lock (_gate)
                 {
                     operation.FailUnfinished("import-failed", "The import could not be completed.");
                     Finish(operation);
                 }
+                NotifyCompleted(operation.Snapshot());
+                ReleaseSources(operation);
             }
         }
     }
@@ -191,16 +220,32 @@ public sealed class ImportOperations(
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Import of source {SourceId} failed unexpectedly.", source.Source.Id);
+                logger.LogError("Import of source {SourceId} failed unexpectedly ({FailureType}).",
+                    source.Source.Id, exception.GetType().Name);
                 lock (_gate)
                     source.Fail("import-failed", "The source could not be imported; see the Companion log.");
             }
-            finally
-            {
-                lock (_gate) _activeSources.Remove(source.Source.Id);
-            }
         }
-        lock (_gate) Finish(operation);
+        ImportOperationSnapshot snapshot;
+        lock (_gate)
+        {
+            Finish(operation);
+            snapshot = operation.Snapshot();
+        }
+        NotifyCompleted(snapshot);
+        ReleaseSources(operation);
+    }
+
+    private void NotifyCompleted(ImportOperationSnapshot snapshot)
+    {
+        try
+        {
+            OperationCompleted?.Invoke(snapshot);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "An import completion observer failed for operation {OperationId}.", snapshot.Id);
+        }
     }
 
     private bool IsStopping
@@ -213,9 +258,17 @@ public sealed class ImportOperations(
 
     private void Finish(OperationState operation)
     {
-        foreach (SourceState source in operation.Sources) _activeSources.Remove(source.Source.Id);
         operation.Finish();
         Trim();
+    }
+
+    private void ReleaseSources(OperationState operation)
+    {
+        lock (_gate)
+        {
+            foreach (SourceState source in operation.Sources)
+                _activeSources.Remove(source.Source.Id);
+        }
     }
 
     public void Dispose()
@@ -234,10 +287,12 @@ public sealed class ImportOperations(
         public ImportCounts? Counts { get; private set; }
         public List<ImportDiagnosticInfo> Diagnostics { get; } = [];
         public bool Truncated { get; private set; }
+        public string? SourceFingerprint { get; private set; }
 
         public void Complete(CompanionImportResult result)
         {
             Outcome = result.Outcome;
+            SourceFingerprint = result.Outcome == CompanionImportOutcome.Successful ? result.SourceFingerprint : null;
             Status = result.Outcome == CompanionImportOutcome.Successful
                 ? ImportOperationStatus.Completed : ImportOperationStatus.Failed;
             Counts = new(result.TotalSourceCraftObservations, result.InsertedCrafts, result.AlreadyPresentCrafts,
@@ -262,22 +317,26 @@ public sealed class ImportOperations(
         }
 
         public ImportSourceSnapshot Snapshot() =>
-            new(Source.Id, Status, Outcome, Counts, Diagnostics.ToArray(), Truncated);
+            new(Source.Id, Status, Outcome, Counts, Diagnostics.ToArray(), Truncated, SourceFingerprint);
     }
 
     private sealed class OperationState
     {
         private readonly List<ImportDiagnosticInfo> _diagnostics = [];
 
-        public OperationState(Guid id, string? requestedSourceId, DateTimeOffset createdAt, IEnumerable<DiscoveredSource> sources)
+        public OperationState(
+            Guid id, string? requestedSourceId, ImportOperationOrigin origin,
+            DateTimeOffset createdAt, IEnumerable<DiscoveredSource> sources)
         {
             Id = id;
             RequestedSourceId = requestedSourceId;
+            Origin = origin;
             CreatedAt = createdAt;
             Sources = sources.Select(source => new SourceState(source)).ToArray();
         }
 
         public Guid Id { get; }
+        public ImportOperationOrigin Origin { get; }
         public string? RequestedSourceId { get; }
         public DateTimeOffset CreatedAt { get; }
         public IReadOnlyList<SourceState> Sources { get; }
@@ -329,7 +388,7 @@ public sealed class ImportOperations(
         }
 
         public ImportOperationSnapshot Snapshot() =>
-            new(Id, Status, Outcome, RequestedSourceId, CreatedAt, StartedAt, CompletedAt,
+            new(Id, Status, Outcome, Origin, RequestedSourceId, CreatedAt, StartedAt, CompletedAt,
                 Sources.Select(source => source.Snapshot()).ToArray(), _diagnostics.ToArray());
     }
 }

@@ -41,8 +41,8 @@ its existing stable-byte-read checks and per-file transaction.
 Directory/ledger links are not followed, including installation-root ancestors.
 Normalized aliases are deduplicated using the OS comparer; hard-link identity,
 case-insensitive Unix volume detection, and adversarial concurrent filesystem
-replacement are not supported. No recursive scan, watcher, periodic work, file
-archive, or monitoring worker is introduced.
+replacement are not supported. C06 adds bounded direct-directory watchers and
+periodic discovery; notifications remain hints and do not replace reconciliation.
 
 ## Host composition and ownership
 
@@ -62,17 +62,15 @@ settings file), `InvocationOverrides` retains each explicitly supplied CLI value
 result. Defaults for omitted JSON properties are applied by the existing settings
 model. A saved false and a CLI false remain distinguishable, even when they
 produce the same effective value. `WithPersistedPreferences` is pure resolution
-of a new saved snapshot with the original invocation overrides; it neither saves
-nor changes the running host. There is no hot reload in C10.
+of a new saved snapshot with the original invocation overrides; `SourceMonitor`
+persists API-initiated changes first, then applies this resolved snapshot live.
 
-Future browser controls must save user preferences through
-`CompanionSettingsStore`, then explicitly resolve the effective snapshot with
-the retained overrides. Precedence remains **invocation overrides > persisted
-user preferences > defaults**. Public controls must deliberately report both
-saved preference and effective value, and whether an invocation override is
-active. For example, with `--monitoring false`, saving enabled should report
-"preference saved; monitoring remains disabled by invocation override", never
-claim that effective monitoring was enabled. The opposite override is symmetric.
+Monitoring controls save only `MonitoringSettings` through
+`CompanionSettingsStore` and preserve roots and other settings. Precedence remains
+**invocation overrides > persisted user preferences > defaults**. If an API
+preference conflicts with `--monitoring` or `--reconciliation-interval`, the
+effective status reports the CLI override; a persisted preference is not claimed
+as effective.
 
 Registration provides paths, invocation configuration, settings access,
 installation discovery, one singleton C03 writer, singleton C07 importer, and
@@ -101,17 +99,18 @@ Never automatically serialize the internal status or configuration: database
 paths, installation roots, configuration internals, and sensitive operational
 information are not public API data. Public DTOs are generated from the C11 OpenAPI contract in `Api/`
 (see `docs/companion/api.md`) and mapped from these internal types.
-Counts are queried via C03 `ReadStatus()` on every read; no duplicate history
-state or monitoring statistics are maintained. Startup/status failures are
+Canonical history counts are queried via C03 `ReadStatus()` on every read;
+monitoring-only counts and timestamps describe current source discovery and
+reconciliation, never canonical craft data. Startup/status failures are
 explicit and structured `ILogger` records use failure codes and exception types,
 not raw sources, account IDs, or installation paths. Detailed command failures
 remain available to diagnose configuration/schema/ownership problems.
 Startup emits the application-started event separately from concise effective
-settings lines for SavedVariables monitoring, its configured-but-inactive
-reconciliation interval, and the HTTP preferred port; once started it logs the
+settings lines for SavedVariables monitoring, its reconciliation interval, and
+the HTTP preferred port; once started it logs the
 actual listening URL (`HTTP API listening on ...`). Disabled monitoring is
-reported as `SavedVariables monitoring: off`; enabled is explicitly marked as
-configured but not implemented. Startup also logs each configured WoW game directory
+reported as `SavedVariables monitoring: off`; enabled is reported as `on`.
+Startup also logs each configured WoW game directory
 and the direct client flavors where
 `Interface/AddOns/ArtisanLogbook_Core/ArtisanLogbook_Core.toc` exists, or
 `(none detected)`. Other client directories and unrelated addons are not
@@ -122,16 +121,14 @@ never establish a saved craft's GameContext.
 
 ## Extension points
 
-The same WebApplication already owns embedded Kestrel on IPv4 loopback.
-There are no routes/assets or advertised browser URL. Occupied ports currently
-fail startup; C11 will add free-port fallback in host configuration and register
-versioned `/api/v1/` Minimal API endpoints after Build and before Run, with the
-selected **MinimalOpenAPI** implementation (not Swashbuckle/NSwag). C12 will serve
-bundled static assets at `/`. Neither requires another host or executable.
+The same WebApplication owns embedded Kestrel on IPv4 loopback. C11 registers
+versioned `/api/v1/` endpoints from the **MinimalOpenAPI** contract; C12 will
+serve bundled static assets at `/`. Neither requires another host or executable.
 
-C06 will register hosted monitoring workers after runtime registration and use
-the same settings/discovery services and shared C07 importer. New runtime import
-requests must use `CompanionRuntimeImports`, which holds a
+`SourceMonitor` is a hosted worker within this application. It uses the same
+settings/discovery services and submits automatic imports to C11's bounded
+`ImportOperations` worker. Both manual and automatic imports use
+`CompanionRuntimeImports`, which holds a
 `CompanionWorkAdmission.Admit()` lease around the existing C07 operation. Before
 startup and once stopping begins, admission rejects explicitly with a logged
 error and an exception. A future worker coordinating longer-lived work may hold
@@ -159,13 +156,14 @@ finally before host disposal after startup/shutdown failure. Workers must observ
 cancellation and release leases; an uncooperative worker can delay graceful
 shutdown, and forced termination still relies on DuckDB transactional safety.
 Always run/stop the host before disposal; DI disposal alone is not worker
-shutdown. No queue, scheduler, or persistent admission state is introduced.
+shutdown. Import scheduling remains in the single bounded C11 worker.
 
-Monitoring remains explicitly opt-in; no monitoring or
-automatic imports run in this foundation, even with the enabled preference.
-Future operational status can extend `CompanionStatus` with real source,
-reconciliation, import, and sync information. No scheduler, channel, persistent
-checkpoint, or dynamic configuration framework is pre-created.
+Monitoring remains explicitly opt-in. C06 stores only per-source observed and
+successfully ingested fingerprints plus pending/retry state in an atomic
+checkpoint file separate from settings and canonical history. C07 returns a
+fingerprint for the exact bytes it successfully imported, allowing manual and
+automatic imports to advance the same checkpoint without inferring identity from
+timestamps or installation paths.
 
 See the [Companion guide](../../README.md) for command flow, configuration
 locations, diagnostics, and operational limitations.

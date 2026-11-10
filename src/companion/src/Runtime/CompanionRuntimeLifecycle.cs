@@ -28,10 +28,9 @@ internal sealed class CompanionRuntimeLifecycle(
             logger.LogInformation("Artisan Logbook Companion started.");
             logger.LogInformation("SavedVariables monitoring: {MonitoringState}",
                 configuration.EffectiveSettings.Monitoring.Enabled
-                    ? "on (configured; not implemented in this release)"
+                    ? "on"
                     : "off");
-            logger.LogInformation("Reconciliation interval: {ReconciliationIntervalSeconds} seconds " +
-                "(inactive until monitoring is implemented).",
+            logger.LogInformation("Reconciliation interval: {ReconciliationIntervalSeconds} seconds.",
                 configuration.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds);
             ReportListeningUrl();
         });

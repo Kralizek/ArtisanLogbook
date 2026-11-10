@@ -33,4 +33,7 @@ public sealed record CompanionImportResult(
 {
     /// <summary>Committed outcomes keyed by canonical observation identity, never source-local ID.</summary>
     public IReadOnlyList<CraftWriteResult> Observations { get; init; } = [];
+
+    /// <summary>SHA-256 of the exact source bytes read for a successful file import.</summary>
+    public string? SourceFingerprint { get; init; }
 }
