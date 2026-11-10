@@ -1,0 +1,31 @@
+@baseUrl = http://127.0.0.1:48721
+
+### Read preferences, overrides, and monitoring diagnostics
+GET {{baseUrl}}/api/v1/monitoring
+
+### Save preferences (invocation overrides still take precedence)
+PUT {{baseUrl}}/api/v1/monitoring
+Content-Type: application/json
+X-Artisan-Logbook-Client: http-file
+
+{
+  "enabled": true,
+  "reconciliationIntervalSeconds": 60
+}
+
+### Request reconciliation (202 when enabled, 409 when disabled)
+POST {{baseUrl}}/api/v1/monitoring/reconcile
+Content-Type: application/json
+X-Artisan-Logbook-Client: http-file
+
+{}
+
+### Invalid interval (400; configuration stays unchanged)
+PUT {{baseUrl}}/api/v1/monitoring
+Content-Type: application/json
+X-Artisan-Logbook-Client: http-file
+
+{
+  "enabled": true,
+  "reconciliationIntervalSeconds": 0
+}

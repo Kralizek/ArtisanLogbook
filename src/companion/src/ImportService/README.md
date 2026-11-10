@@ -41,7 +41,22 @@ second set of occurrences.
 
 C03 `WriteBatch` validates the complete history and applies dimension reconciliation and all craft writes in one DuckDB transaction. Invalid input or any known-fact conflict rejects the entire import; no craft or dimension enrichment from that batch is committed. DuckDB failures return a failed result with persistence diagnostics, and cancellation propagates to the caller while the transaction is disposed and rolled back. Identical observations are idempotent; compatible unknown-to-known corrections and independent evidence use the existing C02 reconciliation rules.
 
-The file API reads an explicit path into an in-memory byte snapshot, checks file length and modification time for changes during the read, and imports only that snapshot. It does not interpret a successful read as proof that WoW has finished writing. A changing file, inaccessible/missing path, oversized file, or invalid UTF-8 is reported separately from C04 parse diagnostics; malformed or unsupported SavedVariables are rejected before the store is called. The file API caps snapshots at 64 MiB and does not retry or wait for file stability. DuckDB writes are serialized by a `HistoryStore` instance; callers should use one writer per database, as separate instances do not coordinate writes.
+The file API uses `SavedVariablesSnapshotReader`, shared with C06 inspection.
+It checks length and modification time during each bounded read, then requires
+two byte-identical reads separated by a 250 ms quiet interval. Equal timestamps
+alone never establish stability. Only that captured content is imported;
+`SourceFingerprint` reports SHA-256 of those exact bytes, including any BOM,
+even if the path is replaced while ingestion executes. In-memory imports and
+failed file reads have no fingerprint. Only a successful C07 outcome permits
+advancing a successful monitoring checkpoint.
+
+A stable read is not proof that WoW has finished saving. A changing file,
+inaccessible/missing path, oversized file, or invalid UTF-8 is reported separately
+from C04 parse diagnostics; malformed or unsupported SavedVariables are rejected
+before the store is called. Snapshots remain capped at 64 MiB. The reader performs
+one stability check, not an indefinite retry; C06 owns retry eligibility.
+DuckDB writes are serialized by a `HistoryStore` instance; callers should use
+one writer per database, as separate instances do not coordinate writes.
 
 ## Source limitations
 

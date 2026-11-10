@@ -132,7 +132,7 @@ public sealed class CompanionSettingsStore(ApplicationPaths paths)
         return settings with { InstallationRoots = roots };
     }
 
-    private static bool HasDuplicateProperties(JsonElement element) => element.ValueKind switch
+    internal static bool HasDuplicateProperties(JsonElement element) => element.ValueKind switch
     {
         JsonValueKind.Object => element.EnumerateObject().Select(property => property.Name)
             .Distinct(StringComparer.Ordinal).Count() != element.EnumerateObject().Count() ||

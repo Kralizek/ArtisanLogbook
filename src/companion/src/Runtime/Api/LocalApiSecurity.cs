@@ -47,7 +47,7 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
 
         if (!HttpMethods.IsGet(request.Method) && !HttpMethods.IsHead(request.Method))
         {
-            if (!HttpMethods.IsPost(request.Method))
+            if (!HttpMethods.IsPost(request.Method) && !HttpMethods.IsPut(request.Method))
             {
                 await Reject(context, StatusCodes.Status405MethodNotAllowed, "method-not-allowed",
                     "The method is not supported.");

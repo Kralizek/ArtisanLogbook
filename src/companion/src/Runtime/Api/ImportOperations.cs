@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Threading.Channels;
 
 using ArtisanLogbook.ImportService;
@@ -10,7 +11,8 @@ namespace ArtisanLogbook.Runtime;
 
 public enum ImportOperationStatus { Queued, Running, Completed, Failed, Cancelled }
 public enum ImportOperationOutcome { Successful, Partial, Failed }
-public enum ImportRejection { InvalidSourceId, UnknownSource, NoSources, SourceBusy, CapacityExceeded, Stopping }
+public enum ImportOrigin { Manual, Automatic }
+public enum ImportRejection { InvalidSourceId, UnknownSource, NoSources, SourceBusy, CapacityExceeded, Stopping, Unchanged, CheckpointCapacityExceeded }
 
 public sealed record ImportDiagnosticInfo(string Category, string Code, string Message);
 public sealed record ImportCounts(
@@ -20,7 +22,7 @@ public sealed record ImportSourceSnapshot(
     string SourceId, ImportOperationStatus Status, CompanionImportOutcome? Outcome, ImportCounts? Counts,
     IReadOnlyList<ImportDiagnosticInfo> Diagnostics, bool DiagnosticsTruncated);
 public sealed record ImportOperationSnapshot(
-    Guid Id, ImportOperationStatus Status, ImportOperationOutcome? Outcome, string? RequestedSourceId,
+    Guid Id, ImportOrigin Origin, ImportOperationStatus Status, ImportOperationOutcome? Outcome, string? RequestedSourceId,
     DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt,
     IReadOnlyList<ImportSourceSnapshot> Sources, IReadOnlyList<ImportDiagnosticInfo> Diagnostics);
 public sealed record ImportSubmission(ImportOperationSnapshot? Operation, ImportRejection? Rejection)
@@ -33,7 +35,7 @@ public sealed record ImportSubmission(ImportOperationSnapshot? Operation, Import
 public sealed record ImportOperationLimits(int MaxActiveOperations = 8, int MaxRetainedOperations = 100);
 
 /// <summary>
-/// Owns accepted manual imports independently of the initiating HTTP request. A single worker serializes
+/// Owns accepted manual and automatic imports independently of their initiating requests. A single worker serializes
 /// execution against the C03 writer through C10 admission; state is process-local and bounded.
 /// </summary>
 public sealed class ImportOperations(
@@ -41,8 +43,13 @@ public sealed class ImportOperations(
     ImportOperationLimits limits, ILogger<ImportOperations> logger) : IHostedService, IDisposable
 {
     private const int MaxDiagnosticsPerSource = 50;
+    private const string CheckpointFailureCode = "checkpoint-terminalization-failed";
+    private const string CheckpointFailureMessage = "The import checkpoint could not be recorded; the Companion is stopping.";
 
     private readonly object _gate = new();
+    private readonly MonitoringCheckpoints _checkpoints = services.GetRequiredService<MonitoringCheckpoints>();
+    private readonly CompanionApplicationStatus _status = services.GetRequiredService<CompanionApplicationStatus>();
+    private readonly IScheduler _clock = services.GetRequiredService<IScheduler>();
     private readonly Channel<OperationState> _queue = Channel.CreateBounded<OperationState>(
         new BoundedChannelOptions(Math.Max(1, limits.MaxActiveOperations)) { SingleReader = true });
     private readonly Dictionary<Guid, OperationState> _operations = [];
@@ -98,14 +105,35 @@ public sealed class ImportOperations(
             return ImportSubmission.Reject(ImportRejection.NoSources);
         }
 
+        return Admit(sources, sourceId, ImportOrigin.Manual, CancellationToken.None);
+    }
+
+    internal ImportSubmission Submit(DiscoveredSource source, string fingerprint, CancellationToken cancellationToken) =>
+        Admit([source], source.Id, ImportOrigin.Automatic, cancellationToken, fingerprint);
+
+    private ImportSubmission Admit(IReadOnlyList<DiscoveredSource> sources, string? sourceId, ImportOrigin origin,
+        CancellationToken cancellationToken, string? fingerprint = null)
+    {
         lock (_gate)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!_accepting) return ImportSubmission.Reject(ImportRejection.Stopping);
             if (sources.Any(source => _activeSources.Contains(source.Id)))
                 return ImportSubmission.Reject(ImportRejection.SourceBusy);
-            OperationState operation = new(Guid.NewGuid(), sourceId, DateTimeOffset.UtcNow, sources);
-            if (!_queue.Writer.TryWrite(operation))
+            if (fingerprint is not null &&
+                _checkpoints.Read().Document.Sources.GetValueOrDefault(sourceId!)?.Successful?.Fingerprint == fingerprint)
+                return ImportSubmission.Reject(ImportRejection.Unchanged);
+            if (_queue.Reader.Count >= Math.Max(1, limits.MaxActiveOperations))
                 return ImportSubmission.Reject(ImportRejection.CapacityExceeded);
+            if (!_checkpoints.TryReserve(sources.Select(source => source.Id).ToArray(), _clock.Now, out var attempts))
+                return ImportSubmission.Reject(ImportRejection.CheckpointCapacityExceeded);
+            OperationState operation = new(Guid.NewGuid(), origin, sourceId, DateTimeOffset.UtcNow, sources, attempts);
+            if (!_queue.Writer.TryWrite(operation))
+            {
+                foreach ((string id, long sequence) in attempts)
+                    _checkpoints.Complete(id, sequence, CheckpointAttemptOutcome.Cancelled, null, _clock.Now);
+                return ImportSubmission.Reject(ImportRejection.CapacityExceeded);
+            }
             _operations[operation.Id] = operation;
             _order.AddFirst(operation.Id);
             foreach (DiscoveredSource source in sources) _activeSources.Add(source.Id);
@@ -117,6 +145,11 @@ public sealed class ImportOperations(
     public ImportOperationSnapshot? Get(Guid id)
     {
         lock (_gate) return _operations.GetValueOrDefault(id)?.Snapshot();
+    }
+
+    internal bool IsSourceActive(string id)
+    {
+        lock (_gate) return _activeSources.Contains(id);
     }
 
     /// <summary>Newest first.</summary>
@@ -153,10 +186,60 @@ public sealed class ImportOperations(
             catch (Exception exception)
             {
                 logger.LogError(exception, "Import operation {OperationId} failed unexpectedly.", operation.Id);
+                bool cancelled = IsStopping || exception is OperationCanceledException;
+                bool checkpointFailure = exception is CheckpointTerminalizationException;
+                string code = checkpointFailure ? CheckpointFailureCode :
+                    cancelled ? "import-cancelled" : "import-failed";
+                string message = checkpointFailure ? CheckpointFailureMessage : cancelled
+                    ? "The application is stopping; the source was not imported."
+                    : "The import could not be completed.";
                 lock (_gate)
                 {
-                    operation.FailUnfinished("import-failed", "The import could not be completed.");
-                    Finish(operation);
+                    foreach (SourceState source in operation.Sources)
+                    {
+                        if (!IsAttemptTerminal(source) && source.Status == ImportOperationStatus.Completed)
+                            source.Fail(checkpointFailure ? CheckpointFailureCode : code,
+                                checkpointFailure ? CheckpointFailureMessage : message);
+                    }
+                    operation.TerminalizeUnfinished(cancelled, code, message);
+                }
+
+                foreach (SourceState source in operation.Sources)
+                {
+                    try
+                    {
+                        if (exception is CheckpointTerminalizationException failedAttempt &&
+                            failedAttempt.SourceId == source.Source.Id && failedAttempt.Attempt == source.Attempt &&
+                            !IsAttemptTerminal(source))
+                        {
+                            checkpointFailure = true;
+                            lock (_gate)
+                                if (source.Status != ImportOperationStatus.Failed)
+                                    source.Fail(CheckpointFailureCode, CheckpointFailureMessage);
+                            continue;
+                        }
+                        CompleteAttempt(source);
+                    }
+                    catch (Exception checkpointException)
+                    {
+                        checkpointFailure = true;
+                        logger.LogCritical(checkpointException,
+                            "Import attempt {Attempt} for source {SourceId} could not be recorded.",
+                            source.Attempt, source.Source.Id);
+                        lock (_gate) source.Fail(CheckpointFailureCode, CheckpointFailureMessage);
+                    }
+                    finally
+                    {
+                        lock (_gate) _activeSources.Remove(source.Source.Id);
+                    }
+                }
+                lock (_gate) Finish(operation, fail: checkpointFailure);
+
+                if (checkpointFailure)
+                {
+                    StopAfterCheckpointFailure(exception);
+                    while (_queue.Reader.TryRead(out OperationState? queued))
+                        FailQueuedOperation(queued);
                 }
             }
         }
@@ -168,10 +251,10 @@ public sealed class ImportOperations(
         foreach (SourceState source in operation.Sources)
         {
             lock (_gate) source.Status = ImportOperationStatus.Running;
+            CompanionImportResult? result = null;
             try
             {
                 if (IsStopping) throw new StoppingException();
-                CompanionImportResult result;
                 try
                 {
                     result = await services.GetRequiredService<CompanionRuntimeImports>().ImportSavedVariablesFileAsync(source.Source.Path, _importCancellation.Token)
@@ -197,10 +280,87 @@ public sealed class ImportOperations(
             }
             finally
             {
-                lock (_gate) _activeSources.Remove(source.Source.Id);
+                try { CompleteAttempt(source); }
+                finally
+                {
+                    lock (_gate) _activeSources.Remove(source.Source.Id);
+                }
             }
         }
         lock (_gate) Finish(operation);
+    }
+
+    private void CompleteAttempt(SourceState source)
+    {
+        if (IsAttemptTerminal(source))
+            return;
+
+        CheckpointAttemptOutcome outcome = source.Status switch
+        {
+            ImportOperationStatus.Completed => CheckpointAttemptOutcome.Successful,
+            ImportOperationStatus.Cancelled => CheckpointAttemptOutcome.Cancelled,
+            ImportOperationStatus.Failed => CheckpointAttemptOutcome.Failed,
+            _ => throw new InvalidOperationException("An unfinished source cannot be checkpointed.")
+        };
+        try
+        {
+            _checkpoints.Complete(source.Source.Id, source.Attempt, outcome, source.Fingerprint, _clock.Now);
+        }
+        catch (Exception exception)
+        {
+            if (IsAttemptTerminal(source))
+            {
+                logger.LogError(exception,
+                    "Import attempt {Attempt} for source {SourceId} was recorded, but notification failed.",
+                    source.Attempt, source.Source.Id);
+                return;
+            }
+
+            logger.LogWarning(exception,
+                "Import attempt {Attempt} for source {SourceId} was not recorded; retrying terminalization once.",
+                source.Attempt, source.Source.Id);
+            try
+            {
+                _checkpoints.Complete(source.Source.Id, source.Attempt, outcome, source.Fingerprint, _clock.Now);
+            }
+            catch (Exception retryException)
+            {
+                if (IsAttemptTerminal(source))
+                {
+                    logger.LogError(retryException,
+                        "Import attempt {Attempt} for source {SourceId} was recorded, but notification failed.",
+                        source.Attempt, source.Source.Id);
+                    return;
+                }
+                throw new CheckpointTerminalizationException(source.Source.Id, source.Attempt, retryException);
+            }
+        }
+    }
+
+    private void StopAfterCheckpointFailure(Exception exception)
+    {
+        logger.LogCritical(exception, "Stopping the Companion because an import checkpoint could not be recorded.");
+        StopAccepting();
+        _status.Fail(CheckpointFailureCode, CheckpointFailureMessage, exception);
+        lifetime.StopApplication();
+    }
+
+    private void FailQueuedOperation(OperationState operation)
+    {
+        lock (_gate)
+        {
+            foreach (SourceState source in operation.Sources)
+                source.Fail(CheckpointFailureCode, CheckpointFailureMessage);
+            operation.AddFailure(CheckpointFailureCode, CheckpointFailureMessage);
+            Finish(operation);
+        }
+    }
+
+    private bool IsAttemptTerminal(SourceState source)
+    {
+        SourceCheckpoint? checkpoint = _checkpoints.Read().Document.Sources.GetValueOrDefault(source.Source.Id);
+        return checkpoint?.LastAttempt is { } recorded && recorded.Sequence >= source.Attempt &&
+            recorded.Outcome != CheckpointAttemptOutcome.Pending;
     }
 
     private bool IsStopping
@@ -211,10 +371,10 @@ public sealed class ImportOperations(
         }
     }
 
-    private void Finish(OperationState operation)
+    private void Finish(OperationState operation, bool fail = false)
     {
         foreach (SourceState source in operation.Sources) _activeSources.Remove(source.Source.Id);
-        operation.Finish();
+        operation.Finish(fail);
         Trim();
     }
 
@@ -226,11 +386,20 @@ public sealed class ImportOperations(
 
     private sealed class StoppingException : Exception;
 
-    private sealed class SourceState(DiscoveredSource source)
+    private sealed class CheckpointTerminalizationException(string sourceId, long attempt, Exception innerException)
+        : Exception("An import checkpoint remained unrecorded after its bounded retry.", innerException)
+    {
+        public string SourceId { get; } = sourceId;
+        public long Attempt { get; } = attempt;
+    }
+
+    private sealed class SourceState(DiscoveredSource source, long attempt)
     {
         public DiscoveredSource Source { get; } = source;
+        public long Attempt { get; } = attempt;
         public ImportOperationStatus Status { get; set; } = ImportOperationStatus.Queued;
         public CompanionImportOutcome? Outcome { get; private set; }
+        public string? Fingerprint { get; private set; }
         public ImportCounts? Counts { get; private set; }
         public List<ImportDiagnosticInfo> Diagnostics { get; } = [];
         public bool Truncated { get; private set; }
@@ -238,6 +407,7 @@ public sealed class ImportOperations(
         public void Complete(CompanionImportResult result)
         {
             Outcome = result.Outcome;
+            Fingerprint = result.SourceFingerprint;
             Status = result.Outcome == CompanionImportOutcome.Successful
                 ? ImportOperationStatus.Completed : ImportOperationStatus.Failed;
             Counts = new(result.TotalSourceCraftObservations, result.InsertedCrafts, result.AlreadyPresentCrafts,
@@ -269,15 +439,18 @@ public sealed class ImportOperations(
     {
         private readonly List<ImportDiagnosticInfo> _diagnostics = [];
 
-        public OperationState(Guid id, string? requestedSourceId, DateTimeOffset createdAt, IEnumerable<DiscoveredSource> sources)
+        public OperationState(Guid id, ImportOrigin origin, string? requestedSourceId, DateTimeOffset createdAt,
+            IEnumerable<DiscoveredSource> sources, IReadOnlyDictionary<string, long> attempts)
         {
             Id = id;
+            Origin = origin;
             RequestedSourceId = requestedSourceId;
             CreatedAt = createdAt;
-            Sources = sources.Select(source => new SourceState(source)).ToArray();
+            Sources = sources.Select(source => new SourceState(source, attempts[source.Id])).ToArray();
         }
 
         public Guid Id { get; }
+        public ImportOrigin Origin { get; }
         public string? RequestedSourceId { get; }
         public DateTimeOffset CreatedAt { get; }
         public IReadOnlyList<SourceState> Sources { get; }
@@ -293,20 +466,30 @@ public sealed class ImportOperations(
             StartedAt = DateTimeOffset.UtcNow;
         }
 
-        public void FailUnfinished(string code, string message)
+        public void TerminalizeUnfinished(bool cancelled, string code, string message)
         {
             foreach (SourceState source in Sources.Where(source => source.Status is
                 ImportOperationStatus.Queued or ImportOperationStatus.Running))
-                source.Fail(code, message);
+            {
+                if (cancelled) source.Cancel(code, message);
+                else source.Fail(code, message);
+            }
             _diagnostics.Add(new("operation", code, message));
         }
 
-        public void Finish()
+        public void AddFailure(string code, string message) => _diagnostics.Add(new("operation", code, message));
+
+        public void Finish(bool fail = false)
         {
             foreach (SourceState source in Sources.Where(source => source.Status == ImportOperationStatus.Queued))
                 source.Cancel("application-stopping", "The application is stopping; the source was not imported.");
             int successful = Sources.Count(source => source.Outcome == CompanionImportOutcome.Successful);
-            if (Sources.Any(source => source.Status == ImportOperationStatus.Cancelled))
+            if (fail)
+            {
+                Status = ImportOperationStatus.Failed;
+                Outcome = ImportOperationOutcome.Failed;
+            }
+            else if (Sources.Any(source => source.Status == ImportOperationStatus.Cancelled))
             {
                 Status = ImportOperationStatus.Cancelled;
             }
@@ -329,7 +512,7 @@ public sealed class ImportOperations(
         }
 
         public ImportOperationSnapshot Snapshot() =>
-            new(Id, Status, Outcome, RequestedSourceId, CreatedAt, StartedAt, CompletedAt,
+            new(Id, Origin, Status, Outcome, RequestedSourceId, CreatedAt, StartedAt, CompletedAt,
                 Sources.Select(source => source.Snapshot()).ToArray(), _diagnostics.ToArray());
     }
 }

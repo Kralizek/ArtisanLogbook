@@ -11,6 +11,7 @@
     <PackageReference Include="NUnit" />
     <PackageReference Include="NUnit3TestAdapter" />
     <PackageReference Include="Spectre.Console.Testing" />
+    <PackageReference Include="Microsoft.Reactive.Testing" />
     <ProjectReference Include="../../src/Cli/Cli.csproj" />
   </ItemGroup>
   <ItemGroup>

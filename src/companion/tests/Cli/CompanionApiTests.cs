@@ -87,6 +87,8 @@ public sealed class CompanionApiTests
         string document = await response.Content.ReadAsStringAsync();
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(document, Does.Contain("openapi: 3.0.3").And.Contain("/api/v1"));
+        Assert.That(document, Does.Contain("enum: [Manual, Automatic]")
+            .And.Contain("Manual for explicitly requested imports"));
 
         string[] documented = Regex.Matches(document, @"^  (/api/v1/\S+):$", RegexOptions.Multiline)
             .Select(match => match.Groups[1].Value).Order().ToArray();
@@ -96,9 +98,11 @@ public sealed class CompanionApiTests
         Assert.That(mapped, Is.EqualTo(documented));
         Assert.That(documented, Is.EqualTo(new[]
         {
-            "/api/v1/health", "/api/v1/imports", "/api/v1/imports/{id}", "/api/v1/sources", "/api/v1/status"
+            "/api/v1/health", "/api/v1/imports", "/api/v1/imports/{id}", "/api/v1/monitoring",
+            "/api/v1/monitoring/reconcile", "/api/v1/sources", "/api/v1/status"
         }));
-        foreach (string operation in new[] { "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport" })
+        foreach (string operation in new[] { "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport",
+            "getMonitoring", "updateMonitoring", "reconcileMonitoring" })
             Assert.That(document, Does.Contain($"operationId: {operation}"));
     }
 
@@ -738,6 +742,7 @@ public sealed class CompanionApiTests
         public async ValueTask DisposeAsync()
         {
             Http.Dispose();
+            await App.StopAsync();
             await App.DisposeAsync();
         }
     }

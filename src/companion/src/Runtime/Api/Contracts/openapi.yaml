@@ -109,6 +109,176 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /api/v1/monitoring:
+    get:
+      operationId: getMonitoring
+      summary: Read monitoring preferences, state and diagnostics
+      tags: [Monitoring]
+      responses:
+        "200":
+          description: Saved preferences and effective runtime state, without source paths or content.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitoringStatus"
+        "403":
+          description: Host or Origin rejected by the local security policy.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    put:
+      operationId: updateMonitoring
+      summary: Persist monitoring preferences and apply their effective values
+      description: Invocation overrides remain authoritative. Enabling effective monitoring immediately reconciles sources.
+      tags: [Monitoring]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled, reconciliationIntervalSeconds]
+              properties:
+                enabled:
+                  type: boolean
+                reconciliationIntervalSeconds:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                  maximum: 86400
+      responses:
+        "200":
+          description: Preferences saved; effective settings may differ because of invocation overrides.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitoringStatus"
+        "400":
+          description: Invalid or incomplete preferences.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Local security checks failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Persisted settings are invalid, unsupported, or changed during saving.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "411":
+          description: Content-Length is required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: Request body too large.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: Content-Type is not application/json.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The application is stopping, or settings could not be persisted.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/monitoring/reconcile:
+    post:
+      operationId: reconcileMonitoring
+      summary: Request an immediate reconciliation pass
+      description: >
+        Requires effective monitoring to be enabled. This accepts an invalidation, not an import operation.
+        Concurrent requests are coalesced; inspect monitoring state and import operations for results.
+      tags: [Monitoring]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "202":
+          description: Reconciliation requested. Location identifies the monitoring status resource.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitoringStatus"
+        "400":
+          description: Invalid request body.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Local security checks failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Effective monitoring is disabled; manual imports remain available.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "411":
+          description: Content-Length is required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: Request body too large.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: Content-Type is not application/json.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Unexpected failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The application is stopping.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/sources:
     get:
       operationId: listSources
@@ -147,7 +317,7 @@ paths:
   /api/v1/imports:
     get:
       operationId: listImports
-      summary: List recent manual import operations
+      summary: List recent manual and automatic import operations
       description: Newest first. Operations are process-local and bounded.
       tags: [Imports]
       parameters:
@@ -255,7 +425,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "429":
-          description: Import scheduling capacity is exhausted; retry later.
+          description: Import scheduling or monitoring checkpoint capacity is exhausted.
           content:
             application/problem+json:
               schema:
@@ -311,6 +481,73 @@ paths:
                 $ref: "#/components/schemas/Problem"
 components:
   schemas:
+    MonitoringPreferences:
+      type: object
+      description: Monitoring preferences shared deliberately by saved and effective projections.
+      required: [enabled, reconciliationIntervalSeconds]
+      properties:
+        enabled:
+          type: boolean
+        reconciliationIntervalSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 86400
+    MonitoringStatus:
+      type: object
+      description: Public monitoring projection shared by status and control responses; never exposes runtime configuration internals.
+      required: [state, preferences, effective, overrides, pendingSources, checkpointSavePending, diagnostics, diagnosticsTruncated]
+      properties:
+        state:
+          type: string
+          enum: [Disabled, Starting, Reconciling, Active, Degraded, Stopping, Stopped]
+        preferences:
+          $ref: "#/components/schemas/MonitoringPreferences"
+        effective:
+          $ref: "#/components/schemas/MonitoringPreferences"
+        overrides:
+          type: object
+          description: True when the corresponding preference is overridden for this invocation.
+          required: [enabled, reconciliationIntervalSeconds]
+          properties:
+            enabled:
+              type: boolean
+            reconciliationIntervalSeconds:
+              type: boolean
+        lastReconciledAt:
+          type: string
+          format: date-time
+          nullable: true
+        discoveredSources:
+          type: integer
+          format: int32
+          nullable: true
+          description: Source count from the last completed reconciliation; null before the first pass.
+        lastSubmittedImports:
+          type: integer
+          format: int32
+          nullable: true
+        pendingSources:
+          type: integer
+          format: int32
+        checkpointSavePending:
+          type: boolean
+        diagnostics:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+              sourceId:
+                type: string
+                nullable: true
+        diagnosticsTruncated:
+          type: boolean
     LifecycleState:
       type: string
       enum: [Created, Starting, Running, Stopping, Stopped, Failed]
@@ -422,12 +659,16 @@ components:
           type: boolean
     ImportOperation:
       type: object
-      required: [id, status, outcome, requestedSourceId, createdAt, startedAt, completedAt, sources, diagnostics]
+      required: [id, origin, status, outcome, requestedSourceId, createdAt, startedAt, completedAt, sources, diagnostics]
       properties:
         id:
           type: string
           format: uuid
           description: Process-local identifier; not durable across restarts.
+        origin:
+          type: string
+          enum: [Manual, Automatic]
+          description: Manual for explicitly requested imports; Automatic for monitoring-triggered imports.
         status:
           type: string
           enum: [Queued, Running, Completed, Failed, Cancelled]

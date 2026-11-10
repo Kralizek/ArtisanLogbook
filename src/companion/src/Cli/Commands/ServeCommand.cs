@@ -13,11 +13,11 @@ namespace ArtisanLogbook.Cli.Commands;
 public sealed class ServeSettings : DatabaseSettings
 {
     [CommandOption("--monitoring <BOOL>")]
-    [Description("Override the monitoring preference for this invocation (monitoring is not implemented yet).")]
+    [Description("Override the SavedVariables monitoring preference for this invocation (default false).")]
     public bool? Monitoring { get; init; }
 
     [CommandOption("--reconciliation-interval <SECONDS>")]
-    [Description("Override the future reconciliation interval (1-86400 seconds; default 60).")]
+    [Description("Override the reconciliation interval (1-86400 seconds; default 60).")]
     public int? ReconciliationIntervalSeconds { get; init; }
 
     [CommandOption("--port <PORT>")]
