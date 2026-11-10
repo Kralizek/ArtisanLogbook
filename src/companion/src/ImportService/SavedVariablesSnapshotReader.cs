@@ -68,8 +68,7 @@ public class SavedVariablesSnapshotReader(TimeProvider? timeProvider = null, Tim
         if (!before.Exists)
             throw new FileNotFoundException("The SavedVariables file does not exist.", path);
 
-        await using FileStream stream = new(path, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using Stream stream = OpenRead(path);
         long length = stream.Length;
         DateTime lastWrite = before.LastWriteTimeUtc;
         if (length > MaximumSnapshotBytes) throw TooLarge();
@@ -90,6 +89,9 @@ public class SavedVariablesSnapshotReader(TimeProvider? timeProvider = null, Tim
             throw Changed();
         return buffer.ToArray();
     }
+
+    protected virtual Stream OpenRead(string path) => new FileStream(path, FileMode.Open, FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
 
     private static SourceSnapshotException Changed() => new("source-changed-during-read",
         "The SavedVariables file changed while it was being read; retry after the write settles.");

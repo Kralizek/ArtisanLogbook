@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -25,7 +26,14 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
         CompanionRuntimeConfiguration Configuration, MonitoringPhase Phase,
         ReconciliationReport? Report, ImmutableHashSet<string> UnavailableWatchers, MonitoringDiagnostic? Failure = null);
     private sealed record SessionOptions(bool Enabled, int Interval, IReadOnlyList<string> Roots);
-    private sealed record Work(SessionOptions Options, CancellationToken Cancellation);
+    private sealed record Work(SessionOptions Options, CancellationToken Cancellation, PendingTriggers? Triggers = null);
+
+    private sealed class PendingTriggers
+    {
+        private int _reasons;
+        public void Add(SourceChangeReason reason) => Interlocked.Or(ref _reasons, (int)reason);
+        public SourceChangeReason Take() => (SourceChangeReason)Interlocked.Exchange(ref _reasons, 0);
+    }
 
     private readonly object _gate = new();
     private State _state;
@@ -129,19 +137,16 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
             .Select(work => Observable.FromAsync(() => Task.Run(() => ProcessAsync(work)))
                 .Catch<Unit, Exception>(exception =>
                 {
-                    _logger.LogError("Monitoring operation failed ({ExceptionType}); later invalidations will retry.",
-                        exception.GetType().Name);
-                    Publish(work, state => state with
-                    {
-                        Phase = work.Options.Enabled ? MonitoringPhase.Active : state.Phase,
-                        Failure = new("reconciliation-failed", "A monitoring operation failed; reconciliation will retry.")
-                    });
+                    _logger.LogError(MonitoringEvents.ReconciliationFailed, exception,
+                        "Monitoring operation failed; later invalidations will retry.");
+                    OperationFailed(work);
                     return Observable.Return(Unit.Default);
                 }))
             .ConcatLatest()
             .Do(_ => { }, exception =>
             {
-                _logger.LogCritical("Monitoring event composition failed ({ExceptionType}); stopping the host.", exception.GetType().Name);
+                _logger.LogCritical(MonitoringEvents.CompositionFailed, exception,
+                    "Monitoring event composition failed; stopping the host.");
                 _lifetime.StopApplication();
             })
             .DefaultIfEmpty(Unit.Default).ToTask();
@@ -153,7 +158,10 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
         IDisposable subscription = _configurations.Subscribe(observer);
         observer.OnNext(Unit.Default);
         return subscription;
-    }).Merge(_lifetime.ApplicationStopping.WhenCancelled()).Synchronize().Select(_ =>
+    }).Merge(_lifetime.ApplicationStopping.WhenCancelled().Do(_ =>
+        _logger.LogInformation(MonitoringEvents.Stopping,
+            "Monitoring stopping; source inspection is cancelled and admitted imports will drain.")))
+        .Synchronize().Select(_ =>
     {
         // Hints carry no snapshot: concurrently published changes always resolve the latest saved state.
         lock (_gate)
@@ -167,6 +175,17 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
     private IObservable<Work> CreateSession(SessionOptions options) =>
         Observable.Using(() => new CancellationDisposable(), cancellation =>
         {
+            if (!_lifetime.ApplicationStopping.IsCancellationRequested)
+            {
+                if (options.Enabled)
+                    _logger.LogInformation(MonitoringEvents.Enabled,
+                        "Monitoring enabled: {RootCount} installation roots, reconciliation every {IntervalSeconds} seconds.",
+                        options.Roots.Count, options.Interval);
+                else
+                    _logger.LogInformation(MonitoringEvents.Disabled,
+                        "Monitoring explicitly disabled; automatic source discovery and imports are off.");
+            }
+            PendingTriggers triggers = new();
             IObservable<SourceInvalidation> source = options.Enabled
                 ? _feed.Observe(options.Roots, TimeSpan.FromSeconds(options.Interval), _requests)
                 : Observable.Return(new SourceInvalidation(SourceChangeReason.Checkpoint));
@@ -185,24 +204,59 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
                             ? state.UnavailableWatchers.Remove(change.Key!) : state.UnavailableWatchers.Add(change.Key!)
                     });
                 })
-                .Select(_ => new Work(options, cancellation.Token));
+                .Select(change =>
+                {
+                    // Pending work is replaceable; accumulate bounded causes until the next pass starts.
+                    triggers.Add(change.Reason);
+                    return new Work(options, cancellation.Token, triggers);
+                });
         });
 
     private async Task<Unit> ProcessAsync(Work work)
     {
         if (work.Options.Enabled && !work.Cancellation.IsCancellationRequested)
         {
+            SourceChangeReason reasons = work.Triggers?.Take() ?? SourceChangeReason.None;
+            string trigger = reasons == SourceChangeReason.None ? "Coalesced" : reasons.ToString();
+            _logger.LogDebug(MonitoringEvents.ReconciliationStarted,
+                "Reconciliation started ({TriggerReasons}).", trigger);
+            Stopwatch duration = Stopwatch.StartNew();
             Publish(work, state => state with { Phase = MonitoringPhase.Reconciling });
             try
             {
                 ReconciliationReport report = await _reconciler.ReconcileAsync(_scheduler.Now, work.Cancellation).ConfigureAwait(false);
+                ReconciliationReport? previous;
+                lock (_gate) previous = _state.Report;
                 Publish(work, state => state with { Phase = MonitoringPhase.Active, Report = report, Failure = null });
+                bool healthChanged = previous is not null &&
+                    !previous.Diagnostics.ToHashSet().SetEquals(report.Diagnostics);
+                const SourceChangeReason visibleTriggers = SourceChangeReason.Activated | SourceChangeReason.Periodic |
+                    SourceChangeReason.FileSystem | SourceChangeReason.Requested;
+                LogLevel level = !work.Cancellation.IsCancellationRequested &&
+                    ((reasons & visibleTriggers) != SourceChangeReason.None || report.SubmittedImports > 0 || healthChanged)
+                    ? LogLevel.Information : LogLevel.Debug;
+                _logger.Log(level, MonitoringEvents.ReconciliationCompleted,
+                    "Reconciliation completed: {DiscoveredSources} sources, {SubmittedImports} imports queued, {DurationMs} ms ({TriggerReasons}); {DiagnosticCount} diagnostics ({DiagnosticCodes}), {PendingSources} sources pending retry or import.",
+                    report.DiscoveredSources, report.SubmittedImports, duration.ElapsedMilliseconds, trigger,
+                    report.Diagnostics.Count, string.Join(", ", report.Diagnostics.Select(diagnostic => diagnostic.Code).Distinct()),
+                    _checkpoints.Read().Document.Sources.Values.Count(source => source.NeedsReconciliation));
             }
             catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested) { }
         }
-        await _checkpoints.FlushAsync(_persistenceDeadline.Token).ConfigureAwait(false);
+        try { await _checkpoints.FlushAsync(_persistenceDeadline.Token).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The checkpoint owner logs persistence transitions; unrelated reconciliation failures still reach Error.
+            OperationFailed(work);
+        }
         return Unit.Default;
     }
+
+    private void OperationFailed(Work work) => Publish(work, state => state with
+    {
+        Phase = work.Options.Enabled ? MonitoringPhase.Active : state.Phase,
+        Failure = new("reconciliation-failed", "A monitoring operation failed; reconciliation will retry.")
+    });
 
     private void Publish(Work work, Func<State, State> update)
     {
@@ -254,6 +308,7 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
         finally
         {
             lock (_gate) _state = _state with { Phase = MonitoringPhase.Stopped };
+            _logger.LogInformation(MonitoringEvents.Stopped, "Monitoring stopped.");
         }
     }
 

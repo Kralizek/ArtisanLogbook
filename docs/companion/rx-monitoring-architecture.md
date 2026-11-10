@@ -137,10 +137,27 @@ No canonical operation runs outside C11/C10/C07.
 
 ### Preferences, status and shutdown
 
-Disabled remains the default. PUT saves through the existing settings store,
+Monitoring is enabled by default; an explicit false remains disabled. PUT saves through the existing settings store,
 preserves invocation overrides and reports both saved and effective preferences.
 Only effective changes replace an activation. There is no implicit settings
 file hot reload. Enabling triggers immediate discovery.
+
+Operational logs use ordinary structured `ILogger` events at the existing
+component boundaries. Each session accumulates a bounded bitset of pending
+trigger reasons before the next pass starts; replacement of pending work does
+not discard provenance or add another queue. Summaries can therefore include
+multiple causes (`Activated`, `Periodic`, `FileSystem`, `Requested`, `Checkpoint`,
+or watcher transitions). `Coalesced` denotes redundant trailing work whose
+causes were already consumed by a preceding pass, not a single new trigger.
+The bounded latest-pending coordinator and reconciliation decisions are unchanged.
+
+Information summaries use the existing `ReconciliationReport` counts plus elapsed
+time. Activation, periodic, filesystem and explicit-request passes are visible.
+Checkpoint-only passes and watcher retry evaluations remain Debug unless imports
+were admitted or reconciliation diagnostics changed. One-second maintenance is
+not an Information heartbeat. Watcher outages and checkpoint persistence failures
+warn once per outage; recovery is Information, with repeated exception details
+available at Debug.
 
 Operational status is an immutable snapshot. Results are associated with their
 activation; obsolete results cannot publish Active after disable or re-enable.

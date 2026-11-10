@@ -286,6 +286,17 @@ public sealed class ImportOperations(
                     lock (_gate) _activeSources.Remove(source.Source.Id);
                 }
             }
+            if (result is not null)
+            {
+                logger.LogInformation(MonitoringEvents.ImportCompleted,
+                    "Import completed for {SourceId} ({OperationId}, {Origin}): {Outcome}; {Observations} observations, {Inserted} inserted, {AlreadyPresent} already present, {Enriched} enriched, {RejectedOrConflicting} rejected or conflicting.",
+                    source.Source.Id, operation.Id, operation.Origin, result.Outcome,
+                    result.TotalSourceCraftObservations, result.InsertedCrafts, result.AlreadyPresentCrafts,
+                    result.EnrichedCrafts, result.RejectedOrConflictingCrafts);
+                if (result.Outcome != CompanionImportOutcome.Successful)
+                    logger.LogDebug("Import diagnostics for {SourceId}: {DiagnosticCodes}.",
+                        source.Source.Id, string.Join(", ", source.Diagnostics.Select(diagnostic => diagnostic.Code)));
+            }
         }
         lock (_gate) Finish(operation);
     }
