@@ -15,6 +15,7 @@ long-running local application through `serve`.
 Implementation-facing contracts remain close to the source:
 
 - [Runtime services](../../src/companion/src/Runtime/README.md)
+- [Rx monitoring architecture](rx-monitoring-architecture.md) — event flow, state ownership, durability and lifecycle.
 - [Core](../../src/companion/src/Core/README.md)
 - [SavedVariables](../../src/companion/src/SavedVariables/README.md)
 - [Import service](../../src/companion/src/ImportService/README.md)

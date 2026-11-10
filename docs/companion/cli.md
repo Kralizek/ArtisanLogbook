@@ -79,7 +79,7 @@ than erased.
 
 The settings version remains **1**; there is no migration. Existing files with
 only `version` and `installationRoots` load unchanged. Omitted monitoring settings
-mean **disabled**, with a 60-second future reconciliation interval; omitted HTTP
+mean **disabled**, with a 60-second reconciliation interval; omitted HTTP
 settings mean preferred port **48721**. An omitted property inside either object
 also uses its built-in default. Explicit `null` objects are invalid. Intervals
 must be integers from **1 through 86400 seconds**; ports must be integers from
@@ -92,6 +92,7 @@ Saving includes the additive preferences; merely loading or serving never saves.
 al serve
 al serve --database history.duckdb --port 48722
 al serve --monitoring false --reconciliation-interval 120
+al serve --monitoring true
 ```
 
 `serve` alone constructs and owns the .NET Generic Host (`WebApplication`).
@@ -110,16 +111,19 @@ settings file, serve uses defaults and no installation roots without creating
 settings; `init` is not a prerequisite.
 
 Internally, saved preferences and invocation overrides are retained separately
-from the effective configuration. Future browser preference changes cannot
+from the effective configuration. Runtime preference changes cannot
 discard an explicit invocation override: controls must distinguish "preference
-saved" from "effective monitoring changed". Runtime preference mutation and hot
-reload are not implemented yet.
+saved" from "effective monitoring changed". The
+[monitoring API](api.md#monitoring) persists preferences and applies effective
+changes immediately. Settings-file hot reload is not supported.
 
 Startup validates configuration and opens one writable C03 History Store, shared
 with C07. Offline installations, absent SavedVariables, and empty craft history
-are supported. No discovery scan or import is triggered by startup. C06 monitoring
-is not implemented, so an enabled preference is reported but performs no work.
-There are no watcher, reconciliation timer, import scheduler, or fake statistics.
+are supported. With effective monitoring disabled, startup does not import.
+Enabled monitoring immediately discovers sources, watches for changes, and
+periodically reconciles stable snapshots. Manual and automatic imports share
+the same bounded import coordinator and writer. Monitoring reads but never
+modifies SavedVariables; removed sources do not remove canonical history.
 
 Kestrel binds **IPv4 loopback only** (`127.0.0.1`) on the effective preferred port,
 falling back to an OS-assigned loopback port only when that port is already in use.
@@ -334,9 +338,9 @@ processes. `status` never starts a host, watcher, server, or background service.
 
 ## Operational boundaries
 
-Only `serve` starts the local application host. No command monitors files,
-synchronizes automatically, or recovers aggregate-only history that has already
-lost per-craft detail. Only one process should write to a DuckDB file at a time.
+Only `serve` starts the local application host and can monitor source files.
+No command synchronizes automatically or recovers aggregate-only history that
+has already lost per-craft detail. Only one process should write to a DuckDB file at a time.
 Do not delete a database's write-ahead log to resolve a lock.
 
 Source snapshots can contain private game account or character data. Back them up, and share only sanitized fixtures or redacted diagnostics.

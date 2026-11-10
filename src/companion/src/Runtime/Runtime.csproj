@@ -16,7 +16,7 @@
     <ProjectReference Include="../ImportService/ImportService.csproj" />
     <OpenApi Include="Api/Contracts/openapi.yaml" Namespace="CompanionApi" PublishAs="/openapi/v1.yaml"
              DisplayName="Artisan Logbook Companion API" DisplayVersion="1.0.0"
-             ExcludeStatusCodesFromHandlers="403;413;415;500" />
+             ExcludeStatusCodesFromHandlers="403;411;413;415;500" />
   </ItemGroup>
   <PropertyGroup>
     <_ApiContractPath>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', 'Api', 'Contracts', 'openapi.yaml'))</_ApiContractPath>
