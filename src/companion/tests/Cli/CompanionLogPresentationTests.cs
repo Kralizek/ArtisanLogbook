@@ -109,6 +109,39 @@ public sealed class CompanionLogPresentationTests
         Assert.That(console.Output, Does.Contain("Awaiting import or retry").And.Not.Contain("Up to date"));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void OutstandingSourceWorkDistinguishesImportingRetryAndReadyWithoutChangingPendingCount(bool verbose)
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = Services(console, verbose);
+        Dictionary<string, object?> state = Reconciliation();
+        state["PendingSources"] = 4;
+        state["ImportingSources"] = 1;
+        state["RetryingSources"] = 2;
+        state["ReadySources"] = 1;
+        Log(services, Monitor, MonitoringEvents.ReconciliationCompleted, state);
+        Assert.That(console.Output, Does.Contain("1 importing · 2 waiting for retry · 1 awaiting reconciliation")
+            .And.Not.Contain("Up to date"));
+        Assert.That(state["PendingSources"], Is.EqualTo(4));
+    }
+
+    [Test]
+    public void DiagnosticReconciliationUsesOriginalPropertiesAndOmitsEmptyOptionalSections()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = Services(console, verbose: true);
+        Dictionary<string, object?> state = Reconciliation();
+        state["SourceLabels"] = new[] { "_forever_", "_retail_" };
+        state["AffectedSourceLabels"] = Array.Empty<string>();
+        Log(services, Monitor, MonitoringEvents.ReconciliationCompleted, state,
+            message: "0 diagnostics (). Sources: stale; affected:");
+        Assert.That(console.Output, Does.Contain("Reconciliation completed: 2 sources · 0 imports queued · 550ms (Periodic)")
+            .And.Contain("SourceLabels=[_forever_, _retail_]").And.Contain("event=6011/ReconciliationCompleted")
+            .And.Not.Contain("AffectedSourceLabels=").And.Not.Contain("DiagnosticCodes=")
+            .And.Not.Contain("diagnostics ()").And.Not.Contain("affected:").And.Not.Contain("stale"));
+    }
+
     [TestCase(3, 2739, 0, "+3 new observations · 2,739 existing")]
     [TestCase(1, 0, 0, "+1 new observation")]
     [TestCase(0, 1, 0, "No changes · 1 observation already present")]

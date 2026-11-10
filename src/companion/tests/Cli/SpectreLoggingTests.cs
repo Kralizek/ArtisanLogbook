@@ -19,6 +19,129 @@ namespace Tests.Cli;
 public sealed class SpectreLoggingTests
 {
     [Test]
+    public void EnumerablePropertiesAreReadableBoundedAndKeepTheOriginalState()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        string[] labels = ["_forever_", "_retail_"];
+        Dictionary<string, object?> state = new()
+        {
+            ["Labels"] = labels,
+            ["Counts"] = new List<int> { 1, 2, 3 },
+            ["Empty"] = Array.Empty<string>(),
+            ["Blank"] = "",
+            ["Missing"] = null,
+            ["Nested"] = new object[] { new[] { "a", "b" }, 4 }
+        };
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker")
+            .Log(LogLevel.Information, default, state, null, (_, _) => "metadata");
+        Assert.That(console.Output, Does.Contain("Labels=[_forever_, _retail_]")
+            .And.Contain("Counts=[1, 2, 3]").And.Contain("Nested=[[a, b], 4]")
+            .And.Contain("Missing=(null)").And.Not.Contain("Empty=").And.Not.Contain("Blank=")
+            .And.Not.Contain("System.String[]"));
+        Assert.That(state["Labels"], Is.SameAs(labels));
+    }
+
+    [TestCase("\n")]
+    [TestCase("\r\n")]
+    public void CollectionMultilineValuesAreSanitizedAndKeepContinuationIndent(string newline)
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").Log(LogLevel.Information, default,
+            new Dictionary<string, object?> { ["Values"] = new[] { "[red]one[/]" + newline + "two\x1b[2J", "three" } },
+            null, (_, _) => "collection");
+        Assert.That(console.Output, Does.Contain("Values=[[red]one[/]\n  two, three]"));
+        Assert.That(console.Output.Contains('\r') || console.Output.Contains('\x1b'), Is.False);
+    }
+
+    [Test]
+    public void CollectionRenderingBoundsEnumerationDepthAndOutputAndDisposesIterators()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        int moved = 0;
+        bool disposed = false;
+        IEnumerable<int> Unbounded()
+        {
+            try
+            {
+                for (int value = 0; ; value++)
+                {
+                    if (++moved > 17) throw new AssertionException("Collection must be bounded before enumeration");
+                    yield return value;
+                }
+            }
+            finally { disposed = true; }
+        }
+        object[] cycle = new object[1];
+        cycle[0] = cycle;
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").Log(LogLevel.Information, default,
+            new Dictionary<string, object?>
+            {
+                ["Unbounded"] = Unbounded(),
+                ["Cycle"] = cycle,
+                ["Large"] = Enumerable.Repeat(new string('x', 10_000), 10_000)
+            }, null, (_, _) => "bounded");
+        Assert.That(moved, Is.EqualTo(17));
+        Assert.That(disposed, Is.True);
+        Assert.That(console.Output, Does.Contain("14, 15, ...]").And.Contain("Cycle=[[[[...]]]]"));
+        Assert.That(console.Output.Length, Is.LessThan(2400));
+    }
+
+    [Test]
+    public void CollectionScopesUseTheSameBoundedFormatting()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, options: options => options.IncludeScopes = true);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        using (logger.BeginScope(new Dictionary<string, object?> { ["Labels"] = new[] { "a", "b" }, ["Empty"] = new int[0] }))
+            logger.LogInformation("scoped");
+        Assert.That(console.Output, Does.Contain("scope: Labels=[a, b]").And.Not.Contain("Empty=").And.Not.Contain("System.String[]"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void StandardTemplateCollectionExpansionIsBoundedAndEnumeratedOncePerEntry(bool verbose)
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = verbose);
+        int moved = 0;
+        IEnumerable<int> Unbounded()
+        {
+            for (int value = 0; ; value++)
+            {
+                if (++moved > 17) throw new AssertionException("Neither message nor properties may enumerate without bounds");
+                yield return value;
+            }
+        }
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker")
+            .LogInformation("Values {Values}; number {Number:F2}; literal {{brace}}", Unbounded(), 42);
+        Assert.That(moved, Is.EqualTo(17));
+        Assert.That(console.Output, Does.Contain("Values [0, 1, 2").And.Contain("14, 15, ...]")
+            .And.Contain("number " + 42.ToString("F2")).And.Contain("literal {brace}"));
+        Assert.That(console.Output.Length, Is.LessThan(350));
+    }
+
+    [Test]
+    public void FilteredCollectionsAreNeverEnumeratedAndConcurrentCollectionEntriesStayAtomic()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, logging => logging.SetMinimumLevel(LogLevel.Information));
+        IEnumerable<int> disabled = Enumerable.Range(0, 1).Select<int, int>(_ =>
+            throw new AssertionException("Disabled log levels must not enumerate values"));
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        logger.Log(LogLevel.Debug, default, new Dictionary<string, object?> { ["Disabled"] = disabled },
+            null, (_, _) => throw new AssertionException("Disabled formatter invoked"));
+        Parallel.For(0, 100, id => logger.Log(LogLevel.Information, default,
+            new Dictionary<string, object?> { ["Pair"] = new[] { id, id } }, null, (_, _) => "collection-" + id));
+        MatchCollection entries = Regex.Matches(console.Output,
+            @"(?m)^\d{2}:\d{2}:\d{2} INF collection-(\d+)\n  category=Worker event=0 Pair=\[\1, \1\]\n");
+        Assert.That(entries, Has.Count.EqualTo(100));
+        Assert.That(entries.Sum(entry => entry.Length), Is.EqualTo(console.Output.Length));
+    }
+
+    [Test]
     public void StructuredStateCategoryLevelAndEventArePreservedWithoutParsingTheMessage()
     {
         using TestConsole console = new();

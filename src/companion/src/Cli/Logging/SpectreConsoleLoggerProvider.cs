@@ -29,10 +29,13 @@ public sealed class SpectreConsoleLoggerProvider(
     {
         SpectreConsoleLoggerOptions settings = options.CurrentValue;
         IEnumerable<KeyValuePair<string, object?>>? properties = state as IEnumerable<KeyValuePair<string, object?>>;
-        ConsoleEntry? entry = settings.Verbose ? new(formatter(state, exception)) :
-            CompanionLogPresenter.Present(category, level, eventId, properties, () => formatter(state, exception));
+        ConsolePropertyFormatter values = new();
+        string Message() => values.Message(state, exception, formatter);
+        ConsoleEntry? entry = settings.Verbose
+            ? CompanionLogPresenter.Diagnostic(category, level, eventId, properties) ?? new(Message()) :
+            CompanionLogPresenter.Present(category, level, eventId, properties, Message);
         if (entry is null && exception is not null)
-            entry = new(formatter(state, exception), Tone: ConsoleTone.Error);
+            entry = new(Message(), Tone: ConsoleTone.Error);
         if (entry is null) return;
         string message = Sanitize(entry.Message);
         string prefix = $"{DateTimeOffset.Now:HH:mm:ss} {LevelLabel(level)}";
@@ -45,7 +48,7 @@ public sealed class SpectreConsoleLoggerProvider(
                 .Append(" event=").Append(eventId.Id.ToString(CultureInfo.InvariantCulture));
             if (eventId.Name is not null)
                 context.Append('/').Append(Sanitize(eventId.Name));
-            AppendProperties(context, state);
+            AppendProperties(context, state, values);
             lines.Add(context.ToString());
         }
         if (settings.IncludeScopes)
@@ -53,7 +56,7 @@ public sealed class SpectreConsoleLoggerProvider(
             scopeProvider.ForEachScope((scope, output) =>
             {
                 StringBuilder text = new("scope:");
-                if (!AppendProperties(text, scope))
+                if (!AppendProperties(text, scope, values))
                     text.Append(' ').Append(Sanitize(Convert.ToString(scope, CultureInfo.InvariantCulture) ?? ""));
                 output.Add(text.ToString());
             }, lines);
@@ -146,7 +149,7 @@ public sealed class SpectreConsoleLoggerProvider(
         _ => "grey"
     });
 
-    private static bool AppendProperties(StringBuilder text, object? state)
+    private static bool AppendProperties(StringBuilder text, object? state, ConsolePropertyFormatter values)
     {
         if (state is not IEnumerable<KeyValuePair<string, object?>> properties)
             return false;
@@ -154,8 +157,10 @@ public sealed class SpectreConsoleLoggerProvider(
         {
             if (key == "{OriginalFormat}")
                 continue;
+            string rendered = values.Format(value);
+            if (string.IsNullOrWhiteSpace(rendered) || rendered == "[]") continue;
             text.Append(' ').Append(Sanitize(key)).Append('=')
-                .Append(Sanitize(value is null ? "(null)" : Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""));
+                .Append(Sanitize(rendered));
         }
         return true;
     }

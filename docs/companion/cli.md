@@ -189,6 +189,14 @@ errors and critical events through a generic fallback. Exception messages and
 inner causes remain visible normally; stack traces are available in verbose mode.
 Selection only affects this console provider: the original event, properties,
 level and exception remain available to other registered logging providers.
+Verbose collection values render as bounded lists rather than CLR type names.
+The limits are 16 items per collection, three collection levels, 512 characters
+per scalar and approximately 2 KiB per property, with `...` indicating truncation.
+Collections shared by the message and property line are formatted once per entry.
+Microsoft logging-template collection expansion uses the same bounds; custom
+`ILogger` message formatters remain responsible for their own execution.
+Empty strings/collections are omitted from optional property sections; nulls
+remain explicit as `(null)`. Multiline values keep their continuation indentation.
 
 Information events describe enabled/disabled monitoring, effective interval and
 root count, watcher readiness/recovery, meaningful reconciliation summaries,
@@ -198,6 +206,17 @@ diagnostic codes and pending sources. A healthy periodic pass still logs when
 nothing changed. Repeated watcher/checkpoint outages warn once until recovery;
 unexpected failures retain error details. The one-second checkpoint maintenance
 evaluation does not emit Information heartbeats.
+Checkpoint-only work rechecks current eligibility when it reaches the bounded
+processing lane. Dirty metadata causes persistence, not full source discovery.
+Sources waiting on an active import or with a stale retry deadline but no
+outstanding work do not cause maintenance inspections. Due failed/inaccessible
+sources still retry, and completion wakes monitoring when newer observed bytes
+require reconciliation. Filesystem/API requests and periodic fallback discovery
+still perform full reconciliation, including during an active import.
+The API's pending-source count continues to mean outstanding source work (which
+includes active imports); console telemetry distinguishes importing, waiting
+for retry and awaiting reconciliation. Pending checkpoint acknowledgement is
+reported separately, not counted as another pending source.
 
 Debug events include settled file-change hints, reconciliation starts, unchanged
 sources, superseded fingerprints, source inspection failure codes and exception
@@ -207,6 +226,18 @@ byte stability is not semantic completeness: parser/import validation and retrie
 remain authoritative for temporarily incomplete writes. The two reads, existing
 250 ms quiet interval, metadata/byte comparisons, strict UTF-8, and C07's exact
 imported-byte checkpoint identity are unchanged. No historical file copies are kept.
+
+Watcher outages retain periodic fallback discovery. To investigate flapping, use
+`serve --verbose` or enable Debug for `ArtisanLogbook.Runtime.SourceChangeFeed`
+alongside diagnostic presentation. Debug records include subscription/disposal
+attempts, native error origin, exception type/HResult, buffer/filter settings and
+full exception details. A failure before readiness is distinguished from an
+active watcher failure. An overflow, access failure or root disappearance must
+be diagnosed from those records, not inferred from a normal-mode outage message.
+Installation roots are still watched recursively so new flavors/accounts are
+detected; managed SavedVariables filtering does not reduce native event traffic.
+Share only a narrowly bounded outage/recovery excerpt, redacting local paths and
+source/account identifiers as appropriate; SavedVariables content is not needed.
 
 Standard .NET logging configuration controls filtering, including environment
 variables such as `Logging__LogLevel__Default=Debug` or

@@ -19,6 +19,25 @@ internal static class CompanionLogPresenter
     private const string Checkpoints = "ArtisanLogbook.Runtime.MonitoringCheckpoints";
     private const string Lifecycle = "ArtisanLogbook.Runtime.CompanionRuntimeLifecycle";
 
+    public static ConsoleEntry? Diagnostic(string category, LogLevel level, EventId eventId,
+        IEnumerable<KeyValuePair<string, object?>>? state)
+    {
+        Properties properties = new(state);
+        if (category != Monitor || eventId != MonitoringEvents.ReconciliationCompleted ||
+            level is not (LogLevel.Information or LogLevel.Debug) ||
+            properties.Number("DiscoveredSources") is not { } sources ||
+            properties.Number("SubmittedImports") is not { } imports ||
+            properties.Number("DurationMs") is not { } duration)
+            return null;
+        // Keep the full state for integrations; only this diagnostic heading drops empty optional sections.
+        string message = $"Reconciliation completed: {sources} sources · {imports} imports queued · {duration}ms";
+        if (properties.Text("TriggerReasons") is { Length: > 0 } reasons) message += $" ({reasons})";
+        if (properties.Number("PendingSources") is > 0) message += " · " + Pending(properties);
+        if (properties.Number("DiagnosticCount") is > 0)
+            message += " · " + ReconciliationAdvice(properties.Text("DiagnosticCodes"));
+        return new(message);
+    }
+
     public static ConsoleEntry? Present(string category, LogLevel level, EventId eventId,
         IEnumerable<KeyValuePair<string, object?>>? state, Func<string> message)
     {
@@ -105,7 +124,7 @@ internal static class CompanionLogPresenter
     {
         string status = imports == 0 ? "Up to date" : $"{imports} {(imports == 1 ? "import" : "imports")} queued";
         if (imports == 0 && properties.Number("PendingSources") is > 0)
-            status = "Awaiting import or retry";
+            status = Pending(properties);
         string? advice = diagnostics > 0 ? ReconciliationAdvice(properties.Text("DiagnosticCodes")) : null;
         if (advice is not null) status = imports > 0 ? status + " · " + advice : advice;
         string message = "Reconciliation complete";
@@ -114,16 +133,32 @@ internal static class CompanionLogPresenter
         {
             message = "Sources discovered";
             if (properties.Get("SourceLabels") is IEnumerable<string> values)
-                labels = string.Join(" · ", values.Select(ClientLabel).Distinct());
+                labels = Labels(values);
         }
         if (diagnostics > 0 && properties.Get("AffectedSourceLabels") is IEnumerable<string> affected)
         {
-            string names = string.Join(" · ", affected.Select(ClientLabel).Distinct());
+            string names = Labels(affected);
             if (names.Length > 0) message += " · " + names;
         }
         return new(message, $"{sources} {(sources == 1 ? "source" : "sources")} · " +
             (string.IsNullOrEmpty(labels) ? "" : labels + " · ") + $"{status} · {duration}ms",
             diagnostics > 0 ? ConsoleTone.Warning : ConsoleTone.Activity);
+    }
+
+    private static string Pending(Properties properties)
+    {
+        List<string> details = [];
+        if (properties.Number("ImportingSources") is > 0 and var importing) details.Add($"{importing} importing");
+        if (properties.Number("RetryingSources") is > 0 and var retrying) details.Add($"{retrying} waiting for retry");
+        if (properties.Number("ReadySources") is > 0 and var ready) details.Add($"{ready} awaiting reconciliation");
+        return details.Count == 0 ? "Awaiting import or retry" : string.Join(" · ", details);
+    }
+
+    private static string Labels(IEnumerable<string> values)
+    {
+        string[] labels = values.Take(17).Select(ClientLabel).Distinct().ToArray();
+        return string.Join(" · ", labels.Take(16).Select(label => label[..Math.Min(label.Length, 512)])) +
+            (labels.Length > 16 ? " · ..." : "");
     }
 
     private static ConsoleEntry? Import(Properties properties, string outcome)
