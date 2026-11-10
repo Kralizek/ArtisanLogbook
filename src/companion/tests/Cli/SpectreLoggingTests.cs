@@ -121,13 +121,14 @@ public sealed class SpectreLoggingTests
         Assert.That(console.Output, Does.Not.Contain("title"));
     }
 
-    [Test]
-    public void MultilineMessagesAndPropertiesAreIndentedAndCarriageReturnsCannotOverwrite()
+    [TestCase("\n")]
+    [TestCase("\r\n")]
+    public void MultilineMessagesAndPropertiesAreIndentedAndCarriageReturnsCannotOverwrite(string newline)
     {
         using TestConsole console = new();
         using ServiceProvider services = CreateServices(console);
         services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker")
-            .LogInformation("first\r\nsecond\rthird {Source}", "line1\nline2");
+            .LogInformation("first" + newline + "second\rthird {Source}", "line1" + newline + "line2");
 
         Assert.That(console.Output, Does.Contain("INF first\n             second\n             third line1")
             .And.Contain("\n             line2")
@@ -267,13 +268,15 @@ public sealed class SpectreLoggingTests
         Assert.That(writer.ToString().Contains('\x1b'), Is.False);
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
+    [TestCase(false, "\n")]
+    [TestCase(false, "\r\n")]
+    [TestCase(true, "\n")]
+    [TestCase(true, "\r\n")]
     [NonParallelizable]
-    public void RedirectedOrNoninteractiveLogsDoNotWrapLongUrlsAtTerminalWidth(bool terminal)
+    public void RedirectedOrNoninteractiveLogsDoNotWrapLongUrlsAtTerminalWidth(bool terminal, string newline)
     {
         using CiEnvironment environment = new(false);
-        using StringWriter writer = new();
+        using StringWriter writer = new() { NewLine = newline };
         IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
         {
             Ansi = AnsiSupport.Yes,
@@ -292,21 +295,30 @@ public sealed class SpectreLoggingTests
         Assert.That(writer.ToString().Contains('\x1b'), Is.False);
     }
 
-    [Test]
-    public void ConcurrentEntriesAndTheirPropertiesAndScopesDoNotInterleave()
+    [TestCase("\n")]
+    [TestCase("\r\n")]
+    public void ConcurrentEntriesAndTheirPropertiesAndScopesDoNotInterleave(string newline)
     {
-        using TestConsole console = new();
+        using StringWriter writer = new() { NewLine = newline };
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            Out = new ControlledOutput(writer, false)
+        });
         using ServiceProvider services = CreateServices(console, options: options => options.IncludeScopes = true);
         ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
         Parallel.For(0, 100, id =>
         {
             using (logger.BeginScope(new Dictionary<string, object?> { ["ScopeId"] = id }))
-                logger.LogInformation("begin-{Id}\nend-{Id}", id, id);
+                logger.LogInformation("begin-{Id}" + newline + "end-{Id}", id, id);
         });
 
-        MatchCollection entries = Regex.Matches(console.Output,
-            @"INF begin-(\d+)\n             end-\1\n  category=Worker event=0 Id=\1 Id=\1\n  scope: ScopeId=\1(?:\r?\n)");
-        Assert.That(entries, Has.Count.EqualTo(100), console.Output);
+        string output = writer.ToString();
+        MatchCollection entries = Regex.Matches(output,
+            @"(?m)^\d{2}:\d{2}:\d{2} INF begin-(\d+)\n             end-\1\n  category=Worker event=0 Id=\1 Id=\1\n  scope: ScopeId=\1\n");
+        Assert.That(entries, Has.Count.EqualTo(100), output);
+        Assert.That(entries.Sum(entry => entry.Length), Is.EqualTo(output.Length), output);
+        Assert.That(entries.Select(entry => entry.Groups[1].Value).Distinct().Count(), Is.EqualTo(100), output);
     }
 
     [Test]

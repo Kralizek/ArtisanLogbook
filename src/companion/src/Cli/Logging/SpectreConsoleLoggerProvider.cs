@@ -54,9 +54,10 @@ public sealed class SpectreConsoleLoggerProvider(
         bool plain = settings.ForcePlainText || !console.Profile.Capabilities.Ansi
             || !console.Profile.Out.IsTerminal || !console.Profile.Capabilities.Interactive
             || IsContinuousIntegration();
-        string output = string.Join(Environment.NewLine, lines.Select((line, index) => index == 0
+        // Keep entry separators consistent with sanitized multiline content on every platform.
+        string output = string.Join("\n", lines.Select((line, index) => index == 0
             ? prefix + " " + Indent(line, "             ")
-            : "  " + Indent(line, "  "))) + Environment.NewLine;
+            : "  " + Indent(line, "  "))) + "\n";
         Grid heading = new Grid()
             .AddColumn(new GridColumn { Width = 12, NoWrap = true, Padding = new Padding(0, 0, 1, 0) })
             .AddColumn(new GridColumn { Padding = new Padding(0) })
