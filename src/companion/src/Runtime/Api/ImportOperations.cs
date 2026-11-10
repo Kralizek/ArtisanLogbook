@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Threading.Channels;
 
 using ArtisanLogbook.ImportService;
@@ -33,7 +34,7 @@ public sealed record ImportSubmission(ImportOperationSnapshot? Operation, Import
 public sealed record ImportOperationLimits(int MaxActiveOperations = 8, int MaxRetainedOperations = 100);
 
 /// <summary>
-/// Owns accepted manual imports independently of the initiating HTTP request. A single worker serializes
+/// Owns accepted manual and automatic imports independently of their initiating requests. A single worker serializes
 /// execution against the C03 writer through C10 admission; state is process-local and bounded.
 /// </summary>
 public sealed class ImportOperations(
@@ -43,6 +44,8 @@ public sealed class ImportOperations(
     private const int MaxDiagnosticsPerSource = 50;
 
     private readonly object _gate = new();
+    private readonly MonitoringCheckpoints _checkpoints = services.GetRequiredService<MonitoringCheckpoints>();
+    private readonly IScheduler _clock = services.GetRequiredService<IScheduler>();
     private readonly Channel<OperationState> _queue = Channel.CreateBounded<OperationState>(
         new BoundedChannelOptions(Math.Max(1, limits.MaxActiveOperations)) { SingleReader = true });
     private readonly Dictionary<Guid, OperationState> _operations = [];
@@ -103,9 +106,15 @@ public sealed class ImportOperations(
             if (!_accepting) return ImportSubmission.Reject(ImportRejection.Stopping);
             if (sources.Any(source => _activeSources.Contains(source.Id)))
                 return ImportSubmission.Reject(ImportRejection.SourceBusy);
-            OperationState operation = new(Guid.NewGuid(), sourceId, DateTimeOffset.UtcNow, sources);
-            if (!_queue.Writer.TryWrite(operation))
+            if (!_checkpoints.TryReserve(sources.Select(source => source.Id).ToArray(), _clock.Now, out var attempts))
                 return ImportSubmission.Reject(ImportRejection.CapacityExceeded);
+            OperationState operation = new(Guid.NewGuid(), sourceId, DateTimeOffset.UtcNow, sources, attempts);
+            if (!_queue.Writer.TryWrite(operation))
+            {
+                foreach ((string id, long sequence) in attempts)
+                    _checkpoints.Complete(id, sequence, CheckpointAttemptOutcome.Cancelled, null, _clock.Now);
+                return ImportSubmission.Reject(ImportRejection.CapacityExceeded);
+            }
             _operations[operation.Id] = operation;
             _order.AddFirst(operation.Id);
             foreach (DiscoveredSource source in sources) _activeSources.Add(source.Id);
@@ -117,6 +126,11 @@ public sealed class ImportOperations(
     public ImportOperationSnapshot? Get(Guid id)
     {
         lock (_gate) return _operations.GetValueOrDefault(id)?.Snapshot();
+    }
+
+    internal bool IsSourceActive(string id)
+    {
+        lock (_gate) return _activeSources.Contains(id);
     }
 
     /// <summary>Newest first.</summary>
@@ -168,10 +182,10 @@ public sealed class ImportOperations(
         foreach (SourceState source in operation.Sources)
         {
             lock (_gate) source.Status = ImportOperationStatus.Running;
+            CompanionImportResult? result = null;
             try
             {
                 if (IsStopping) throw new StoppingException();
-                CompanionImportResult result;
                 try
                 {
                     result = await services.GetRequiredService<CompanionRuntimeImports>().ImportSavedVariablesFileAsync(source.Source.Path, _importCancellation.Token)
@@ -197,6 +211,10 @@ public sealed class ImportOperations(
             }
             finally
             {
+                _checkpoints.Complete(source.Source.Id, source.Attempt,
+                    source.Status == ImportOperationStatus.Completed ? CheckpointAttemptOutcome.Successful :
+                    source.Status == ImportOperationStatus.Cancelled ? CheckpointAttemptOutcome.Cancelled : CheckpointAttemptOutcome.Failed,
+                    result?.SourceFingerprint, _clock.Now);
                 lock (_gate) _activeSources.Remove(source.Source.Id);
             }
         }
@@ -226,9 +244,10 @@ public sealed class ImportOperations(
 
     private sealed class StoppingException : Exception;
 
-    private sealed class SourceState(DiscoveredSource source)
+    private sealed class SourceState(DiscoveredSource source, long attempt)
     {
         public DiscoveredSource Source { get; } = source;
+        public long Attempt { get; } = attempt;
         public ImportOperationStatus Status { get; set; } = ImportOperationStatus.Queued;
         public CompanionImportOutcome? Outcome { get; private set; }
         public ImportCounts? Counts { get; private set; }
@@ -269,12 +288,13 @@ public sealed class ImportOperations(
     {
         private readonly List<ImportDiagnosticInfo> _diagnostics = [];
 
-        public OperationState(Guid id, string? requestedSourceId, DateTimeOffset createdAt, IEnumerable<DiscoveredSource> sources)
+        public OperationState(Guid id, string? requestedSourceId, DateTimeOffset createdAt, IEnumerable<DiscoveredSource> sources,
+            IReadOnlyDictionary<string, long> attempts)
         {
             Id = id;
             RequestedSourceId = requestedSourceId;
             CreatedAt = createdAt;
-            Sources = sources.Select(source => new SourceState(source)).ToArray();
+            Sources = sources.Select(source => new SourceState(source, attempts[source.Id])).ToArray();
         }
 
         public Guid Id { get; }

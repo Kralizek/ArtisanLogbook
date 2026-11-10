@@ -1,3 +1,5 @@
+using System.Reactive.Concurrency;
+
 using ArtisanLogbook.ImportService;
 
 using Microsoft.AspNetCore.Builder;
@@ -65,6 +67,10 @@ public static class CompanionHostingExtensions
         services.AddSingleton(configuration);
         services.AddSingleton<CompanionSettingsStore>();
         services.AddSingleton<InstallationDiscovery>();
+        services.TryAddSingleton<IScheduler>(TaskPoolScheduler.Default);
+        services.AddSingleton<SavedVariablesSnapshotReader>();
+        services.AddSingleton(_ => new MonitoringCheckpointStore(configuration.DatabasePath + ".monitoring.json"));
+        services.AddSingleton<MonitoringCheckpoints>();
         services.AddSingleton<Store>(_ => new Store(configuration.DatabasePath));
         services.AddSingleton<CompanionImportService>();
         services.AddSingleton<CompanionApplicationStatus>();

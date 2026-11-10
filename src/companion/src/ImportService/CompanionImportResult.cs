@@ -31,6 +31,9 @@ public sealed record CompanionImportResult(
     IReadOnlyList<CompanionImportDiagnostic> InputDiagnostics,
     IReadOnlyList<CompanionImportDiagnostic> PersistenceDiagnostics)
 {
+    /// <summary>SHA-256 of the exact file bytes read by C07; null for in-memory imports or failed reads.</summary>
+    public string? SourceFingerprint { get; init; }
+
     /// <summary>Committed outcomes keyed by canonical observation identity, never source-local ID.</summary>
     public IReadOnlyList<CraftWriteResult> Observations { get; init; } = [];
 }

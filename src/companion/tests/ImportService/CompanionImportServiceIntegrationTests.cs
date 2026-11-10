@@ -376,6 +376,8 @@ public sealed class CompanionImportServiceIntegrationTests
         {
             Assert.That(imported.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
             Assert.That(imported.InsertedCrafts, Is.EqualTo(1));
+            Assert.That(imported.SourceFingerprint, Is.EqualTo(Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)))));
             Assert.That(missing.Outcome, Is.EqualTo(CompanionImportOutcome.Failed));
             Assert.That(missing.InputDiagnostics.Single().Code, Is.EqualTo("source-read-failed"));
         });

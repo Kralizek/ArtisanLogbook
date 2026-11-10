@@ -12,6 +12,7 @@
     <Using Include="Microsoft.AspNetCore.Routing" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="MinimalOpenAPI" />
+    <PackageReference Include="System.Reactive" />
     <ProjectReference Include="../ImportService/ImportService.csproj" />
     <OpenApi Include="Api/Contracts/openapi.yaml" Namespace="CompanionApi" PublishAs="/openapi/v1.yaml"
              DisplayName="Artisan Logbook Companion API" DisplayVersion="1.0.0"
