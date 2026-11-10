@@ -43,9 +43,12 @@ public sealed class ImportOperations(
     ImportOperationLimits limits, ILogger<ImportOperations> logger) : IHostedService, IDisposable
 {
     private const int MaxDiagnosticsPerSource = 50;
+    private const string CheckpointFailureCode = "checkpoint-terminalization-failed";
+    private const string CheckpointFailureMessage = "The import checkpoint could not be recorded; the Companion is stopping.";
 
     private readonly object _gate = new();
     private readonly MonitoringCheckpoints _checkpoints = services.GetRequiredService<MonitoringCheckpoints>();
+    private readonly CompanionApplicationStatus _status = services.GetRequiredService<CompanionApplicationStatus>();
     private readonly IScheduler _clock = services.GetRequiredService<IScheduler>();
     private readonly Channel<OperationState> _queue = Channel.CreateBounded<OperationState>(
         new BoundedChannelOptions(Math.Max(1, limits.MaxActiveOperations)) { SingleReader = true });
@@ -184,14 +187,60 @@ public sealed class ImportOperations(
             {
                 logger.LogError(exception, "Import operation {OperationId} failed unexpectedly.", operation.Id);
                 bool cancelled = IsStopping || exception is OperationCanceledException;
-                string code = cancelled ? "import-cancelled" : "import-failed";
-                string message = cancelled
+                bool checkpointFailure = exception is CheckpointTerminalizationException;
+                string code = checkpointFailure ? CheckpointFailureCode :
+                    cancelled ? "import-cancelled" : "import-failed";
+                string message = checkpointFailure ? CheckpointFailureMessage : cancelled
                     ? "The application is stopping; the source was not imported."
                     : "The import could not be completed.";
                 lock (_gate)
+                {
+                    foreach (SourceState source in operation.Sources)
+                    {
+                        if (!IsAttemptTerminal(source) && source.Status == ImportOperationStatus.Completed)
+                            source.Fail(checkpointFailure ? CheckpointFailureCode : code,
+                                checkpointFailure ? CheckpointFailureMessage : message);
+                    }
                     operation.TerminalizeUnfinished(cancelled, code, message);
-                foreach (SourceState source in operation.Sources) CompleteAttempt(source, tolerateRecordedNotificationFailure: true);
+                }
+
+                foreach (SourceState source in operation.Sources)
+                {
+                    try
+                    {
+                        if (exception is CheckpointTerminalizationException failedAttempt &&
+                            failedAttempt.SourceId == source.Source.Id && failedAttempt.Attempt == source.Attempt &&
+                            !IsAttemptTerminal(source))
+                        {
+                            checkpointFailure = true;
+                            lock (_gate)
+                                if (source.Status != ImportOperationStatus.Failed)
+                                    source.Fail(CheckpointFailureCode, CheckpointFailureMessage);
+                            continue;
+                        }
+                        CompleteAttempt(source);
+                    }
+                    catch (Exception checkpointException)
+                    {
+                        checkpointFailure = true;
+                        logger.LogCritical(checkpointException,
+                            "Import attempt {Attempt} for source {SourceId} could not be recorded.",
+                            source.Attempt, source.Source.Id);
+                        lock (_gate) source.Fail(CheckpointFailureCode, CheckpointFailureMessage);
+                    }
+                    finally
+                    {
+                        lock (_gate) _activeSources.Remove(source.Source.Id);
+                    }
+                }
                 lock (_gate) Finish(operation);
+
+                if (checkpointFailure)
+                {
+                    StopAfterCheckpointFailure(exception);
+                    while (_queue.Reader.TryRead(out OperationState? queued))
+                        FailQueuedOperation(queued);
+                }
             }
         }
     }
@@ -231,14 +280,17 @@ public sealed class ImportOperations(
             }
             finally
             {
-                CompleteAttempt(source);
-                lock (_gate) _activeSources.Remove(source.Source.Id);
+                try { CompleteAttempt(source); }
+                finally
+                {
+                    lock (_gate) _activeSources.Remove(source.Source.Id);
+                }
             }
         }
         lock (_gate) Finish(operation);
     }
 
-    private void CompleteAttempt(SourceState source, bool tolerateRecordedNotificationFailure = false)
+    private void CompleteAttempt(SourceState source)
     {
         if (IsAttemptTerminal(source))
             return;
@@ -254,10 +306,53 @@ public sealed class ImportOperations(
         {
             _checkpoints.Complete(source.Source.Id, source.Attempt, outcome, source.Fingerprint, _clock.Now);
         }
-        catch (Exception exception) when (tolerateRecordedNotificationFailure && IsAttemptTerminal(source))
+        catch (Exception exception)
         {
-            logger.LogError(exception, "Import attempt {Attempt} for source {SourceId} was recorded, but notification failed.",
+            if (IsAttemptTerminal(source))
+            {
+                logger.LogError(exception,
+                    "Import attempt {Attempt} for source {SourceId} was recorded, but notification failed.",
+                    source.Attempt, source.Source.Id);
+                return;
+            }
+
+            logger.LogWarning(exception,
+                "Import attempt {Attempt} for source {SourceId} was not recorded; retrying terminalization once.",
                 source.Attempt, source.Source.Id);
+            try
+            {
+                _checkpoints.Complete(source.Source.Id, source.Attempt, outcome, source.Fingerprint, _clock.Now);
+            }
+            catch (Exception retryException)
+            {
+                if (IsAttemptTerminal(source))
+                {
+                    logger.LogError(retryException,
+                        "Import attempt {Attempt} for source {SourceId} was recorded, but notification failed.",
+                        source.Attempt, source.Source.Id);
+                    return;
+                }
+                throw new CheckpointTerminalizationException(source.Source.Id, source.Attempt, retryException);
+            }
+        }
+    }
+
+    private void StopAfterCheckpointFailure(Exception exception)
+    {
+        logger.LogCritical(exception, "Stopping the Companion because an import checkpoint could not be recorded.");
+        StopAccepting();
+        _status.Fail(CheckpointFailureCode, CheckpointFailureMessage, exception);
+        lifetime.StopApplication();
+    }
+
+    private void FailQueuedOperation(OperationState operation)
+    {
+        lock (_gate)
+        {
+            foreach (SourceState source in operation.Sources)
+                source.Fail(CheckpointFailureCode, CheckpointFailureMessage);
+            operation.AddFailure(CheckpointFailureCode, CheckpointFailureMessage);
+            Finish(operation);
         }
     }
 
@@ -290,6 +385,13 @@ public sealed class ImportOperations(
     }
 
     private sealed class StoppingException : Exception;
+
+    private sealed class CheckpointTerminalizationException(string sourceId, long attempt, Exception innerException)
+        : Exception("An import checkpoint remained unrecorded after its bounded retry.", innerException)
+    {
+        public string SourceId { get; } = sourceId;
+        public long Attempt { get; } = attempt;
+    }
 
     private sealed class SourceState(DiscoveredSource source, long attempt)
     {
@@ -374,6 +476,8 @@ public sealed class ImportOperations(
             }
             _diagnostics.Add(new("operation", code, message));
         }
+
+        public void AddFailure(string code, string message) => _diagnostics.Add(new("operation", code, message));
 
         public void Finish()
         {

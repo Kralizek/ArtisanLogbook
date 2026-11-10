@@ -14,6 +14,61 @@ namespace Tests.Cli;
 public sealed class ReactiveCoordinationTests
 {
     [Test]
+    public void SerializedNotificationsDeliverAcceptedWorkBeforeTerminationOutsideTheStateLock()
+    {
+        object gate = new();
+        SerializedNotifications notifications = new(gate);
+        List<string> observed = [];
+        bool admissionDrain = notifications.Enqueue(() =>
+        {
+            Assert.That(Monitor.IsEntered(gate), Is.False);
+            observed.Add("admitted");
+            Assert.That(notifications.Enqueue(() => observed.Add("reentrant")), Is.False);
+        });
+        bool terminationDrain = notifications.Enqueue(() =>
+        {
+            Assert.That(Monitor.IsEntered(gate), Is.False);
+            observed.Add("completed");
+        });
+
+        Assert.That(admissionDrain, Is.True);
+        Assert.That(terminationDrain, Is.False);
+        notifications.Drain();
+
+        Assert.That(observed, Is.EqualTo(new[] { "admitted", "completed", "reentrant" }));
+    }
+
+    [Test]
+    public void SerializedNotificationsKeepAcceptedAdmissionAheadOfRacingSourceFailure()
+    {
+        object gate = new();
+        SerializedNotifications notifications = new(gate);
+        List<string> observed = [];
+        bool admissionDrain = notifications.Enqueue(() => observed.Add("admitted"));
+        bool errorDrain = notifications.Enqueue(() => observed.Add("error"));
+
+        Assert.That(admissionDrain, Is.True);
+        Assert.That(errorDrain, Is.False);
+        notifications.Drain();
+
+        Assert.That(observed, Is.EqualTo(new[] { "admitted", "error" }));
+    }
+
+    [Test]
+    public void SerializedNotificationsDiscardAcceptedButUndeliveredWorkOnDisposal()
+    {
+        object gate = new();
+        SerializedNotifications notifications = new(gate);
+        int callbacks = 0;
+        Assert.That(notifications.Enqueue(() => callbacks++), Is.True);
+
+        notifications.Clear();
+        notifications.Drain();
+
+        Assert.That(callbacks, Is.Zero);
+    }
+
+    [Test]
     public void EmptySourceCompletesWithoutStartingWork()
     {
         using Subject<IObservable<int>> work = new();

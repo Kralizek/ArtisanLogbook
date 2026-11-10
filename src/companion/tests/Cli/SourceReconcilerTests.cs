@@ -5,6 +5,7 @@ using ArtisanLogbook.ImportService;
 using ArtisanLogbook.Runtime;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -109,7 +110,7 @@ public sealed class SourceReconcilerTests
     }
 
     [Test]
-    public async Task UnexpectedWorkerFailureFinalizesPendingAttemptsAndKeepsTheWorkerUsable()
+    public async Task PostRecordingNotificationFailureDoesNotRepeatImportsOrStopTheWorker()
     {
         await using ReconciliationHarness harness = new();
         harness.Files.Ledger("_retail_", "A");
@@ -131,33 +132,80 @@ public sealed class SourceReconcilerTests
             () => harness.Operations.Get(accepted.Id)?.CompletedAt is not null);
         harness.Checkpoints.CompletionRecorded -= injectedFailure;
 
-        ImportOperationSnapshot failedOperation = harness.Operations.Get(accepted.Id)!;
+        ImportOperationSnapshot completedOperation = harness.Operations.Get(accepted.Id)!;
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Imports.Calls, Is.EqualTo(2), "the exception must escape the source-local catch");
-            Assert.That(failedOperation.Sources.Take(2).Select(source => source.Status),
+            Assert.That(harness.Imports.Calls, Is.EqualTo(3));
+            Assert.That(completedOperation.Sources.Select(source => source.Status),
                 Is.All.EqualTo(ImportOperationStatus.Completed));
-            Assert.That(failedOperation.Sources.Last().Status, Is.EqualTo(ImportOperationStatus.Failed));
-            Assert.That(failedOperation.Sources.All(source => source.Status is not
-                (ImportOperationStatus.Queued or ImportOperationStatus.Running)), Is.True);
-            Assert.That(failedOperation.Outcome, Is.EqualTo(ImportOperationOutcome.Partial));
-            Assert.That(failedOperation.Origin, Is.EqualTo(ImportOrigin.Manual));
+            Assert.That(completedOperation.Outcome, Is.EqualTo(ImportOperationOutcome.Successful));
+            Assert.That(completedOperation.Origin, Is.EqualTo(ImportOrigin.Manual));
+            Assert.That(harness.Status.Read().LifecycleState, Is.Not.EqualTo(CompanionLifecycleState.Failed));
         });
 
-        foreach (ImportSourceSnapshot source in failedOperation.Sources)
+        foreach (ImportSourceSnapshot source in completedOperation.Sources)
         {
             Assert.That(harness.Operations.IsSourceActive(source.SourceId), Is.False);
             SourceCheckpoint checkpoint = harness.Checkpoints.Read().Document.Sources[source.SourceId];
             Assert.That(checkpoint.LastAttempt!.Outcome, Is.Not.EqualTo(CheckpointAttemptOutcome.Pending));
-            Assert.That(checkpoint.Successful?.Outcome, Is.EqualTo(
-                source.Status == ImportOperationStatus.Completed ? CheckpointAttemptOutcome.Successful : null));
+            Assert.That(checkpoint.Successful?.Outcome, Is.EqualTo(CheckpointAttemptOutcome.Successful));
         }
 
-        ImportSubmission retry = harness.Operations.Submit(failedOperation.Sources.Last().SourceId);
+        ImportSubmission retry = harness.Operations.Submit(completedOperation.Sources.Last().SourceId);
         Assert.That(retry.Rejection, Is.Null);
-        await harness.WaitForImports(3);
+        await harness.WaitForImports(4);
         Assert.That(harness.Operations.Get(retry.Operation!.Id)!.Sources.Single().Status,
             Is.EqualTo(ImportOperationStatus.Completed));
+    }
+
+    [Test]
+    public async Task RepeatedPreRecordingFailureStopsWorkerAndAccountsForQueuedOperations()
+    {
+        await using ReconciliationHarness harness = new();
+        string firstPath = harness.Files.Ledger("_retail_", "A");
+        string secondPath = harness.Files.Ledger("_classic_", "B", project: 2);
+        await harness.StartAsync();
+        ImportSubmission seed = harness.Operations.Submit(SourceCatalog.IdFor(firstPath));
+        Assert.That(seed.Rejection, Is.Null);
+        await harness.WaitForImports(1);
+        SourceCheckpoint prior = harness.Checkpoints.Read().Document.Sources[SourceCatalog.IdFor(firstPath)];
+        Assert.That(prior.Successful, Is.Not.Null);
+
+        File.AppendAllText(firstPath, "\n--new import");
+        TestGate<CompanionImportResult> gate = harness.Imports.BlockNext();
+        harness.Imports.ReturnNullFingerprintForNext();
+        ImportSubmission failing = harness.Operations.Submit(SourceCatalog.IdFor(firstPath));
+        Assert.That(failing.Rejection, Is.Null);
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        ImportSubmission queued = harness.Operations.Submit(SourceCatalog.IdFor(secondPath));
+        Assert.That(queued.Rejection, Is.Null);
+
+        gate.Release.SetResult();
+        await MonitoringTestHost.Eventually(() =>
+            harness.IsStopping &&
+            harness.Operations.Get(failing.Operation!.Id)?.CompletedAt is not null &&
+            harness.Operations.Get(queued.Operation!.Id)?.CompletedAt is not null);
+        await harness.Operations.StopAsync(CancellationToken.None);
+
+        ImportOperationSnapshot failedOperation = harness.Operations.Get(failing.Operation!.Id)!;
+        ImportOperationSnapshot queuedOperation = harness.Operations.Get(queued.Operation!.Id)!;
+        SourceCheckpoint after = harness.Checkpoints.Read().Document.Sources[SourceCatalog.IdFor(firstPath)];
+        Assert.Multiple(() =>
+        {
+            Assert.That(failedOperation.Status, Is.EqualTo(ImportOperationStatus.Failed));
+            Assert.That(failedOperation.Sources.Single().Status, Is.EqualTo(ImportOperationStatus.Failed));
+            Assert.That(after.LastAttempt!.Outcome, Is.EqualTo(CheckpointAttemptOutcome.Pending),
+                "an unrecorded transition must not be reported as durable");
+            Assert.That(after.Successful, Is.EqualTo(prior.Successful),
+                "a terminalization failure must preserve the prior successful receipt");
+            Assert.That(queuedOperation.Status, Is.EqualTo(ImportOperationStatus.Failed));
+            Assert.That(queuedOperation.Sources.Single().Status, Is.EqualTo(ImportOperationStatus.Failed));
+            Assert.That(harness.Operations.IsSourceActive(SourceCatalog.IdFor(firstPath)), Is.False);
+            Assert.That(harness.Operations.IsSourceActive(SourceCatalog.IdFor(secondPath)), Is.False);
+            Assert.That(harness.Status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Failed));
+            Assert.That(harness.Operations.Submit(SourceCatalog.IdFor(secondPath)).Rejection,
+                Is.EqualTo(ImportRejection.Stopping));
+        });
     }
 
     [Test]
@@ -226,6 +274,8 @@ public sealed class SourceReconcilerTests
         public MonitoringTestHost Files { get; } = new();
         public MonitoringCheckpointTests.MemoryStore Metadata { get; } = new();
         public MonitoringCheckpoints Checkpoints { get; private set; } = null!;
+        public CompanionApplicationStatus Status { get; private set; } = null!;
+        public bool IsStopping => _lifetime.IsStopping;
         public Store History { get; private set; } = null!;
         public ImportOperations Operations { get; private set; } = null!;
         public ControlledRuntimeImports Imports { get; private set; } = null!;
@@ -241,7 +291,9 @@ public sealed class SourceReconcilerTests
             CompanionWorkAdmission admission = new(NullLogger<CompanionWorkAdmission>.Instance);
             admission.Open();
             Imports = new(admission, new CompanionImportService(History, Files.Reader));
-            _services = new ServiceCollection().AddSingleton(Checkpoints).AddSingleton<IScheduler>(Files.Scheduler)
+            Status = new(configuration, new TestEnvironment(Files.Root), NullLogger<CompanionApplicationStatus>.Instance);
+            _services = new ServiceCollection().AddSingleton(Checkpoints).AddSingleton(Status)
+                .AddSingleton<IScheduler>(Files.Scheduler)
                 .AddSingleton<CompanionRuntimeImports>(Imports).BuildServiceProvider();
             Operations = new(_services, catalog, _lifetime, limits ?? new(), NullLogger<ImportOperations>.Instance);
             Reconciler = new(catalog, Files.Reader, Checkpoints, Operations);
@@ -276,7 +328,16 @@ public sealed class SourceReconcilerTests
         public CancellationToken ApplicationStarted => CancellationToken.None;
         public CancellationToken ApplicationStopping => _stopping.Token;
         public CancellationToken ApplicationStopped => CancellationToken.None;
+        public bool IsStopping => _stopping.IsCancellationRequested;
         public void StopApplication() => _stopping.Cancel();
         public void Dispose() => _stopping.Dispose();
+    }
+
+    private sealed class TestEnvironment(string contentRoot) : IHostEnvironment
+    {
+        public string ApplicationName { get; set; } = typeof(CompanionApplicationStatus).Assembly.GetName().Name!;
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ContentRootPath { get; set; } = contentRoot;
     }
 }

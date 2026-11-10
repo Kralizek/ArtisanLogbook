@@ -173,6 +173,7 @@ internal sealed class ControlledRuntimeImports : CompanionRuntimeImports
     private readonly ConcurrentBag<TestGate<CompanionImportResult>> _gates = [];
     private int _calls;
     private int _active;
+    private int _nullFingerprintForNext;
     private readonly ConcurrentBag<int> _concurrency = [];
     public int Calls => Volatile.Read(ref _calls);
     public int MaximumActive => _concurrency.DefaultIfEmpty().Max();
@@ -187,6 +188,8 @@ internal sealed class ControlledRuntimeImports : CompanionRuntimeImports
         Interlocked.Exchange(ref _next, gate);
         return gate;
     }
+
+    public void ReturnNullFingerprintForNext() => Interlocked.Exchange(ref _nullFingerprintForNext, 1);
 
     public override async Task<CompanionImportResult> ImportSavedVariablesFileAsync(string path, CancellationToken cancellationToken = default)
     {
@@ -203,6 +206,8 @@ internal sealed class ControlledRuntimeImports : CompanionRuntimeImports
                 gate.Entered.TrySetResult(result);
                 await gate.Release.Task.WaitAsync(cancellationToken);
             }
+            if (Interlocked.Exchange(ref _nullFingerprintForNext, 0) != 0)
+                result = result with { SourceFingerprint = null };
             return result;
         }
         finally { Interlocked.Decrement(ref _active); }
