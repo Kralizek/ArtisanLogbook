@@ -345,6 +345,32 @@ public sealed class CompanionApiTests
     }
 
     [Test]
+    public async Task CancelledImportDoesNotAdvanceSuccessfulCheckpoint()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        string sourceId = SourceCatalog.IdFor(source);
+        string previousFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("previous snapshot")))
+            .ToLowerInvariant();
+        new MonitoringCheckpointStore(_paths).Save([
+            new(sourceId, null, null, previousFingerprint, null, true, false)
+        ]);
+        await using ApiHost host = await Start();
+        SourceMonitor monitor = host.App.Services.GetRequiredService<SourceMonitor>();
+
+        DateTimeOffset completedAt = DateTimeOffset.UtcNow;
+        monitor.ImportCompleted(new(
+            Guid.NewGuid(), ImportOperationStatus.Cancelled, null, ImportOperationOrigin.Manual, sourceId,
+            completedAt, completedAt, completedAt,
+            [new(sourceId, ImportOperationStatus.Cancelled, null, null, [], false)],
+            []));
+
+        MonitoringCheckpoint checkpoint = await WaitForCheckpoint(sourceId,
+            item => item.ReconciliationPending && item.RetryAfter is not null);
+        Assert.That(checkpoint.IngestedFingerprint, Is.EqualTo(previousFingerprint));
+    }
+
+    [Test]
     public async Task RestartReconcilesUnchangedSourceWithoutRepeatingImport()
     {
         _settings.Save(CompanionSettings.ForRoots(_root) with
