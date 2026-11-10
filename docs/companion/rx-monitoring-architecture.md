@@ -191,3 +191,125 @@ complete sidecar remains valid and restart conservatively reimports.
 - Restart converts persisted pending attempts to cancelled/retryable metadata,
   never success. This also allows absent interrupted sources to be pruned once
   the recovery transition is durable.
+
+## Independent assessment, before comparison
+
+Assessment boundary: implementation commit `e539672`, based on `9bd6443`.
+Neither reference PR has been read at this checkpoint.
+
+### Evidence
+
+The Release solution build passes with zero warnings/errors; solution formatting
+verification passes. The full Companion suite passes **462 tests**, with one
+existing Windows-only rename test skipped on Linux. Windows validation is not
+claimed at this checkpoint; the repository's Linux/Windows CI matrix will run
+on the draft PR.
+
+The tests exercise the requested boundaries rather than only the orchestrator:
+
+| Boundary | Evidence |
+| --- | --- |
+| Event composition | Virtual-time independent flavor bursts, group expiration/reuse, watcher recovery/backoff disposal, 100,000 hints reduced to two passes |
+| Thread safety | 100 real completion/notification races; concurrent watcher health notifications and 1,000 requests; controlled inspection/import/save gates |
+| Reconciliation | Standalone calls without a monitoring subscription; new files, unavailable roots, atomic replacement, removal/reappearance, missed notifications, unstable/incomplete content |
+| Admission | Manual/automatic single-worker coordination, stale-decision recheck, capacity-one fairness while a source keeps changing |
+| Checkpoints | Success then failure before save, out-of-order receipts, 10,000 successes in constant per-source space, concurrent saves, save failure/cancellation, recovery of pending attempts |
+| Lifecycle | Uncooperative inspection completing after disable, re-enable while old work unwinds, preference changes during backoff, immediate ApplicationStopping disposal, import drain before final save |
+| Persistence failure | Retry without reimport, operation-history eviction without receipt loss, explicit failed shutdown with the writer still released |
+| HTTP | Real Kestrel requests, complete OpenAPI route inventory, saved/effective overrides in both directions, required fields, 1/86400 interval bounds, 50-entry diagnostic limit, 4096-source capacity, local mutation security |
+| Restart | Real sidecar/database reopen suppresses unchanged imports; malformed metadata is rejected rather than interpreted as success |
+
+### Size and state inventory
+
+Counts include comments and blank lines, exclude generated code, tests, YAML and
+documentation, and are not presented as a quality score:
+
+| New production component | Lines |
+| --- | ---: |
+| SourceChangeFeed | 111 |
+| SourceReconciler | 63 |
+| SourceCheckpoint transitions | 46 |
+| MonitoringCheckpoints | 182 |
+| MonitoringCheckpointStore | 125 |
+| SourceMonitor | 268 |
+| ReactiveCoordination | 85 |
+| Shared SavedVariablesSnapshotReader | 99 |
+| MonitoringEndpoints and DTO mapping | 118 |
+| **New-file total** | **1097** |
+
+Including changes to existing production C# gives **+1171/-98, net +1073 lines
+across 18 files**. Merely quoting the orchestrator's 268 lines would hide most of
+the implementation.
+
+Counting one immutable record as "one state" would also be misleading:
+
+- Feed and reconciler have **no independently mutable application state**.
+  Rx still maintains watcher subscriptions, debounce groups and timer state.
+- The monitor's record has **five mutable facts**: configuration, phase, last
+  completed report, watcher availability and current unexpected failure.
+  It also has one processing-task handle, two cancellation lifetimes, and two
+  subjects bridging configuration/request notifications. No observer is called
+  under its state lock.
+- Checkpoint management has **five global facts**: source membership, next
+  attempt sequence, mutation revision, durable revision and persistence failure.
+  Each source has five facts: observation, successful receipt, latest attempt,
+  retry deadline and inspection failure. Pending ingestion is derived.
+- The file adapter retains one expected file revision. Bounded concat retains
+  two local values: its phase and latest pending observable.
+- New explicit synchronization is **three short monitor locks and one async
+  persistence semaphore**. C11/C10/C03's existing gates and ingestion channel
+  remain, and are not hidden from this accounting.
+
+These are cohesive state machines and projections, not a claim that mutable
+facts disappeared when placed in records. The gain is that checkpoint transitions
+do not require understanding subscriptions, and changing debounce does not
+require understanding transactions.
+
+### What was eliminated, and what was only separated
+
+Rx eliminates application-maintained watcher registries, per-source worker
+lifetimes, manual debounce timers and retry sleepers. `Switch`/`Using` own
+activation disposal; `GroupByUntil` owns group expiration; `Merge` keeps event
+detection independent of reconciliation. No extra import queue was added.
+
+Rx does **not** eliminate the need for backpressure/serialization. The 85-line
+coordination utility supplies the missing bounded-concat policy, while Rx owns
+inner subscription execution. Its tests are essential; an operator chain is not
+automatically thread-safe merely because it uses Rx.
+
+Durable acknowledgement was **separated, not eliminated**. Ordering receipts,
+retaining success across later failures, snapshotting concurrent state and
+acknowledging only a committed revision are necessary domain complexity.
+Keeping them outside Rx avoids coupling file persistence to event delivery.
+
+### Costs, limitations and debugging
+
+- Each admitted source is inspected by C06 and read again by C07, each with a
+  stability check. This costs I/O but avoids retaining large snapshot buffers in
+  C11's queue and correctly handles changes while queued.
+- A pass inspects all discovered sources. This favors a small bounded work model
+  over a permanent per-source scheduler. Very large installations may need
+  measured optimization later, not speculative per-source concurrency now.
+- Retry policy is fixed (two seconds for source/watcher failures, one-second
+  checkpoint maintenance). Configuration changes do not wait inside that backoff.
+- The state/revision model makes retained receipts inspectable directly in tests;
+  operational DTOs expose pending state and safe diagnostic codes. Detailed
+  ingestion outcomes remain in C11 rather than being duplicated.
+- Rx's internal locks and synchronous notifications are real complexity. The
+  observed startup inversion and its regression tests are evidence against
+  describing this design as "lock-free" or assuming disposal equals completion.
+- Checkpoints are paired with the selected database, not an independent backup
+  or a database-generation ledger. Manual database replacement/restoration
+  requires resetting the sidecar, as documented in the HTTP guide. C09 restore
+  semantics and cross-file crash atomicity are not silently invented here.
+- A crash between canonical commit and checkpoint acknowledgement can repeat
+  ingestion. A permanently unwritable disk cannot be made durable by retries:
+  graceful shutdown reports failure and restart uses only the last complete
+  checkpoint. This is conservative at-least-once reconciliation, not exactly-once
+  event delivery.
+
+**Independent verdict:** this is a functional, testable C06 alternative, with
+clearer local reasoning boundaries and a small explicit scheduling policy.
+The simplification claim is specifically about the amount of behavior that must
+be understood together, not zero synchronization or minimum total lines.
+Comparison with the other experiments comes after this checkpoint.
