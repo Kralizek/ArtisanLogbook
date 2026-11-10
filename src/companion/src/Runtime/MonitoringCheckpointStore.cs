@@ -4,6 +4,12 @@ using System.Text.Json.Serialization;
 
 namespace ArtisanLogbook.Runtime;
 
+public interface IMonitoringCheckpointPersistence
+{
+    IReadOnlyList<MonitoringCheckpoint> Load();
+    void Save(IEnumerable<MonitoringCheckpoint> checkpoints, CancellationToken cancellationToken = default);
+}
+
 public sealed record MonitoringCheckpoint(
     string SourceId,
     string? ObservedFingerprint,
@@ -16,7 +22,7 @@ public sealed record MonitoringCheckpoint(
 internal sealed record MonitoringCheckpointDocument(int Version, IReadOnlyList<MonitoringCheckpoint> Sources);
 
 /// <summary>Atomic, non-canonical monitoring state kept separately from user settings and craft history.</summary>
-public sealed class MonitoringCheckpointStore(ApplicationPaths paths)
+public sealed class MonitoringCheckpointStore(ApplicationPaths paths) : IMonitoringCheckpointPersistence
 {
     private const int CurrentVersion = 1;
     private const long MaximumCheckpointBytes = 4L * 1024 * 1024;

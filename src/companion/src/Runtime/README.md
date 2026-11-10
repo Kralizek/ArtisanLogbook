@@ -163,7 +163,10 @@ successfully ingested fingerprints plus pending/retry state in an atomic
 checkpoint file separate from settings and canonical history. C07 returns a
 fingerprint for the exact bytes it successfully imported, allowing manual and
 automatic imports to advance the same checkpoint without inferring identity from
-timestamps or installation paths.
+timestamps or installation paths. Completion effects remain pending until the
+checkpoint replacement succeeds, and persistence retries do not require another
+import. Worker failures dispose watchers and retry on the same hosted worker with
+bounded backoff; successful reconciliation rebuilds watcher coverage.
 
 See the [Companion guide](../../README.md) for command flow, configuration
 locations, diagnostics, and operational limitations.

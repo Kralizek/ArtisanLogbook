@@ -140,7 +140,10 @@ temporarily disappears remains eligible for retry; its absence never deletes
 canonical history. Atomic replacements at the same path retain the same opaque
 source id. Monitoring checkpoints live separately from settings and craft
 history, and only a successful C07 file import advances the ingested-content
-fingerprint. A failed checkpoint save can cause a safe idempotent re-import.
+fingerprint. Completed-import checkpoint effects remain pending until atomically
+saved, and transient persistence failures are retried without another import.
+Unexpected monitor worker failures are logged and retried with bounded backoff;
+watchers are rebuilt on recovery.
 
 Manual imports remain available while monitoring is disabled. Manual and
 automatic imports use the same bounded worker, source-busy suppression,
@@ -160,7 +163,8 @@ counts, last attempted and last successful reconciliation times, in-progress
 state and actionable diagnostics. Diagnostics use opaque `sourceId` values and
 never include file paths, account names, SavedVariables content or exceptions.
 `Disabled` is distinct from an unhealthy monitor; `Degraded` diagnostics identify
-discovery, watcher, unstable-source, import or checkpoint retry conditions.
+discovery, watcher, unstable-source, import, worker-recovery or checkpoint retry
+conditions.
 
 ## Local access and security
 

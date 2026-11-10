@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 
 using ArtisanLogbook.Cli;
 using ArtisanLogbook.ImportService;
@@ -204,6 +205,143 @@ public sealed class CompanionApiTests
         Assert.That(second.GetProperty("sources")[0].GetProperty("sourceId").GetString(), Is.EqualTo(sourceId));
         Assert.That(host.App.Services.GetRequiredService<Store>().ReadStatus().TotalCraftCount,
             Is.GreaterThan(historyCount));
+    }
+
+    [Test]
+    public async Task DisablingDuringCheckpointPersistenceKeepsMonitorDisabled()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root) with
+        {
+            Monitoring = new() { Enabled = true, ReconciliationIntervalSeconds = 30 }
+        });
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        ControlledCheckpointPersistence persistence = new(new MonitoringCheckpointStore(_paths), blockFirstSave: true);
+        await using ApiHost host = await Start(checkpointPersistence: persistence);
+        SourceMonitor monitor = host.App.Services.GetRequiredService<SourceMonitor>();
+
+        try
+        {
+            await persistence.FirstSaveEntered.Task.WaitAsync(Timeout());
+            SourceMonitoringSnapshot disabled = monitor.UpdatePreferences(
+                new() { Enabled = false, ReconciliationIntervalSeconds = 30 }, CancellationToken.None);
+            Assert.That(disabled.State, Is.EqualTo(SourceMonitoringState.Disabled));
+
+            persistence.ReleaseFirstSave.TrySetResult();
+            await WaitForMonitorIdle(monitor);
+            Assert.That(monitor.GetSnapshot().State, Is.EqualTo(SourceMonitoringState.Disabled));
+            Assert.That(host.App.Services.GetRequiredService<ImportOperations>()
+                .SubmitAutomatic(SourceCatalog.IdFor(source)).Rejection, Is.EqualTo(ImportRejection.MonitoringDisabled));
+        }
+        finally
+        {
+            persistence.ReleaseFirstSave.TrySetResult();
+        }
+    }
+
+    [Test]
+    public async Task WorkerRetriesUnexpectedFailureAndResumesReconciliation()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root) with
+        {
+            Monitoring = new() { Enabled = true, ReconciliationIntervalSeconds = 30 }
+        });
+        FailOnceTimeProvider timeProvider = new();
+        await using ApiHost host = await Start(timeProvider: timeProvider);
+        SourceMonitor monitor = host.App.Services.GetRequiredService<SourceMonitor>();
+
+        await timeProvider.FailureInjected.Task.WaitAsync(Timeout());
+        await WaitForMonitorDiagnostic(monitor, "monitor-worker-retrying");
+        Assert.That(monitor.GetSnapshot().State, Is.EqualTo(SourceMonitoringState.Unavailable));
+
+        await timeProvider.RetryStarted.Task.WaitAsync(Timeout());
+        await WaitForSuccessfulReconciliation(host);
+        Assert.That(monitor.GetSnapshot().State, Is.EqualTo(SourceMonitoringState.Active));
+    }
+
+    [Test]
+    public async Task CompletedImportCheckpointRetriesAfterPersistenceFailureWithoutAnotherImport()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        ControlledCheckpointPersistence persistence = new(new MonitoringCheckpointStore(_paths), failures: 1);
+        await using ApiHost host = await Start(checkpointPersistence: persistence);
+
+        string operation = await Accept(host, $$"""{"sourceId":"{{SourceCatalog.IdFor(source)}}"}""");
+        JsonElement completed = await host.WaitFor(operation);
+        Assert.That(completed.GetProperty("status").GetString(), Is.EqualTo("Completed"));
+
+        Assert.That(await persistence.WaitForSaveAttemptAsync().WaitAsync(Timeout()), Is.EqualTo(1));
+        Assert.That(await persistence.WaitForSaveAttemptAsync().WaitAsync(Timeout()), Is.EqualTo(2));
+        await persistence.SuccessfulSave.Task.WaitAsync(Timeout());
+        string expectedFingerprint = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(source)))
+            .ToLowerInvariant();
+        Assert.That(new MonitoringCheckpointStore(_paths).Load().Single().IngestedFingerprint,
+            Is.EqualTo(expectedFingerprint));
+        Assert.That(host.App.Services.GetRequiredService<ImportOperations>().List(100), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task MultipleCompletedImportsForOneSourceRetainTheLatestCheckpointInOrder()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        ControlledCheckpointPersistence persistence = new(new MonitoringCheckpointStore(_paths), blockFirstSave: true);
+        await using ApiHost host = await Start(checkpointPersistence: persistence);
+        string sourceId = SourceCatalog.IdFor(source);
+        SourceMonitor monitor = host.App.Services.GetRequiredService<SourceMonitor>();
+
+        string first = await Accept(host, $$"""{"sourceId":"{{sourceId}}"}""");
+        try
+        {
+            await host.WaitFor(first);
+            await persistence.FirstSaveEntered.Task.WaitAsync(Timeout());
+            Assert.That(await persistence.WaitForSaveAttemptAsync().WaitAsync(Timeout()), Is.EqualTo(1));
+            monitor.ImportCompleted(host.App.Services.GetRequiredService<ImportOperations>()
+                .Get(Guid.Parse(first))!);
+            await WaitForSourceIdle(host, sourceId);
+
+            await File.WriteAllTextAsync(source, CompanionCommandAppTests.Snapshot(2, null, 1));
+            string second = await Accept(host, $$"""{"sourceId":"{{sourceId}}"}""");
+            await host.WaitFor(second);
+            string expectedFingerprint = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(source)))
+                .ToLowerInvariant();
+
+            persistence.ReleaseFirstSave.TrySetResult();
+            Assert.That(await persistence.WaitForSaveAttemptAsync().WaitAsync(Timeout()), Is.EqualTo(2));
+            await persistence.SuccessfulSave.Task.WaitAsync(Timeout());
+            Assert.That(new MonitoringCheckpointStore(_paths).Load().Single().IngestedFingerprint,
+                Is.EqualTo(expectedFingerprint));
+            Assert.That(host.App.Services.GetRequiredService<ImportOperations>().List(100), Has.Count.EqualTo(2));
+        }
+        finally
+        {
+            persistence.ReleaseFirstSave.TrySetResult();
+        }
+    }
+
+    [Test]
+    public async Task FailedImportDoesNotAdvanceSuccessfulCheckpoint()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        string sourceId = SourceCatalog.IdFor(source);
+        string previousFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("previous snapshot")))
+            .ToLowerInvariant();
+        new MonitoringCheckpointStore(_paths).Save([
+            new(sourceId, null, null, previousFingerprint, null, true, false)
+        ]);
+        await using ApiHost host = await Start(gated: true);
+        host.Imports!.Failure = new IOException("Injected import failure.");
+
+        string operation = await Accept(host, $$"""{"sourceId":"{{sourceId}}"}""");
+        await host.Imports.Entered.WaitAsync(Timeout());
+        host.Imports.Gate.SetResult();
+        JsonElement failed = await host.WaitFor(operation);
+        Assert.That(failed.GetProperty("status").GetString(), Is.EqualTo("Failed"));
+
+        MonitoringCheckpoint checkpoint = await WaitForCheckpoint(sourceId,
+            item => item.ReconciliationPending && item.RetryAfter is not null);
+        Assert.That(checkpoint.IngestedFingerprint, Is.EqualTo(previousFingerprint));
     }
 
     [Test]
@@ -796,8 +934,13 @@ public sealed class CompanionApiTests
         Assert.That((await second.Http.GetAsync("/api/v1/health")).StatusCode, Is.EqualTo(HttpStatusCode.OK));
     }
 
-    private async Task<ApiHost> Start(bool gated = false, ImportOperationLimits? limits = null, int? port = null) =>
-        await ApiHost.StartAsync(_paths, _settings, gated, limits, port);
+    private async Task<ApiHost> Start(
+        bool gated = false,
+        ImportOperationLimits? limits = null,
+        int? port = null,
+        IMonitoringCheckpointPersistence? checkpointPersistence = null,
+        TimeProvider? timeProvider = null) =>
+        await ApiHost.StartAsync(_paths, _settings, gated, limits, port, checkpointPersistence, timeProvider);
 
     private string Ledger(string client, string account, int project)
     {
@@ -851,6 +994,42 @@ public sealed class CompanionApiTests
         }
     }
 
+    private static async Task WaitForMonitorIdle(SourceMonitor monitor)
+    {
+        using CancellationTokenSource timeout = new(Timeout());
+        while (monitor.GetSnapshot().ReconciliationInProgress)
+            await Task.Delay(5, timeout.Token);
+    }
+
+    private static async Task WaitForMonitorDiagnostic(SourceMonitor monitor, string code)
+    {
+        using CancellationTokenSource timeout = new(Timeout());
+        while (!monitor.GetSnapshot().Diagnostics.Any(diagnostic => diagnostic.Code == code))
+            await Task.Delay(5, timeout.Token);
+    }
+
+    private static async Task WaitForSourceIdle(ApiHost host, string sourceId)
+    {
+        using CancellationTokenSource timeout = new(Timeout());
+        ImportOperations imports = host.App.Services.GetRequiredService<ImportOperations>();
+        while (imports.IsSourceActive(sourceId))
+            await Task.Delay(5, timeout.Token);
+    }
+
+    private async Task<MonitoringCheckpoint> WaitForCheckpoint(
+        string sourceId, Func<MonitoringCheckpoint, bool> predicate)
+    {
+        using CancellationTokenSource timeout = new(Timeout());
+        while (true)
+        {
+            MonitoringCheckpoint? checkpoint = new MonitoringCheckpointStore(_paths).Load()
+                .FirstOrDefault(item => item.SourceId == sourceId);
+            if (checkpoint is not null && predicate(checkpoint))
+                return checkpoint;
+            await Task.Delay(5, timeout.Token);
+        }
+    }
+
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
 
@@ -892,6 +1071,79 @@ public sealed class CompanionApiTests
         }
     }
 
+    private sealed class ControlledCheckpointPersistence(
+        IMonitoringCheckpointPersistence inner,
+        int failures = 0,
+        bool blockFirstSave = false) : IMonitoringCheckpointPersistence
+    {
+        private readonly Channel<int> _saveAttempts = Channel.CreateUnbounded<int>();
+        private int _remainingFailures = failures;
+        private int _saveCount;
+
+        public TaskCompletionSource FirstSaveEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstSave { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SuccessfulSave { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<MonitoringCheckpoint> Load() => inner.Load();
+
+        public void Save(IEnumerable<MonitoringCheckpoint> checkpoints, CancellationToken cancellationToken = default)
+        {
+            int attempt = Interlocked.Increment(ref _saveCount);
+            _saveAttempts.Writer.TryWrite(attempt);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (blockFirstSave && attempt == 1)
+            {
+                FirstSaveEntered.TrySetResult();
+                ReleaseFirstSave.Task.GetAwaiter().GetResult();
+                throw new IOException("Injected checkpoint persistence failure.");
+            }
+            if (ConsumeFailure())
+                throw new IOException("Injected checkpoint persistence failure.");
+            inner.Save(checkpoints, cancellationToken);
+            SuccessfulSave.TrySetResult();
+        }
+
+        private bool ConsumeFailure()
+        {
+            while (true)
+            {
+                int remaining = Volatile.Read(ref _remainingFailures);
+                if (remaining <= 0)
+                    return false;
+                if (Interlocked.CompareExchange(ref _remainingFailures, remaining - 1, remaining) == remaining)
+                    return true;
+            }
+        }
+
+        public Task<int> WaitForSaveAttemptAsync(CancellationToken cancellationToken = default) =>
+            _saveAttempts.Reader.ReadAsync(cancellationToken).AsTask();
+    }
+
+    private sealed class FailOnceTimeProvider : TimeProvider
+    {
+        private int _calls;
+        public TaskCompletionSource FailureInjected { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource RetryStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            int call = Interlocked.Increment(ref _calls);
+            if (call == 1)
+            {
+                FailureInjected.TrySetResult();
+                throw new InvalidOperationException("Injected monitoring worker failure.");
+            }
+            if (call == 2)
+                RetryStarted.TrySetResult();
+            return DateTimeOffset.UtcNow;
+        }
+    }
+
     private sealed class ApiHost : IAsyncDisposable
     {
         public required WebApplication App { get; init; }
@@ -900,7 +1152,8 @@ public sealed class CompanionApiTests
         public GatedImports? Imports { get; init; }
 
         public static async Task<ApiHost> StartAsync(
-            ApplicationPaths paths, CompanionSettingsStore settings, bool gated, ImportOperationLimits? limits, int? port)
+            ApplicationPaths paths, CompanionSettingsStore settings, bool gated, ImportOperationLimits? limits, int? port,
+            IMonitoringCheckpointPersistence? checkpointPersistence, TimeProvider? timeProvider)
         {
             WebApplicationBuilder builder = WebApplication.CreateEmptyBuilder(new()
             {
@@ -916,6 +1169,10 @@ public sealed class CompanionApiTests
                     new GatedImports(provider.GetRequiredService<CompanionWorkAdmission>(),
                         provider.GetRequiredService<CompanionImportService>())));
             if (limits is not null) builder.Services.Replace(ServiceDescriptor.Singleton(limits));
+            if (checkpointPersistence is not null)
+                builder.Services.Replace(ServiceDescriptor.Singleton(checkpointPersistence));
+            if (timeProvider is not null)
+                builder.Services.Replace(ServiceDescriptor.Singleton(timeProvider));
             WebApplication app = builder.Build();
             await app.StartAsync();
             string url = app.Services.GetRequiredService<CompanionHttpEndpoint>().ListeningUrl!;

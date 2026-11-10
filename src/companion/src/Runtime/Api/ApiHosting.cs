@@ -26,6 +26,8 @@ internal static class CompanionApiHosting
         services.AddSingleton<ImportOperations>();
         services.AddHostedService(provider => provider.GetRequiredService<ImportOperations>());
         services.AddSingleton<MonitoringCheckpointStore>();
+        services.AddSingleton<IMonitoringCheckpointPersistence>(provider =>
+            provider.GetRequiredService<MonitoringCheckpointStore>());
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<SourceMonitor>();
         services.AddHostedService(provider => provider.GetRequiredService<SourceMonitor>());

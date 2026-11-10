@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security;
 using System.Security.Cryptography;
 using System.Threading.Channels;
@@ -28,7 +27,7 @@ public enum ReconciliationRequestStatus { Accepted, Coalesced, Disabled, Unavail
 public sealed class SourceMonitor(
     CompanionRuntimeConfiguration configuration,
     CompanionSettingsStore settingsStore,
-    MonitoringCheckpointStore checkpointStore,
+    IMonitoringCheckpointPersistence checkpointStore,
     SourceCatalog catalog,
     InstallationDiscovery discovery,
     ImportOperations imports,
@@ -37,21 +36,31 @@ public sealed class SourceMonitor(
     ILogger<SourceMonitor> logger) : IHostedService, IDisposable
 {
     private static readonly TimeSpan StableQuietPeriod = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan InitialWorkerRetryDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MaximumWorkerRetryDelay = TimeSpan.FromSeconds(30);
     private const long MaximumSnapshotBytes = 64L * 1024 * 1024;
     private const int MaximumWatchDirectories = 128;
+    private const int MaximumPendingCompletionSources = 4096;
     private readonly object _statusGate = new();
+    private readonly object _preferenceGate = new();
     private readonly object _watcherGate = new();
+    private readonly object _completedImportsGate = new();
     private readonly Channel<byte> _signals = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
         FullMode = BoundedChannelFullMode.Wait,
         SingleReader = true,
         SingleWriter = false
     });
-    private readonly ConcurrentQueue<ImportOperationSnapshot> _completedImports = new();
+    private readonly Dictionary<string, PendingImportCheckpoint> _completedImports = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MonitoringCheckpoint> _checkpoints = new(StringComparer.Ordinal);
     private readonly List<FileSystemWatcher> _watchers = [];
     private readonly SemaphoreSlim _passGate = new(1, 1);
     private readonly CancellationTokenSource _stop = new();
+    private long _completionVersion;
+    private bool _completionOverflow;
+    private TimeSpan _checkpointRetryDelay = InitialWorkerRetryDelay;
+    private DateTimeOffset? _checkpointRetryAfter;
+    private int _workerFailureCount;
     private CompanionRuntimeConfiguration _configuration = configuration;
     private MonitoringSettings _effectiveSettings = configuration.EffectiveSettings.Monitoring;
     private SourceMonitoringState _state = configuration.EffectiveSettings.Monitoring.Enabled
@@ -99,8 +108,11 @@ public sealed class SourceMonitor(
     {
         if (Volatile.Read(ref _disposed) != 0)
             return;
-        _stopping = true;
-        imports.SetAutomaticEnabled(false);
+        lock (_preferenceGate)
+        {
+            _stopping = true;
+            imports.SetAutomaticEnabled(false);
+        }
         DisposeWatchers();
         RequestStop();
         await _worker.ConfigureAwait(false);
@@ -118,40 +130,55 @@ public sealed class SourceMonitor(
     public SourceMonitoringSnapshot UpdatePreferences(MonitoringSettings preferences, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(preferences);
-        if (_stopping || lifetime.ApplicationStopping.IsCancellationRequested)
-            throw new CompanionSettingsException("The Companion is stopping and cannot update monitoring preferences.");
-        CompanionRuntimeConfiguration currentConfiguration;
-        lock (_statusGate) currentConfiguration = _configuration;
-        CompanionSettingsStore.Validate(currentConfiguration.EffectiveSettings with { Monitoring = preferences });
-
-        SettingsLoadResult loaded = settingsStore.Load();
-        if (!loaded.CanSave)
-            throw new CompanionSettingsException(loaded.Diagnostic ?? "The monitoring preferences cannot be saved.");
-        CompanionSettings saved = (loaded.Settings ??
-            CompanionSettings.ForRoots(currentConfiguration.EffectiveSettings.InstallationRoots.ToArray())) with
+        lock (_preferenceGate)
         {
-            Monitoring = preferences
-        };
-        settingsStore.Save(saved, cancellationToken, loaded);
+            if (_stopping || lifetime.ApplicationStopping.IsCancellationRequested)
+                throw new CompanionSettingsException("The Companion is stopping and cannot update monitoring preferences.");
+            CompanionRuntimeConfiguration currentConfiguration;
+            lock (_statusGate) currentConfiguration = _configuration;
+            CompanionSettingsStore.Validate(currentConfiguration.EffectiveSettings with { Monitoring = preferences });
 
+            SettingsLoadResult loaded = settingsStore.Load();
+            if (!loaded.CanSave)
+                throw new CompanionSettingsException(loaded.Diagnostic ?? "The monitoring preferences cannot be saved.");
+            CompanionSettings saved = (loaded.Settings ??
+                CompanionSettings.ForRoots(currentConfiguration.EffectiveSettings.InstallationRoots.ToArray())) with
+            {
+                Monitoring = preferences
+            };
+            settingsStore.Save(saved, cancellationToken, loaded);
+
+            bool enabled;
+            lock (_statusGate)
+            {
+                _configuration = _configuration.WithPersistedPreferences(saved);
+                _effectiveSettings = _configuration.EffectiveSettings.Monitoring;
+                enabled = _effectiveSettings.Enabled;
+                _state = enabled ? SourceMonitoringState.Unavailable : SourceMonitoringState.Disabled;
+            }
+            imports.SetAutomaticEnabled(enabled);
+            if (!enabled)
+                DisposeWatchers();
+            Signal();
+            return GetSnapshot();
+        }
+    }
+
+    private void RecordWorkerFailure(SourceMonitoringDiagnostic diagnostic)
+    {
         lock (_statusGate)
         {
-            _configuration = _configuration.WithPersistedPreferences(saved);
-            _effectiveSettings = _configuration.EffectiveSettings.Monitoring;
+            _diagnostics = [diagnostic];
+            _state = _effectiveSettings.Enabled
+                ? SourceMonitoringState.Unavailable
+                : SourceMonitoringState.Disabled;
         }
-        bool enabled = GetSnapshot().Enabled;
-        imports.SetAutomaticEnabled(enabled);
-        if (!enabled)
-        {
-            DisposeWatchers();
-            SetState(SourceMonitoringState.Disabled);
-        }
-        else
-        {
-            SetState(SourceMonitoringState.Unavailable);
-        }
-        Signal();
-        return GetSnapshot();
+    }
+
+    private void ClearDiagnostic(string code)
+    {
+        lock (_statusGate)
+            _diagnostics = _diagnostics.Where(diagnostic => diagnostic.Code != code).ToArray();
     }
 
     public ReconciliationRequestStatus RequestReconciliation()
@@ -185,31 +212,43 @@ public sealed class SourceMonitor(
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (!GetSnapshot().Enabled)
+                try
                 {
-                    DisposeWatchers();
-                    SetState(SourceMonitoringState.Disabled);
-                    await ProcessCompletedImportsAsync(cancellationToken).ConfigureAwait(false);
-                    await WaitForSignalAsync(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
+                    if (!GetSnapshot().Enabled)
+                    {
+                        DisposeWatchers();
+                        SetStateWhenDisabled(SourceMonitoringState.Disabled);
+                        await ProcessCompletedImportsAsync(cancellationToken).ConfigureAwait(false);
+                        await WaitForSignalAsync(NextCheckpointRetryDelay(), cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
 
-                DrainSignals();
-                await ReconcileOnceAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (cancellationToken.IsCancellationRequested)
+                    DrainSignals();
+                    await ReconcileOnceAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+                    await WaitForSignalAsync(NextReconciliationDelay(), cancellationToken).ConfigureAwait(false);
+                    _workerFailureCount = 0;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
                     break;
-                await WaitForSignalAsync(NextReconciliationDelay(), cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    TimeSpan retryDelay = NextWorkerRetryDelay();
+                    DisposeWatchers();
+                    logger.LogError("SavedVariables monitoring worker failed ({FailureType}); retrying in {RetrySeconds} seconds.",
+                        exception.GetType().Name, retryDelay.TotalSeconds);
+                    RecordWorkerFailure(new("monitor-worker-retrying",
+                        $"Monitoring encountered an unexpected failure and will retry in {retryDelay.TotalSeconds:0} seconds.",
+                        null));
+                    await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-        }
-        catch (Exception exception)
-        {
-            logger.LogError("SavedVariables monitoring stopped unexpectedly ({FailureType}); periodic recovery is unavailable.",
-                exception.GetType().Name);
-            SetDiagnostics([new("monitor-failed", "Monitoring encountered an unexpected failure; restart the Companion to recover.", null)]);
-            SetState(SourceMonitoringState.Unavailable);
         }
         finally
         {
@@ -254,8 +293,28 @@ public sealed class SourceMonitor(
             if (untilDue < delay)
                 delay = untilDue;
         }
+        TimeSpan checkpointDelay = NextCheckpointRetryDelay();
+        if (checkpointDelay != Timeout.InfiniteTimeSpan && checkpointDelay < delay)
+            delay = checkpointDelay;
         return delay <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(100) : delay;
     }
+
+    private TimeSpan NextCheckpointRetryDelay()
+    {
+        lock (_completedImportsGate)
+        {
+            if (_completedImports.Count == 0)
+                return Timeout.InfiniteTimeSpan;
+            if (_checkpointRetryAfter is not { } retryAfter)
+                return TimeSpan.Zero;
+            TimeSpan delay = retryAfter - timeProvider.GetUtcNow();
+            return delay > TimeSpan.Zero ? delay : TimeSpan.Zero;
+        }
+    }
+
+    private TimeSpan NextWorkerRetryDelay() =>
+        TimeSpan.FromSeconds(Math.Min(MaximumWorkerRetryDelay.TotalSeconds,
+            InitialWorkerRetryDelay.TotalSeconds * Math.Pow(2, Math.Min(_workerFailureCount++, 5))));
 
     private async Task ReconcilePassAsync(bool forceStable, CancellationToken cancellationToken)
     {
@@ -265,6 +324,8 @@ public sealed class SourceMonitor(
         DateTimeOffset now = timeProvider.GetUtcNow();
         lock (_statusGate)
         {
+            if (!_effectiveSettings.Enabled)
+                return;
             _inProgress = true;
             _lastAttempt = now;
         }
@@ -272,9 +333,11 @@ public sealed class SourceMonitor(
         Dictionary<string, MonitoringCheckpoint> working = new(_checkpoints, StringComparer.Ordinal);
         List<SourceMonitoringDiagnostic> diagnostics = [];
         bool hasFailure = false;
+        PendingImportCheckpoint[] completedImports = [];
         try
         {
-            await ApplyCompletedImportsAsync(working, diagnostics, cancellationToken).ConfigureAwait(false);
+            completedImports = CaptureCompletedImports();
+            ApplyCompletedImports(completedImports, working, diagnostics);
             SourceCatalogSnapshot snapshot = catalog.Discover();
             lock (_statusGate) _discoveredSources = snapshot.Sources.Count;
             foreach (SourceCatalogDiagnostic diagnostic in snapshot.Diagnostics)
@@ -323,7 +386,14 @@ public sealed class SourceMonitor(
                     if (!forceStable && now < stableAt || state.RetryAfter is { } retry && now < retry)
                         continue;
 
-                    ImportSubmission submission = imports.SubmitAutomatic(source.Id);
+                    ImportSubmission? submission = SubmitAutomaticUnlessCompletionPending(source.Id);
+                    if (submission is null)
+                    {
+                        diagnostics.Add(new("checkpoint-save-pending",
+                            "A completed import checkpoint is pending persistence; automatic re-import is deferred.", source.Id));
+                        hasFailure = true;
+                        continue;
+                    }
                     if (submission.Rejection is null)
                     {
                         diagnostics.Add(new("import-queued", "The source import is queued; completion is reported separately.", source.Id));
@@ -390,26 +460,52 @@ public sealed class SourceMonitor(
                 hasFailure = true;
             }
 
+            bool checkpointsPersisted = false;
             try
             {
-                if (!CheckpointsEqual(_checkpoints, working))
-                    checkpointStore.Save(working.Values, cancellationToken);
-                ReplaceCheckpoints(working);
-                if (allSourcesReconciled)
-                    lock (_statusGate) _lastSuccess = now;
+                if (IsCheckpointRetryDeferred())
+                {
+                    diagnostics.Add(new("checkpoint-save-pending",
+                        "Completed import checkpoints are retained until their persistence retry is due.", null));
+                    hasFailure = true;
+                }
+                else
+                {
+                    if (!CheckpointsEqual(_checkpoints, working))
+                        checkpointStore.Save(working.Values, cancellationToken);
+                    ReplaceCheckpoints(working);
+                    checkpointsPersisted = true;
+                    CompleteCompletedImports(completedImports);
+                    if (allSourcesReconciled)
+                        lock (_statusGate) _lastSuccess = now;
+                }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
                 or SecurityException or ArgumentException)
             {
                 diagnostics.Add(new("checkpoint-save-failed",
-                    "Monitoring state could not be saved; a later reconciliation may safely re-import this source.", null));
+                    "Monitoring state could not be saved; completed import checkpoints will be retried automatically.", null));
                 hasFailure = true;
                 logger.LogWarning("SavedVariables monitoring checkpoints could not be saved ({FailureType}).",
                     exception.GetType().Name);
+                ScheduleCheckpointRetry();
             }
 
+            if (IsCompletionOverflowed())
+                diagnostics.Add(new("checkpoint-update-overflow",
+                    "Checkpoint updates exceeded the in-memory limit; current files are being reconciled to recover safely.", null));
+            else if (HasPendingCompletedImports() &&
+                !diagnostics.Any(diagnostic => diagnostic.Code == "checkpoint-save-failed"))
+                diagnostics.Add(new("checkpoint-save-pending",
+                    "Completed import checkpoints are retained and awaiting a persistence retry.", null));
+
             SetDiagnostics(diagnostics);
-            SetState(hasFailure ? SourceMonitoringState.Degraded : SourceMonitoringState.Active);
+            if (checkpointsPersisted && !HasPendingCompletedImports())
+            {
+                ResetCheckpointRetry();
+                ClearCompletionOverflow();
+            }
+            SetStateWhenEnabled(hasFailure ? SourceMonitoringState.Degraded : SourceMonitoringState.Active);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -421,7 +517,7 @@ public sealed class SourceMonitor(
                 exception.GetType().Name);
             SetDiagnostics([new("reconciliation-failed",
                 "Source reconciliation failed; monitoring will retry on the next trigger or interval.", null)]);
-            SetState(SourceMonitoringState.Degraded);
+            SetStateWhenEnabled(SourceMonitoringState.Degraded);
         }
         finally
         {
@@ -429,17 +525,23 @@ public sealed class SourceMonitor(
         }
     }
 
-    private async Task ProcessCompletedImportsAsync(CancellationToken cancellationToken)
+    private Task ProcessCompletedImportsAsync(CancellationToken cancellationToken)
     {
         Dictionary<string, MonitoringCheckpoint> working = new(_checkpoints, StringComparer.Ordinal);
         List<SourceMonitoringDiagnostic> diagnostics = [];
-        await ApplyCompletedImportsAsync(working, diagnostics, cancellationToken).ConfigureAwait(false);
-        if (!CheckpointsEqual(_checkpoints, working))
+        PendingImportCheckpoint[] completedImports = CaptureCompletedImports();
+        ApplyCompletedImports(completedImports, working, diagnostics);
+        bool unchanged = CheckpointsEqual(_checkpoints, working);
+        if (completedImports.Length > 0 && !unchanged && !IsCheckpointRetryDeferred())
         {
             try
             {
                 checkpointStore.Save(working.Values, cancellationToken);
                 ReplaceCheckpoints(working);
+                CompleteCompletedImports(completedImports);
+                ClearDiagnostic("checkpoint-save-failed");
+                if (!HasPendingCompletedImports())
+                    ResetCheckpointRetry();
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
                 or SecurityException or ArgumentException)
@@ -447,51 +549,165 @@ public sealed class SourceMonitor(
                 logger.LogWarning("SavedVariables monitoring checkpoints could not be saved ({FailureType}).",
                     exception.GetType().Name);
                 SetDiagnostics([new("checkpoint-save-failed",
-                    "Monitoring state could not be saved; a later reconciliation may safely re-import this source.", null)]);
+                    "Monitoring state could not be saved; completed import checkpoints will be retried automatically.", null)]);
+                ScheduleCheckpointRetry();
             }
+        }
+        else if (completedImports.Length > 0)
+        {
+            if (unchanged)
+            {
+                CompleteCompletedImports(completedImports);
+                ClearDiagnostic("checkpoint-save-failed");
+                if (!HasPendingCompletedImports())
+                    ResetCheckpointRetry();
+            }
+        }
+        return Task.CompletedTask;
+    }
+
+    private void ApplyCompletedImports(
+        IReadOnlyList<PendingImportCheckpoint> completedImports,
+        Dictionary<string, MonitoringCheckpoint> working,
+        List<SourceMonitoringDiagnostic> diagnostics)
+    {
+        foreach (PendingImportCheckpoint completion in completedImports)
+        {
+            MonitoringCheckpoint state = working.GetValueOrDefault(completion.SourceId) ??
+                new(completion.SourceId, null, null, null, null, false, true);
+            if (completion.IngestedFingerprint is { } fingerprint)
+            {
+                bool pending = state.ObservedFingerprint is not null &&
+                    !StringComparer.Ordinal.Equals(state.ObservedFingerprint, fingerprint);
+                DateTimeOffset? retry = completion.FailedAfterLatestSuccess
+                    ? timeProvider.GetUtcNow() + TimeSpan.FromSeconds(GetSnapshot().ReconciliationIntervalSeconds)
+                    : null;
+                working[completion.SourceId] = state with
+                {
+                    IngestedFingerprint = fingerprint,
+                    ReconciliationPending = pending || completion.FailedAfterLatestSuccess,
+                    RetryAfter = retry
+                };
+            }
+            else if (completion.FailedAfterLatestSuccess)
+            {
+                DateTimeOffset retry = timeProvider.GetUtcNow() +
+                    TimeSpan.FromSeconds(GetSnapshot().ReconciliationIntervalSeconds);
+                working[completion.SourceId] = state with { ReconciliationPending = true, RetryAfter = retry };
+            }
+            if (completion.FailedAfterLatestSuccess)
+                diagnostics.Add(new("import-failed",
+                    "The last import did not complete successfully; the source remains eligible for retry.", completion.SourceId));
         }
     }
 
-    private async Task ApplyCompletedImportsAsync(
-        Dictionary<string, MonitoringCheckpoint> working,
-        List<SourceMonitoringDiagnostic> diagnostics,
-        CancellationToken cancellationToken)
+    internal void ImportCompleted(ImportOperationSnapshot operation)
     {
-        while (_completedImports.TryDequeue(out ImportOperationSnapshot? operation))
+        bool overflowed = false;
+        lock (_completedImportsGate)
         {
             foreach (ImportSourceSnapshot source in operation.Sources)
             {
-                MonitoringCheckpoint state = working.GetValueOrDefault(source.SourceId) ??
-                    new(source.SourceId, null, null, null, null, false, true);
-                if (source.Outcome == ImportService.CompanionImportOutcome.Successful &&
-                    source.SourceFingerprint is { } fingerprint)
+                bool successful = source.Outcome == ImportService.CompanionImportOutcome.Successful &&
+                    source.SourceFingerprint is not null;
+                bool failed = source.Status is ImportOperationStatus.Failed or ImportOperationStatus.Cancelled;
+                if (!successful && !failed)
+                    continue;
+                if (!_completedImports.TryGetValue(source.SourceId, out PendingImportCheckpoint? pending) &&
+                    _completedImports.Count >= MaximumPendingCompletionSources)
                 {
-                    bool pending = state.ObservedFingerprint is not null &&
-                        !StringComparer.Ordinal.Equals(state.ObservedFingerprint, fingerprint);
-                    working[source.SourceId] = state with
-                    {
-                        IngestedFingerprint = fingerprint,
-                        ReconciliationPending = pending,
-                        RetryAfter = null
-                    };
+                    _completionOverflow = true;
+                    overflowed = true;
+                    continue;
                 }
-                else if (source.Status is ImportOperationStatus.Failed or ImportOperationStatus.Cancelled)
-                {
-                    DateTimeOffset retry = timeProvider.GetUtcNow() +
-                        TimeSpan.FromSeconds(GetSnapshot().ReconciliationIntervalSeconds);
-                    working[source.SourceId] = state with { ReconciliationPending = true, RetryAfter = retry };
-                    diagnostics.Add(new("import-failed",
-                        "The last import did not complete successfully; the source remains eligible for retry.", source.SourceId));
-                }
+
+                _completedImports[source.SourceId] = new(
+                    source.SourceId,
+                    ++_completionVersion,
+                    successful ? source.SourceFingerprint : pending?.IngestedFingerprint,
+                    !successful && (failed || pending?.FailedAfterLatestSuccess == true));
             }
         }
-        await Task.CompletedTask.ConfigureAwait(false);
+        if (overflowed)
+        {
+            logger.LogWarning("SavedVariables completion checkpoints exceeded the in-memory limit; a source scan will recover safely.");
+            SetDiagnostics([new("checkpoint-update-overflow",
+                "Checkpoint updates exceeded the in-memory limit; current files will be reconciled to recover safely.", null)]);
+        }
+        Signal();
     }
 
-    private void ImportCompleted(ImportOperationSnapshot operation)
+    private PendingImportCheckpoint[] CaptureCompletedImports()
     {
-        _completedImports.Enqueue(operation);
-        Signal();
+        lock (_completedImportsGate)
+            return _completedImports.Values.ToArray();
+    }
+
+    private ImportSubmission? SubmitAutomaticUnlessCompletionPending(string sourceId)
+    {
+        lock (_completedImportsGate)
+        {
+            if (_completedImports.ContainsKey(sourceId))
+                return null;
+            return imports.SubmitAutomatic(sourceId);
+        }
+    }
+
+    private bool IsCheckpointRetryDeferred()
+    {
+        lock (_completedImportsGate)
+            return _completedImports.Count > 0 &&
+                _checkpointRetryAfter is { } retryAfter && timeProvider.GetUtcNow() < retryAfter;
+    }
+
+    private void CompleteCompletedImports(IEnumerable<PendingImportCheckpoint> completedImports)
+    {
+        lock (_completedImportsGate)
+        {
+            foreach (PendingImportCheckpoint completion in completedImports)
+            {
+                if (_completedImports.TryGetValue(completion.SourceId, out PendingImportCheckpoint? current) &&
+                    current.Version == completion.Version)
+                    _completedImports.Remove(completion.SourceId);
+            }
+        }
+    }
+
+    private bool HasPendingCompletedImports()
+    {
+        lock (_completedImportsGate)
+            return _completedImports.Count > 0;
+    }
+
+    private bool IsCompletionOverflowed()
+    {
+        lock (_completedImportsGate)
+            return _completionOverflow;
+    }
+
+    private void ClearCompletionOverflow()
+    {
+        lock (_completedImportsGate)
+            _completionOverflow = false;
+    }
+
+    private void ScheduleCheckpointRetry()
+    {
+        lock (_completedImportsGate)
+        {
+            _checkpointRetryAfter = timeProvider.GetUtcNow() + _checkpointRetryDelay;
+            _checkpointRetryDelay = TimeSpan.FromSeconds(Math.Min(
+                MaximumWorkerRetryDelay.TotalSeconds, _checkpointRetryDelay.TotalSeconds * 2));
+        }
+    }
+
+    private void ResetCheckpointRetry()
+    {
+        lock (_completedImportsGate)
+        {
+            _checkpointRetryAfter = null;
+            _checkpointRetryDelay = InitialWorkerRetryDelay;
+        }
     }
 
     private void RebuildWatchers(
@@ -683,6 +899,24 @@ public sealed class SourceMonitor(
         lock (_statusGate) _state = state;
     }
 
+    private void SetStateWhenEnabled(SourceMonitoringState state)
+    {
+        lock (_statusGate)
+        {
+            if (_effectiveSettings.Enabled)
+                _state = state;
+        }
+    }
+
+    private void SetStateWhenDisabled(SourceMonitoringState state)
+    {
+        lock (_statusGate)
+        {
+            if (!_effectiveSettings.Enabled)
+                _state = state;
+        }
+    }
+
     private void ReplaceCheckpoints(Dictionary<string, MonitoringCheckpoint> working)
     {
         _checkpoints.Clear();
@@ -696,12 +930,21 @@ public sealed class SourceMonitor(
         first.Count == second.Count && first.All(pair =>
             second.TryGetValue(pair.Key, out MonitoringCheckpoint? value) && value == pair.Value);
 
+    private sealed record PendingImportCheckpoint(
+        string SourceId,
+        long Version,
+        string? IngestedFingerprint,
+        bool FailedAfterLatestSuccess);
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        _stopping = true;
-        imports.SetAutomaticEnabled(false);
+        lock (_preferenceGate)
+        {
+            _stopping = true;
+            imports.SetAutomaticEnabled(false);
+        }
         imports.OperationCompleted -= ImportCompleted;
         DisposeWatchers();
         RequestStop();
