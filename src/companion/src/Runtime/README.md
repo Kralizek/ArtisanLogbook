@@ -7,7 +7,7 @@ The existing CLI is the sole application entry point: only `serve` builds a host
 - `ApplicationPaths`: one shared per-user data directory, default history path,
   settings path, and working-directory-relative explicit path resolution.
 - `CompanionSettings`: schema version 1, multiple absolute installation roots,
-  optional monitoring preferences (disabled, 60 seconds), and HTTP preferences
+  optional monitoring preferences (enabled, 60 seconds), and HTTP preferences
   (port 48721). Older version-1 files load without migration or writes.
 - `CompanionSettingsStore.Load()`: structured `Loaded`, `Missing`, `Invalid`,
   `Unsupported`, or `Unreadable` result, diagnostic, and opaque revision.

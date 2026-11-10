@@ -82,7 +82,9 @@ reported as already present).
 
 ## Monitoring
 
-Monitoring is **disabled by default**. The GET response reports `preferences`,
+Monitoring is **enabled by default**. An explicit saved or invocation-level
+disable remains authoritative; omitted preferences in older version-1 settings
+use the new default without rewriting the file. The GET response reports `preferences`,
 `effective`, and `overrides` separately. Invocation options retain precedence:
 for example, `serve --monitoring false` allows saving an enabled preference but
 does not enable the current host. Interval overrides are reported independently.

@@ -76,12 +76,12 @@ public sealed class CompanionHostingTests
                 Assert.That(running.DatabaseAvailable, Is.True);
                 Assert.That(running.DatabaseSchemaVersion, Is.EqualTo(store.SchemaVersion));
                 Assert.That(running.CanonicalCraftCount, Is.Zero);
-                Assert.That(running.Configuration.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(monitoring ?? false));
+                Assert.That(running.Configuration.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(monitoring ?? true));
                 Assert.That(running.CriticalFailure, Is.Null);
                 Assert.That(_runtimeLogs, Does.Contain("Artisan Logbook Companion started."));
                 Assert.That(_runtimeLogs, Does.Contain($"Game directory: {Path.Combine(_directory, "offline")}"));
                 Assert.That(_runtimeLogs, Does.Contain("ArtisanLogbook Core installed flavors: (none detected)"));
-                Assert.That(_runtimeLogs, Does.Contain(monitoring is true
+                Assert.That(_runtimeLogs, Does.Contain(monitoring is not false
                     ? "SavedVariables monitoring: on"
                     : "SavedVariables monitoring: off"));
                 Assert.That(_runtimeLogs, Does.Contain("Reconciliation interval: 60 seconds."));
@@ -567,7 +567,7 @@ public sealed class CompanionHostingTests
                 if (line is null) Assert.Fail(startup + await errors);
                 startup += line + "\n";
             }
-            Assert.That(startup, Does.Contain("SavedVariables monitoring: off")
+            Assert.That(startup, Does.Contain("SavedVariables monitoring: on")
                 .And.Contain("Reconciliation interval: 60 seconds")
                 .And.Contain("HTTP API listening on http://127.0.0.1:")
                 .And.Contain("/api/v1"));
