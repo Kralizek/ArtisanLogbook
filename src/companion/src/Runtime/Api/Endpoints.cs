@@ -39,12 +39,39 @@ internal static class ApiMapping
             ImportOperationOutcome.Failed => CompanionApi.Contracts.ImportOperationOutcome.Failed,
             _ => null
         },
+        Origin = operation.Origin == ImportOperationOrigin.Automatic
+            ? CompanionApi.Contracts.ImportOperationOrigin.Automatic
+            : CompanionApi.Contracts.ImportOperationOrigin.Manual,
         RequestedSourceId = operation.RequestedSourceId,
         CreatedAt = operation.CreatedAt,
         StartedAt = operation.StartedAt,
         CompletedAt = operation.CompletedAt,
         Sources = operation.Sources.Select(Map).ToArray(),
         Diagnostics = operation.Diagnostics.Select(Map).ToArray()
+    };
+
+    public static MonitoringStatus Map(SourceMonitoringSnapshot snapshot) => new()
+    {
+        Enabled = snapshot.Enabled,
+        ReconciliationIntervalSeconds = snapshot.ReconciliationIntervalSeconds,
+        State = snapshot.State switch
+        {
+            SourceMonitoringState.Disabled => MonitoringState.Disabled,
+            SourceMonitoringState.Active => MonitoringState.Active,
+            SourceMonitoringState.Degraded => MonitoringState.Degraded,
+            _ => MonitoringState.Unavailable
+        },
+        DiscoveredSources = snapshot.DiscoveredSources,
+        WatchedDirectories = snapshot.WatchedDirectories,
+        LastReconciliationAttempt = snapshot.LastReconciliationAttempt,
+        LastSuccessfulReconciliation = snapshot.LastSuccessfulReconciliation,
+        ReconciliationInProgress = snapshot.ReconciliationInProgress,
+        Diagnostics = snapshot.Diagnostics.Select(diagnostic => new MonitoringDiagnostic
+        {
+            Code = diagnostic.Code,
+            Message = diagnostic.Message,
+            SourceId = diagnostic.SourceId
+        }).ToArray()
     };
 
     private static CompanionApi.Contracts.ImportOperationStatus Map(ImportOperationStatus status) => status switch
@@ -167,6 +194,75 @@ internal sealed class ListImportsEndpoint(ImportOperations operations) : ListImp
         {
             Operations = operations.List(limit).Select(ApiMapping.Map).ToArray()
         }));
+    }
+}
+
+internal sealed class GetMonitoringEndpoint(SourceMonitor monitor) : GetMonitoringEndpointBase
+{
+    public override Task<Ok<MonitoringStatus>> HandleAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(TypedResults.Ok(ApiMapping.Map(monitor.GetSnapshot())));
+}
+
+internal sealed class UpdateMonitoringEndpoint(SourceMonitor monitor) : UpdateMonitoringEndpointBase
+{
+    public override Task<Results<Ok<MonitoringStatus>, UpdateMonitoringEndpointBase.BadRequestProblem,
+        UpdateMonitoringEndpointBase.ConflictProblem>> HandleAsync(
+        Request request, CancellationToken cancellationToken)
+    {
+        if (request.ReconciliationIntervalSeconds is < 1 or > 86400)
+            return Task.FromResult<Results<Ok<MonitoringStatus>, UpdateMonitoringEndpointBase.BadRequestProblem,
+                UpdateMonitoringEndpointBase.ConflictProblem>>(
+                new UpdateMonitoringEndpointBase.BadRequestProblem(ApiMapping.Problem(400, "invalid-reconciliation-interval",
+                    "reconciliationIntervalSeconds must be between 1 and 86400.")));
+
+        try
+        {
+            SourceMonitoringSnapshot snapshot = monitor.UpdatePreferences(new()
+            {
+                Enabled = request.Enabled,
+                ReconciliationIntervalSeconds = request.ReconciliationIntervalSeconds
+            }, cancellationToken);
+            return Task.FromResult<Results<Ok<MonitoringStatus>, UpdateMonitoringEndpointBase.BadRequestProblem,
+                UpdateMonitoringEndpointBase.ConflictProblem>>(
+                TypedResults.Ok(ApiMapping.Map(snapshot)));
+        }
+        catch (ArgumentException exception)
+        {
+            return Task.FromResult<Results<Ok<MonitoringStatus>, UpdateMonitoringEndpointBase.BadRequestProblem,
+                UpdateMonitoringEndpointBase.ConflictProblem>>(
+                new UpdateMonitoringEndpointBase.BadRequestProblem(
+                    ApiMapping.Problem(400, "invalid-monitoring-configuration", exception.Message)));
+        }
+        catch (CompanionSettingsException)
+        {
+            return Task.FromResult<Results<Ok<MonitoringStatus>, UpdateMonitoringEndpointBase.BadRequestProblem,
+                UpdateMonitoringEndpointBase.ConflictProblem>>(
+                new UpdateMonitoringEndpointBase.ConflictProblem(
+                    ApiMapping.Problem(409, "settings-update-failed",
+                        "The settings could not be updated; no monitoring preference was applied.")));
+        }
+    }
+}
+
+internal sealed class RequestMonitoringReconciliationEndpoint(SourceMonitor monitor) :
+    RequestMonitoringReconciliationEndpointBase
+{
+    public override Task<Results<Accepted<ReconciliationAcknowledgement>, ConflictProblem, Status503Problem>>
+        HandleAsync(Request request, CancellationToken cancellationToken)
+    {
+        ReconciliationRequestStatus status = monitor.RequestReconciliation();
+        return Task.FromResult<Results<Accepted<ReconciliationAcknowledgement>, ConflictProblem, Status503Problem>>(
+            status switch
+            {
+                ReconciliationRequestStatus.Accepted => TypedResults.Accepted(
+                    (string?)null, new ReconciliationAcknowledgement { Accepted = true, Coalesced = false }),
+                ReconciliationRequestStatus.Coalesced => TypedResults.Accepted(
+                    (string?)null, new ReconciliationAcknowledgement { Accepted = true, Coalesced = true }),
+                ReconciliationRequestStatus.Disabled => new ConflictProblem(ApiMapping.Problem(
+                    409, "monitoring-disabled", "Enable monitoring before requesting reconciliation.")),
+                _ => new Status503Problem(ApiMapping.Problem(
+                    503, "application-stopping", "The Companion is stopping and cannot accept monitoring work."))
+            });
     }
 }
 

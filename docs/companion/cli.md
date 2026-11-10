@@ -79,7 +79,7 @@ than erased.
 
 The settings version remains **1**; there is no migration. Existing files with
 only `version` and `installationRoots` load unchanged. Omitted monitoring settings
-mean **disabled**, with a 60-second future reconciliation interval; omitted HTTP
+mean **disabled**, with a 60-second reconciliation interval; omitted HTTP
 settings mean preferred port **48721**. An omitted property inside either object
 also uses its built-in default. Explicit `null` objects are invalid. Intervals
 must be integers from **1 through 86400 seconds**; ports must be integers from
@@ -103,29 +103,36 @@ well as .NET 10; the SDK and self-contained Windows deployment supply it.
 Configuration precedence is **invocation CLI overrides > persisted settings >
 built-in defaults**. `--database` continues selecting the database independently
 of settings. `--monitoring <BOOL>`, `--reconciliation-interval <SECONDS>`, and
-`--port <PORT>` override only the current invocation and never persist. Invalid
+`--port <PORT>` are effective for this invocation; CLI values themselves never
+persist. A monitoring API update persists the user preference, but an explicit
+CLI override remains effective until that process exits. Invalid
 CLI options return 1. Invalid, unreadable, or unsupported persisted settings
 return 3 even if overrides would otherwise mask their invalid values. With no
 settings file, serve uses defaults and no installation roots without creating
 settings; `init` is not a prerequisite.
 
-Internally, saved preferences and invocation overrides are retained separately
-from the effective configuration. Future browser preference changes cannot
-discard an explicit invocation override: controls must distinguish "preference
-saved" from "effective monitoring changed". Runtime preference mutation and hot
-reload are not implemented yet.
+Saved preferences and invocation overrides remain separate from the effective
+configuration. Runtime monitoring changes are applied immediately and persisted
+through the local HTTP API. The API reports the effective value, so a saved
+preference that conflicts with an invocation override is not presented as active.
 
 Startup validates configuration and opens one writable C03 History Store, shared
 with C07. Offline installations, absent SavedVariables, and empty craft history
-are supported. No discovery scan or import is triggered by startup. C06 monitoring
-is not implemented, so an enabled preference is reported but performs no work.
-There are no watcher, reconciliation timer, import scheduler, or fake statistics.
+are supported. Monitoring is disabled by default. When enabled, a hosted monitor
+performs startup and periodic reconciliation, uses filesystem notifications as
+hints, waits for stable file content before submitting imports, and retries
+transient failures without a connected HTTP client. Automatic and manual imports
+share the bounded C11 worker and C10 admission mechanism.
 
 Kestrel binds **IPv4 loopback only** (`127.0.0.1`) on the effective preferred port,
 falling back to an OS-assigned loopback port only when that port is already in use.
 The actual URL is printed at startup. The local `/api/v1/` HTTP API and its
 OpenAPI document are described in [Local HTTP API](api.md). Bundled browser assets
 at `/` belong to C12.
+
+Use the monitoring API to enable/disable monitoring, change its interval, inspect
+operational diagnostics, or request a one-off reconciliation. See
+[monitoring API examples and behavior](api.md#savedvariables-monitoring).
 
 The process stays active without a browser. Ctrl+C, SIGTERM, or normal host
 shutdown stops hosted work and disposes the writer, releasing database ownership.

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -96,10 +97,190 @@ public sealed class CompanionApiTests
         Assert.That(mapped, Is.EqualTo(documented));
         Assert.That(documented, Is.EqualTo(new[]
         {
-            "/api/v1/health", "/api/v1/imports", "/api/v1/imports/{id}", "/api/v1/sources", "/api/v1/status"
+            "/api/v1/health", "/api/v1/imports", "/api/v1/imports/{id}", "/api/v1/monitoring",
+            "/api/v1/monitoring/reconcile", "/api/v1/sources", "/api/v1/status"
         }));
-        foreach (string operation in new[] { "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport" })
+        foreach (string operation in new[]
+        {
+            "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport",
+            "getMonitoring", "updateMonitoring", "requestMonitoringReconciliation"
+        })
             Assert.That(document, Does.Contain($"operationId: {operation}"));
+    }
+
+    [Test]
+    public async Task MonitoringApiPersistsPreferencesAndRejectsDisabledReconciliation()
+    {
+        string secondRoot = Path.Combine(_directory, "second-installation");
+        _settings.Save(CompanionSettings.ForRoots(_root, secondRoot));
+        await using ApiHost host = await Start();
+
+        JsonElement initial = await Json(await host.Http.GetAsync("/api/v1/monitoring"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(initial.GetProperty("enabled").GetBoolean(), Is.False);
+            Assert.That(initial.GetProperty("reconciliationIntervalSeconds").GetInt32(), Is.EqualTo(60));
+            Assert.That(initial.GetProperty("state").GetString(), Is.EqualTo("Disabled"));
+            Assert.That(initial.GetProperty("watchedDirectories").GetInt32(), Is.Zero);
+        });
+
+        using (HttpResponseMessage disabled = await host.Post("/api/v1/monitoring/reconcile", "{}"))
+        {
+            Assert.That(disabled.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That((await Json(disabled)).GetProperty("code").GetString(), Is.EqualTo("monitoring-disabled"));
+        }
+
+        using HttpResponseMessage missingHeader = await host.Http.PutAsync("/api/v1/monitoring",
+            new StringContent("""{"enabled":true,"reconciliationIntervalSeconds":15}""", Encoding.UTF8, "application/json"));
+        Assert.That(missingHeader.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
+
+        using HttpResponseMessage enabled = await host.Http.SendAsync(host.Request(HttpMethod.Put, "/api/v1/monitoring",
+            """{"enabled":true,"reconciliationIntervalSeconds":15}"""));
+        JsonElement enabledBody = await Json(enabled);
+        Assert.That(enabled.StatusCode, Is.EqualTo(HttpStatusCode.OK), enabledBody.ToString());
+        Assert.That(enabledBody.GetProperty("enabled").GetBoolean(), Is.True);
+        Assert.That(enabledBody.GetProperty("reconciliationIntervalSeconds").GetInt32(), Is.EqualTo(15));
+        Assert.That(enabledBody.GetProperty("state").GetString(), Is.EqualTo("Unavailable").Or.EqualTo("Active"));
+        Assert.That(_settings.Load().Settings!.InstallationRoots, Is.EqualTo(new[] { _root, secondRoot }));
+        Assert.That(_settings.Load().Settings!.Monitoring, Is.EqualTo(new MonitoringSettings
+        {
+            Enabled = true,
+            ReconciliationIntervalSeconds = 15
+        }));
+
+        using HttpResponseMessage invalid = await host.Http.SendAsync(host.Request(HttpMethod.Put, "/api/v1/monitoring",
+            """{"enabled":false,"reconciliationIntervalSeconds":0}"""));
+        Assert.That(invalid.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(_settings.Load().Settings!.Monitoring.Enabled, Is.True,
+            "Invalid preferences must not be partially persisted.");
+
+        using HttpResponseMessage accepted = await host.Post("/api/v1/monitoring/reconcile", "{}");
+        JsonElement acknowledgement = await Json(accepted);
+        Assert.That(accepted.StatusCode, Is.EqualTo(HttpStatusCode.Accepted));
+        Assert.That(acknowledgement.GetProperty("accepted").GetBoolean(), Is.True);
+        Assert.That(acknowledgement.GetProperty("coalesced").ValueKind, Is.EqualTo(JsonValueKind.True).Or.EqualTo(JsonValueKind.False));
+
+        using HttpResponseMessage disabledAgain = await host.Http.SendAsync(host.Request(HttpMethod.Put, "/api/v1/monitoring",
+            """{"enabled":false,"reconciliationIntervalSeconds":15}"""));
+        Assert.That(disabledAgain.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That((await Json(disabledAgain)).GetProperty("state").GetString(), Is.EqualTo("Disabled"));
+        Assert.That(host.App.Services.GetRequiredService<SourceMonitor>().GetSnapshot().WatchedDirectories, Is.Zero);
+        Assert.That(_settings.Load().Settings!.InstallationRoots, Is.EqualTo(new[] { _root, secondRoot }));
+    }
+
+    [Test]
+    public async Task HostedMonitorImportsInitialSnapshotAndSkipsUnchangedContent()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root) with
+        {
+            Monitoring = new() { Enabled = true, ReconciliationIntervalSeconds = 30 }
+        });
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        await using ApiHost host = await Start();
+        SourceMonitor monitor = host.App.Services.GetRequiredService<SourceMonitor>();
+
+        JsonElement first = await WaitForAutomaticOperation(host);
+        string sourceId = SourceCatalog.IdFor(source);
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.GetProperty("origin").GetString(), Is.EqualTo("Automatic"));
+            Assert.That(first.GetProperty("status").GetString(), Is.EqualTo("Completed"));
+            Assert.That(first.GetProperty("sources")[0].GetProperty("sourceId").GetString(), Is.EqualTo(sourceId));
+        });
+
+        long historyCount = host.App.Services.GetRequiredService<Store>().ReadStatus().TotalCraftCount;
+        int operationCount = host.App.Services.GetRequiredService<ImportOperations>().List(100).Count;
+        await monitor.ReconcileOnceAsync(forceStable: true);
+        Assert.That(host.App.Services.GetRequiredService<ImportOperations>().List(100), Has.Count.EqualTo(operationCount));
+        Assert.That(host.App.Services.GetRequiredService<Store>().ReadStatus().TotalCraftCount, Is.EqualTo(historyCount));
+        Assert.That(host.App.Services.GetRequiredService<MonitoringCheckpointStore>().Load().Single().IngestedFingerprint,
+            Is.EqualTo(Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(source))).ToLowerInvariant()));
+
+        string replacement = source + ".replacement";
+        await File.WriteAllTextAsync(replacement, CompanionCommandAppTests.Snapshot(2, null, 1));
+        File.Move(replacement, source, overwrite: true);
+        monitor.RequestReconciliation();
+        JsonElement second = await WaitForAutomaticOperation(host, afterCount: operationCount);
+        Assert.That(second.GetProperty("sources")[0].GetProperty("sourceId").GetString(), Is.EqualTo(sourceId));
+        Assert.That(host.App.Services.GetRequiredService<Store>().ReadStatus().TotalCraftCount,
+            Is.GreaterThan(historyCount));
+    }
+
+    [Test]
+    public async Task RestartReconcilesUnchangedSourceWithoutRepeatingImport()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root) with
+        {
+            Monitoring = new() { Enabled = true, ReconciliationIntervalSeconds = 30 }
+        });
+        Ledger("_retail_", "ACCOUNT", 1);
+        await using (ApiHost first = await Start())
+        {
+            await WaitForAutomaticOperation(first);
+            await WaitForSuccessfulReconciliation(first);
+            Assert.That(first.App.Services.GetRequiredService<MonitoringCheckpointStore>().Load().Single().IngestedFingerprint,
+                Is.Not.Null);
+        }
+
+        await using ApiHost second = await Start();
+        await WaitForSuccessfulReconciliation(second);
+        Assert.That(second.App.Services.GetRequiredService<ImportOperations>().List(100), Is.Empty);
+    }
+
+    [Test]
+    public async Task SuccessfulManualImportSeedsCheckpointBeforeMonitoringIsEnabled()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        await using ApiHost host = await Start();
+        using HttpResponseMessage accepted = await host.Post("/api/v1/imports",
+            $$"""{"sourceId":"{{SourceCatalog.IdFor(source)}}"}""");
+        Assert.That(accepted.StatusCode, Is.EqualTo(HttpStatusCode.Accepted));
+        string id = (await Json(accepted)).GetProperty("id").GetString()!;
+        JsonElement manual = await host.WaitFor(id);
+        Assert.That(manual.GetProperty("origin").GetString(), Is.EqualTo("Manual"));
+
+        using HttpResponseMessage enabled = await host.Http.SendAsync(host.Request(HttpMethod.Put, "/api/v1/monitoring",
+            """{"enabled":true,"reconciliationIntervalSeconds":30}"""));
+        Assert.That(enabled.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        await WaitForSuccessfulReconciliation(host);
+        Assert.That(host.App.Services.GetRequiredService<ImportOperations>().List(100), Has.Count.EqualTo(1));
+        Assert.That(host.App.Services.GetRequiredService<MonitoringCheckpointStore>().Load().Single().IngestedFingerprint,
+            Is.EqualTo(Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(source))).ToLowerInvariant()));
+    }
+
+    [Test]
+    public async Task AutomaticAndManualImportsShareSourceAdmissionAndDisableStopsNewAutomaticWork()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root) with
+        {
+            Monitoring = new() { Enabled = true, ReconciliationIntervalSeconds = 30 }
+        });
+        string source = Ledger("_retail_", "ACCOUNT", 1);
+        await using ApiHost host = await Start(gated: true);
+        GatedImports gated = host.Imports!;
+        using CancellationTokenSource timeout = new(Timeout());
+        try
+        {
+            await gated.Entered.WaitAsync(timeout.Token);
+            using HttpResponseMessage manual = await host.Post("/api/v1/imports",
+                $$"""{"sourceId":"{{SourceCatalog.IdFor(source)}}"}""");
+            Assert.That(manual.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That((await Json(manual)).GetProperty("code").GetString(), Is.EqualTo("source-busy"));
+
+            using HttpResponseMessage disabled = await host.Http.SendAsync(host.Request(HttpMethod.Put, "/api/v1/monitoring",
+                """{"enabled":false,"reconciliationIntervalSeconds":30}"""));
+            Assert.That(disabled.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That((await Json(disabled)).GetProperty("enabled").GetBoolean(), Is.False);
+        }
+        finally
+        {
+            gated.Gate.TrySetResult();
+        }
+
+        JsonElement automatic = await WaitForAutomaticOperation(host);
+        Assert.That(automatic.GetProperty("origin").GetString(), Is.EqualTo("Automatic"));
+        Assert.That(host.App.Services.GetRequiredService<ImportOperations>().List(100), Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -632,6 +813,42 @@ public sealed class CompanionApiTests
         using HttpResponseMessage response = await host.Post("/api/v1/imports", body);
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Accepted), await response.Content.ReadAsStringAsync());
         return (await Json(response)).GetProperty("id").GetString()!;
+    }
+
+    private static async Task<JsonElement> WaitForAutomaticOperation(ApiHost host, int afterCount = 0)
+    {
+        using CancellationTokenSource timeout = new(Timeout());
+        while (true)
+        {
+            IReadOnlyList<ImportOperationSnapshot> operations =
+                host.App.Services.GetRequiredService<ImportOperations>().List(100);
+            if (operations.Count > afterCount)
+            {
+                ImportOperationSnapshot? automatic = operations.FirstOrDefault(item =>
+                    item.Origin == ImportOperationOrigin.Automatic);
+                if (automatic is not null)
+                {
+                    JsonElement result = await Json(await host.Http.GetAsync(
+                        $"/api/v1/imports/{automatic.Id}", timeout.Token));
+                    if (result.GetProperty("completedAt").ValueKind != JsonValueKind.Null)
+                        return result;
+                }
+            }
+            await Task.Delay(10, timeout.Token);
+        }
+    }
+
+    private static async Task WaitForSuccessfulReconciliation(ApiHost host)
+    {
+        using CancellationTokenSource timeout = new(Timeout());
+        SourceMonitor monitor = host.App.Services.GetRequiredService<SourceMonitor>();
+        while (true)
+        {
+            SourceMonitoringSnapshot snapshot = monitor.GetSnapshot();
+            if (snapshot.LastSuccessfulReconciliation is not null && !snapshot.ReconciliationInProgress)
+                return;
+            await Task.Delay(10, timeout.Token);
+        }
     }
 
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
