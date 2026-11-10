@@ -694,7 +694,7 @@ public sealed class CompanionApiTests
                 Args = [],
                 ApplicationName = typeof(CompanionCommandApp).Assembly.GetName().Name
             });
-            CompanionRuntimeConfiguration configuration = CompanionRuntimeConfiguration.Resolve(paths, settings, port: port);
+            CompanionRuntimeConfiguration configuration = CompanionRuntimeConfiguration.Resolve(paths, settings, monitoring: false, port: port);
             builder.ConfigureCompanionHost(configuration);
             if (port is null) builder.WebHost.UseUrls("http://127.0.0.1:0");
             builder.Services.AddArtisanLogbookCompanion(paths, configuration);

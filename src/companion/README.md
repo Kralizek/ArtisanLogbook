@@ -67,11 +67,13 @@ artisanlogbook import --help
 The Companion provides initialization, importing, read-only status, and a
 long-running local host. `serve` owns the database until shutdown; other processes
 cannot import or inspect it while that writer is active. Stop the host before
-using manual database commands. Monitoring defaults to disabled. Enable it with
-`serve --monitoring true` for one invocation, or persist preferences through the
+using manual database commands. Monitoring defaults to enabled. Disable it with
+`serve --monitoring false` for one invocation, or persist preferences through the
 [monitoring API](../../docs/companion/api.md#monitoring). Enabled monitoring
 discovers configured accounts and client flavors, watches for changes, and
 periodically reconciles stable SavedVariables snapshots through the same importer.
+Older settings with omitted monitoring preferences use the new default without
+being rewritten. An explicit saved `"enabled": false` remains disabled.
 
 The host binds loopback only and serves the [local HTTP API](../../docs/companion/api.md)
 (`/api/v1`, OpenAPI at `/openapi/v1.yaml`); the URL is printed at startup. It has no

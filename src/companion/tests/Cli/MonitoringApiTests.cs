@@ -12,7 +12,7 @@ namespace Tests.Cli;
 public sealed class MonitoringApiTests
 {
     [Test]
-    public async Task DisabledByDefaultAndPublicStatusDoesNotExposePathsOrAccounts()
+    public async Task ExplicitlyDisabledAndPublicStatusDoesNotExposePathsOrAccounts()
     {
         await using MonitoringTestHost host = new();
         host.Ledger(account: "PRIVATE_ACCOUNT");
@@ -32,6 +32,26 @@ public sealed class MonitoringApiTests
         });
         using HttpResponseMessage disabled = await Send(host, HttpMethod.Post, "/api/v1/monitoring/reconcile", "{}");
         await Problem(disabled, HttpStatusCode.Conflict, "monitoring-disabled");
+    }
+
+    [Test]
+    public async Task LegacySettingsEnableMonitoringAndApiReportsDefaultsWithoutRewritingPreferences()
+    {
+        await using MonitoringTestHost host = new();
+        host.Ledger(account: "PRIVATE_ACCOUNT");
+        await host.StartAsync(legacySettings: true);
+        byte[] before = File.ReadAllBytes(host.Settings.FilePath);
+        await MonitoringTestHost.Eventually(() => host.Checkpoints.Read().Document.Sources.Values.Any(source => source.Successful is not null));
+        JsonElement state = JsonDocument.Parse(await host.Http.GetStringAsync("/api/v1/monitoring")).RootElement;
+        Assert.That(state.GetProperty("preferences").GetProperty("enabled").GetBoolean(), Is.True);
+        Assert.That(state.GetProperty("effective").GetProperty("enabled").GetBoolean(), Is.True);
+        Assert.That(File.ReadAllBytes(host.Settings.FilePath), Is.EqualTo(before));
+        host.Preferences(false);
+        Assert.That(host.Settings.Load().Settings!.Monitoring.Enabled, Is.False);
+        state = JsonDocument.Parse(await host.Http.GetStringAsync("/api/v1/monitoring")).RootElement;
+        Assert.That(state.GetProperty("preferences").GetProperty("enabled").GetBoolean(), Is.False);
+        Assert.That(state.GetProperty("effective").GetProperty("enabled").GetBoolean(), Is.False);
+        Assert.That(File.ReadAllText(host.Settings.FilePath), Does.Contain("\"enabled\": false"));
     }
 
     [Test]

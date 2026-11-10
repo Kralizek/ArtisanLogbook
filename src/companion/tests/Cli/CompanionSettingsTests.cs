@@ -96,11 +96,47 @@ public sealed class CompanionSettingsTests
         Assert.Multiple(() =>
         {
             Assert.That(CompanionSettings.CurrentVersion, Is.EqualTo(1));
-            Assert.That(settings.Monitoring.Enabled, Is.False);
+            Assert.That(settings.Monitoring.Enabled, Is.True);
             Assert.That(settings.Monitoring.ReconciliationIntervalSeconds, Is.EqualTo(60));
             Assert.That(settings.Http.PreferredPort, Is.EqualTo(48721));
             Assert.That(File.ReadAllText(_store.FilePath), Is.EqualTo(json));
         });
+    }
+
+    [TestCase(null, true)]
+    [TestCase("""{"version":1,"installationRoots":[]}""", true)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{}}""", true)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"reconciliationIntervalSeconds":120}}""", true)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"enabled":true}}""", true)]
+    [TestCase("""{"version":1,"installationRoots":[],"monitoring":{"enabled":false}}""", false)]
+    public void DefaultsAndLegacyPreferencesResolveWithoutWrites(string? json, bool enabled)
+    {
+        if (json is not null)
+        {
+            Directory.CreateDirectory(_paths.DataDirectory);
+            File.WriteAllText(_store.FilePath, json);
+        }
+        CompanionRuntimeConfiguration configuration = CompanionRuntimeConfiguration.Resolve(_paths, _store);
+        Assert.That(configuration.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(enabled));
+        Assert.That(configuration.PersistedPreferences?.Monitoring.Enabled, Is.EqualTo(json is null ? null : (bool?)enabled));
+        Assert.That(File.Exists(_store.FilePath), Is.EqualTo(json is not null));
+        if (json is not null) Assert.That(File.ReadAllText(_store.FilePath), Is.EqualTo(json));
+        Assert.That(CompanionRuntimeConfiguration.Resolve(_paths, _store, monitoring: false)
+            .EffectiveSettings.Monitoring.Enabled, Is.False);
+        Assert.That(CompanionRuntimeConfiguration.Resolve(_paths, _store, monitoring: true)
+            .EffectiveSettings.Monitoring.Enabled, Is.True);
+    }
+
+    [Test]
+    public void ExplicitFalseSurvivesSavingAndUnrelatedPreferenceUpdates()
+    {
+        _store.Save(CompanionSettings.ForRoots(_directory) with { Monitoring = new() { Enabled = false } });
+        Assert.That(File.ReadAllText(_store.FilePath), Does.Contain("\"enabled\": false"));
+        CompanionSettings saved = _store.Load().Settings!;
+        _store.Save(saved with { Http = new() { PreferredPort = 12345 } });
+        CompanionRuntimeConfiguration configuration = CompanionRuntimeConfiguration.Resolve(_paths, _store);
+        Assert.That(configuration.PersistedPreferences!.Monitoring.Enabled, Is.False);
+        Assert.That(configuration.EffectiveSettings.Monitoring.Enabled, Is.False);
     }
 
     [Test]
@@ -154,7 +190,7 @@ public sealed class CompanionSettingsTests
         Assert.That(File.Exists(_store.FilePath), Is.False);
     }
 
-    [TestCase(null, false, true)]
+    [TestCase(null, true, true)]
     [TestCase(false, false, false)]
     [TestCase(true, true, true)]
     public void NewSavedSnapshotCannotDiscardInvocationOverride(bool? invocation, bool firstEffective, bool updatedEffective)

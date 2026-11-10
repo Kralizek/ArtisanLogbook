@@ -1,0 +1,581 @@
+using System.Text;
+using System.Text.RegularExpressions;
+
+using ArtisanLogbook.Cli.Logging;
+
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
+
+using NUnit.Framework;
+
+using Spectre.Console;
+using Spectre.Console.Testing;
+
+namespace Tests.Cli;
+
+[TestFixture]
+public sealed class SpectreLoggingTests
+{
+    [Test]
+    public void EnumerablePropertiesAreReadableBoundedAndKeepTheOriginalState()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        string[] labels = ["_forever_", "_retail_"];
+        Dictionary<string, object?> state = new()
+        {
+            ["Labels"] = labels,
+            ["Counts"] = new List<int> { 1, 2, 3 },
+            ["Empty"] = Array.Empty<string>(),
+            ["Blank"] = "",
+            ["Missing"] = null,
+            ["Nested"] = new object[] { new[] { "a", "b" }, 4 }
+        };
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker")
+            .Log(LogLevel.Information, default, state, null, (_, _) => "metadata");
+        Assert.That(console.Output, Does.Contain("Labels=[_forever_, _retail_]")
+            .And.Contain("Counts=[1, 2, 3]").And.Contain("Nested=[[a, b], 4]")
+            .And.Contain("Missing=(null)").And.Not.Contain("Empty=").And.Not.Contain("Blank=")
+            .And.Not.Contain("System.String[]"));
+        Assert.That(state["Labels"], Is.SameAs(labels));
+    }
+
+    [TestCase("\n")]
+    [TestCase("\r\n")]
+    public void CollectionMultilineValuesAreSanitizedAndKeepContinuationIndent(string newline)
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").Log(LogLevel.Information, default,
+            new Dictionary<string, object?> { ["Values"] = new[] { "[red]one[/]" + newline + "two\x1b[2J", "three" } },
+            null, (_, _) => "collection");
+        Assert.That(console.Output, Does.Contain("Values=[[red]one[/]\n  two, three]"));
+        Assert.That(console.Output.Contains('\r') || console.Output.Contains('\x1b'), Is.False);
+    }
+
+    [Test]
+    public void CollectionRenderingBoundsEnumerationDepthAndOutputAndDisposesIterators()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        int moved = 0;
+        bool disposed = false;
+        IEnumerable<int> Unbounded()
+        {
+            try
+            {
+                for (int value = 0; ; value++)
+                {
+                    if (++moved > 17) throw new AssertionException("Collection must be bounded before enumeration");
+                    yield return value;
+                }
+            }
+            finally { disposed = true; }
+        }
+        object[] cycle = new object[1];
+        cycle[0] = cycle;
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").Log(LogLevel.Information, default,
+            new Dictionary<string, object?>
+            {
+                ["Unbounded"] = Unbounded(),
+                ["Cycle"] = cycle,
+                ["Large"] = Enumerable.Repeat(new string('x', 10_000), 10_000)
+            }, null, (_, _) => "bounded");
+        Assert.That(moved, Is.EqualTo(17));
+        Assert.That(disposed, Is.True);
+        Assert.That(console.Output, Does.Contain("14, 15, ...]").And.Contain("Cycle=[[[[...]]]]"));
+        Assert.That(console.Output.Length, Is.LessThan(2400));
+    }
+
+    [Test]
+    public void CollectionScopesUseTheSameBoundedFormatting()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, options: options => options.IncludeScopes = true);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        using (logger.BeginScope(new Dictionary<string, object?> { ["Labels"] = new[] { "a", "b" }, ["Empty"] = new int[0] }))
+            logger.LogInformation("scoped");
+        Assert.That(console.Output, Does.Contain("scope: Labels=[a, b]").And.Not.Contain("Empty=").And.Not.Contain("System.String[]"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void StandardTemplateCollectionExpansionIsBoundedAndEnumeratedOncePerEntry(bool verbose)
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = verbose);
+        int moved = 0;
+        IEnumerable<int> Unbounded()
+        {
+            for (int value = 0; ; value++)
+            {
+                if (++moved > 17) throw new AssertionException("Neither message nor properties may enumerate without bounds");
+                yield return value;
+            }
+        }
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker")
+            .LogInformation("Values {Values}; number {Number:F2}; literal {{brace}}", Unbounded(), 42);
+        Assert.That(moved, Is.EqualTo(17));
+        Assert.That(console.Output, Does.Contain("Values [0, 1, 2").And.Contain("14, 15, ...]")
+            .And.Contain("number " + 42.ToString("F2")).And.Contain("literal {brace}"));
+        Assert.That(console.Output.Length, Is.LessThan(350));
+    }
+
+    [Test]
+    public void FilteredCollectionsAreNeverEnumeratedAndConcurrentCollectionEntriesStayAtomic()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, logging => logging.SetMinimumLevel(LogLevel.Information));
+        IEnumerable<int> disabled = Enumerable.Range(0, 1).Select<int, int>(_ =>
+            throw new AssertionException("Disabled log levels must not enumerate values"));
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        logger.Log(LogLevel.Debug, default, new Dictionary<string, object?> { ["Disabled"] = disabled },
+            null, (_, _) => throw new AssertionException("Disabled formatter invoked"));
+        Parallel.For(0, 100, id => logger.Log(LogLevel.Information, default,
+            new Dictionary<string, object?> { ["Pair"] = new[] { id, id } }, null, (_, _) => "collection-" + id));
+        MatchCollection entries = Regex.Matches(console.Output,
+            @"(?m)^\d{2}:\d{2}:\d{2} INF collection-(\d+)\n  category=Worker event=0 Pair=\[\1, \1\]\n");
+        Assert.That(entries, Has.Count.EqualTo(100));
+        Assert.That(entries.Sum(entry => entry.Length), Is.EqualTo(console.Output.Length));
+    }
+
+    [Test]
+    public void StructuredStateCategoryLevelAndEventArePreservedWithoutParsingTheMessage()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Test.Worker");
+        logger.Log(LogLevel.Warning, new EventId(42, "Imported"),
+            new Dictionary<string, object?> { ["RecipeId"] = 123, ["Source"] = "file.lua", ["Missing"] = null },
+            null, (_, _) => "Finished importing");
+
+        Assert.That(console.Output, Does.Contain("WRN Finished importing")
+            .And.Contain("category=Test.Worker event=42/Imported")
+            .And.Contain("RecipeId=123").And.Contain("Source=file.lua").And.Contain("Missing=(null)"));
+    }
+
+    [Test]
+    public void StandardConfigurationFiltersCategoriesAndProviderLevels()
+    {
+        using TestConsole console = new();
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Logging:LogLevel:Default"] = "Error",
+            ["Logging:SpectreConsole:LogLevel:Verbose.Worker"] = "Debug"
+        }).Build();
+        using ServiceProvider services = CreateServices(console, logging =>
+            logging.AddConfiguration(configuration.GetSection("Logging")));
+        ILoggerFactory factory = services.GetRequiredService<ILoggerFactory>();
+        ILogger regular = factory.CreateLogger("Regular");
+        ILogger verbose = factory.CreateLogger("Verbose.Worker");
+
+        regular.LogWarning("filtered");
+        regular.LogError("visible error");
+        verbose.LogDebug("visible debug");
+        verbose.LogTrace("filtered trace");
+
+        Assert.That(regular.IsEnabled(LogLevel.Warning), Is.False);
+        Assert.That(verbose.IsEnabled(LogLevel.Debug), Is.True);
+        Assert.That(console.Output, Does.Not.Contain("filtered"));
+        Assert.That(console.Output, Does.Contain("visible error").And.Contain("visible debug"));
+    }
+
+    [Test]
+    public void StandardFiltersSkipFormattingAndNoneNeverLogs()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, logging => logging.SetMinimumLevel(LogLevel.Error));
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        logger.Log<string>(LogLevel.Debug, default, "", null, (_, _) => throw new AssertionException("Must not format"));
+        logger.Log<string>(LogLevel.None, default, "", null, (_, _) => throw new AssertionException("Must not format"));
+        Assert.That(console.Output, Is.Empty);
+    }
+
+    [Test]
+    public void ExceptionsRetainNestedMessagesAndReadableStackFrames()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        Exception exception;
+        try
+        {
+            ThrowFailure();
+            throw new AssertionException("Expected exception");
+        }
+        catch (InvalidOperationException failure)
+        {
+            exception = failure;
+        }
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").LogError(exception, "Import failed");
+        Assert.That(console.Output, Does.Contain("ERR Import failed")
+            .And.Contain("System.InvalidOperationException: outer [red]")
+            .And.Contain("System.ArgumentException: inner")
+            .And.Contain(nameof(ThrowFailure)));
+        Assert.That(console.Output, Does.Contain("\n     at "));
+    }
+
+    [Test]
+    public void EveryExternalFieldIsLiteralAndControlSequencesCannotReachTheTerminal()
+    {
+        using TestConsole console = new();
+        console.Profile.Capabilities.Ansi = true;
+        console.EmitAnsiSequences = false;
+        console.Width(300);
+        using ServiceProvider services = CreateServices(console, options: options => options.IncludeScopes = true);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("[red]category[/]\x1b[2J");
+        using (logger.BeginScope("[link=https://bad]scope[/]\x1b]0;title\a"))
+        {
+            logger.Log(LogLevel.Error, new EventId(7, "[blue]event[/]\u009b31m"),
+                new Dictionary<string, object?>
+                {
+                    ["[bold]key[/]\x1b[5m"] = "[green]value[/]\x1b]8;;https://bad\x1b\\\0"
+                },
+                new Exception("[red]failure[/]\b\u202e"), (_, _) => "[yellow]message[/]\x1b[31m\tend");
+        }
+
+        Assert.That(console.Output, Does.Contain("[yellow]message[/]    end")
+            .And.Contain("[red]category[/]").And.Contain("[blue]event[/]")
+            .And.Contain("[bold]key[/]=[green]value[/]").And.Contain("[red]failure[/]")
+            .And.Contain("[link=https://bad]scope[/]"));
+        Assert.That(console.Output.Any(character => char.IsControl(character) && character != '\n'), Is.False);
+        Assert.That(console.Output.Contains('\u202e'), Is.False);
+        Assert.That(console.Output, Does.Not.Contain("title"));
+    }
+
+    [TestCase("\n")]
+    [TestCase("\r\n")]
+    public void MultilineMessagesAndPropertiesAreIndentedAndCarriageReturnsCannotOverwrite(string newline)
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker")
+            .LogInformation("first" + newline + "second\rthird {Source}", "line1" + newline + "line2");
+
+        Assert.That(console.Output, Does.Contain("INF first\n             second\n             third line1")
+            .And.Contain("\n             line2")
+            .And.Contain("Source=line1\n  line2"));
+        Assert.That(console.Output, Does.Not.Contain("\r").And.Not.Contain("{OriginalFormat}"));
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ScopesCanBeEnabledAndUseOriginalStructuredProperties(bool enabled)
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console, options: options => options.IncludeScopes = enabled);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        using (logger.BeginScope("outer"))
+        using (logger.BeginScope(new Dictionary<string, object?> { ["BatchId"] = 37 }))
+            logger.LogInformation("inside");
+        logger.LogInformation("outside");
+
+        string[] entries = console.Output.Split("INF ");
+        Assert.That(entries[1].Contains("scope: outer"), Is.EqualTo(enabled));
+        Assert.That(entries[1].Contains("BatchId=37"), Is.EqualTo(enabled));
+        Assert.That(entries[2], Does.Not.Contain("scope:").And.Not.Contain("BatchId"));
+    }
+
+    [Test]
+    public void ScopeOptionIsReadFromProviderConfiguration()
+    {
+        using TestConsole console = new();
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Logging:SpectreConsole:IncludeScopes"] = "true"
+        }).Build();
+        using ServiceProvider services = CreateServices(console, logging =>
+            logging.AddConfiguration(configuration.GetSection("Logging")));
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        using (logger.BeginScope("configured-scope"))
+            logger.LogInformation("message");
+        Assert.That(console.Output, Does.Contain("scope: configured-scope"));
+    }
+
+    [Test]
+    [NonParallelizable]
+    public void EnvironmentConfigurationSupportsStandardCategoryFiltersAndProviderOptions()
+    {
+        const string prefix = "ARTISAN_LOGGING_TEST_";
+        const string levelKey = prefix + "Logging__SpectreConsole__LogLevel__Worker";
+        const string scopesKey = prefix + "Logging__SpectreConsole__IncludeScopes";
+        string? originalLevel = Environment.GetEnvironmentVariable(levelKey);
+        string? originalScopes = Environment.GetEnvironmentVariable(scopesKey);
+        try
+        {
+            Environment.SetEnvironmentVariable(levelKey, "Error");
+            Environment.SetEnvironmentVariable(scopesKey, "true");
+            IConfiguration configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            using TestConsole console = new();
+            using ServiceProvider services = CreateServices(console, logging =>
+                logging.AddConfiguration(configuration.GetSection("Logging")));
+            ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+            using (logger.BeginScope("environment-scope"))
+            {
+                logger.LogWarning("filtered warning");
+                logger.LogError("visible error");
+            }
+            Assert.That(console.Output, Does.Not.Contain("filtered warning"));
+            Assert.That(console.Output, Does.Contain("ERR visible error").And.Contain("scope: environment-scope"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(levelKey, originalLevel);
+            Environment.SetEnvironmentVariable(scopesKey, originalScopes);
+        }
+    }
+
+    [TestCase(false, true, false)]
+    [TestCase(true, false, false)]
+    [TestCase(true, true, true)]
+    public void RedirectedUnsupportedAndExplicitPlainConsolesNeverEmitAnsi(bool terminal, bool ansi, bool forcePlain)
+    {
+        using StringWriter writer = new();
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = ansi ? AnsiSupport.Yes : AnsiSupport.No,
+            Out = new ControlledOutput(writer, terminal)
+        });
+        using ServiceProvider services = CreateServices(console, options: options => options.ForcePlainText = forcePlain);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").LogWarning("[red]literal[/]");
+        Assert.That(writer.ToString(), Does.Contain("WRN [red]literal[/]"));
+        Assert.That(writer.ToString().Contains('\x1b'), Is.False);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    [NonParallelizable]
+    public void CapableTerminalUsesColorAndHangingIndentWrappingWithoutInterpretingMarkup(bool verbose)
+    {
+        using CiEnvironment environment = new(false);
+        using StringWriter writer = new();
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            Interactive = InteractionSupport.Yes,
+            ColorSystem = ColorSystemSupport.Standard,
+            Out = new ControlledOutput(writer, true, 44)
+        });
+        console.Profile.Capabilities.Interactive = true;
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = verbose);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        logger.LogWarning("[red]literal[/] followed by enough words to wrap onto another line");
+        logger.LogInformation("next entry");
+        string rendered = writer.ToString();
+        string text = Regex.Replace(rendered, @"\u001b\[[0-?]*[ -/]*[@-~]", "");
+
+        Assert.That(rendered.Contains('\x1b'), Is.True);
+        Assert.That(text, Does.Contain(verbose ? "WRN [red]literal[/]" : "Warning: [red]literal[/]")
+            .And.Contain(verbose ? "INF next entry" : "next entry"));
+        string[] lines = text.Split('\n');
+        Assert.That(lines.Any(line => line.StartsWith("             ", StringComparison.Ordinal)
+            && line.Trim().Length > 0), Is.True, text);
+        Assert.That(lines.All(line => line.TrimEnd('\r').Length <= 44), Is.True, text);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    [NonParallelizable]
+    public void NormalEventIconsRespectUnicodeCapability(bool unicode)
+    {
+        using CiEnvironment environment = new(false);
+        using StringWriter writer = new();
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            Interactive = InteractionSupport.Yes,
+            Out = new ControlledOutput(writer, true)
+        });
+        console.Profile.Capabilities.Interactive = true;
+        console.Profile.Capabilities.Unicode = unicode;
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = false);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("ArtisanLogbook.Runtime.SourceMonitor")
+            .LogInformation(ArtisanLogbook.Runtime.MonitoringEvents.Enabled,
+                "Monitoring enabled: {RootCount} roots, {IntervalSeconds} seconds.", 1, 60);
+        string text = Regex.Replace(writer.ToString(), @"\u001b\[[0-?]*[ -/]*[@-~]", "");
+        Assert.That(text, Does.Contain(unicode ? "✓  Monitoring active" : "OK Monitoring active").And.Contain("Every 60s"));
+        Assert.That(text.Contains('✓'), Is.EqualTo(unicode));
+    }
+
+    [Test]
+    [NonParallelizable]
+    public void CiForcesPlainOutputEvenWithAnsiAndTerminalCapabilities()
+    {
+        using CiEnvironment environment = new(true);
+        using StringWriter writer = new();
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            Interactive = InteractionSupport.Yes,
+            Out = new ControlledOutput(writer, true)
+        });
+        console.Profile.Capabilities.Interactive = true;
+        using ServiceProvider services = CreateServices(console);
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").LogError("CI message");
+        Assert.That(writer.ToString(), Does.Contain("ERR CI message"));
+        Assert.That(writer.ToString().Contains('\x1b'), Is.False);
+    }
+
+    [TestCase(false, "\n", false)]
+    [TestCase(false, "\r\n", false)]
+    [TestCase(true, "\n", false)]
+    [TestCase(true, "\r\n", false)]
+    [TestCase(false, "\n", true)]
+    [TestCase(false, "\r\n", true)]
+    [TestCase(true, "\n", true)]
+    [TestCase(true, "\r\n", true)]
+    [NonParallelizable]
+    public void RedirectedOrNoninteractiveLogsDoNotWrapLongUrlsAtTerminalWidth(bool terminal, string newline, bool verbose)
+    {
+        using CiEnvironment environment = new(false);
+        using StringWriter writer = new() { NewLine = newline };
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.Yes,
+            Interactive = InteractionSupport.No,
+            Out = new ControlledOutput(writer, terminal, 24)
+        });
+        using ServiceProvider services = CreateServices(console, options: options => options.Verbose = verbose);
+        const string url = "https://localhost:48721/api/v1/history?source=long-source-identifier&filter=crafts";
+        services.GetRequiredService<ILoggerFactory>().CreateLogger("Long.Worker.Category")
+            .LogInformation(new EventId(99, "Request"), "Request {Url}", url);
+
+        string[] lines = writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.That(lines, Has.Length.EqualTo(verbose ? 2 : 1));
+        Assert.That(lines[0], Does.EndWith((verbose ? "INF " : "i  ") + "Request " + url));
+        if (verbose)
+            Assert.That(lines[1], Is.EqualTo("  category=Long.Worker.Category event=99/Request Url=" + url));
+        Assert.That(writer.ToString().Contains('\x1b'), Is.False);
+    }
+
+    [TestCase("\n")]
+    [TestCase("\r\n")]
+    public void ConcurrentEntriesAndTheirPropertiesAndScopesDoNotInterleave(string newline)
+    {
+        using StringWriter writer = new() { NewLine = newline };
+        IAnsiConsole console = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            Out = new ControlledOutput(writer, false)
+        });
+        using ServiceProvider services = CreateServices(console, options: options => options.IncludeScopes = true);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        Parallel.For(0, 100, id =>
+        {
+            using (logger.BeginScope(new Dictionary<string, object?> { ["ScopeId"] = id }))
+                logger.LogInformation("begin-{Id}" + newline + "end-{Id}", id, id);
+        });
+
+        string output = writer.ToString();
+        MatchCollection entries = Regex.Matches(output,
+            @"(?m)^\d{2}:\d{2}:\d{2} INF begin-(\d+)\n             end-\1\n  category=Worker event=0 Id=\1 Id=\1\n  scope: ScopeId=\1\n");
+        Assert.That(entries, Has.Count.EqualTo(100), output);
+        Assert.That(entries.Sum(entry => entry.Length), Is.EqualTo(output.Length), output);
+        Assert.That(entries.Select(entry => entry.Groups[1].Value).Distinct().Count(), Is.EqualTo(100), output);
+    }
+
+    [Test]
+    public void FormattingDoesNotHoldTheRenderingLock()
+    {
+        using TestConsole console = new();
+        using ServiceProvider services = CreateServices(console);
+        ILogger logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker");
+        logger.Log(LogLevel.Information, default, "outer", null, (state, _) =>
+        {
+            Task inner = Task.Run(() => logger.LogInformation("inner"));
+            Assert.That(inner.Wait(TimeSpan.FromSeconds(5)), Is.True, "Formatting held the render lock");
+            return state;
+        });
+        Assert.That(console.Output, Does.Contain("INF inner").And.Contain("INF outer"));
+    }
+
+    [Test]
+    public void RegistrationIsIdempotentReplacesOnlyConsoleAndDoesNotOwnTheConsole()
+    {
+        using TestConsole console = new();
+        ServiceCollection collection = new();
+        using RecordingProvider other = new();
+        collection.AddLogging(logging =>
+        {
+            logging.AddConsole();
+            logging.AddProvider(other);
+            logging.AddSpectreConsole(console);
+            logging.AddSpectreConsole(console);
+        });
+        using (ServiceProvider services = collection.BuildServiceProvider())
+        {
+            ILoggerProvider[] providers = services.GetServices<ILoggerProvider>().ToArray();
+            Assert.That(providers.OfType<ConsoleLoggerProvider>(), Is.Empty);
+            Assert.That(providers.OfType<SpectreConsoleLoggerProvider>().Count(), Is.EqualTo(1));
+            Assert.That(providers, Does.Contain(other));
+            services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker").LogInformation("one entry");
+            Assert.That(Regex.Matches(console.Output, "one entry"), Has.Count.EqualTo(1));
+            Assert.That(other.Messages, Is.EqualTo(1));
+        }
+        Assert.DoesNotThrow(() => console.WriteLine("still usable"));
+    }
+
+    private static ServiceProvider CreateServices(IAnsiConsole console, Action<ILoggingBuilder>? configure = null,
+        Action<SpectreConsoleLoggerOptions>? options = null)
+    {
+        ServiceCollection collection = new();
+        collection.AddLogging(logging =>
+        {
+            configure?.Invoke(logging);
+            logging.AddSpectreConsole(console, settings =>
+            {
+                settings.Verbose = true;
+                options?.Invoke(settings);
+            });
+        });
+        return collection.BuildServiceProvider();
+    }
+
+    private static void ThrowFailure() =>
+        throw new InvalidOperationException("outer [red]", new ArgumentException("inner"));
+
+    private sealed class ControlledOutput(TextWriter writer, bool terminal, int width = 100) : IAnsiConsoleOutput
+    {
+        public TextWriter Writer => writer;
+        public bool IsTerminal => terminal;
+        public int Width => width;
+        public int Height => 30;
+        public void SetEncoding(Encoding encoding) { }
+    }
+
+    private sealed class CiEnvironment : IDisposable
+    {
+        private readonly Dictionary<string, string?> original = [];
+
+        public CiEnvironment(bool enabled)
+        {
+            foreach (string key in new[] { "CI", "TF_BUILD", "GITHUB_ACTIONS" })
+            {
+                original[key] = Environment.GetEnvironmentVariable(key);
+                Environment.SetEnvironmentVariable(key, enabled ? "true" : "false");
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach ((string key, string? value) in original)
+                Environment.SetEnvironmentVariable(key, value);
+        }
+    }
+
+    private sealed class RecordingProvider : ILoggerProvider
+    {
+        public int Messages { get; private set; }
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(this);
+        public void Dispose() { }
+
+        private sealed class RecordingLogger(RecordingProvider provider) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter) => provider.Messages++;
+        }
+    }
+}

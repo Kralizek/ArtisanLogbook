@@ -15,7 +15,7 @@ public sealed record CompanionSettings
 
 public sealed record MonitoringSettings
 {
-    public bool Enabled { get; init; }
+    public bool Enabled { get; init; } = true;
     public int ReconciliationIntervalSeconds { get; init; } = 60;
 }
 

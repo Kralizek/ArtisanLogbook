@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
 
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace ArtisanLogbook.Runtime;
 
 internal sealed class CheckpointCapacityException() : InvalidOperationException("Monitoring checkpoint source capacity is exhausted.");
@@ -20,14 +23,17 @@ internal sealed class MonitoringCheckpoints : IDisposable
     private readonly SemaphoreSlim _persistence = new(1);
     private readonly MonitoringCheckpointStore _store;
     private readonly int _maximumSources;
+    private readonly ILogger<MonitoringCheckpoints> _logger;
     private CheckpointSnapshot _state;
 
-    public MonitoringCheckpoints(MonitoringCheckpointStore store, int maximumSources = MaximumSources)
+    public MonitoringCheckpoints(MonitoringCheckpointStore store, int maximumSources = MaximumSources,
+        ILogger<MonitoringCheckpoints>? logger = null)
     {
         if (maximumSources is < 1 or > MaximumSources)
             throw new ArgumentOutOfRangeException(nameof(maximumSources));
         _store = store;
         _maximumSources = maximumSources;
+        _logger = logger ?? NullLogger<MonitoringCheckpoints>.Instance;
         CheckpointDocument document = store.Load();
         if (document.Sources.Count > maximumSources)
             throw new IOException("Persisted monitoring checkpoints exceed the configured source capacity.");
@@ -116,9 +122,17 @@ internal sealed class MonitoringCheckpoints : IDisposable
     public bool NeedsMaintenance(DateTimeOffset now, bool monitoringEnabled)
     {
         lock (_gate)
-            return _state.IsDirty || (monitoringEnabled && _state.Document.Sources.Values.Any(source =>
-                source.RetryAfter <= now));
+            return _state.IsDirty || (monitoringEnabled && HasActionableSources(now));
     }
+
+    public bool NeedsReconciliation(DateTimeOffset now)
+    {
+        lock (_gate) return HasActionableSources(now);
+    }
+
+    private bool HasActionableSources(DateTimeOffset now) => _state.Document.Sources.Values.Any(source =>
+        source.NeedsReconciliation && source.LastAttempt?.Outcome != CheckpointAttemptOutcome.Pending &&
+        (source.RetryAfter is null || source.RetryAfter <= now));
 
     public void Prune(IReadOnlySet<string> discovered)
     {
@@ -150,10 +164,18 @@ internal sealed class MonitoringCheckpoints : IDisposable
                 await _store.SaveAsync(captured.Document, cancellationToken).ConfigureAwait(false);
                 lock (_gate)
                     _state = _state with { AcknowledgedRevision = captured.Revision, PersistenceFailure = null };
+                if (captured.PersistenceFailure is not null)
+                    _logger.LogInformation(MonitoringEvents.CheckpointSaveRecovered,
+                        "Monitoring checkpoint persistence recovered; pending results acknowledged.");
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or OperationCanceledException)
             {
                 lock (_gate) _state = _state with { PersistenceFailure = "checkpoint-save-failed" };
+                if (captured.PersistenceFailure is null)
+                    _logger.LogWarning(MonitoringEvents.CheckpointSaveFailed,
+                        "Monitoring checkpoint persistence failed ({ExceptionType}); unacknowledged results retained for retry.",
+                        exception.GetType().Name);
+                _logger.LogDebug(exception, "Monitoring checkpoint persistence failure detail.");
                 throw;
             }
         }

@@ -1,9 +1,12 @@
 using System.ComponentModel;
 
+using ArtisanLogbook.Cli.Logging;
 using ArtisanLogbook.Runtime;
 
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -13,7 +16,7 @@ namespace ArtisanLogbook.Cli.Commands;
 public sealed class ServeSettings : DatabaseSettings
 {
     [CommandOption("--monitoring <BOOL>")]
-    [Description("Override the SavedVariables monitoring preference for this invocation (default false).")]
+    [Description("Override the SavedVariables monitoring preference for this invocation (default true).")]
     public bool? Monitoring { get; init; }
 
     [CommandOption("--reconciliation-interval <SECONDS>")]
@@ -23,6 +26,10 @@ public sealed class ServeSettings : DatabaseSettings
     [CommandOption("--port <PORT>")]
     [Description("Preferred loopback API port (1-65535; default 48721); an OS-assigned port is used if it is taken.")]
     public int? Port { get; init; }
+
+    [CommandOption("--verbose")]
+    [Description("Show diagnostic log details and enable Debug by default (standard logging filters still apply).")]
+    public bool Verbose { get; init; }
 
     public override ValidationResult Validate()
     {
@@ -46,14 +53,20 @@ public sealed class ServeCommand(ApplicationPaths paths, CompanionSettingsStore 
             ApplicationName = typeof(ServeCommand).Assembly.GetName().Name
         });
         builder.ConfigureCompanionHost(configuration);
+        builder.Configuration.AddEnvironmentVariables();
+        builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+        if (settings.Verbose) builder.Logging.SetMinimumLevel(LogLevel.Debug);
+        builder.Logging.AddSpectreConsole(console, options =>
+        {
+            if (settings.Verbose)
+            {
+                options.Verbose = true;
+                options.IncludeScopes = true;
+            }
+        });
         builder.Services.AddArtisanLogbookCompanion(paths, configuration);
         await using WebApplication app = builder.Build();
-        app.Lifetime.ApplicationStarted.Register(() =>
-        {
-            string? url = app.Services.GetRequiredService<CompanionHttpEndpoint>().ListeningUrl;
-            if (url is not null)
-                console.WriteLine($"Artisan Logbook API: {url}/api/v1 (OpenAPI: {url}/openapi/v1.yaml)");
-        });
+        console.WriteLine("ARTISAN LOGBOOK  /  COMPANION");
         await app.RunCompanionAsync();
         return ExitCodes.Success;
     }

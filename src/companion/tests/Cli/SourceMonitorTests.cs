@@ -113,11 +113,15 @@ public sealed class SourceMonitorTests
             host.Checkpoints.Read().Document.Sources.GetValueOrDefault(SourceCatalog.IdFor(source))?.Successful is not null &&
             host.Checkpoints.Read().PersistenceFailure is not null);
         Assert.That(host.Checkpoints.Read().IsDirty, Is.True);
+        int passes = host.Logs.Entries.Count(log => log.Event == MonitoringEvents.ReconciliationCompleted);
+        int inspections = host.Reader.Reads[source];
         metadata.Fail = false;
         host.Scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
         await host.Settled();
         Assert.That(metadata.Durable.Sources[SourceCatalog.IdFor(source)].Successful, Is.Not.Null);
         Assert.That(host.Imports.Calls, Is.EqualTo(1));
+        Assert.That(host.Logs.Entries.Count(log => log.Event == MonitoringEvents.ReconciliationCompleted), Is.EqualTo(passes));
+        Assert.That(host.Reader.Reads[source], Is.EqualTo(inspections), "terminal receipt persistence must not inspect the source again");
     }
 
     [Test]

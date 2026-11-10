@@ -7,7 +7,12 @@ using Microsoft.Extensions.Logging;
 
 namespace ArtisanLogbook.Runtime;
 
-internal enum SourceChangeReason { Activated, FileSystem, Periodic, Requested, WatcherUnavailable, WatcherReady, Checkpoint }
+[Flags]
+internal enum SourceChangeReason
+{
+    None = 0, Activated = 1, FileSystem = 2, Periodic = 4, Requested = 8,
+    WatcherUnavailable = 16, WatcherReady = 32, Checkpoint = 64
+}
 internal sealed record SourceInvalidation(SourceChangeReason Reason, string? Key = null);
 
 /// <summary>Cold event producers. Each subscription owns all its watchers, groups and timers.</summary>
@@ -23,7 +28,9 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
         IObservable<SourceInvalidation> watchers = roots.Select(RecoveringRoot).Merge();
         return Observable.Merge(
             watchers.Publish(shared => Observable.Merge(
-                Coalesce(shared.Where(change => change.Reason == SourceChangeReason.FileSystem)),
+                Coalesce(shared.Where(change => change.Reason == SourceChangeReason.FileSystem))
+                    .Do(change => logger.LogDebug(MonitoringEvents.FileChanged,
+                        "Filesystem change detected for {SourceId}.", change.Key)),
                 shared.Where(change => change.Reason != SourceChangeReason.FileSystem))),
             Observable.Interval(interval, scheduler).Select(_ => new SourceInvalidation(SourceChangeReason.Periodic)),
             requests.Select(_ => new SourceInvalidation(SourceChangeReason.Requested)))
@@ -34,16 +41,47 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
         changes.GroupByUntil(change => change.Key, group => group.Throttle(GroupIdle, scheduler))
             .SelectMany(group => group.Throttle(Debounce, scheduler));
 
-    private IObservable<SourceInvalidation> RecoveringRoot(string root) =>
-        Observable.Defer(() => WatchRoot(root))
+    private IObservable<SourceInvalidation> RecoveringRoot(string root) => Observable.Defer(() =>
+    {
+        bool unavailable = false;
+        int attempt = 0;
+        bool ready = false;
+        string rootId = SourceCatalog.IdFor(root);
+        return Observable.Defer(() =>
+            {
+                int subscription = ++attempt;
+                ready = false;
+                logger.LogDebug(MonitoringEvents.WatcherSubscribed,
+                    "Subscribing filesystem watcher for {RootId} ({RootLabel}), attempt {WatcherAttempt}.",
+                    rootId, root, subscription);
+                return Observable.Defer(() => WatchRoot(root)).Finally(() => logger.LogDebug(MonitoringEvents.WatcherDisposed,
+                    "Filesystem watcher subscription disposed for {RootId} ({RootLabel}), attempt {WatcherAttempt}.",
+                    rootId, root, subscription));
+            })
+            .Do(change =>
+            {
+                if (change.Reason != SourceChangeReason.WatcherReady) return;
+                ready = true;
+                logger.LogInformation(MonitoringEvents.WatcherReady,
+                    "Filesystem watcher {WatcherState} for {RootId} ({RootLabel}).",
+                    unavailable ? "recovered" : "ready", rootId, root);
+                unavailable = false;
+            })
             .Catch<SourceInvalidation, Exception>(exception =>
             {
                 if (!IsFileSystemFailure(exception)) return Observable.Throw<SourceInvalidation>(exception);
-                logger.LogWarning("Monitoring watcher unavailable for {RootId} ({ExceptionType}); retrying.",
-                    SourceCatalog.IdFor(root), exception.GetType().Name);
-                return Observable.Return(new SourceInvalidation(SourceChangeReason.WatcherUnavailable, SourceCatalog.IdFor(root)))
+                if (!unavailable)
+                    logger.LogWarning(MonitoringEvents.WatcherUnavailable,
+                        "Filesystem watcher unavailable for {RootId} ({RootLabel}, {ExceptionType}); retrying every {RetrySeconds} seconds; periodic discovery remains active.",
+                        rootId, root, exception.GetType().Name, WatcherRetry.TotalSeconds);
+                logger.LogDebug(exception,
+                    "Filesystem watcher failure detail for {RootId} ({RootLabel}): {ExceptionType}, HResult {HResult}, stage {WatcherStage}, attempt {WatcherAttempt}.",
+                    rootId, root, exception.GetType().Name, exception.HResult, ready ? "Watching" : "Subscription", attempt);
+                unavailable = true;
+                return Observable.Return(new SourceInvalidation(SourceChangeReason.WatcherUnavailable, rootId))
                     .Concat(Observable.Empty<SourceInvalidation>().DelaySubscription(WatcherRetry, scheduler));
             }).Repeat();
+    });
 
     protected virtual IObservable<SourceInvalidation> WatchRoot(string root) =>
         Observable.Using(() => CreateWatcher(root), watcher => Observable.Create<SourceInvalidation>(observer =>
@@ -60,6 +98,14 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
                     h => watcher.Renamed += h, h => watcher.Renamed -= h).Select(e => (FileSystemEventArgs)e.EventArgs),
                 Observable.FromEventPattern<ErrorEventHandler, ErrorEventArgs>(
                     h => watcher.Error += h, h => watcher.Error -= h)
+                    .Do(e =>
+                    {
+                        Exception exception = e.EventArgs.GetException();
+                        logger.LogDebug(MonitoringEvents.WatcherNativeError,
+                            "Native filesystem watcher error for {RootId} ({RootLabel}): {ExceptionType}, HResult {HResult}, buffer {BufferBytes} bytes, recursive {Recursive}, filters {NotifyFilter}.",
+                            SourceCatalog.IdFor(root), root, exception.GetType().Name, exception.HResult,
+                            watcher.InternalBufferSize, watcher.IncludeSubdirectories, watcher.NotifyFilter);
+                    })
                     .SelectMany(e => Observable.Throw<FileSystemEventArgs>(e.EventArgs.GetException())));
             IDisposable subscription = events.SelectMany(change => Paths(change)
                 .Select(path => Invalidate(root, path, change.ChangeType))
@@ -76,7 +122,7 @@ internal class SourceChangeFeed(IScheduler scheduler, ILogger<SourceChangeFeed> 
             return subscription;
         }));
 
-    private static FileSystemWatcher CreateWatcher(string root)
+    protected virtual FileSystemWatcher CreateWatcher(string root)
     {
         for (DirectoryInfo? ancestor = new(root); ancestor is not null; ancestor = ancestor.Parent)
             if ((File.GetAttributes(ancestor.FullName) & FileAttributes.ReparsePoint) != 0)

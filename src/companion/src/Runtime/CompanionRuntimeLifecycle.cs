@@ -25,12 +25,12 @@ internal sealed class CompanionRuntimeLifecycle(
         _started = lifetime.ApplicationStarted.Register(() =>
         {
             status.Transition(CompanionLifecycleState.Running);
-            logger.LogInformation("Artisan Logbook Companion started.");
-            logger.LogInformation("SavedVariables monitoring: {MonitoringState}",
+            logger.LogInformation(CompanionEvents.Started, "Artisan Logbook Companion started.");
+            logger.LogInformation(CompanionEvents.MonitoringPreference, "SavedVariables monitoring: {MonitoringState}",
                 configuration.EffectiveSettings.Monitoring.Enabled
                     ? "on"
                     : "off");
-            logger.LogInformation("Reconciliation interval: {ReconciliationIntervalSeconds} seconds.",
+            logger.LogInformation(CompanionEvents.ReconciliationInterval, "Reconciliation interval: {ReconciliationIntervalSeconds} seconds.",
                 configuration.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds);
             ReportListeningUrl();
         });
@@ -77,7 +77,7 @@ internal sealed class CompanionRuntimeLifecycle(
         if (endpoint.FallbackUsed)
             logger.LogWarning("HTTP preferred port {PreferredPort} is unavailable; using an OS-assigned port instead.",
                 endpoint.PreferredPort);
-        logger.LogInformation("HTTP API listening on {ListeningUrl} (preferred port {PreferredPort}).",
+        logger.LogInformation(CompanionEvents.Listening, "HTTP API listening on {ListeningUrl} (preferred port {PreferredPort}).",
             endpoint.ListeningUrl, endpoint.PreferredPort);
     }
 
@@ -86,7 +86,7 @@ internal sealed class CompanionRuntimeLifecycle(
         IReadOnlyList<string> roots = configuration.EffectiveSettings.InstallationRoots;
         if (roots.Count == 0)
         {
-            logger.LogInformation("Game directory: not configured.");
+            logger.LogInformation(CompanionEvents.NoInstallations, "Game directory: not configured.");
             return;
         }
 
@@ -97,8 +97,8 @@ internal sealed class CompanionRuntimeLifecycle(
                 .Where(flavor => InstallationDiscovery.PathComparer.Equals(flavor.InstallationRoot, root))
                 .Select(flavor => flavor.Name)
                 .ToArray();
-            logger.LogInformation("Game directory: {GameDirectory}", root);
-            logger.LogInformation("ArtisanLogbook Core installed flavors: {InstalledFlavors}",
+            logger.LogInformation(CompanionEvents.Installation, "Game directory: {GameDirectory}", root);
+            logger.LogInformation(CompanionEvents.InstalledFlavors, "ArtisanLogbook Core installed flavors: {InstalledFlavors}",
                 flavors.Length == 0 ? "(none detected)" : string.Join(", ", flavors));
         }
 
@@ -122,7 +122,7 @@ internal sealed class CompanionRuntimeLifecycle(
         await admission.DrainAsync();
         CloseDatabase();
         status.Transition(CompanionLifecycleState.Stopped);
-        logger.LogInformation("Artisan Logbook Companion stopped; database ownership released.");
+        logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");
     }
 
     private async Task CleanupFailedStartupAsync()

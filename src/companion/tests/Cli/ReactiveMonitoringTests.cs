@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 
 using ArtisanLogbook.Runtime;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Reactive.Testing;
 
@@ -168,7 +169,8 @@ public sealed class ReactiveMonitoringTests
         Assert.That(feed.Attempts, Is.EqualTo(attempts), "disposed backoff must not reconnect");
     }
 
-    internal sealed class ControlledFeed(TestScheduler scheduler) : SourceChangeFeed(scheduler, NullLogger<SourceChangeFeed>.Instance)
+    internal sealed class ControlledFeed(TestScheduler scheduler, ILogger<SourceChangeFeed>? logger = null)
+        : SourceChangeFeed(scheduler, logger ?? NullLogger<SourceChangeFeed>.Instance)
     {
         private int _subscriptions;
         private int _attempts;

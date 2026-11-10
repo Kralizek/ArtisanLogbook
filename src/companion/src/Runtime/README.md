@@ -7,7 +7,7 @@ The existing CLI is the sole application entry point: only `serve` builds a host
 - `ApplicationPaths`: one shared per-user data directory, default history path,
   settings path, and working-directory-relative explicit path resolution.
 - `CompanionSettings`: schema version 1, multiple absolute installation roots,
-  optional monitoring preferences (disabled, 60 seconds), and HTTP preferences
+  optional monitoring preferences (enabled, 60 seconds), and HTTP preferences
   (port 48721). Older version-1 files load without migration or writes.
 - `CompanionSettingsStore.Load()`: structured `Loaded`, `Missing`, `Invalid`,
   `Unsupported`, or `Unreadable` result, diagnostic, and opaque revision.
@@ -125,6 +125,14 @@ directory paths are shown explicitly for startup diagnostics; history database
 paths remain unlogged. Flavor directory names are presentation labels only and
 never establish a saved craft's GameContext.
 
+`CompanionEvents` and `MonitoringEvents` expose stable log identities for console
+and other log consumers, not HTTP contracts. The CLI's normal presenter condenses
+startup metadata into monitoring status, actual server readiness, and completed
+source discovery. `serve --verbose` retains the full diagnostic startup records.
+Discovered sources carry internal log labels, disambiguated only when needed;
+the same metadata enriches admission, completion and reconciliation records
+without changing ingestion decisions or exposing labels through API DTOs.
+
 ## Extension points
 
 The same WebApplication owns embedded Kestrel on IPv4 loopback, with free-port
@@ -183,6 +191,25 @@ disposes source producers (including on ApplicationStopping), then drains
 reconciliation and C11 imports. C06's StoppedAsync flushes only monitoring
 metadata after **all** workers' StopAsync calls; it performs no canonical write.
 Save failure remains unacknowledged and fails graceful shutdown explicitly.
+
+The one-second maintenance predicate distinguishes dirty metadata from actionable
+source work. Both use the existing bounded lane, but checkpoint-only hints perform
+full reconciliation only for outstanding, non-pending sources whose retry deadline
+is due (or absent). A pending receipt belongs to C11; elapsed deferral and dirty
+state alone cannot justify reinspection. Execution rechecks eligibility so stale
+coalesced hints become persistence-only work. Completion retains observed-byte
+changes and wakes the same lane; periodic/filesystem/API reconciliation remains
+unchanged. Persistence failures retain revision acknowledgement and their own
+diagnostics, without manufacturing a source-reconciliation failure.
+
+`PendingSources` retains its existing outstanding-work meaning, including active
+imports. Additional log-only counts distinguish pending receipts, backoff and
+ready work; inspection failures may overlap those counts. Dirty checkpoint
+acknowledgement is separate. Neither public DTOs nor checkpoint transitions change.
+Watcher Debug diagnostics distinguish subscription and active-watcher failure,
+native errors and per-activation subscription/disposal attempts. Recursive root
+placement, buffer defaults and the Catch/Repeat retry lifetime remain unchanged;
+normal outage/recovery records alone cannot establish an overflow or other cause.
 
 See [the architecture assessment](../../../../docs/companion/rx-monitoring-architecture.md)
 for state ownership, synchronization invariants, exact-byte snapshot identity

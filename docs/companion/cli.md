@@ -79,12 +79,15 @@ than erased.
 
 The settings version remains **1**; there is no migration. Existing files with
 only `version` and `installationRoots` load unchanged. Omitted monitoring settings
-mean **disabled**, with a 60-second reconciliation interval; omitted HTTP
+mean **enabled**, with a 60-second reconciliation interval; omitted HTTP
 settings mean preferred port **48721**. An omitted property inside either object
 also uses its built-in default. Explicit `null` objects are invalid. Intervals
 must be integers from **1 through 86400 seconds**; ports must be integers from
 **1 through 65535**. Unknown and duplicate properties are rejected at every level.
 Saving includes the additive preferences; merely loading or serving never saves.
+Existing files with an explicit `"enabled": false` remain disabled, including
+after unrelated preference updates. Use `serve --monitoring false` to disable
+monitoring for one invocation without saving a preference.
 
 ## Serve
 
@@ -93,6 +96,7 @@ al serve
 al serve --database history.duckdb --port 48722
 al serve --monitoring false --reconciliation-interval 120
 al serve --monitoring true
+al serve --verbose
 ```
 
 `serve` alone constructs and owns the .NET Generic Host (`WebApplication`).
@@ -124,6 +128,132 @@ Enabled monitoring immediately discovers sources, watches for changes, and
 periodically reconciles stable snapshots. Manual and automatic imports share
 the same bounded import coordinator and writer. Monitoring reads but never
 modifies SavedVariables; removed sources do not remove canonical history.
+
+### Operational logging
+
+`serve` uses a synchronous Spectre.Console logging provider in the CLI project;
+Runtime and monitoring services retain standard structured `ILogger<T>` templates.
+The default **normal** presentation is an operational console, not a property dump:
+muted timestamps, consistent outcome/activity icons, a human-readable event, and
+an optional indented context line. For example:
+
+```text
+ARTISAN LOGBOOK  /  COMPANION
+19:48:30  OK Monitoring active
+             Every 60s
+19:48:30  OK Server ready
+             http://127.0.0.1:48721
+19:48:31  -> Sources discovered
+             2 sources · Retail · Forever · Up to date · 550ms
+19:49:31  -> Reconciliation complete
+             2 sources · Up to date · 550ms
+19:49:45  -> Import queued · Retail
+19:49:46  OK Import completed · Retail
+             +3 new observations · 2,739 existing
+```
+
+Capable interactive terminals use green success marks, cyan activity arrows,
+amber warnings and red errors; timestamps and secondary text are muted.
+Redirected output, CI, and non-ANSI terminals use plain text and ASCII indicators
+(`OK`, `->`, `!`, `X`, `-`) without wrapping long URLs to terminal width. Logs
+scroll normally, with no dashboard, animation, panels or screen clearing.
+All external values are literal text, never trusted markup; terminal controls
+are sanitized. Complete entries remain atomic under concurrent logging.
+
+The CLI's stateless `CompanionLogPresenter` selects and formats known stable
+event IDs using their original structured properties, never by parsing a message.
+Routine startup metadata and initial watcher readiness are not repeated on the
+normal console. The actual listening event reports readiness only after startup;
+the completed discovery report supplies source counts and labels. These can arrive
+in different orders; there is no buffered startup aggregator or inferred readiness.
+An idle periodic reconciliation still emits a compact heartbeat. Outstanding
+imports/retries and source-read problems are not reported as "Up to date."
+
+Imports identify the discovered client (for example Retail or Forever), not a
+reverse-engineered source hash or assumed GameContext. When a client has multiple
+sources, labels add the installation name, then account only if needed to
+disambiguate; indistinguishable names add a short identifier. Recognized routine events never
+dump full source IDs or operation GUIDs. Log labels are populated during existing
+discovery and passed as structured metadata; logging does not query the filesystem
+or database, and API responses do not expose these internal labels.
+
+Use **`serve --verbose`** for diagnostic presentation: original messages,
+categories, event IDs, structured properties, scopes, and detailed exceptions.
+The flag sets Debug as the default minimum through standard .NET logging options;
+explicit category/provider level configuration still takes precedence.
+`Logging__SpectreConsole__Verbose=true` enables the same presentation through
+configuration without changing the configured minimum level. Debug requires
+`Logging__LogLevel__Default=Debug` or a category-specific equivalent.
+Normal mode still shows explicitly enabled Debug events, unexpected warnings,
+errors and critical events through a generic fallback. Exception messages and
+inner causes remain visible normally; stack traces are available in verbose mode.
+Selection only affects this console provider: the original event, properties,
+level and exception remain available to other registered logging providers.
+Verbose collection values render as bounded lists rather than CLR type names.
+The limits are 16 items per collection, three collection levels, 512 characters
+per scalar and approximately 2 KiB per property, with `...` indicating truncation.
+Collections shared by the message and property line are formatted once per entry.
+Microsoft logging-template collection expansion uses the same bounds; custom
+`ILogger` message formatters remain responsible for their own execution.
+Empty strings/collections are omitted from optional property sections; nulls
+remain explicit as `(null)`. Multiline values keep their continuation indentation.
+
+Information events describe enabled/disabled monitoring, effective interval and
+root count, watcher readiness/recovery, meaningful reconciliation summaries,
+automatic import admission and import outcomes/counts, and shutdown. Summaries
+include combined trigger reasons, discovered sources, submitted imports, duration,
+diagnostic codes and pending sources. A healthy periodic pass still logs when
+nothing changed. Repeated watcher/checkpoint outages warn once until recovery;
+unexpected failures retain error details. The one-second checkpoint maintenance
+evaluation does not emit Information heartbeats.
+Checkpoint-only work rechecks current eligibility when it reaches the bounded
+processing lane. Dirty metadata causes persistence, not full source discovery.
+Sources waiting on an active import or with a stale retry deadline but no
+outstanding work do not cause maintenance inspections. Due failed/inaccessible
+sources still retry, and completion wakes monitoring when newer observed bytes
+require reconciliation. Filesystem/API requests and periodic fallback discovery
+still perform full reconciliation, including during an active import.
+The API's pending-source count continues to mean outstanding source work (which
+includes active imports); console telemetry distinguishes importing, waiting
+for retry and awaiting reconciliation. Pending checkpoint acknowledgement is
+reported separately, not counted as another pending source.
+
+Debug events include settled file-change hints, reconciliation starts, unchanged
+sources, superseded fingerprints, source inspection failure codes and exception
+details. `source-changed-during-read` is an expected unstable write, distinct from
+`source-read-failed` (inaccessible source) and `invalid-source-encoding`. Short-term
+byte stability is not semantic completeness: parser/import validation and retries
+remain authoritative for temporarily incomplete writes. The two reads, existing
+250 ms quiet interval, metadata/byte comparisons, strict UTF-8, and C07's exact
+imported-byte checkpoint identity are unchanged. No historical file copies are kept.
+
+Watcher outages retain periodic fallback discovery. To investigate flapping, use
+`serve --verbose` or enable Debug for `ArtisanLogbook.Runtime.SourceChangeFeed`
+alongside diagnostic presentation. Debug records include subscription/disposal
+attempts, native error origin, exception type/HResult, buffer/filter settings and
+full exception details. A failure before readiness is distinguished from an
+active watcher failure. An overflow, access failure or root disappearance must
+be diagnosed from those records, not inferred from a normal-mode outage message.
+Installation roots are still watched recursively so new flavors/accounts are
+detected; managed SavedVariables filtering does not reduce native event traffic.
+Share only a narrowly bounded outage/recovery excerpt, redacting local paths and
+source/account identifiers as appropriate; SavedVariables content is not needed.
+
+Standard .NET logging configuration controls filtering, including environment
+variables such as `Logging__LogLevel__Default=Debug` or
+`Logging__LogLevel__ArtisanLogbook.Runtime=Debug`. Microsoft and ASP.NET Core
+warnings/errors remain visible. Console logging has one owner: the Spectre
+registration replaces the framework console provider without clearing other
+logging providers.
+
+Set `Logging__SpectreConsole__IncludeScopes=true` to include logging scopes
+(off by default, enabled by `--verbose`), or `Logging__SpectreConsole__ForcePlainText=true` to request
+plain text even in an ANSI terminal. Provider-specific filters use the standard
+`Logging__SpectreConsole__LogLevel__<category>` keys.
+If console rendering or output fails, the provider reports the failure and the
+sanitized plain entry to stderr instead of aborting monitoring or an import.
+
+### HTTP and shutdown
 
 Kestrel binds **IPv4 loopback only** (`127.0.0.1`) on the effective preferred port,
 falling back to an OS-assigned loopback port only when that port is already in use.

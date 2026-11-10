@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Reactive.Testing;
 
 using Store = ArtisanLogbook.HistoryStore.HistoryStore;
@@ -25,7 +26,7 @@ internal sealed class MonitoringTestHost : IAsyncDisposable
         Directory.CreateDirectory(Root);
         Paths = new(CompanionPlatform.Linux, DirectoryPath, DirectoryPath, null, DirectoryPath);
         Settings = new(Paths);
-        Feed = new(Scheduler);
+        Feed = new(Scheduler, Logs.CreateLogger<SourceChangeFeed>());
     }
 
     public string DirectoryPath { get; }
@@ -33,6 +34,7 @@ internal sealed class MonitoringTestHost : IAsyncDisposable
     public ApplicationPaths Paths { get; }
     public CompanionSettingsStore Settings { get; }
     public TestScheduler Scheduler { get; } = new();
+    public CapturingLoggerProvider Logs { get; } = new();
     public ReactiveMonitoringTests.ControlledFeed Feed { get; }
     public ControlledSnapshotReader Reader { get; } = new();
     public WebApplication App { get; private set; } = null!;
@@ -54,12 +56,18 @@ internal sealed class MonitoringTestHost : IAsyncDisposable
     public async Task StartAsync(
         bool enabled = false, int interval = 60, bool? enabledOverride = null, int? intervalOverride = null,
         MonitoringCheckpointTests.MemoryStore? checkpointStore = null, bool realWatchers = false,
-        ImportOperationLimits? limits = null)
+        ImportOperationLimits? limits = null, bool legacySettings = false)
     {
         Settings.Save(CompanionSettings.ForRoots(Root) with
         {
             Monitoring = new() { Enabled = enabled, ReconciliationIntervalSeconds = interval }
         });
+        if (legacySettings)
+            File.WriteAllText(Settings.FilePath, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                version = 1,
+                installationRoots = new[] { Root }
+            }));
         CompanionRuntimeConfiguration configuration = CompanionRuntimeConfiguration.Resolve(
             Paths, Settings, monitoring: enabledOverride, reconciliationIntervalSeconds: intervalOverride);
         WebApplicationBuilder builder = WebApplication.CreateEmptyBuilder(new()
@@ -68,6 +76,7 @@ internal sealed class MonitoringTestHost : IAsyncDisposable
             ApplicationName = typeof(CompanionCommandApp).Assembly.GetName().Name
         });
         builder.ConfigureCompanionHost(configuration);
+        builder.Logging.SetMinimumLevel(LogLevel.Debug).AddProvider(Logs);
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddArtisanLogbookCompanion(Paths, configuration);
         builder.Services.Replace(ServiceDescriptor.Singleton<SavedVariablesSnapshotReader>(Reader));
