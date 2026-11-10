@@ -79,12 +79,15 @@ than erased.
 
 The settings version remains **1**; there is no migration. Existing files with
 only `version` and `installationRoots` load unchanged. Omitted monitoring settings
-mean **disabled**, with a 60-second reconciliation interval; omitted HTTP
+mean **enabled**, with a 60-second reconciliation interval; omitted HTTP
 settings mean preferred port **48721**. An omitted property inside either object
 also uses its built-in default. Explicit `null` objects are invalid. Intervals
 must be integers from **1 through 86400 seconds**; ports must be integers from
 **1 through 65535**. Unknown and duplicate properties are rejected at every level.
 Saving includes the additive preferences; merely loading or serving never saves.
+Existing files with an explicit `"enabled": false` remain disabled, including
+after unrelated preference updates. Use `serve --monitoring false` to disable
+monitoring for one invocation without saving a preference.
 
 ## Serve
 
@@ -124,6 +127,49 @@ Enabled monitoring immediately discovers sources, watches for changes, and
 periodically reconciles stable snapshots. Manual and automatic imports share
 the same bounded import coordinator and writer. Monitoring reads but never
 modifies SavedVariables; removed sources do not remove canonical history.
+
+### Operational logging
+
+`serve` uses a synchronous Spectre.Console logging provider in the CLI project;
+Runtime and monitoring services retain standard structured `ILogger<T>` templates.
+Interactive ANSI terminals get muted timestamps, compact colored severities,
+restrained icons, and contextual properties below each message. Logs scroll
+normally; there is no dashboard or screen clearing. Redirected output, CI, and
+terminals without ANSI support use readable timestamped plain text. Messages,
+properties, scopes and exceptions are rendered as literal text with terminal
+control characters sanitized. Concurrent entries are rendered atomically.
+
+Information events describe enabled/disabled monitoring, effective interval and
+root count, watcher readiness/recovery, meaningful reconciliation summaries,
+automatic import admission and import outcomes/counts, and shutdown. Summaries
+include combined trigger reasons, discovered sources, submitted imports, duration,
+diagnostic codes and pending sources. A healthy periodic pass still logs when
+nothing changed. Repeated watcher/checkpoint outages warn once until recovery;
+unexpected failures retain error details. The one-second checkpoint maintenance
+evaluation does not emit Information heartbeats.
+
+Debug events include settled file-change hints, reconciliation starts, unchanged
+sources, superseded fingerprints, source inspection failure codes and exception
+details. `source-changed-during-read` is an expected unstable write, distinct from
+`source-read-failed` (inaccessible source) and `invalid-source-encoding`. Short-term
+byte stability is not semantic completeness: parser/import validation and retries
+remain authoritative for temporarily incomplete writes. The two reads, existing
+250 ms quiet interval, metadata/byte comparisons, strict UTF-8, and C07's exact
+imported-byte checkpoint identity are unchanged. No historical file copies are kept.
+
+Standard .NET logging configuration controls filtering, including environment
+variables such as `Logging__LogLevel__Default=Debug` or
+`Logging__LogLevel__ArtisanLogbook.Runtime=Debug`. Microsoft and ASP.NET Core
+warnings/errors remain visible. Console logging has one owner: the Spectre
+registration replaces the framework console provider without clearing other
+logging providers.
+
+Set `Logging__SpectreConsole__IncludeScopes=true` to include logging scopes
+(off by default), or `Logging__SpectreConsole__ForcePlainText=true` to request
+plain text even in an ANSI terminal. Provider-specific filters use the standard
+`Logging__SpectreConsole__LogLevel__<category>` keys.
+
+### HTTP and shutdown
 
 Kestrel binds **IPv4 loopback only** (`127.0.0.1`) on the effective preferred port,
 falling back to an OS-assigned loopback port only when that port is already in use.

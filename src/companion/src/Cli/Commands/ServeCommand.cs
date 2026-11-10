@@ -1,9 +1,12 @@
 using System.ComponentModel;
 
+using ArtisanLogbook.Cli.Logging;
 using ArtisanLogbook.Runtime;
 
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -13,7 +16,7 @@ namespace ArtisanLogbook.Cli.Commands;
 public sealed class ServeSettings : DatabaseSettings
 {
     [CommandOption("--monitoring <BOOL>")]
-    [Description("Override the SavedVariables monitoring preference for this invocation (default false).")]
+    [Description("Override the SavedVariables monitoring preference for this invocation (default true).")]
     public bool? Monitoring { get; init; }
 
     [CommandOption("--reconciliation-interval <SECONDS>")]
@@ -46,6 +49,9 @@ public sealed class ServeCommand(ApplicationPaths paths, CompanionSettingsStore 
             ApplicationName = typeof(ServeCommand).Assembly.GetName().Name
         });
         builder.ConfigureCompanionHost(configuration);
+        builder.Configuration.AddEnvironmentVariables();
+        builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+        builder.Logging.AddSpectreConsole(console);
         builder.Services.AddArtisanLogbookCompanion(paths, configuration);
         await using WebApplication app = builder.Build();
         app.Lifetime.ApplicationStarted.Register(() =>

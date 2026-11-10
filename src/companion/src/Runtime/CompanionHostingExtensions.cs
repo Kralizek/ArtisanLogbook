@@ -24,7 +24,6 @@ public static class CompanionHostingExtensions
         builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = LocalApiSecurityMiddleware.MaxRequestBodyBytes)
             .UseUrls(endpoint.RequestedUrl);
         builder.Host.UseConsoleLifetime();
-        builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
         return builder;
     }
