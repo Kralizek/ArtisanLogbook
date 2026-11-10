@@ -206,6 +206,36 @@ public sealed class SourceReconcilerTests
             Assert.That(harness.Operations.Submit(SourceCatalog.IdFor(secondPath)).Rejection,
                 Is.EqualTo(ImportRejection.Stopping));
         });
+
+        await harness.Checkpoints.FlushAsync();
+        using MonitoringCheckpoints recovered = new(harness.Metadata);
+        SourceCheckpoint recoveredFailure = recovered.Read().Document.Sources[SourceCatalog.IdFor(firstPath)];
+        SourceCheckpoint recoveredQueued = recovered.Read().Document.Sources[SourceCatalog.IdFor(secondPath)];
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered.Read().IsDirty, Is.True,
+                "startup recovery must persist terminal states for attempts left pending at shutdown");
+            Assert.That(recoveredFailure.LastAttempt!.Outcome, Is.EqualTo(CheckpointAttemptOutcome.Cancelled));
+            Assert.That(recoveredFailure.Successful, Is.EqualTo(prior.Successful));
+            Assert.That(recoveredQueued.LastAttempt!.Outcome, Is.EqualTo(CheckpointAttemptOutcome.Cancelled));
+            Assert.That(recoveredFailure.LastAttempt.Sequence, Is.GreaterThan(0));
+            Assert.That(recoveredQueued.LastAttempt.Sequence, Is.GreaterThan(recoveredFailure.LastAttempt.Sequence));
+        });
+
+        await recovered.FlushAsync();
+        CheckpointDocument durableRecovery = harness.Metadata.Durable;
+        using MonitoringCheckpoints secondRestart = new(harness.Metadata);
+        Assert.Multiple(() =>
+        {
+            Assert.That(durableRecovery.Sources[SourceCatalog.IdFor(firstPath)].LastAttempt!.Outcome,
+                Is.EqualTo(CheckpointAttemptOutcome.Cancelled));
+            Assert.That(durableRecovery.Sources[SourceCatalog.IdFor(secondPath)].LastAttempt!.Outcome,
+                Is.EqualTo(CheckpointAttemptOutcome.Cancelled));
+            Assert.That(secondRestart.Read().Document.Sources[SourceCatalog.IdFor(firstPath)].LastAttempt!.Outcome,
+                Is.EqualTo(CheckpointAttemptOutcome.Cancelled));
+            Assert.That(secondRestart.Read().Document.Sources[SourceCatalog.IdFor(secondPath)].LastAttempt!.Outcome,
+                Is.EqualTo(CheckpointAttemptOutcome.Cancelled));
+        });
     }
 
     [Test]
