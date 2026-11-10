@@ -192,6 +192,25 @@ reconciliation and C11 imports. C06's StoppedAsync flushes only monitoring
 metadata after **all** workers' StopAsync calls; it performs no canonical write.
 Save failure remains unacknowledged and fails graceful shutdown explicitly.
 
+The one-second maintenance predicate distinguishes dirty metadata from actionable
+source work. Both use the existing bounded lane, but checkpoint-only hints perform
+full reconciliation only for outstanding, non-pending sources whose retry deadline
+is due (or absent). A pending receipt belongs to C11; elapsed deferral and dirty
+state alone cannot justify reinspection. Execution rechecks eligibility so stale
+coalesced hints become persistence-only work. Completion retains observed-byte
+changes and wakes the same lane; periodic/filesystem/API reconciliation remains
+unchanged. Persistence failures retain revision acknowledgement and their own
+diagnostics, without manufacturing a source-reconciliation failure.
+
+`PendingSources` retains its existing outstanding-work meaning, including active
+imports. Additional log-only counts distinguish pending receipts, backoff and
+ready work; inspection failures may overlap those counts. Dirty checkpoint
+acknowledgement is separate. Neither public DTOs nor checkpoint transitions change.
+Watcher Debug diagnostics distinguish subscription and active-watcher failure,
+native errors and per-activation subscription/disposal attempts. Recursive root
+placement, buffer defaults and the Catch/Repeat retry lifetime remain unchanged;
+normal outage/recovery records alone cannot establish an overflow or other cause.
+
 See [the architecture assessment](../../../../docs/companion/rx-monitoring-architecture.md)
 for state ownership, synchronization invariants, exact-byte snapshot identity
 and acknowledgement semantics. The [HTTP guide](../../../../docs/companion/api.md#monitoring)

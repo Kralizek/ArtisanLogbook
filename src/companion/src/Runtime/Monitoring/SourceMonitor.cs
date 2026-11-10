@@ -214,10 +214,14 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
 
     private async Task<Unit> ProcessAsync(Work work)
     {
-        if (work.Options.Enabled && !work.Cancellation.IsCancellationRequested)
+        SourceChangeReason reasons = work.Triggers?.Take() ?? SourceChangeReason.None;
+        // Maintenance and completion hints share the bounded lane with source work, but dirty state needs only a save.
+        // Recheck on execution: coalesced hints may already have been satisfied by the previous operation.
+        bool reconcile = (reasons & ~SourceChangeReason.Checkpoint) != SourceChangeReason.None ||
+            ((reasons & SourceChangeReason.Checkpoint) != SourceChangeReason.None && _checkpoints.NeedsReconciliation(_scheduler.Now));
+        if (reconcile && work.Options.Enabled && !work.Cancellation.IsCancellationRequested)
         {
-            SourceChangeReason reasons = work.Triggers?.Take() ?? SourceChangeReason.None;
-            string trigger = reasons == SourceChangeReason.None ? "Coalesced" : reasons.ToString();
+            string trigger = reasons.ToString();
             _logger.LogDebug(MonitoringEvents.ReconciliationStarted,
                 "Reconciliation started ({TriggerReasons}).", trigger);
             Stopwatch duration = Stopwatch.StartNew();
@@ -235,11 +239,18 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
                 LogLevel level = !work.Cancellation.IsCancellationRequested &&
                     ((reasons & visibleTriggers) != SourceChangeReason.None || report.SubmittedImports > 0 || healthChanged)
                     ? LogLevel.Information : LogLevel.Debug;
+                CheckpointSnapshot checkpointStatus = _checkpoints.Read();
+                SourceCheckpoint[] pending = checkpointStatus.Document.Sources.Values
+                    .Where(source => source.NeedsReconciliation).ToArray();
+                int importing = pending.Count(source => source.LastAttempt?.Outcome == CheckpointAttemptOutcome.Pending);
+                int retrying = pending.Count(source => source.LastAttempt?.Outcome != CheckpointAttemptOutcome.Pending &&
+                    source.RetryAfter > _scheduler.Now);
                 _logger.Log(level, MonitoringEvents.ReconciliationCompleted,
-                    "Reconciliation completed: {DiscoveredSources} sources, {SubmittedImports} imports queued, {DurationMs} ms ({TriggerReasons}); {DiagnosticCount} diagnostics ({DiagnosticCodes}), {PendingSources} sources pending retry or import. Sources: {SourceLabels}; affected: {AffectedSourceLabels}",
+                    "Reconciliation completed: {DiscoveredSources} sources, {SubmittedImports} imports queued, {DurationMs} ms ({TriggerReasons}); {DiagnosticCount} diagnostics ({DiagnosticCodes}), {PendingSources} sources with outstanding work ({ImportingSources} importing, {RetryingSources} waiting for retry, {ReadySources} awaiting reconciliation); {InspectionFailures} inspection failures, checkpoint save pending {CheckpointSavePending}. Sources: {SourceLabels}; affected: {AffectedSourceLabels}",
                     report.DiscoveredSources, report.SubmittedImports, duration.ElapsedMilliseconds, trigger,
                     report.Diagnostics.Count, string.Join(", ", report.Diagnostics.Select(diagnostic => diagnostic.Code).Distinct()),
-                    _checkpoints.Read().Document.Sources.Values.Count(source => source.NeedsReconciliation),
+                    pending.Length, importing, retrying, pending.Length - importing - retrying,
+                    pending.Count(source => source.InspectionFailure is not null), checkpointStatus.IsDirty,
                     report.SourceLabels, report.AffectedSourceLabels);
             }
             catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested) { }
@@ -247,8 +258,7 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
         try { await _checkpoints.FlushAsync(_persistenceDeadline.Token).ConfigureAwait(false); }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // The checkpoint owner logs persistence transitions; unrelated reconciliation failures still reach Error.
-            OperationFailed(work);
+            // The checkpoint owner exposes/logs the outage and recovery; persistence-only failure is not a source failure.
         }
         return Unit.Default;
     }

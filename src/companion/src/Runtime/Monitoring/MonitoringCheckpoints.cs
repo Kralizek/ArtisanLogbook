@@ -122,9 +122,17 @@ internal sealed class MonitoringCheckpoints : IDisposable
     public bool NeedsMaintenance(DateTimeOffset now, bool monitoringEnabled)
     {
         lock (_gate)
-            return _state.IsDirty || (monitoringEnabled && _state.Document.Sources.Values.Any(source =>
-                source.RetryAfter <= now));
+            return _state.IsDirty || (monitoringEnabled && HasActionableSources(now));
     }
+
+    public bool NeedsReconciliation(DateTimeOffset now)
+    {
+        lock (_gate) return HasActionableSources(now);
+    }
+
+    private bool HasActionableSources(DateTimeOffset now) => _state.Document.Sources.Values.Any(source =>
+        source.NeedsReconciliation && source.LastAttempt?.Outcome != CheckpointAttemptOutcome.Pending &&
+        (source.RetryAfter is null || source.RetryAfter <= now));
 
     public void Prune(IReadOnlySet<string> discovered)
     {
