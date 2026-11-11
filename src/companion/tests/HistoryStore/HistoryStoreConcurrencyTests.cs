@@ -160,8 +160,9 @@ public sealed class HistoryStoreConcurrencyTests
             Assert.That(result.Contexts.Sum(x => x.CraftCount), Is.EqualTo(result.TotalCraftCount));
         });
 
-    [Test]
-    public async Task DisposeDrainsActiveReadRejectsNewWorkAndReleasesFile()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task DisposeDrainsActiveReadRejectsNewWorkAndReleasesFile(bool asynchronous)
     {
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim release = new();
@@ -180,7 +181,7 @@ public sealed class HistoryStoreConcurrencyTests
         try
         {
             Wait(entered);
-            dispose = Task.Run(store.Dispose);
+            dispose = asynchronous ? store.DisposeAsync().AsTask() : Task.Run(store.Dispose);
             Assert.That(SpinWait.SpinUntil(() =>
             {
                 try { _ = store.SchemaVersion; return false; }
@@ -201,8 +202,9 @@ public sealed class HistoryStoreConcurrencyTests
         Assert.That(reopened.ReadAll(), Has.Count.EqualTo(1));
     }
 
-    [Test]
-    public async Task DisposeCancelsActiveWriterAndWaitsForItsRollback()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task DisposeCancelsActiveWriterAndWaitsForItsRollback(bool asynchronous)
     {
         Store store = new(_path);
         using ManualResetEventSlim writing = new();
@@ -217,8 +219,12 @@ public sealed class HistoryStoreConcurrencyTests
         try
         {
             Wait(writing);
-            store.RequestShutdown();
-            dispose = store.ShutdownAsync();
+            dispose = asynchronous ? store.DisposeAsync().AsTask() : Task.Run(store.Dispose);
+            Assert.That(SpinWait.SpinUntil(() =>
+            {
+                try { _ = store.ShutdownCompletion; return true; }
+                catch (InvalidOperationException) { return false; }
+            }, Timeout), Is.True);
             Assert.Throws<ObjectDisposedException>(() => store.ReadAll());
             Assert.That(dispose.IsCompleted, Is.False);
         }

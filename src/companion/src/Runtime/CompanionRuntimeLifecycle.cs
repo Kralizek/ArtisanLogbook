@@ -12,9 +12,11 @@ internal sealed class CompanionRuntimeLifecycle(
     IServiceProvider services, CompanionApplicationStatus status, IHostApplicationLifetime lifetime,
     CompanionRuntimeConfiguration configuration, CompanionWorkAdmission admission,
     InstallationDiscovery discovery,
-    ILogger<CompanionRuntimeLifecycle> logger) : IHostedLifecycleService, IDisposable
+    ILogger<CompanionRuntimeLifecycle> logger) : IHostedLifecycleService, IDisposable, IAsyncDisposable
 {
     private Store? _store;
+    private int _cleanupFailed;
+    private int _databaseClosed;
     private CancellationTokenRegistration _started;
     private CancellationTokenRegistration _stopping;
 
@@ -51,15 +53,15 @@ internal sealed class CompanionRuntimeLifecycle(
             cancellationToken.ThrowIfCancellationRequested();
             return;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
-            await CleanupFailedStartupAsync();
+            await CleanupFailedStartupAsync(exception);
             throw;
         }
         catch (Exception exception)
         {
             status.Fail("database-startup-failed", "Cannot initialize the history database.", exception);
-            await CleanupFailedStartupAsync();
+            await CleanupFailedStartupAsync(exception);
             throw;
         }
     }
@@ -119,15 +121,25 @@ internal sealed class CompanionRuntimeLifecycle(
     {
         BeginStopping();
         await DrainAndCloseDatabaseAsync();
-        status.Transition(CompanionLifecycleState.Stopped);
-        logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");
+        if (Volatile.Read(ref _cleanupFailed) == 0)
+        {
+            status.Transition(CompanionLifecycleState.Stopped);
+            logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");
+        }
     }
 
-    private async Task CleanupFailedStartupAsync()
+    private async Task CleanupFailedStartupAsync(Exception startupFailure)
     {
         // Startup can fail after admission opens; C03 still owns any operations that outlive the grace period.
         admission.StopAccepting();
-        await DrainAndCloseDatabaseAsync();
+        try
+        {
+            await DrainAndCloseDatabaseAsync().ConfigureAwait(false);
+        }
+        catch (Exception cleanupFailure)
+        {
+            throw new AggregateException("Companion startup and cleanup both failed.", startupFailure, cleanupFailure);
+        }
     }
 
     private void BeginStopping()
@@ -136,37 +148,51 @@ internal sealed class CompanionRuntimeLifecycle(
         status.Transition(CompanionLifecycleState.Stopping);
     }
 
-    private void CloseDatabase()
+    private async Task CloseDatabaseAsync()
     {
-        admission.StopAccepting();
-        _store?.Dispose();
-        status.DatabaseClosed();
-        _store = null;
+        if (_store is not null)
+            await _store.DisposeAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _databaseClosed, 1) == 0)
+            status.DatabaseClosed();
     }
 
     private async Task DrainAndCloseDatabaseAsync()
     {
-        _store?.RequestShutdown();
+        admission.StopAccepting();
         try
         {
+            _store?.RequestShutdown();
             await Task.WhenAll(admission.DrainAsync(_store?.ShutdownGracePeriod),
-                _store?.ShutdownAsync() ?? Task.CompletedTask);
-            CloseDatabase();
+                CloseDatabaseAsync()).ConfigureAwait(false);
+            if (_store?.ShutdownTimedOut == true && Volatile.Read(ref _cleanupFailed) == 0)
+                ReportCleanupFailure(new TimeoutException("An earlier HistoryStore shutdown exceeded its grace period."));
         }
-        catch (TimeoutException exception)
+        catch (Exception exception)
         {
-            status.Fail("database-shutdown-timeout",
-                "Shutdown grace expired; unfinished database operations retain ownership until they unwind.", exception);
-            logger.LogError(exception, "Companion shutdown timed out; database ownership has not been declared released.");
+            ReportCleanupFailure(exception);
             throw;
         }
     }
 
-    public void Dispose()
+    private void ReportCleanupFailure(Exception exception)
+    {
+        Interlocked.Exchange(ref _cleanupFailed, 1);
+        bool timedOut = exception is TimeoutException;
+        status.Fail(timedOut ? "database-shutdown-timeout" : "database-shutdown-failed",
+            timedOut ? "Shutdown grace expired; unfinished database operations retain ownership until they unwind." :
+                "Database cleanup failed; ownership release could not be confirmed.", exception);
+        logger.LogError(exception, "Companion database cleanup failed; successful shutdown has not been reported.");
+    }
+
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    public async ValueTask DisposeAsync()
     {
         admission.StopAccepting();
-        _started.Dispose();
-        _stopping.Dispose();
-        CloseDatabase();
+        await _started.DisposeAsync().ConfigureAwait(false);
+        await _stopping.DisposeAsync().ConfigureAwait(false);
+        await DrainAndCloseDatabaseAsync().ConfigureAwait(false);
+        if (Volatile.Read(ref _cleanupFailed) == 0)
+            status.Transition(CompanionLifecycleState.Stopped);
     }
 }

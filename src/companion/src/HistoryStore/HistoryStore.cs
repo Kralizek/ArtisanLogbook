@@ -68,7 +68,7 @@ public sealed record CraftHistoryBatchWriteResult(
 }
 
 /// <summary>Persists canonical craft observations in a local DuckDB database.</summary>
-public sealed class HistoryStore : IDisposable
+public sealed class HistoryStore : IDisposable, IAsyncDisposable
 {
     private const int CurrentSchemaVersion = 2;
     private const int EvidenceFormatVersion = 1;
@@ -113,6 +113,7 @@ public sealed class HistoryStore : IDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _operationsDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _activeOperations;
+    private int _shutdownTimedOut;
     private Task? _shutdownCompletion;
 
     // Test synchronization at materialization boundaries, without exposing connections.
@@ -121,6 +122,8 @@ public sealed class HistoryStore : IDisposable
     public string DatabasePath { get; }
     public static TimeSpan DefaultShutdownGracePeriod => TimeSpan.FromSeconds(5);
     public TimeSpan ShutdownGracePeriod { get; }
+    /// <summary>Whether a shutdown wait has timed out; actual cleanup is reported by ShutdownCompletion.</summary>
+    public bool ShutdownTimedOut => Volatile.Read(ref _shutdownTimedOut) != 0;
 
     public int SchemaVersion => GetSchemaVersion();
 
@@ -436,13 +439,21 @@ public sealed class HistoryStore : IDisposable
             _disposed = true;
             Task cancellation = _shutdown.CancelAsync();
             if (_activeOperations == 0) _operationsDrained.TrySetResult();
-            _shutdownCompletion = Task.Run(async () =>
+            Task cleanup = Task.Run(async () =>
             {
-                await cancellation.ConfigureAwait(false);
+                // A failed cancellation callback must not strand the owned connections.
+                await cancellation.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
                 await _operationsDrained.Task.ConfigureAwait(false);
-                _writerConnection.Dispose();
-                _shutdown.Dispose();
+                try
+                {
+                    _writerConnection.Dispose();
+                }
+                finally
+                {
+                    _shutdown.Dispose();
+                }
             });
+            _shutdownCompletion = Task.WhenAll(cancellation, cleanup);
         }
     }
 
@@ -457,15 +468,26 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    public async Task ShutdownAsync()
+    public Task ShutdownAsync() => WaitForShutdownAsync();
+
+    public ValueTask DisposeAsync() => new(WaitForShutdownAsync());
+
+    private async Task WaitForShutdownAsync()
     {
         RequestShutdown();
+        Task completion = ShutdownCompletion;
         try
         {
-            await ShutdownCompletion.WaitAsync(ShutdownGracePeriod).ConfigureAwait(false);
+            await completion.WaitAsync(ShutdownGracePeriod).ConfigureAwait(false);
         }
         catch (TimeoutException exception)
         {
+            if (completion.IsCompleted)
+            {
+                await completion.ConfigureAwait(false);
+                return;
+            }
+            Volatile.Write(ref _shutdownTimedOut, 1);
             throw new TimeoutException(
                 $"History shutdown did not finish within {ShutdownGracePeriod}. " +
                 "Unfinished operations and connections remain owned; observe ShutdownCompletion before reopening the database.",
@@ -473,7 +495,7 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    public void Dispose() => ShutdownAsync().GetAwaiter().GetResult();
+    public void Dispose() => WaitForShutdownAsync().GetAwaiter().GetResult();
 
     private Operation AdmitOperation(CancellationToken cancellationToken = default)
     {

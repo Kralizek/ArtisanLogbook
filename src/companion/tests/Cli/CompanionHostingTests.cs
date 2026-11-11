@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 
 using ArtisanLogbook.Cli;
 using ArtisanLogbook.History;
@@ -430,6 +431,198 @@ public sealed class CompanionHostingTests
     }
 
     [Test]
+    public async Task StoppedThenConcurrentRuntimeDisposalsShareCompletedDatabaseCleanup()
+    {
+        await using WebApplication app = Build();
+        await app.StartAsync();
+        Store store = app.Services.GetRequiredService<Store>();
+        CompanionApplicationStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>();
+        CompanionRuntimeLifecycle lifecycle = app.Services.GetServices<IHostedService>()
+            .OfType<CompanionRuntimeLifecycle>().Single();
+        await app.StopAsync();
+        Task completion = store.ShutdownCompletion;
+        await Task.WhenAll(lifecycle.DisposeAsync().AsTask(), lifecycle.DisposeAsync().AsTask(), Task.Run(lifecycle.Dispose));
+        Assert.That(store.ShutdownCompletion, Is.SameAs(completion));
+        Assert.That(completion.IsCompletedSuccessfully, Is.True);
+        Assert.That(status.Read().DatabaseAvailable, Is.False);
+        Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopped));
+        AssertDatabaseReleased();
+    }
+
+    [Test]
+    public async Task HostWithoutNormalStopUsesAsyncDiDisposalAndReleasesDatabase()
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.AddSingleton<AsyncDisposalProbe>();
+        WebApplication app = builder.Build();
+        await app.StartAsync();
+        AsyncDisposalProbe probe = app.Services.GetRequiredService<AsyncDisposalProbe>();
+        Store store = app.Services.GetRequiredService<Store>();
+        CompanionApplicationStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>();
+        await app.DisposeAsync();
+        Assert.That(probe.AsyncDisposed, Is.True);
+        Assert.That(store.ShutdownCompletion.IsCompletedSuccessfully, Is.True);
+        Assert.That(status.Read().DatabaseAvailable, Is.False);
+        Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopped));
+        AssertDatabaseReleased();
+    }
+
+    [Test]
+    public async Task CleanupFailureRemainsObservableThroughRuntimeAndHostDisposal()
+    {
+        WebApplication app = Build();
+        await app.StartAsync();
+        Store store = app.Services.GetRequiredService<Store>();
+        CompanionApplicationStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>();
+        CompanionRuntimeLifecycle lifecycle = app.Services.GetServices<IHostedService>()
+            .OfType<CompanionRuntimeLifecycle>().Single();
+        CancellationTokenSource shutdown = (CancellationTokenSource)typeof(Store)
+            .GetField("_shutdown", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+        using CancellationTokenRegistration registration = shutdown.Token.Register(() =>
+            throw new IOException("Controlled cleanup callback failure."));
+        Assert.ThrowsAsync<AggregateException>(async () => await lifecycle.StoppedAsync(CancellationToken.None));
+        Assert.That(store.ShutdownCompletion.IsFaulted, Is.True);
+        Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Failed));
+        Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("database-shutdown-failed"));
+        Assert.That(_runtimeLogs, Has.None.Contains("database ownership released"));
+        Assert.ThrowsAsync<AggregateException>(async () => await lifecycle.DisposeAsync());
+        Assert.ThrowsAsync<AggregateException>(async () => await app.DisposeAsync());
+        AssertDatabaseReleased();
+    }
+
+    [Test]
+    public async Task HostStartupAndFinalDrainFailuresAreBothPreserved()
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.AddSingleton<AdmittingStartupFailure>();
+        builder.Services.AddHostedService(provider => provider.GetRequiredService<AdmittingStartupFailure>());
+        await using WebApplication app = builder.Build();
+        AdmittingStartupFailure worker = app.Services.GetRequiredService<AdmittingStartupFailure>();
+        try
+        {
+            AggregateException? failure = Assert.ThrowsAsync<AggregateException>(async () =>
+                await app.RunCompanionAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.That(failure!.InnerExceptions[0], Is.TypeOf<InvalidOperationException>());
+            Assert.That(failure.InnerExceptions[0].Message, Does.Contain("Startup failed"));
+            Assert.That(failure.InnerExceptions[1], Is.TypeOf<TimeoutException>());
+            Assert.That(_runtimeLogs, Has.Some.Contains("Companion final work drain failed"));
+        }
+        finally
+        {
+            worker.Lease?.Dispose();
+        }
+    }
+
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task AsyncRuntimeOrHostDisposalRetainsActiveNativeReadUntilEventualCleanup(
+        bool stoppedFirst, bool disposeHost)
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.Replace(ServiceDescriptor.Singleton<Store>(_ =>
+            new(_database, shutdownGracePeriod: TimeSpan.FromMilliseconds(100))));
+        WebApplication app = builder.Build();
+        await app.StartAsync();
+        Store store = app.Services.GetRequiredService<Store>();
+        CompanionApplicationStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>();
+        CompanionRuntimeLifecycle lifecycle = app.Services.GetServices<IHostedService>()
+            .OfType<CompanionRuntimeLifecycle>().Single();
+        CraftHistory parsed = SavedVariablesReader.Parse(CompanionCommandAppTests.Snapshot(1, null, 1)).History!;
+        store.WriteBatch(parsed);
+        using ManualResetEventSlim executing = new();
+        using ManualResetEventSlim release = new();
+        using (DuckDBConnection setup = new($"Data Source={_database}"))
+        {
+            setup.Open();
+            setup.RegisterScalarFunction<long, bool>("hold_runtime_read", (long _) =>
+            {
+                executing.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(20))) throw new TimeoutException("Test read was not released.");
+                return true;
+            });
+            using var command = setup.CreateCommand();
+            command.CommandText = """
+                ALTER TABLE Craft RENAME TO StoredCraft;
+                CREATE VIEW Craft AS SELECT c.* FROM StoredCraft c WHERE hold_runtime_read(c.CraftKey)
+                """;
+            command.ExecuteNonQuery();
+        }
+        Task read = Task.Run(() => store.ReadStatus());
+        try
+        {
+            Assert.That(executing.Wait(TimeSpan.FromSeconds(20)), Is.True);
+            if (stoppedFirst)
+                Assert.ThrowsAsync<TimeoutException>(async () => await app.StopAsync());
+            Task disposing = disposeHost ? app.DisposeAsync().AsTask() : lifecycle.DisposeAsync().AsTask();
+            Assert.That(disposing.IsCompleted, Is.False, "Async disposal must return while the native read still owns its connection.");
+            Assert.ThrowsAsync<TimeoutException>(async () => await disposing);
+            Assert.That(store.ShutdownCompletion.IsCompleted, Is.False);
+            Assert.That(read.IsCompleted, Is.False);
+            Assert.That(_runtimeLogs, Has.None.Contains("database ownership released"));
+            if (!disposeHost)
+            {
+                Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("database-shutdown-timeout"));
+                Assert.ThrowsAsync<TimeoutException>(async () => await lifecycle.DisposeAsync());
+            }
+            using DuckDBConnection probe = new($"Data Source={_database};access_mode=READ_ONLY");
+            probe.Open();
+            using var command = probe.CreateCommand();
+            command.CommandText = "SELECT current_setting('access_mode')";
+            Assert.That(command.ExecuteScalar(), Is.EqualTo("automatic"), "The original database handle must remain owned.");
+        }
+        finally
+        {
+            release.Set();
+            Assert.ThrowsAsync<OperationCanceledException>(async () => await read.WaitAsync(TimeSpan.FromSeconds(20)));
+            await store.ShutdownCompletion.WaitAsync(TimeSpan.FromSeconds(20));
+            await lifecycle.DisposeAsync();
+            await app.DisposeAsync();
+        }
+        Assert.That(status.Read().DatabaseAvailable, Is.False);
+        Assert.That(store.ShutdownCompletion.IsCompletedSuccessfully, Is.True);
+        await lifecycle.StoppedAsync(CancellationToken.None);
+        Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Failed));
+        Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("database-shutdown-timeout"));
+        Assert.That(_runtimeLogs, Has.None.Contains("database ownership released"));
+        AssertDatabaseReleased();
+    }
+
+    [Test]
+    public async Task FailedStartupPreservesOriginalErrorWhenCleanupAlsoTimesOut()
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.Replace(ServiceDescriptor.Singleton<Store>(_ =>
+            new(_database, shutdownGracePeriod: TimeSpan.FromMilliseconds(100))));
+        builder.Services.AddSingleton<ILogger<CompanionRuntimeLifecycle>>(new FailingStartupLogger());
+        await using WebApplication app = builder.Build();
+        CompanionRuntimeLifecycle lifecycle = app.Services.GetServices<IHostedService>()
+            .OfType<CompanionRuntimeLifecycle>().Single();
+        CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
+        CompanionApplicationStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>();
+        admission.Open();
+        IDisposable lease = admission.Admit();
+        try
+        {
+            AggregateException? failure = Assert.ThrowsAsync<AggregateException>(async () =>
+                await lifecycle.StartAsync(CancellationToken.None));
+            Assert.That(failure!.InnerExceptions[0], Is.TypeOf<IOException>());
+            Assert.That(failure.InnerExceptions[1], Is.TypeOf<TimeoutException>());
+            Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("database-startup-failed"));
+            Assert.That(status.Read().DatabaseAvailable, Is.False);
+            AssertDatabaseReleased();
+            Assert.That(_runtimeLogs, Has.None.Contains("database ownership released"));
+        }
+        finally
+        {
+            lease.Dispose();
+            await lifecycle.DisposeAsync();
+        }
+        Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("database-startup-failed"));
+    }
+
+    [Test]
     public async Task ShutdownCancellationRollsBackAnAdmittedTransactionBeforeReleasingOwnership()
     {
         await using WebApplication app = Build();
@@ -694,6 +887,15 @@ public sealed class CompanionHostingTests
 
     private WebApplication Build() => Builder().Build();
 
+    private void AssertDatabaseReleased()
+    {
+        using DuckDBConnection connection = new($"Data Source={_database};access_mode=READ_ONLY");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT current_setting('access_mode')";
+        Assert.That(command.ExecuteScalar(), Is.EqualTo("read_only"));
+    }
+
     private WebApplicationBuilder Builder()
     {
         WebApplicationBuilder builder = WebApplication.CreateEmptyBuilder(new()
@@ -731,6 +933,30 @@ public sealed class CompanionHostingTests
             LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             if (IsEnabled(logLevel)) lock (messages) messages.Add(formatter(state, exception));
+        }
+    }
+
+    private sealed class FailingStartupLogger : ILogger<CompanionRuntimeLifecycle>
+    {
+        private int _failed;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (Interlocked.Exchange(ref _failed, 1) == 0)
+                throw new IOException("Controlled startup reporting failure after database acquisition.");
+        }
+    }
+
+    private sealed class AsyncDisposalProbe : IDisposable, IAsyncDisposable
+    {
+        public bool AsyncDisposed { get; private set; }
+        public void Dispose() => throw new InvalidOperationException("The asynchronous host must not select synchronous DI disposal.");
+        public ValueTask DisposeAsync()
+        {
+            AsyncDisposed = true;
+            return ValueTask.CompletedTask;
         }
     }
 

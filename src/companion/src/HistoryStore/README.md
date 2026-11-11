@@ -56,18 +56,31 @@ when it was cancelled. No reader ever interrupts the writer or another reader.
 Cancellation racing successful completion may lose to completion; a cancelled
 read never returns a partially constructed result.
 
+`HistoryStore` implements both `IDisposable` and `IAsyncDisposable`. Prefer
+`await using` in asynchronous application lifecycles; synchronous `using` remains
+supported for CLI and test callers:
+
+```csharp
+await using HistoryStore store = new(databasePath);
+HistoryStoreStatus status = store.ReadStatus(cancellationToken);
+```
+
 `RequestShutdown()` atomically closes admission and signals cancellation without
-waiting for the writer lock. `Dispose()` and `ShutdownAsync()` then allow a
+waiting for the writer lock. `DisposeAsync()`, `Dispose()`, and `ShutdownAsync()` allow a
 **five-second grace period by default**, configurable using the constructor's
-`shutdownGracePeriod` (positive and finite). `ShutdownAsync` is asynchronous
-waiting for ownership release, not asynchronous native database execution.
-All callers share one cleanup task. Shutdown cancels active reads, allows
+`shutdownGracePeriod` (positive and finite). All three use the same bounded
+shutdown implementation. `DisposeAsync` waits without blocking a thread;
+`Dispose` blocks its caller for that same bounded wait. `ShutdownAsync` remains a
+Task-returning convenience for explicitly initiating/awaiting shutdown without a
+disposal scope. Neither asynchronous method makes native SQL execution async.
+All callers, including concurrent or mixed synchronous/asynchronous disposals,
+share one cleanup task, not independent physical cleanups. Shutdown cancels active reads, allows
 admitted writers to unwind/roll back, and disposes the writer only after every
 operation has released its own resources. New operations throw
 `ObjectDisposedException`, including while an active writer is still running.
 
 If work or native cleanup does not finish within the grace period,
-`Dispose`/`ShutdownAsync` throws **`TimeoutException`**, not a success-shaped
+`DisposeAsync`/`Dispose`/`ShutdownAsync` throws **`TimeoutException`**, not a success-shaped
 return. The store remains permanently closed to new work. It retains its
 operation count, connections, cancellation sources and cleanup task, rather than
 closing a connection underneath native code. **`ShutdownCompletion`** (available
@@ -75,11 +88,27 @@ after shutdown is requested) reports actual eventual resource release or cleanup
 failure. When the last operation finally unwinds, cleanup closes the writer and
 completes that task even if the original shutdown call timed out. Repeated
 shutdown calls observe the same cleanup task with their own bounded wait.
+An earlier timeout does not poison cleanup: after that task succeeds, later
+disposal calls succeed without another physical cleanup. An actual cleanup
+failure instead faults that task and remains observable by every later caller.
+`ShutdownTimedOut` records whether any disposal/shutdown waiter exceeded its
+grace period, even if cleanup later succeeds. It is historical reporting, not
+the terminal outcome; use `ShutdownCompletion` to determine actual release.
+Even if a cancellation callback fails, cleanup still waits for operation
+resources to drain before releasing the writer; the callback failure is retained.
 Do not reopen/replace the store or claim file ownership released until that
 task succeeds. If native work never returns, ownership remains retained; process
 termination is the ultimate external boundary, not a feature provided here.
 Thread scheduling means the grace period is a timeout policy, not a hard
 real-time guarantee.
+
+The lifecycle terms are deliberately distinct:
+
+- **Shutdown requested:** admission is closed and cancellation has been signaled.
+- **Shutdown timed out:** a caller's grace period expired; unfinished operations
+  still own their resources. This is not a terminal result of the cleanup task.
+- **Shutdown completed:** every tracked operation has finished and all owned
+  connections have been released successfully (`ShutdownCompletion` succeeded).
 
 Writers retain their existing transaction boundaries and do not receive native
 interrupts. `WriteBatch` links its existing cooperative token to shutdown and
@@ -97,7 +126,10 @@ grace period and is not bypassed by an already-cancelled host token. Timeout
 sets/logs `database-shutdown-timeout` and propagates; Runtime does not emit a
 successful stopped/ownership-released message. Failed-startup/final admission
 drains are also bounded. Database ownership is no longer reported closed before
-store disposal succeeds. This does not redesign worker stopping: a worker's
+store disposal succeeds. Runtime's asynchronous lifecycle and async disposal
+await `DisposeAsync`; DI may also dispose the same singleton, safely sharing
+its cleanup task. See the [runtime ownership rules](../Runtime/README.md#extension-points)
+for host disposal and failure propagation. This does not redesign worker stopping: a worker's
 own non-cooperative `StopAsync` still needs its host-level shutdown policy.
 
 ### Provider investigation (DuckDB.NET.Data.Full 1.5.6.1)
