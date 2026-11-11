@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 using Store = ArtisanLogbook.HistoryStore.HistoryStore;
 
@@ -52,9 +53,10 @@ public static class CompanionHostingExtensions
         {
             CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
             admission.StopAccepting();
+            using CancellationTokenSource deadline = new(app.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
             try
             {
-                await admission.DrainAsync();
+                await admission.DrainAsync(deadline.Token);
             }
             catch (Exception cleanupFailure)
             {

@@ -6,8 +6,7 @@ namespace ArtisanLogbook.Runtime;
 public sealed class CompanionWorkAdmission(ILogger<CompanionWorkAdmission> logger)
 {
     private readonly object _gate = new();
-    private bool _accepting;
-    private bool _stopping;
+    private AdmissionState _state;
     private int _active;
     private TaskCompletionSource _drained = Completed();
 
@@ -15,7 +14,7 @@ public sealed class CompanionWorkAdmission(ILogger<CompanionWorkAdmission> logge
     {
         lock (_gate)
         {
-            if (!_accepting)
+            if (_state != AdmissionState.Accepting)
             {
                 logger.LogWarning("Runtime work rejected: application is not accepting new work.");
                 throw new InvalidOperationException("The Companion is not accepting new work; it has not started or is stopping.");
@@ -29,23 +28,20 @@ public sealed class CompanionWorkAdmission(ILogger<CompanionWorkAdmission> logge
     {
         lock (_gate)
         {
-            if (!_stopping) _accepting = true;
+            if (_state == AdmissionState.Created) _state = AdmissionState.Accepting;
         }
     }
 
     internal void StopAccepting()
     {
         lock (_gate)
-        {
-            _stopping = true;
-            _accepting = false;
-        }
+            _state = AdmissionState.Stopping;
     }
 
-    internal Task DrainAsync(TimeSpan? gracePeriod = null)
+    internal Task DrainAsync(CancellationToken cancellationToken)
     {
         lock (_gate)
-            return _drained.Task.WaitAsync(gracePeriod ?? ArtisanLogbook.HistoryStore.HistoryStore.DefaultShutdownGracePeriod);
+            return _drained.Task.WaitAsync(cancellationToken);
     }
 
     private void Release()
@@ -62,6 +58,8 @@ public sealed class CompanionWorkAdmission(ILogger<CompanionWorkAdmission> logge
         result.SetResult();
         return result;
     }
+
+    private enum AdmissionState { Created, Accepting, Stopping }
 
     private sealed class Lease(CompanionWorkAdmission owner) : IDisposable
     {

@@ -1,6 +1,5 @@
 using System.Data.Common;
 using System.Diagnostics;
-using System.Reflection;
 
 using ArtisanLogbook.History;
 using ArtisanLogbook.HistoryStore;
@@ -74,21 +73,15 @@ public sealed class HistoryStoreCancellationTests
             using (store = new(_path))
                 Assert.That(store.Write(Observation).IsSuccessful, Is.True);
         }
-        Task completion = store.ShutdownCompletion;
-        Assert.That(completion.IsCompletedSuccessfully, Is.True);
-        Assert.That(store.ShutdownTimedOut, Is.False);
         AssertReleased();
         await using Store reopened = new(_path);
         await store.DisposeAsync();
         store.Dispose();
-        await store.ShutdownAsync();
-        Assert.That(store.ShutdownCompletion, Is.SameAs(completion));
-        Assert.That(store.ShutdownTimedOut, Is.False);
         Assert.That(reopened.Read(Observation.Identity), Is.EqualTo(Observation));
     }
 
     [Test]
-    public async Task ConcurrentAsyncDisposalsWaitWithoutBlockingAndSharePhysicalCleanup()
+    public async Task ConcurrentMixedDisposalsWaitWithoutBlockingAndReleaseTheDatabase()
     {
         using ManualResetEventSlim entered = new();
         using ManualResetEventSlim release = new();
@@ -104,14 +97,11 @@ public sealed class HistoryStoreCancellationTests
         Assert.That(store.Write(Observation).IsSuccessful, Is.True);
         Task read = Task.Run(() => store.Read(Observation.Identity));
         Task[] disposing = [];
-        Task? completion = null;
         try
         {
             Wait(entered);
-            disposing = Enumerable.Range(0, 8).Select(_ => store.DisposeAsync().AsTask()).ToArray();
-            completion = store.ShutdownCompletion;
+            disposing = [store.DisposeAsync().AsTask(), store.DisposeAsync().AsTask(), Task.Run(store.Dispose)];
             Assert.That(disposing, Has.All.Property(nameof(Task.IsCompleted)).False);
-            Assert.That(completion.IsCompleted, Is.False);
             Assert.Throws<ObjectDisposedException>(() => store.ReadStatus());
             Assert.Throws<ObjectDisposedException>(() => store.Write(Observation));
         }
@@ -122,28 +112,7 @@ public sealed class HistoryStoreCancellationTests
             await Task.WhenAll(disposing).WaitAsync(Timeout);
             await store.DisposeAsync();
         }
-        Assert.That(store.ShutdownCompletion, Is.SameAs(completion));
-        Assert.That(completion!.IsCompletedSuccessfully, Is.True);
         AssertReleased();
-    }
-
-    [Test]
-    public async Task CancellationCallbackFailureStillReleasesResourcesAndRemainsObservable()
-    {
-        Store store = new(_path);
-        // Fault injection without exposing the store's shutdown source to production callers.
-        CancellationTokenSource shutdown = (CancellationTokenSource)typeof(Store)
-            .GetField("_shutdown", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
-        using CancellationTokenRegistration registration = shutdown.Token.Register(() =>
-            throw new IOException("Controlled cancellation callback failure."));
-        AggregateException? failure = Assert.ThrowsAsync<AggregateException>(async () => await store.DisposeAsync());
-        Assert.That(failure!.Flatten().InnerExceptions.Single(), Is.TypeOf<IOException>());
-        Task completion = store.ShutdownCompletion;
-        Assert.That(completion.IsFaulted, Is.True);
-        AssertReleased();
-        Assert.ThrowsAsync<AggregateException>(async () => await store.DisposeAsync());
-        Assert.Throws<AggregateException>(store.Dispose);
-        Assert.That(store.ShutdownCompletion, Is.SameAs(completion));
     }
 
     [TestCase("Admission")]
@@ -265,7 +234,7 @@ public sealed class HistoryStoreCancellationTests
         {
             Wait(executing);
             if (shutdown)
-                stopping = store.ShutdownAsync();
+                stopping = store.DisposeAsync().AsTask();
             else
             {
                 // These operations do not touch the deliberately slow test view.
@@ -324,7 +293,6 @@ public sealed class HistoryStoreCancellationTests
         {
             Wait(executing);
             Assert.ThrowsAsync<TimeoutException>(async () => await store.DisposeAsync());
-            Assert.That(store.ShutdownCompletion.IsCompleted, Is.False);
             Assert.That(read.IsCompleted, Is.False, "Interrupt must not be mistaken for forced callback termination.");
             Assert.Throws<ObjectDisposedException>(() => store.ReadAll());
         }
@@ -332,7 +300,6 @@ public sealed class HistoryStoreCancellationTests
         {
             release.Set();
             Assert.ThrowsAsync<OperationCanceledException>(async () => await read.WaitAsync(Timeout));
-            await store.ShutdownCompletion.WaitAsync(Timeout);
             await store.DisposeAsync();
             Execute(setup, "DROP VIEW Craft; ALTER TABLE StoredCraft RENAME TO Craft");
         }
@@ -398,16 +365,9 @@ public sealed class HistoryStoreCancellationTests
         {
             Wait(entered);
             Stopwatch elapsed = Stopwatch.StartNew();
-            TimeoutException? exception = Assert.ThrowsAsync<TimeoutException>(async () => await store.DisposeAsync());
-            Assert.That(exception!.Message, Does.Contain("ShutdownCompletion"));
+            Assert.ThrowsAsync<TimeoutException>(async () => await store.DisposeAsync());
             Assert.That(elapsed.Elapsed, Is.LessThan(store.ShutdownGracePeriod + TimeSpan.FromSeconds(5)));
             Assert.That(elapsed.Elapsed, Is.GreaterThanOrEqualTo(store.ShutdownGracePeriod * 0.75));
-            Task completion = store.ShutdownCompletion;
-            Assert.ThrowsAsync<TimeoutException>(async () => await store.DisposeAsync());
-            Assert.Throws<TimeoutException>(store.Dispose);
-            Assert.That(store.ShutdownCompletion, Is.SameAs(completion));
-            Assert.That(store.ShutdownTimedOut, Is.True);
-            Assert.That(store.ShutdownCompletion.IsCompleted, Is.False);
             Assert.That(operation.IsCompleted, Is.False);
             Assert.Throws<ObjectDisposedException>(() => store.ReadStatus());
             Assert.Throws<ObjectDisposedException>(() => store.Write(Observation));
@@ -420,43 +380,19 @@ public sealed class HistoryStoreCancellationTests
         {
             release.Set();
             Assert.ThrowsAsync<OperationCanceledException>(async () => await operation.WaitAsync(Timeout));
-            await store.ShutdownCompletion.WaitAsync(Timeout);
+            Assert.That(SpinWait.SpinUntil(() =>
+            {
+                using DuckDBConnection probe = Open(readOnly: true);
+                using DbCommand command = probe.CreateCommand();
+                command.CommandText = "SELECT current_setting('access_mode')";
+                return Equals(command.ExecuteScalar(), "read_only");
+            }, Timeout), Is.True, "Cleanup must release the writer without another disposal trigger.");
             await store.DisposeAsync();
             store.Dispose();
         }
         AssertReleased();
-        Assert.That(store.ShutdownTimedOut, Is.True);
         using Store reopened = new(_path);
         Assert.That(reopened.ReadAll(), Is.EqualTo(new[] { Observation }));
-    }
-
-    [Test]
-    public async Task CancellationRacingWithTwoDisposalsHasOneSafeCompletion()
-    {
-        using ManualResetEventSlim entered = new();
-        using ManualResetEventSlim release = new();
-        using CancellationTokenSource cancellation = new();
-        Store store = new(_path)
-        {
-            ReadCheckpoint = boundary =>
-            {
-                if (boundary != "Craft") return;
-                entered.Set();
-                Wait(release);
-            }
-        };
-        Assert.That(store.Write(Observation).IsSuccessful, Is.True);
-        Task read = Task.Run(() => store.Read(Observation.Identity, cancellation.Token));
-        Wait(entered);
-        await cancellation.CancelAsync();
-        Task first = store.DisposeAsync().AsTask();
-        Task second = Task.Run(store.Dispose);
-        Task third = store.ShutdownAsync();
-        release.Set();
-        Assert.ThrowsAsync<OperationCanceledException>(async () => await read.WaitAsync(Timeout));
-        await Task.WhenAll(first, second, third).WaitAsync(Timeout);
-        Assert.That(store.ShutdownCompletion.IsCompletedSuccessfully, Is.True);
-        AssertReleased();
     }
 
     private DuckDBConnection Open(bool readOnly = false)

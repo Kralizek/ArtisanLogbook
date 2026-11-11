@@ -109,12 +109,10 @@ public sealed class HistoryStore : IDisposable, IAsyncDisposable
     private readonly DuckDBConnection _writerConnection;
     private readonly string _connectionString;
     private readonly bool _readOnly;
-    private volatile bool _disposed;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _operationsDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _activeOperations;
-    private int _shutdownTimedOut;
-    private Task? _shutdownCompletion;
+    private Task? _cleanup;
 
     // Test synchronization at materialization boundaries, without exposing connections.
     internal Action<string>? ReadCheckpoint { get; init; }
@@ -122,8 +120,6 @@ public sealed class HistoryStore : IDisposable, IAsyncDisposable
     public string DatabasePath { get; }
     public static TimeSpan DefaultShutdownGracePeriod => TimeSpan.FromSeconds(5);
     public TimeSpan ShutdownGracePeriod { get; }
-    /// <summary>Whether a shutdown wait has timed out; actual cleanup is reported by ShutdownCompletion.</summary>
-    public bool ShutdownTimedOut => Volatile.Read(ref _shutdownTimedOut) != 0;
 
     public int SchemaVersion => GetSchemaVersion();
 
@@ -430,79 +426,48 @@ public sealed class HistoryStore : IDisposable, IAsyncDisposable
         reader.IsDBNull(ordinal) ? null : DateTimeOffset.Parse(
             reader.GetString(ordinal), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 
-    /// <summary>Stops admission and signals cancellation. Resources remain owned until all operations unwind.</summary>
-    public void RequestShutdown()
+    public async ValueTask DisposeAsync()
     {
+        Task cleanup;
         lock (_lifecycleGate)
         {
-            if (_disposed) return;
-            _disposed = true;
-            Task cancellation = _shutdown.CancelAsync();
-            if (_activeOperations == 0) _operationsDrained.TrySetResult();
-            Task cleanup = Task.Run(async () =>
+            if (_cleanup is null)
             {
-                // A failed cancellation callback must not strand the owned connections.
-                await cancellation.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-                await _operationsDrained.Task.ConfigureAwait(false);
-                try
+                Task cancellation = _shutdown.CancelAsync();
+                if (_activeOperations == 0) _operationsDrained.TrySetResult();
+                _cleanup = Task.Run(async () =>
                 {
-                    _writerConnection.Dispose();
-                }
-                finally
-                {
-                    _shutdown.Dispose();
-                }
-            });
-            _shutdownCompletion = Task.WhenAll(cancellation, cleanup);
-        }
-    }
-
-    /// <summary>Actual resource release, including late completion after a shutdown timeout.</summary>
-    public Task ShutdownCompletion
-    {
-        get
-        {
-            lock (_lifecycleGate)
-                return _shutdownCompletion ??
-                    throw new InvalidOperationException("History shutdown has not been requested.");
-        }
-    }
-
-    public Task ShutdownAsync() => WaitForShutdownAsync();
-
-    public ValueTask DisposeAsync() => new(WaitForShutdownAsync());
-
-    private async Task WaitForShutdownAsync()
-    {
-        RequestShutdown();
-        Task completion = ShutdownCompletion;
-        try
-        {
-            await completion.WaitAsync(ShutdownGracePeriod).ConfigureAwait(false);
-        }
-        catch (TimeoutException exception)
-        {
-            if (completion.IsCompleted)
-            {
-                await completion.ConfigureAwait(false);
-                return;
+                    try
+                    {
+                        await cancellation.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        await _operationsDrained.Task.ConfigureAwait(false);
+                        try
+                        {
+                            _writerConnection.Dispose();
+                        }
+                        finally
+                        {
+                            _shutdown.Dispose();
+                        }
+                    }
+                });
             }
-            Volatile.Write(ref _shutdownTimedOut, 1);
-            throw new TimeoutException(
-                $"History shutdown did not finish within {ShutdownGracePeriod}. " +
-                "Unfinished operations and connections remain owned; observe ShutdownCompletion before reopening the database.",
-                exception);
+            cleanup = _cleanup;
         }
+        await cleanup.WaitAsync(ShutdownGracePeriod).ConfigureAwait(false);
     }
 
-    public void Dispose() => WaitForShutdownAsync().GetAwaiter().GetResult();
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     private Operation AdmitOperation(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_lifecycleGate)
         {
-            ThrowIfDisposed();
+            ObjectDisposedException.ThrowIf(_cleanup is not null, this);
             cancellationToken.ThrowIfCancellationRequested();
             Operation operation = new(this, cancellationToken, _shutdown.Token);
             _activeOperations++;
@@ -513,16 +478,16 @@ public sealed class HistoryStore : IDisposable, IAsyncDisposable
     private sealed class Operation(
         HistoryStore owner, CancellationToken callerToken, CancellationToken shutdownToken) : IDisposable
     {
-        private readonly CancellationTokenSource _cancellation =
-            CancellationTokenSource.CreateLinkedTokenSource(callerToken, shutdownToken);
-        public CancellationToken Token => _cancellation.Token;
+        private readonly CancellationTokenSource? _cancellation = callerToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(callerToken, shutdownToken) : null;
+        public CancellationToken Token => _cancellation?.Token ?? shutdownToken;
 
         public void Dispose()
         {
-            _cancellation.Dispose();
+            _cancellation?.Dispose();
             lock (owner._lifecycleGate)
             {
-                if (--owner._activeOperations == 0 && owner._disposed)
+                if (--owner._activeOperations == 0 && owner._cleanup is not null)
                     owner._operationsDrained.TrySetResult();
             }
         }
@@ -1602,9 +1567,6 @@ public sealed class HistoryStore : IDisposable, IAsyncDisposable
             ? enumValue
             : throw new InvalidDataException($"Stored recipe reagent {field} '{value}' is not supported.");
     }
-
-    private void ThrowIfDisposed() =>
-        ObjectDisposedException.ThrowIf(_disposed, this);
 
     private void ThrowIfReadOnly()
     {

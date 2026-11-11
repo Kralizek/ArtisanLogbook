@@ -184,8 +184,9 @@ public sealed class HistoryStoreConcurrencyTests
             dispose = asynchronous ? store.DisposeAsync().AsTask() : Task.Run(store.Dispose);
             Assert.That(SpinWait.SpinUntil(() =>
             {
-                try { _ = store.ShutdownCompletion; return true; }
-                catch (InvalidOperationException) { return false; }
+                try { _ = store.SchemaVersion; return false; }
+                catch (ObjectDisposedException) { return true; }
+                catch (OperationCanceledException) { return true; }
             }, Timeout), Is.True);
             Assert.That(dispose.IsCompleted, Is.False);
             Assert.Throws<ObjectDisposedException>(() => store.ReadAll());
@@ -223,8 +224,9 @@ public sealed class HistoryStoreConcurrencyTests
             dispose = asynchronous ? store.DisposeAsync().AsTask() : Task.Run(store.Dispose);
             Assert.That(SpinWait.SpinUntil(() =>
             {
-                try { _ = store.ShutdownCompletion; return true; }
-                catch (InvalidOperationException) { return false; }
+                try { _ = store.SchemaVersion; return false; }
+                catch (ObjectDisposedException) { return true; }
+                catch (OperationCanceledException) { return true; }
             }, Timeout), Is.True);
             Assert.Throws<ObjectDisposedException>(() => store.ReadAll());
             Assert.That(dispose.IsCompleted, Is.False);

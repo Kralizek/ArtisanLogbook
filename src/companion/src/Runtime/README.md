@@ -83,28 +83,27 @@ installation discovery, one singleton C03 writer, singleton C07 importer, and
 `CompanionApplicationStatus`. Duplicate history ownership registration is rejected.
 `CompanionRuntimeLifecycle` uses standard `IHostedLifecycleService` and
 `IHostApplicationLifetime`: startup opens and verifies C03 before successful host
-startup; ApplicationStarted reports Running, ApplicationStopping reports Stopping,
-and StoppedAsync closes the database after all workers' StopAsync calls. Runtime
-implements both `IDisposable` and `IAsyncDisposable`; asynchronous lifecycle and
-disposal paths await C03's `DisposeAsync` instead of blocking on synchronous
-disposal. The synchronous compatibility path uses the same bounded cleanup.
-Disposal also closes the writer after partial startup failures. C03 tracks admitted reads
-and writes so disposal cannot race a live connection. At `StoppedAsync`, Runtime
-requests C03 cancellation before draining residual leases; store shutdown and
-lease drains use C03's configurable grace period (five seconds by default).
-Cancellation of the host token does not bypass safe rollback/cleanup. An expired
-grace period propagates/logs `database-shutdown-timeout`, without claiming that
-database ownership was released or that the host stopped successfully. C03
-retains unfinished work and exposes `ShutdownCompletion` for eventual safe
-resource release; it never closes a connection under nonresponsive native code.
-Repeated or concurrent runtime disposal retries the bounded wait on that same
-C03 task. It does not reset a prior critical failure or emit a successful stopped
-message after an earlier timeout. `DatabaseClosed` is reported only after
-successful C03 cleanup, never merely after requesting cancellation or observing
-a timeout. The runtime keeps its store reference so later disposal still
-observes the same terminal result. A startup error plus a cleanup error is
-propagated as an aggregate preserving both; other cleanup failures are logged,
-reported as `database-shutdown-failed`, and rethrown.
+startup; StartedAsync reports Running and startup configuration immediately before
+the host's ApplicationStarted notification; ApplicationStopping reports Stopping.
+StoppedAsync awaits C03's asynchronous disposal after all workers' StopAsync calls.
+Runtime's own `Dispose` only closes application admission and removes its
+ApplicationStopping registration; it does not own a second database-disposal
+path or an async-disposal implementation.
+DI owns the store and provides fallback disposal after failed startup or host
+disposal without normal stopping.
+
+C03 tracks admitted reads/writes so disposal cannot race a live connection.
+At `StoppedAsync`, Runtime starts C03 disposal before draining residual application
+leases. Database disposal uses C03's grace period (five seconds by default);
+lease drain uses the host shutdown token and remaining deadline instead of a
+second database-layer timeout. Even if lease drain is cancelled, Runtime awaits
+the bounded database-disposal attempt; cancellation never authorizes closing
+active native resources. A database timeout reports `database-shutdown-timeout`,
+cancelled lease drain reports `shutdown-drain-cancelled`, and other cleanup
+errors report `database-shutdown-failed`. Errors are logged and rethrown without
+a successful stopped/ownership-released message. `DatabaseClosed` is reported
+only after disposal and lease draining succeed. Existing application status
+preserves the first critical failure; no parallel historical-timeout state is kept.
 Worker `StopAsync` remains governed by the hosting lifecycle; the database grace
 does not forcibly terminate a stuck worker. See the [HistoryStore lifecycle and
 provider guarantees](../HistoryStore/README.md#read-cancellation-and-bounded-shutdown).
@@ -178,7 +177,7 @@ stops in reverse registration order within each phase: all `StoppingAsync` hooks
 Shutdown errors are aggregated rather than skipping later phases. Runtime closes
 admission in its StoppingAsync hook and in ApplicationStopping (which may be
 signaled first by external termination). In StoppedAsync it requests C03 shutdown
-and waits a bounded grace period for outstanding leases and database operations.
+and awaits database disposal and the host-deadline-bounded lease drain.
 Workers must stop admitting new work when
 shutdown begins and drain in StopAsync; they must not defer database work to
 StoppedAsync. The guarantee does not depend on sequential StopAsync execution.
@@ -188,10 +187,16 @@ cancel worker work, but stopping does not immediately cancel every admitted
 request or dispose its connection. Once workers have stopped, C03 shutdown
 rejects new database operations and cancels outstanding reads/cooperative batch
 writes. A residual application lease does not authorize starting new database
-work after this point. Drain respects the grace period even if the host token
-is canceled; expiry is an explicit failure, never early connection disposal.
-RunCompanionAsync also closes admission and uses a bounded drain in finally
-before host disposal after startup/shutdown failure. Workers must observe
+work after this point. Lease drain responds to host cancellation, while C03's
+disposal wait remains independently bounded and does not abandon resource ownership.
+RunCompanionAsync closes admission in finally and gives outstanding leases one
+exceptional-cleanup budget from `HostOptions.ShutdownTimeout` (30 seconds by
+default), before DI disposal after startup/shutdown failure. This host-boundary
+drain also covers failures in hosted services that start after Runtime; there
+is no additional local startup-cleanup state machine. A primary host error plus
+a final-drain error is propagated as an aggregate preserving both.
+Calling Runtime's StartAsync directly is not a resource-owning scope: callers
+must dispose the host after startup failure or cancellation. Workers must observe
 cancellation and release leases; an uncooperative worker's own StopAsync can
 still delay reaching the database-shutdown phase, and forced termination
 still relies on DuckDB transactional safety.
@@ -202,12 +207,13 @@ shutdown. C06 adds no ingestion queue or per-flavor worker.
 
 `HistoryStore` alone owns its native connections. Runtime coordinates shutdown
 and reports successful database release; the DI container also owns the singleton
-store and the hosted runtime lifecycle. These paths can both request disposal,
-but C03 starts physical cleanup exactly once. `StoppedAsync` and runtime
-disposal await the same store cleanup rather than closing native handles again.
+store and the hosted runtime lifecycle. Normal `StoppedAsync` and DI may both
+dispose the store, but C03 starts physical cleanup exactly once; every disposal
+awaits that same private task with a bounded wait. No other Runtime disposal path
+attempts database cleanup.
 If the host is disposed without normal stopping, C03 still cancels/drains its
 tracked operations before releasing connections; this does not replace worker
-`StopAsync` responsibilities.
+`StopAsync` responsibilities or report the host as successfully Stopped.
 
 The [.NET 10 DI scope implementation](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.DependencyInjection/src/ServiceLookup/ServiceProviderEngineScope.cs)
 prefers `IAsyncDisposable` during async disposal, but `IDisposable` during
@@ -215,13 +221,12 @@ synchronous provider disposal when a service implements both. It walks captured
 services in reverse creation order, not hosted-service registration order, and
 stops that walk if a disposal throws. A later provider-disposal call does not
 restart an aborted walk. Depending on creation order, DI may reach the store
-before Runtime. Therefore safe eventual connection cleanup cannot depend on
-DI calling Runtime again after a timeout: C03's tracked cleanup continues
-independently, and `ShutdownCompletion` exposes its actual terminal outcome.
-Its historical `ShutdownTimedOut` flag lets later runtime disposal retain the
-failure report even when an earlier DI-driven store timeout bypassed Runtime.
-After failed provider disposal, keep the store reference to observe that task;
-do not infer resource release from the provider being marked disposed.
+before Runtime. Safe eventual connection cleanup therefore cannot depend on
+DI calling Runtime again: C03's private cleanup continues independently after
+timeout. A later store disposal can confirm completion or expose its cleanup
+failure; it does not restart cleanup. Do not infer resource release from the
+provider being marked disposed. There is no passive completion API, historical
+timeout reconstruction, or Runtime retry protocol.
 
 The [.NET 10 host](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.Hosting/src/Internal/Host.cs)
 implements async disposal and asynchronously disposes its service provider;
@@ -234,9 +239,9 @@ disposal path, including DI's async-interface preference.
 Cancellation means work was signaled, timeout means one bounded wait expired,
 and completion means all tracked operations and owned connections were released.
 After timeout, operations retain their connections until they unwind; eventual
-success permits subsequent disposal, but does not erase the recorded shutdown
-failure. `ShutdownCompletion` faults on actual cleanup failure, which remains
-observable on subsequent disposal calls. Native interruption cannot forcibly
+success permits subsequent disposal. Callers must report the original timeout;
+successful later disposal is not evidence that the earlier shutdown succeeded.
+Actual cleanup failures propagate on subsequent store disposal. Native interruption cannot forcibly
 terminate a non-cooperative callback or native operation.
 
 ## Monitoring ownership

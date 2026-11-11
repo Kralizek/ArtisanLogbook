@@ -77,11 +77,13 @@ internal sealed class CompanionApplicationStatus(
         lock (_gate) _store = store;
     }
 
-    internal void Transition(CompanionLifecycleState state)
+    internal bool Transition(CompanionLifecycleState state)
     {
         lock (_gate)
         {
-            if (_failure is null) _state = state;
+            if (_failure is not null) return false;
+            _state = state;
+            return true;
         }
     }
 
