@@ -57,7 +57,7 @@ public sealed class ImportReportingTests
             .And.Contain("Inserted dimensions").And.Contain("unknown-recipe")
             .And.Contain("ArtisanLogbookDB.crafts[id=1].recipeId").And.Contain("legacy-identity-lineage")
             .And.Contain("Recipe identity was not recorded"));
-        using Store store = new(_database, readOnly: true);
+        using Store store = new(_database);
         CompanionImportResult result = await new CompanionImportService(store).ImportSavedVariablesAsync(content);
         Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
         ImportPresentation model = Present(result);

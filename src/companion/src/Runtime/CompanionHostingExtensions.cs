@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 using Store = ArtisanLogbook.HistoryStore.HistoryStore;
 
@@ -30,17 +31,20 @@ public static class CompanionHostingExtensions
 
     public static async Task RunCompanionAsync(this WebApplication app, CancellationToken cancellationToken = default)
     {
+        Exception? runFailure = null;
         try
         {
             await app.StartAsync(cancellationToken);
             await app.WaitForShutdownAsync(cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
         {
+            runFailure = exception;
             throw;
         }
         catch (Exception exception)
         {
+            runFailure = exception;
             app.Services.GetRequiredService<CompanionApplicationStatus>()
                 .Fail("host-failed", "The Companion host could not start or continue running.", exception);
             throw;
@@ -49,7 +53,19 @@ public static class CompanionHostingExtensions
         {
             CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
             admission.StopAccepting();
-            await admission.DrainAsync();
+            using CancellationTokenSource deadline = new(app.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+            try
+            {
+                await admission.DrainAsync(deadline.Token);
+            }
+            catch (Exception cleanupFailure)
+            {
+                app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(CompanionHostingExtensions))
+                    .LogError(cleanupFailure, "Companion final work drain failed.");
+                if (runFailure is not null)
+                    throw new AggregateException("Companion execution and final work drain both failed.", runFailure, cleanupFailure);
+                throw;
+            }
         }
     }
 

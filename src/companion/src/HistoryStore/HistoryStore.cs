@@ -68,7 +68,7 @@ public sealed record CraftHistoryBatchWriteResult(
 }
 
 /// <summary>Persists canonical craft observations in a local DuckDB database.</summary>
-public sealed class HistoryStore : IDisposable
+public sealed class HistoryStore : IDisposable, IAsyncDisposable
 {
     private const int CurrentSchemaVersion = 2;
     private const int EvidenceFormatVersion = 1;
@@ -104,27 +104,40 @@ public sealed class HistoryStore : IDisposable
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly object _gate = new();
-    private readonly DuckDBConnection _connection;
-    private bool _disposed;
+    private readonly Lock _gate = new();
+    private readonly Lock _lifecycleGate = new();
+    private readonly DuckDBConnection _writerConnection;
+    private readonly string _connectionString;
+    private readonly bool _readOnly;
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly TaskCompletionSource _operationsDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _activeOperations;
+    private Task? _cleanup;
+
+    // Test synchronization at materialization boundaries, without exposing connections.
+    internal Action<string>? ReadCheckpoint { get; init; }
 
     public string DatabasePath { get; }
+    public static TimeSpan DefaultShutdownGracePeriod => TimeSpan.FromSeconds(5);
+    public TimeSpan ShutdownGracePeriod { get; }
 
-    public int SchemaVersion
-    {
-        get
-        {
-            lock (_gate)
-            {
-                ThrowIfDisposed();
-                return Convert.ToInt32(ExecuteScalar("SELECT COALESCE(MAX(Version), 0) FROM __HistoryStoreMigration"));
-            }
-        }
-    }
+    public int SchemaVersion => GetSchemaVersion();
 
-    public HistoryStore(string databasePath, bool readOnly = false)
+    public int GetSchemaVersion(CancellationToken cancellationToken = default) =>
+        ReadSnapshot(ReadStoredSchemaVersion, cancellationToken);
+
+    private static int ReadStoredSchemaVersion(DbTransaction transaction, CancellationToken cancellationToken) =>
+        Convert.ToInt32(ExecuteScalar(
+            "SELECT COALESCE(MAX(Version), 0) FROM __HistoryStoreMigration", transaction, cancellationToken),
+            CultureInfo.InvariantCulture);
+
+    public HistoryStore(string databasePath, bool readOnly = false, TimeSpan? shutdownGracePeriod = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        ShutdownGracePeriod = shutdownGracePeriod ?? DefaultShutdownGracePeriod;
+        if (ShutdownGracePeriod <= TimeSpan.Zero || ShutdownGracePeriod.TotalMilliseconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(shutdownGracePeriod), "Shutdown grace must be positive and finite.");
+        _readOnly = readOnly;
         DatabasePath = Path.GetFullPath(databasePath);
         if (readOnly)
         {
@@ -150,33 +163,37 @@ public sealed class HistoryStore : IDisposable
         };
         if (readOnly)
             connectionString["access_mode"] = "READ_ONLY";
-        _connection = new DuckDBConnection(connectionString.ConnectionString);
+        _connectionString = connectionString.ConnectionString;
+        _writerConnection = new DuckDBConnection(_connectionString);
         try
         {
-            _connection.Open();
+            _writerConnection.Open();
             if (!readOnly)
                 InitializeSchema(initializeIfEmpty);
         }
         catch
         {
-            _connection.Dispose();
+            _writerConnection.Dispose();
             throw;
         }
     }
 
     public CraftWriteResult Write(CraftObservation observation)
     {
+        using Operation operation = AdmitOperation();
         lock (_gate)
         {
-            ThrowIfDisposed();
+            operation.Token.ThrowIfCancellationRequested();
+            ThrowIfReadOnly();
             ArgumentNullException.ThrowIfNull(observation);
 
             IReadOnlyList<HistoryValidationError> validationErrors = HistoryValidator.Validate([observation]);
             if (validationErrors.Count > 0)
                 return new(CraftWriteStatus.Invalid, null, validationErrors, []);
 
-            using DbTransaction transaction = _connection.BeginTransaction();
+            using DbTransaction transaction = _writerConnection.BeginTransaction();
             CraftWriteResult result = WriteObservation(observation, transaction);
+            operation.Token.ThrowIfCancellationRequested();
             transaction.Commit();
             return result;
         }
@@ -192,17 +209,20 @@ public sealed class HistoryStore : IDisposable
     {
         ArgumentNullException.ThrowIfNull(history);
         cancellationToken.ThrowIfCancellationRequested();
+        using Operation operation = AdmitOperation(cancellationToken);
+        cancellationToken = operation.Token;
 
         lock (_gate)
         {
-            ThrowIfDisposed();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfReadOnly();
             cancellationToken.ThrowIfCancellationRequested();
 
             IReadOnlyList<HistoryValidationError> validationErrors = CraftHistoryValidator.Validate(history);
             if (validationErrors.Count > 0)
                 return new(0, 0, 0, 0, 0, validationErrors, [], []);
 
-            using DbTransaction transaction = _connection.BeginTransaction();
+            using DbTransaction transaction = _writerConnection.BeginTransaction();
             CraftDimensions existingDimensions = ReadDimensions(transaction);
             CraftHistoryMergeResult dimensionMerge = CraftHistoryReconciler.Merge(
                 new CraftHistory([], existingDimensions),
@@ -268,21 +288,22 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    public CraftObservation? Read(CraftIdentity identity)
+    public CraftObservation? Read(CraftIdentity identity, CancellationToken cancellationToken = default)
     {
-        lock (_gate)
+        return ReadSnapshot((transaction, token) =>
         {
-            ThrowIfDisposed();
             ArgumentNullException.ThrowIfNull(identity);
-            return Read(identity, transaction: null);
-        }
+            return Read(identity, transaction, token);
+        }, cancellationToken);
     }
 
     public DimensionWriteResult WriteDimensions(CraftDimensions dimensions)
     {
+        using Operation operation = AdmitOperation();
         lock (_gate)
         {
-            ThrowIfDisposed();
+            operation.Token.ThrowIfCancellationRequested();
+            ThrowIfReadOnly();
             ArgumentNullException.ThrowIfNull(dimensions);
 
             IReadOnlyList<HistoryValidationError> validationErrors =
@@ -290,7 +311,7 @@ public sealed class HistoryStore : IDisposable
             if (validationErrors.Count > 0)
                 return new(DimensionWriteStatus.Invalid, null, validationErrors, []);
 
-            using DbTransaction transaction = _connection.BeginTransaction();
+            using DbTransaction transaction = _writerConnection.BeginTransaction();
             CraftDimensions existing = ReadDimensions(transaction);
             CraftHistoryMergeResult merge = CraftHistoryReconciler.Merge(
                 new CraftHistory([], existing),
@@ -312,6 +333,7 @@ public sealed class HistoryStore : IDisposable
 
             StoreDimensions(reconciled, transaction);
             CraftDimensions persisted = ReadDimensions(transaction);
+            operation.Token.ThrowIfCancellationRequested();
             transaction.Commit();
             bool hasExisting = existing.Characters.Count + existing.Recipes.Count +
                 existing.Professions.Count + existing.Items.Count + existing.Expansions.Count +
@@ -321,53 +343,45 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    public CraftDimensions ReadDimensions()
-    {
-        lock (_gate)
-        {
-            ThrowIfDisposed();
-            return ReadDimensions(transaction: null);
-        }
-    }
+    public CraftDimensions ReadDimensions(CancellationToken cancellationToken = default) =>
+        ReadSnapshot(ReadDimensions, cancellationToken);
 
-    public IReadOnlyList<CraftObservation> ReadAll()
+    public IReadOnlyList<CraftObservation> ReadAll(CancellationToken cancellationToken = default)
     {
-        lock (_gate)
+        return ReadSnapshot<IReadOnlyList<CraftObservation>>((transaction, token) =>
         {
-            ThrowIfDisposed();
             List<CraftIdentity> identities = [];
-            using (DuckDBCommand command = _connection.CreateCommand())
-            {
-                command.CommandText = """
+            using (DuckDBCommand command = CreateCommand("""
                     SELECT CraftIdentity.IdentityOrigin, CraftIdentity.IdentityObservation
                     FROM CraftIdentity
                     JOIN Craft USING (CraftKey)
                     ORDER BY CraftIdentity.IdentityOrigin, CraftIdentity.IdentityObservation
-                    """;
-                using DbDataReader reader = command.ExecuteReader();
-                while (reader.Read())
+                    """, transaction))
+            {
+                using DbDataReader reader = ExecuteReader(command, token);
+                while (ReadRow(reader, token))
                     identities.Add(new CraftIdentity(reader.GetString(0), reader.GetString(1)));
             }
 
+            OnReadCheckpoint("Identities", transaction, token);
             List<CraftObservation> observations = new(identities.Count);
             foreach (CraftIdentity identity in identities)
-                observations.Add(Read(identity) ??
+                observations.Add(Read(identity, transaction, token) ??
                     throw new InvalidDataException($"Craft '{identity.Origin}/{identity.Observation}' disappeared during a read."));
             return observations;
-        }
+        }, cancellationToken);
     }
 
     /// <summary>Returns operational counts without loading craft payloads or migrating the database.</summary>
-    public HistoryStoreStatus ReadStatus()
+    public HistoryStoreStatus ReadStatus(CancellationToken cancellationToken = default)
     {
-        lock (_gate)
+        return ReadSnapshot((transaction, token) =>
         {
-            ThrowIfDisposed();
             bool hasMigration = Convert.ToInt64(ExecuteScalar("""
                 SELECT COUNT(*) FROM information_schema.tables
                 WHERE table_schema = 'main' AND table_name = '__HistoryStoreMigration'
-                """), CultureInfo.InvariantCulture) > 0;
-            int? version = hasMigration ? SchemaVersion : null;
+                """, transaction, token), CultureInfo.InvariantCulture) > 0;
+            int? version = hasMigration ? ReadStoredSchemaVersion(transaction, token) : null;
             if (version != CurrentSchemaVersion)
                 throw new InvalidOperationException(
                     $"History schema version {version?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"} " +
@@ -376,51 +390,144 @@ public sealed class HistoryStore : IDisposable
             long total;
             DateTimeOffset? oldest;
             DateTimeOffset? newest;
-            using (DuckDBCommand command = _connection.CreateCommand())
-            {
-                command.CommandText = """
+            using (DuckDBCommand command = CreateCommand("""
                     SELECT COUNT(*),
                         strftime(MIN(CAST(RecordedAt AS TIMESTAMPTZ)) AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S.%fZ'),
                         strftime(MAX(CAST(RecordedAt AS TIMESTAMPTZ)) AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S.%fZ')
                     FROM Craft
-                    """;
-                using DbDataReader reader = command.ExecuteReader();
-                reader.Read();
+                    """, transaction))
+            {
+                using DbDataReader reader = ExecuteReader(command, token);
+                ReadRow(reader, token);
                 total = reader.GetInt64(0);
                 oldest = ReadTimestamp(reader, 1);
                 newest = ReadTimestamp(reader, 2);
             }
 
+            OnReadCheckpoint("Counts", transaction, token);
             List<GameContextCraftCount> contexts = [];
-            using (DuckDBCommand command = _connection.CreateCommand())
-            {
-                command.CommandText = """
+            using (DuckDBCommand command = CreateCommand("""
                     SELECT g.ProjectId, g.ProgressionTrack, COUNT(*)
                     FROM Craft c JOIN GameContext g ON c.ContextKey = g.ContextKey
                     GROUP BY g.ProjectId, g.ProgressionTrack
                     ORDER BY g.ProjectId, g.ProgressionTrack NULLS FIRST
-                    """;
-                using DbDataReader reader = command.ExecuteReader();
-                while (reader.Read())
+                    """, transaction))
+            {
+                using DbDataReader reader = ExecuteReader(command, token);
+                while (ReadRow(reader, token))
                     contexts.Add(new(new GameContext((GameProject)reader.GetInt32(0),
                         NullableString(reader, 1)), reader.GetInt64(2)));
             }
-            return new(version.Value, total, oldest, newest, contexts);
-        }
+            return new HistoryStoreStatus(version.Value, total, oldest, newest, contexts);
+        }, cancellationToken);
     }
 
     private static DateTimeOffset? ReadTimestamp(DbDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : DateTimeOffset.Parse(
             reader.GetString(ordinal), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        lock (_gate)
+        Task cleanup;
+        lock (_lifecycleGate)
         {
-            if (_disposed) return;
-            _connection.Dispose();
-            _disposed = true;
+            if (_cleanup is null)
+            {
+                Task cancellation = _shutdown.CancelAsync();
+                if (_activeOperations == 0) _operationsDrained.TrySetResult();
+                _cleanup = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await cancellation.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        await _operationsDrained.Task.ConfigureAwait(false);
+                        try
+                        {
+                            _writerConnection.Dispose();
+                        }
+                        finally
+                        {
+                            _shutdown.Dispose();
+                        }
+                    }
+                });
+            }
+            cleanup = _cleanup;
         }
+        await cleanup.WaitAsync(ShutdownGracePeriod).ConfigureAwait(false);
+    }
+
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    private Operation AdmitOperation(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_cleanup is not null, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            Operation operation = new(this, cancellationToken, _shutdown.Token);
+            _activeOperations++;
+            return operation;
+        }
+    }
+
+    private sealed class Operation(
+        HistoryStore owner, CancellationToken callerToken, CancellationToken shutdownToken) : IDisposable
+    {
+        private readonly CancellationTokenSource? _cancellation = callerToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(callerToken, shutdownToken) : null;
+        public CancellationToken Token => _cancellation?.Token ?? shutdownToken;
+
+        public void Dispose()
+        {
+            _cancellation?.Dispose();
+            lock (owner._lifecycleGate)
+            {
+                if (--owner._activeOperations == 0 && owner._cleanup is not null)
+                    owner._operationsDrained.TrySetResult();
+            }
+        }
+    }
+
+    private T ReadSnapshot<T>(Func<DbTransaction, CancellationToken, T> read, CancellationToken cancellationToken)
+    {
+        using Operation operation = AdmitOperation(cancellationToken);
+        CancellationToken token = operation.Token;
+        using DuckDBConnection connection = new(_connectionString);
+        ReadCheckpoint?.Invoke("Admission");
+        token.ThrowIfCancellationRequested();
+        connection.Open();
+        token.ThrowIfCancellationRequested();
+        using DbTransaction transaction = connection.BeginTransaction();
+        try
+        {
+            T result;
+            // Stop/join interrupt callbacks before COMMIT or rollback/disconnection.
+            using (new ReadInterruption(connection, token))
+            {
+                token.ThrowIfCancellationRequested();
+                result = read(transaction, token);
+                token.ThrowIfCancellationRequested();
+            }
+            transaction.Commit();
+            return result;
+        }
+        catch (OperationCanceledException exception) when (token.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("History read was interrupted.", exception,
+                cancellationToken.IsCancellationRequested ? cancellationToken : token);
+        }
+    }
+
+    private void OnReadCheckpoint(string checkpoint, DbTransaction transaction, CancellationToken cancellationToken = default)
+    {
+        if (!ReferenceEquals(transaction.Connection, _writerConnection))
+            ReadCheckpoint?.Invoke(checkpoint);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static bool InspectExistingDatabase(string databasePath)
@@ -513,13 +620,13 @@ public sealed class HistoryStore : IDisposable
 
     private void InitializeSchema(bool initializeIfEmpty)
     {
-        long objectCount = UserObjectCount(_connection);
+        long objectCount = UserObjectCount(_writerConnection);
         if (objectCount == 0)
         {
             if (!initializeIfEmpty)
                 throw new InvalidOperationException(
                     "The database became empty while it was being opened; refusing to initialize an existing file.");
-            using DbTransaction transaction = _connection.BeginTransaction();
+            using DbTransaction transaction = _writerConnection.BeginTransaction();
             foreach (string statement in SchemaStatements())
                 ExecuteNonQuery(statement, transaction);
             ExecuteNonQuery(
@@ -531,7 +638,7 @@ public sealed class HistoryStore : IDisposable
             return;
         }
 
-        ValidateInitializedSchema(_connection);
+        ValidateInitializedSchema(_writerConnection);
     }
 
     private static long UserObjectCount(DbConnection connection)
@@ -691,7 +798,7 @@ public sealed class HistoryStore : IDisposable
             """
         ];
 
-    private CraftObservation? Read(CraftIdentity identity, DbTransaction? transaction)
+    private CraftObservation? Read(CraftIdentity identity, DbTransaction transaction, CancellationToken cancellationToken = default)
     {
         long craftKey;
         int projectId;
@@ -751,8 +858,8 @@ public sealed class HistoryStore : IDisposable
             """, transaction))
         {
             AddParameters(command, identity.Origin, identity.Observation);
-            using DbDataReader reader = command.ExecuteReader();
-            if (!reader.Read()) return null;
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            if (!ReadRow(reader, cancellationToken)) return null;
 
             craftKey = reader.GetInt64(0);
             projectId = reader.GetInt32(1);
@@ -780,12 +887,13 @@ public sealed class HistoryStore : IDisposable
             recipeSchematicEvidenceJson = NullableString(reader, 23);
         }
 
+        OnReadCheckpoint("Craft", transaction, cancellationToken);
         if (evidenceFormatVersion != EvidenceFormatVersion)
             throw new InvalidDataException(
                 $"Craft evidence format {evidenceFormatVersion} is not supported; expected {EvidenceFormatVersion}.");
 
-        IReadOnlyList<CraftReagent> reagentRows = ReadReagents(craftKey, transaction);
-        IReadOnlyList<CraftOutput> outputRows = ReadOutputs(craftKey, transaction);
+        IReadOnlyList<CraftReagent> reagentRows = ReadReagents(craftKey, transaction, cancellationToken);
+        IReadOnlyList<CraftOutput> outputRows = ReadOutputs(craftKey, transaction, cancellationToken);
         if ((!reagentsObserved && reagentRows.Count != 0) || (!outputsObserved && outputRows.Count != 0))
             throw new InvalidDataException(
                 $"Craft '{identity.Origin}/{identity.Observation}' has child rows for an unobserved collection.");
@@ -867,7 +975,7 @@ public sealed class HistoryStore : IDisposable
         return (inserted, enriched);
     }
 
-    private IReadOnlyList<CraftReagent> ReadReagents(long craftKey, DbTransaction? transaction)
+    private IReadOnlyList<CraftReagent> ReadReagents(long craftKey, DbTransaction transaction, CancellationToken cancellationToken)
     {
         List<CraftReagent> reagents = [];
         using DuckDBCommand command = CreateCommand("""
@@ -877,8 +985,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ItemId
             """, transaction);
         AddParameters(command, craftKey);
-        using DbDataReader reader = command.ExecuteReader();
-        while (reader.Read())
+        using DbDataReader reader = ExecuteReader(command, cancellationToken);
+        while (ReadRow(reader, cancellationToken))
         {
             string? returnedQuantity = NullableString(reader, 2);
             reagents.Add(new CraftReagent(
@@ -891,7 +999,7 @@ public sealed class HistoryStore : IDisposable
         return reagents;
     }
 
-    private IReadOnlyList<CraftOutput> ReadOutputs(long craftKey, DbTransaction? transaction)
+    private IReadOnlyList<CraftOutput> ReadOutputs(long craftKey, DbTransaction transaction, CancellationToken cancellationToken)
     {
         List<CraftOutput> outputs = [];
         using DuckDBCommand command = CreateCommand("""
@@ -901,8 +1009,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ItemId, QualityKey
             """, transaction);
         AddParameters(command, craftKey);
-        using DbDataReader reader = command.ExecuteReader();
-        while (reader.Read())
+        using DbDataReader reader = ExecuteReader(command, cancellationToken);
+        while (ReadRow(reader, cancellationToken))
             outputs.Add(new CraftOutput(
                 reader.GetInt32(0),
                 NullableInt32(reader, 1),
@@ -1015,19 +1123,20 @@ public sealed class HistoryStore : IDisposable
                 output.Quantity);
     }
 
-    private CraftDimensions ReadDimensions(DbTransaction? transaction)
+    private CraftDimensions ReadDimensions(DbTransaction transaction, CancellationToken cancellationToken = default)
     {
         Dictionary<string, GameContext> contexts = [];
         using (DuckDBCommand command = CreateCommand("""
             SELECT ContextKey, ProjectId, ProgressionTrack FROM GameContext
             """, transaction))
         {
-            using DbDataReader reader = command.ExecuteReader();
-            while (reader.Read())
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            while (ReadRow(reader, cancellationToken))
                 contexts.Add(reader.GetString(0),
                     new GameContext((GameProject)reader.GetInt32(1), NullableString(reader, 2)));
         }
 
+        OnReadCheckpoint("Contexts", transaction, cancellationToken);
         GameContext Game(DbDataReader reader, int ordinal) =>
             contexts.TryGetValue(reader.GetString(ordinal), out GameContext? game)
                 ? game
@@ -1039,8 +1148,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ContextKey, IdentityKey
             """, transaction))
         {
-            using DbDataReader reader = command.ExecuteReader();
-            while (reader.Read())
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            while (ReadRow(reader, cancellationToken))
                 characters.Add(new(Game(reader, 0), new CharacterIdentity(reader.GetString(1)),
                     NullableString(reader, 2), NullableString(reader, 3)));
         }
@@ -1051,8 +1160,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ContextKey, RecipeId
             """, transaction))
         {
-            using DbDataReader reader = command.ExecuteReader();
-            while (reader.Read())
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            while (ReadRow(reader, cancellationToken))
                 recipes.Add(new(Game(reader, 0), reader.GetInt32(1), NullableString(reader, 2),
                     NullableInt32(reader, 3), NullableString(reader, 4), NullableInt32(reader, 5)));
         }
@@ -1063,8 +1172,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ContextKey, ProfessionId
             """, transaction))
         {
-            using DbDataReader reader = command.ExecuteReader();
-            while (reader.Read())
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            while (ReadRow(reader, cancellationToken))
                 professions.Add(new(Game(reader, 0), reader.GetInt32(1), NullableString(reader, 2),
                     NullableInt32(reader, 3)));
         }
@@ -1075,8 +1184,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ContextKey, ItemId
             """, transaction))
         {
-            using DbDataReader reader = command.ExecuteReader();
-            while (reader.Read())
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            while (ReadRow(reader, cancellationToken))
                 items.Add(new(Game(reader, 0), reader.GetInt32(1), NullableString(reader, 2)));
         }
 
@@ -1086,8 +1195,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ContextKey, ExpansionKey
             """, transaction))
         {
-            using DbDataReader reader = command.ExecuteReader();
-            while (reader.Read())
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            while (ReadRow(reader, cancellationToken))
                 expansions.Add(new(Game(reader, 0), reader.GetString(1), NullableString(reader, 2)));
         }
 
@@ -1099,8 +1208,8 @@ public sealed class HistoryStore : IDisposable
             ORDER BY ContextKey, RecipeId, DataSlotTypeKey, DataSlotIndex
             """, transaction))
         {
-            using DbDataReader reader = command.ExecuteReader();
-            while (reader.Read())
+            using DbDataReader reader = ExecuteReader(command, cancellationToken);
+            while (ReadRow(reader, cancellationToken))
             {
                 int dataSlotTypeKey = Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture);
                 RecipeReagentDataSlotType? dataSlotType = dataSlotTypeKey == UnknownDataSlotType
@@ -1381,30 +1490,45 @@ public sealed class HistoryStore : IDisposable
             throw new InvalidDataException($"A stored {typeof(T).Name} JSON value was null.");
     }
 
-    private object? ExecuteScalar(string sql)
-    {
-        using DuckDBCommand command = _connection.CreateCommand();
-        command.CommandText = sql;
-        return command.ExecuteScalar();
-    }
-
-    private object? ExecuteScalar(string sql, DbTransaction transaction, params object?[] values)
+    private static object? ExecuteScalar(string sql, DbTransaction transaction, params object?[] values)
     {
         using DuckDBCommand command = CreateCommand(sql, transaction);
         AddParameters(command, values);
         return command.ExecuteScalar();
     }
 
-    private int ExecuteNonQuery(string sql, DbTransaction? transaction = null, params object?[] values)
+    private static object? ExecuteScalar(string sql, DbTransaction transaction, CancellationToken cancellationToken)
+    {
+        using DuckDBCommand command = CreateCommand(sql, transaction);
+        using DbDataReader reader = ExecuteReader(command, cancellationToken);
+        return ReadRow(reader, cancellationToken) ? reader.GetValue(0) : null;
+    }
+
+    private static DbDataReader ExecuteReader(DuckDBCommand command, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return command.ExecuteReader();
+    }
+
+    private static bool ReadRow(DbDataReader reader, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        bool result = reader.Read();
+        cancellationToken.ThrowIfCancellationRequested();
+        return result;
+    }
+
+    private static int ExecuteNonQuery(string sql, DbTransaction transaction, params object?[] values)
     {
         using DuckDBCommand command = CreateCommand(sql, transaction);
         AddParameters(command, values);
         return command.ExecuteNonQuery();
     }
 
-    private DuckDBCommand CreateCommand(string sql, DbTransaction? transaction)
+    private static DuckDBCommand CreateCommand(string sql, DbTransaction transaction)
     {
-        DuckDBCommand command = _connection.CreateCommand();
+        DuckDBCommand command = (DuckDBCommand)(transaction.Connection ??
+            throw new InvalidOperationException("The history transaction has no connection.")).CreateCommand();
         command.CommandText = sql;
         command.Transaction = transaction;
         return command;
@@ -1444,8 +1568,11 @@ public sealed class HistoryStore : IDisposable
             : throw new InvalidDataException($"Stored recipe reagent {field} '{value}' is not supported.");
     }
 
-    private void ThrowIfDisposed() =>
-        ObjectDisposedException.ThrowIf(_disposed, this);
+    private void ThrowIfReadOnly()
+    {
+        if (_readOnly)
+            throw new InvalidOperationException("The history store was opened read-only.");
+    }
 
     private sealed record ContextIdentity(int ProjectId, string? ProgressionTrack);
 }

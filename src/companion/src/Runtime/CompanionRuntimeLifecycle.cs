@@ -15,51 +15,36 @@ internal sealed class CompanionRuntimeLifecycle(
     ILogger<CompanionRuntimeLifecycle> logger) : IHostedLifecycleService, IDisposable
 {
     private Store? _store;
-    private CancellationTokenRegistration _started;
     private CancellationTokenRegistration _stopping;
 
     public Task StartingAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         status.Starting();
-        _started = lifetime.ApplicationStarted.Register(() =>
-        {
-            status.Transition(CompanionLifecycleState.Running);
-            logger.LogInformation(CompanionEvents.Started, "Artisan Logbook Companion started.");
-            logger.LogInformation(CompanionEvents.MonitoringPreference, "SavedVariables monitoring: {MonitoringState}",
-                configuration.EffectiveSettings.Monitoring.Enabled
-                    ? "on"
-                    : "off");
-            logger.LogInformation(CompanionEvents.ReconciliationInterval, "Reconciliation interval: {ReconciliationIntervalSeconds} seconds.",
-                configuration.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds);
-            ReportListeningUrl();
-        });
         _stopping = lifetime.ApplicationStopping.Register(BeginStopping);
         return Task.CompletedTask;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             _store = services.GetRequiredService<Store>();
-            _store.ReadStatus();
+            _store.ReadStatus(cancellationToken);
             status.DatabaseOpened(_store);
             LogInstallationFlavors();
             admission.Open();
             cancellationToken.ThrowIfCancellationRequested();
-            return;
+            return Task.CompletedTask;
         }
         catch (OperationCanceledException)
         {
-            await CleanupFailedStartupAsync();
             throw;
         }
         catch (Exception exception)
         {
             status.Fail("database-startup-failed", "Cannot initialize the history database.", exception);
-            await CleanupFailedStartupAsync();
             throw;
         }
     }
@@ -107,7 +92,17 @@ internal sealed class CompanionRuntimeLifecycle(
                 diagnostic.Code, diagnostic.Path, diagnostic.Message);
     }
 
-    public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StartedAsync(CancellationToken cancellationToken)
+    {
+        status.Transition(CompanionLifecycleState.Running);
+        logger.LogInformation(CompanionEvents.Started, "Artisan Logbook Companion started.");
+        logger.LogInformation(CompanionEvents.MonitoringPreference, "SavedVariables monitoring: {MonitoringState}",
+            configuration.EffectiveSettings.Monitoring.Enabled ? "on" : "off");
+        logger.LogInformation(CompanionEvents.ReconciliationInterval, "Reconciliation interval: {ReconciliationIntervalSeconds} seconds.",
+            configuration.EffectiveSettings.Monitoring.ReconciliationIntervalSeconds);
+        ReportListeningUrl();
+        return Task.CompletedTask;
+    }
     public Task StoppingAsync(CancellationToken cancellationToken)
     {
         BeginStopping();
@@ -118,20 +113,22 @@ internal sealed class CompanionRuntimeLifecycle(
     public async Task StoppedAsync(CancellationToken cancellationToken)
     {
         BeginStopping();
-        // Shutdown cancellation must not close C03 beneath admitted work still unwinding.
-        await admission.DrainAsync();
-        CloseDatabase();
-        status.Transition(CompanionLifecycleState.Stopped);
-        logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");
-    }
-
-    private async Task CleanupFailedStartupAsync()
-    {
-        // Admission may have opened before startup failed or was canceled.
-        // Never close the shared store until every accepted lease is released.
-        admission.StopAccepting();
-        await admission.DrainAsync();
-        CloseDatabase();
+        try
+        {
+            Task disposal = _store?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+            await Task.WhenAll(disposal, admission.DrainAsync(cancellationToken)).ConfigureAwait(false);
+            status.DatabaseClosed();
+            if (status.Transition(CompanionLifecycleState.Stopped))
+                logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");
+        }
+        catch (Exception exception)
+        {
+            string code = exception is TimeoutException ? "database-shutdown-timeout" :
+                exception is OperationCanceledException ? "shutdown-drain-cancelled" : "database-shutdown-failed";
+            status.Fail(code, "Shutdown did not complete successfully; unfinished operations retain their resources.", exception);
+            logger.LogError(exception, "Companion shutdown failed; successful database release has not been reported.");
+            throw;
+        }
     }
 
     private void BeginStopping()
@@ -140,19 +137,9 @@ internal sealed class CompanionRuntimeLifecycle(
         status.Transition(CompanionLifecycleState.Stopping);
     }
 
-    private void CloseDatabase()
-    {
-        admission.StopAccepting();
-        status.DatabaseClosed();
-        _store?.Dispose();
-        _store = null;
-    }
-
     public void Dispose()
     {
         admission.StopAccepting();
-        _started.Dispose();
         _stopping.Dispose();
-        CloseDatabase();
     }
 }

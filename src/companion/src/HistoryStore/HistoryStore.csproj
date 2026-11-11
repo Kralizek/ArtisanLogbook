@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="DuckDB.NET.Data.Full" />
+    <InternalsVisibleTo Include="Tests.HistoryStore" />
   </ItemGroup>
 
   <PropertyGroup>
