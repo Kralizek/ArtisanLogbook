@@ -86,7 +86,7 @@ public sealed class HistoryStoreStatusTests
                     new GameContextCraftCount(hardcore, 1)
                 }));
             });
-            Assert.That(() => reader.Write(Craft("d", retail, newer)), Throws.InstanceOf<DbException>());
+            Assert.That(() => reader.Write(Craft("d", retail, newer)), Throws.InvalidOperationException);
         }
         Assert.That(File.ReadAllBytes(_database), Is.EqualTo(before));
     }

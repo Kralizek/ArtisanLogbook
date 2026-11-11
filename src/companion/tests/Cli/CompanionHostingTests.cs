@@ -386,11 +386,14 @@ public sealed class CompanionHostingTests
         TaskCompletionSource written = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource continueTransaction = new(TaskCreationOptions.RunContinuationsAsynchronously);
         using CancellationTokenSource cancellation = new();
+        int completedPasses = 0;
         CraftHistory history = parsed with
         {
             Crafts = new EnumerationCallbackList(parsed.Crafts, () =>
             {
-                if (store.ReadStatus().TotalCraftCount == 0) return;
+                // Validation completes first; the second pass has persisted the uncommitted batch.
+                if (Interlocked.Increment(ref completedPasses) != 2) return;
+                Assert.That(store.ReadStatus().TotalCraftCount, Is.Zero);
                 written.TrySetResult();
                 continueTransaction.Task.GetAwaiter().GetResult();
             })
