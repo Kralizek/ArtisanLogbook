@@ -192,23 +192,21 @@ public sealed class HistoryStoreConcurrencyTests
         finally
         {
             release.Set();
-            await read.WaitAsync(Timeout);
+            Assert.ThrowsAsync<OperationCanceledException>(async () => await read.WaitAsync(Timeout));
             if (dispose is not null) await dispose.WaitAsync(Timeout);
             store.Dispose();
         }
-        Assert.That(read.Result, Is.EqualTo(Observation(0)));
         AssertReleased();
         using Store reopened = new(_path);
         Assert.That(reopened.ReadAll(), Has.Count.EqualTo(1));
     }
 
     [Test]
-    public async Task DisposeWaitsForActiveWriterWithoutInterruptingItsTransaction()
+    public async Task DisposeCancelsActiveWriterAndWaitsForItsRollback()
     {
         Store store = new(_path);
         using ManualResetEventSlim writing = new();
         using ManualResetEventSlim release = new();
-        using ManualResetEventSlim disposing = new();
         Task<CraftHistoryBatchWriteResult> import = Task.Run(() => store.WriteBatch(new(
             new HistoryStorePerformanceTests.PausedImport([Observation(0), Observation(1)], () =>
             {
@@ -219,24 +217,20 @@ public sealed class HistoryStoreConcurrencyTests
         try
         {
             Wait(writing);
-            dispose = Task.Run(() =>
-            {
-                disposing.Set();
-                store.Dispose();
-            });
-            Wait(disposing);
-            Assert.That(store.ReadAll(), Is.Empty);
+            store.RequestShutdown();
+            dispose = store.ShutdownAsync();
+            Assert.Throws<ObjectDisposedException>(() => store.ReadAll());
             Assert.That(dispose.IsCompleted, Is.False);
         }
         finally
         {
             release.Set();
-            await import.WaitAsync(Timeout);
+            Assert.ThrowsAsync<OperationCanceledException>(async () => await import.WaitAsync(Timeout));
             if (dispose is not null) await dispose.WaitAsync(Timeout);
             store.Dispose();
         }
         using Store reopened = new(_path);
-        Assert.That(reopened.ReadAll(), Has.Count.EqualTo(2));
+        Assert.That(reopened.ReadAll(), Is.Empty);
     }
 
     [Test]

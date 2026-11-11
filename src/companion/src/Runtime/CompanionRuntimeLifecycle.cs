@@ -44,7 +44,7 @@ internal sealed class CompanionRuntimeLifecycle(
         {
             cancellationToken.ThrowIfCancellationRequested();
             _store = services.GetRequiredService<Store>();
-            _store.ReadStatus();
+            _store.ReadStatus(cancellationToken);
             status.DatabaseOpened(_store);
             LogInstallationFlavors();
             admission.Open();
@@ -118,20 +118,16 @@ internal sealed class CompanionRuntimeLifecycle(
     public async Task StoppedAsync(CancellationToken cancellationToken)
     {
         BeginStopping();
-        // Shutdown cancellation must not close C03 beneath admitted work still unwinding.
-        await admission.DrainAsync();
-        CloseDatabase();
+        await DrainAndCloseDatabaseAsync();
         status.Transition(CompanionLifecycleState.Stopped);
         logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");
     }
 
     private async Task CleanupFailedStartupAsync()
     {
-        // Admission may have opened before startup failed or was canceled.
-        // Never close the shared store until every accepted lease is released.
+        // Startup can fail after admission opens; C03 still owns any operations that outlive the grace period.
         admission.StopAccepting();
-        await admission.DrainAsync();
-        CloseDatabase();
+        await DrainAndCloseDatabaseAsync();
     }
 
     private void BeginStopping()
@@ -143,9 +139,27 @@ internal sealed class CompanionRuntimeLifecycle(
     private void CloseDatabase()
     {
         admission.StopAccepting();
-        status.DatabaseClosed();
         _store?.Dispose();
+        status.DatabaseClosed();
         _store = null;
+    }
+
+    private async Task DrainAndCloseDatabaseAsync()
+    {
+        _store?.RequestShutdown();
+        try
+        {
+            await Task.WhenAll(admission.DrainAsync(_store?.ShutdownGracePeriod),
+                _store?.ShutdownAsync() ?? Task.CompletedTask);
+            CloseDatabase();
+        }
+        catch (TimeoutException exception)
+        {
+            status.Fail("database-shutdown-timeout",
+                "Shutdown grace expired; unfinished database operations retain ownership until they unwind.", exception);
+            logger.LogError(exception, "Companion shutdown timed out; database ownership has not been declared released.");
+            throw;
+        }
     }
 
     public void Dispose()

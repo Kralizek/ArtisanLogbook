@@ -85,9 +85,19 @@ installation discovery, one singleton C03 writer, singleton C07 importer, and
 `IHostApplicationLifetime`: startup opens and verifies C03 before successful host
 startup; ApplicationStarted reports Running, ApplicationStopping reports Stopping,
 and StoppedAsync closes the database after all workers' StopAsync calls. Disposal
-also closes the writer after partial startup failures. C03's transaction gate
-ensures disposal cannot race an in-progress transactional write. No database,
-source, or craft semantics have changed.
+also closes the writer after partial startup failures. C03 tracks admitted reads
+and writes so disposal cannot race a live connection. At `StoppedAsync`, Runtime
+requests C03 cancellation before draining residual leases; store shutdown and
+lease drains use C03's configurable grace period (five seconds by default).
+Cancellation of the host token does not bypass safe rollback/cleanup. An expired
+grace period propagates/logs `database-shutdown-timeout`, without claiming that
+database ownership was released or that the host stopped successfully. C03
+retains unfinished work and exposes `ShutdownCompletion` for eventual safe
+resource release; it never closes a connection under nonresponsive native code.
+Worker `StopAsync` remains governed by the hosting lifecycle; the database grace
+does not forcibly terminate a stuck worker. See the [HistoryStore lifecycle and
+provider guarantees](../HistoryStore/README.md#read-cancellation-and-bounded-shutdown).
+No database, source, or craft semantics have changed.
 
 DuckDB locking, not a second lock/ownership persistence system, rejects other
 processes. Short-lived CLI commands retain their own existing open/dispose
@@ -156,19 +166,24 @@ stops in reverse registration order within each phase: all `StoppingAsync` hooks
 `ApplicationStopping`, all `StopAsync` calls, then all `StoppedAsync` hooks.
 Shutdown errors are aggregated rather than skipping later phases. Runtime closes
 admission in its StoppingAsync hook and in ApplicationStopping (which may be
-signaled first by external termination), and waits for outstanding leases in
-StoppedAsync before disposing C03. Workers must stop admitting new work when
+signaled first by external termination). In StoppedAsync it requests C03 shutdown
+and waits a bounded grace period for outstanding leases and database operations.
+Workers must stop admitting new work when
 shutdown begins and drain in StopAsync; they must not defer database work to
 StoppedAsync. The guarantee does not depend on sequential StopAsync execution.
 
 Pass request/worker cancellation tokens into C07. The host's shutdown token can
 cancel worker work, but stopping does not immediately cancel every admitted
-request or dispose its connection. Drain waits even if the shutdown token is
-canceled, allowing admitted transactional work to commit or roll back before
-ownership is released. RunCompanionAsync also closes admission and drains in
-finally before host disposal after startup/shutdown failure. Workers must observe
-cancellation and release leases; an uncooperative worker can delay graceful
-shutdown, and forced termination still relies on DuckDB transactional safety.
+request or dispose its connection. Once workers have stopped, C03 shutdown
+rejects new database operations and cancels outstanding reads/cooperative batch
+writes. A residual application lease does not authorize starting new database
+work after this point. Drain respects the grace period even if the host token
+is canceled; expiry is an explicit failure, never early connection disposal.
+RunCompanionAsync also closes admission and uses a bounded drain in finally
+before host disposal after startup/shutdown failure. Workers must observe
+cancellation and release leases; an uncooperative worker's own StopAsync can
+still delay reaching the database-shutdown phase, and forced termination
+still relies on DuckDB transactional safety.
 Always run/stop the host before disposal; DI disposal alone is not worker
 shutdown. C06 adds no ingestion queue or per-flavor worker.
 

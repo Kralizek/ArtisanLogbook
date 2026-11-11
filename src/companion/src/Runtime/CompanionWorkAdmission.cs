@@ -42,9 +42,10 @@ public sealed class CompanionWorkAdmission(ILogger<CompanionWorkAdmission> logge
         }
     }
 
-    internal Task DrainAsync()
+    internal Task DrainAsync(TimeSpan? gracePeriod = null)
     {
-        lock (_gate) return _drained.Task;
+        lock (_gate)
+            return _drained.Task.WaitAsync(gracePeriod ?? ArtisanLogbook.HistoryStore.HistoryStore.DefaultShutdownGracePeriod);
     }
 
     private void Release()

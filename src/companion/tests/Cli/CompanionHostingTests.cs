@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -344,7 +345,7 @@ public sealed class CompanionHostingTests
     }
 
     [Test]
-    public async Task DrainWaitsForLeaseEvenAfterWorkersStopAndShutdownTokenIsCanceled()
+    public async Task DrainWaitsForLeaseButDatabaseRejectsNewOperationsAfterWorkersStop()
     {
         await using WebApplication app = Build();
         await app.StartAsync();
@@ -358,12 +359,17 @@ public sealed class CompanionHostingTests
             Assert.That(stopping.IsCompleted, Is.False);
             cancellation.Cancel();
             Assert.That(stopping.IsCompleted, Is.False);
-            Assert.That(store.ReadStatus().TotalCraftCount, Is.Zero);
+            Assert.That(SpinWait.SpinUntil(() =>
+            {
+                try { _ = store.ShutdownCompletion; return true; }
+                catch (InvalidOperationException) { return false; }
+            }, TimeSpan.FromSeconds(10)), Is.True);
+            Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
             Assert.ThrowsAsync<InvalidOperationException>(async () =>
                 await app.Services.GetRequiredService<CompanionRuntimeImports>().ImportSavedVariablesFileAsync("unused.lua"));
             var result = await app.Services.GetRequiredService<CompanionImportService>().ImportSavedVariablesAsync(
                 CompanionCommandAppTests.Snapshot(1, null, 1));
-            Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
+            Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Failed));
         }
         finally
         {
@@ -372,7 +378,55 @@ public sealed class CompanionHostingTests
         await stopping;
         Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
         using Store reopened = new(_database);
-        Assert.That(reopened.ReadStatus().TotalCraftCount, Is.EqualTo(1));
+        Assert.That(reopened.ReadStatus().TotalCraftCount, Is.Zero);
+    }
+
+    [Test]
+    public async Task HostReportsDatabaseShutdownTimeoutAndLateRollbackRetainsSafeOwnership()
+    {
+        WebApplicationBuilder builder = Builder();
+        builder.Services.Replace(ServiceDescriptor.Singleton<Store>(_ =>
+            new(_database, shutdownGracePeriod: TimeSpan.FromMilliseconds(100))));
+        await using WebApplication app = builder.Build();
+        await app.StartAsync();
+        Store store = app.Services.GetRequiredService<Store>();
+        CompanionWorkAdmission admission = app.Services.GetRequiredService<CompanionWorkAdmission>();
+        CraftHistory parsed = SavedVariablesReader.Parse(CompanionCommandAppTests.Snapshot(1, null, 1)).History!;
+        using ManualResetEventSlim written = new();
+        using ManualResetEventSlim release = new();
+        int passes = 0;
+        Task transaction = Task.Run(() =>
+        {
+            using IDisposable lease = admission.Admit();
+            store.WriteBatch(parsed with
+            {
+                Crafts = new EnumerationCallbackList(parsed.Crafts, () =>
+                {
+                    if (Interlocked.Increment(ref passes) != 2) return;
+                    written.Set();
+                    if (!release.Wait(TimeSpan.FromSeconds(20))) throw new TimeoutException("Test writer was not released.");
+                })
+            });
+        });
+        try
+        {
+            Assert.That(written.Wait(TimeSpan.FromSeconds(20)), Is.True);
+            Assert.ThrowsAsync<TimeoutException>(async () => await app.StopAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.That(store.ShutdownCompletion.IsCompleted, Is.False);
+            Assert.That(transaction.IsCompleted, Is.False);
+            CompanionStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>().Read();
+            Assert.That(status.LifecycleState, Is.EqualTo(CompanionLifecycleState.Failed));
+            Assert.That(status.CriticalFailure!.Code, Is.EqualTo("database-shutdown-timeout"));
+            Assert.That(_runtimeLogs, Has.None.Contains("database ownership released"));
+        }
+        finally
+        {
+            release.Set();
+            Assert.ThrowsAsync<OperationCanceledException>(async () => await transaction.WaitAsync(TimeSpan.FromSeconds(20)));
+            await store.ShutdownCompletion.WaitAsync(TimeSpan.FromSeconds(20));
+        }
+        using Store reopened = new(_database);
+        Assert.That(reopened.ReadAll(), Is.Empty);
     }
 
     [Test]

@@ -26,17 +26,79 @@ operation can see a newly committed batch; rollback, cancellation, conflicts,
 and database errors do not publish partial batches. Separate public read calls
 are separate snapshots, not a combined transaction.
 
-A short lifecycle lock admits/counts reads, including connection opening.
-Neither it nor the writer lock is held during reader SQL/materialization.
-`Dispose` waits for the current writer using the writer lock, closes admission,
-drains already-admitted reads without holding the lifecycle lock, then closes
-the writer. Concurrent disposals serialize; subsequent operations throw
-`ObjectDisposedException`. Reads can still enter while disposal is waiting for
-an active writer. Shutdown does not cancel active work and can wait indefinitely
-for it. Connection/command/materialization errors propagate; `using` and `finally`
-roll back unfinished transactions, dispose connections, and release admission.
-Read APIs remain synchronous and do not acquire new cancellation parameters;
-`WriteBatch` retains its existing cooperative cancellation checks.
+A short lifecycle lock admits/counts **all** operations, including connection
+opening and writers waiting for the writer lock. Neither it nor the writer lock
+is held during reader SQL/materialization. Connection/command/materialization
+errors propagate; `using` and `finally` roll back unfinished transactions,
+dispose connections, and release admission.
+
+### Read cancellation and bounded shutdown
+
+`Read`, `ReadAll`, `ReadDimensions`, and `ReadStatus` accept an optional
+`CancellationToken`, preserving existing callers and return types.
+`GetSchemaVersion(CancellationToken = default)` is the cancellable counterpart
+of the unchanged `SchemaVersion` property. A pre-cancelled call never enters
+admission. Cancellation is checked before/after opening, before each SELECT,
+while iterating rows, between materialization statements, and before completing
+the operation. Connection opening, an individual JSON deserialization, and
+transaction cleanup do not have a force-cancellation API.
+
+Each read links the caller token to store shutdown and registers interruption
+only against its **own** connection. Native interrupt signaling runs on the
+cancelling/timer thread, not by cancelling a wrapper task while SQL continues.
+After cancellation, a 10-ms retry timer covers DuckDB resetting its interrupt
+flag during query startup. The timer is dormant before cancellation. Registration
+disposal and a short interrupt lock ensure no interrupt can race transaction
+cleanup or disconnection; queued timer callbacks cannot touch the connection
+after the scope ends. Interrupts stop before read COMMIT/rollback. Provider
+interrupt errors become `OperationCanceledException`, retaining the caller token
+when it was cancelled. No reader ever interrupts the writer or another reader.
+Cancellation racing successful completion may lose to completion; a cancelled
+read never returns a partially constructed result.
+
+`RequestShutdown()` atomically closes admission and signals cancellation without
+waiting for the writer lock. `Dispose()` and `ShutdownAsync()` then allow a
+**five-second grace period by default**, configurable using the constructor's
+`shutdownGracePeriod` (positive and finite). `ShutdownAsync` is asynchronous
+waiting for ownership release, not asynchronous native database execution.
+All callers share one cleanup task. Shutdown cancels active reads, allows
+admitted writers to unwind/roll back, and disposes the writer only after every
+operation has released its own resources. New operations throw
+`ObjectDisposedException`, including while an active writer is still running.
+
+If work or native cleanup does not finish within the grace period,
+`Dispose`/`ShutdownAsync` throws **`TimeoutException`**, not a success-shaped
+return. The store remains permanently closed to new work. It retains its
+operation count, connections, cancellation sources and cleanup task, rather than
+closing a connection underneath native code. **`ShutdownCompletion`** (available
+after shutdown is requested) reports actual eventual resource release or cleanup
+failure. When the last operation finally unwinds, cleanup closes the writer and
+completes that task even if the original shutdown call timed out. Repeated
+shutdown calls observe the same cleanup task with their own bounded wait.
+Do not reopen/replace the store or claim file ownership released until that
+task succeeds. If native work never returns, ownership remains retained; process
+termination is the ultimate external boundary, not a feature provided here.
+Thread scheduling means the grace period is a timeout policy, not a hard
+real-time guarantee.
+
+Writers retain their existing transaction boundaries and do not receive native
+interrupts. `WriteBatch` links its existing cooperative token to shutdown and
+checks between observations/before commit; `Write`/`WriteDimensions` check store
+shutdown before work and before committing mutations. A commit already racing
+cancellation can win. Validation/reconciliation, a blocked input enumerator,
+an active SQL statement/commit, or a queued writer may not respond immediately;
+they remain tracked and can cause the same explicit shutdown timeout. No C11
+scheduling/coordination changes or forced writer rollback/disconnection occur.
+
+Runtime first stops application admission and its hosted workers as before.
+After workers' `StopAsync`, `StoppedAsync` requests store shutdown **before**
+draining any residual application leases; that drain is bounded by the same
+grace period and is not bypassed by an already-cancelled host token. Timeout
+sets/logs `database-shutdown-timeout` and propagates; Runtime does not emit a
+successful stopped/ownership-released message. Failed-startup/final admission
+drains are also bounded. Database ownership is no longer reported closed before
+store disposal succeeds. This does not redesign worker stopping: a worker's
+own non-cooperative `StopAsync` still needs its host-level shutdown policy.
 
 ### Provider investigation (DuckDB.NET.Data.Full 1.5.6.1)
 
@@ -75,8 +137,38 @@ Confirmed against provider release commit
   Deterministic tests verify readers alongside a held writer transaction.
 - Ordinary ADO.NET open/execute methods are synchronous here; the provider does
   not override them with asynchronous native execution. `Cancel` interrupts the
-  connection, not an isolated operation sharing that connection. No cosmetic
-  async APIs or new cancellation model are introduced.
+  connection, not an isolated operation sharing that connection. Read execution
+  stays synchronous; the cancellation support above uses native interruption.
+
+Cancellation evidence for the bundled **DuckDB v1.5.6** (also checked at runtime):
+
+- Provider
+  [`DuckDBCommand.Cancel`](https://github.com/Giorgi/DuckDB.NET/blob/7ac3220f8fe5eaba150ac8172c1f3bdbabf7a5c5/DuckDB.NET.Data/DuckDBCommand.cs)
+  calls `NativeConnection.Interrupt()`, bound to
+  [`duckdb_interrupt`](https://github.com/Giorgi/DuckDB.NET/blob/7ac3220f8fe5eaba150ac8172c1f3bdbabf7a5c5/DuckDB.NET.Bindings/NativeMethods/NativeMethods.Startup.cs).
+  DuckDB's [C API](https://duckdb.org/docs/1.5/clients/c/connect#duckdb_interrupt)
+  describes interruption of a running query on the specified connection.
+- Native
+  [`ClientContext::Interrupt`](https://github.com/duckdb/duckdb/blob/v1.5.6/src/main/client_context.cpp#L1193)
+  sets an
+  [`atomic<bool>`](https://github.com/duckdb/duckdb/blob/v1.5.6/src/include/duckdb/main/client_context.hpp#L81).
+  It does not take the query-execution lock or destroy connection state.
+  Cross-thread interrupt signaling while synchronous execution/fetch is active
+  is therefore supported; destruction underneath execution is **not**.
+  [`InitialCleanup`](https://github.com/duckdb/duckdb/blob/v1.5.6/src/main/client_context.cpp#L693)
+  resets interruption at query startup, motivating the cancellation retry.
+- Provider
+  [`DuckDBResultExtensions.ThrowOnError`](https://github.com/Giorgi/DuckDB.NET/blob/7ac3220f8fe5eaba150ac8172c1f3bdbabf7a5c5/DuckDB.NET.Data/Extensions/DuckDBResultExtensions.cs)
+  translates native `Interrupt` errors into `OperationCanceledException` (without
+  a token). Tests verify actual executing aggregate SQL and streaming reads stop,
+  dispose their readers, roll back, and can query again on the same connection.
+  HistoryStore still disposes cancelled read connections rather than reusing them.
+- An interrupt is a cooperative signal, **not** a deadline/forced thread kill.
+  No provider/native guarantee makes every optimizer, extension, UDF, I/O,
+  open/close, or blocked managed callback return within a fixed duration.
+  A real SQL scalar callback held by a test event demonstrably survives
+  interruption and the shutdown grace period, then unwinds safely after release.
+  The timeout/retained-ownership contract exposes this limit instead of hiding it.
 
 `readOnly: true` remains suitable for offline status/inspection: if first to open
 the file, it selects physical `READ_ONLY` mode without creating/migrating schema.
@@ -98,6 +190,12 @@ multi-statement read; bounded overlapping readers/writers; read failures;
 disposal during reads/writes; failed connection opening and recovery; both
 provider access-mode opening orders; and release of the final cached database
 handle after shutdown. Internal read checkpoints expose no mutable connections.
+Cancellation tests additionally cover pre-admission cancellation; cancellation
+before opening and between every multi-statement read boundary; native aggregate
+and streaming interruption; query-startup cancellation; per-reader isolation;
+registration cleanup/recovery; cancellation racing multiple disposals; timed-out
+readers/writers; and a non-cooperative callback executing inside native SQL.
+Hosting tests verify timeout failure reporting and late transaction rollback.
 
 Run the opt-in real-DuckDB workload from `src/companion`:
 
@@ -106,7 +204,7 @@ dotnet test tests/HistoryStore/Tests.HistoryStore.csproj -c Release \
   --filter FullyQualifiedName~HistoryStorePerformanceTests --logger 'console;verbosity=normal'
 ```
 
-One before/after sample on Linux x64, .NET SDK 10.0.401, against baseline
+Original pre-cancellation before/after sample on Linux x64, .NET SDK 10.0.401, against baseline
 `dba2961`, using the same benchmark source, native provider, temporary local file,
 and 1,000 observations (two reagents, two outputs, provenance each):
 
@@ -135,6 +233,13 @@ large evidence payloads, and is not a Windows performance result. Long snapshots
 can retain MVCC versions and consume memory; unrestricted caller concurrency
 still consumes DuckDB/OS resources. No unmeasured resource-exhaustion or absolute
 latency guarantee is claimed.
+
+The same unchanged benchmark after adding cancellation/lifecycle tracking
+measured: seed 17,619 ms; 100 reads 491 ms; four x 100 reads 480 ms;
+ReadAll 4,066 ms; 500 open/count/dispose 266 ms; 500 reused counts 237 ms;
+100-craft batch 2,649 ms; read during paused import 5.0 ms. This is another
+single shared-environment sample, not a new statistical comparison; the original
+results above are preserved.
 
 ## Physical schema (version 2)
 
