@@ -5,6 +5,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Dapper" />
     <PackageReference Include="DuckDB.NET.Data.Full" />
     <InternalsVisibleTo Include="Tests.HistoryStore" />
   </ItemGroup>

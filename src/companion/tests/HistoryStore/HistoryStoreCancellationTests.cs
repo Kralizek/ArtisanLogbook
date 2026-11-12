@@ -164,6 +164,22 @@ public sealed class HistoryStoreCancellationTests
         AssertReleased();
     }
 
+    [Test]
+    public void CancellationDuringDimensionMaterializationStopsTheRead()
+    {
+        using CancellationTokenSource cancellation = new();
+        using Store store = new(_path)
+        {
+            ReadCheckpoint = boundary =>
+            {
+                if (boundary == "CharacterRow") cancellation.Cancel();
+            }
+        };
+        Assert.That(store.Write(Observation).IsSuccessful, Is.True);
+        Assert.Throws<OperationCanceledException>(() => store.ReadDimensions(cancellation.Token));
+        Assert.That(store.ReadStatus().TotalCraftCount, Is.EqualTo(1));
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task ProviderCancelInterruptsExecutingSqlAndConnectionCanBeReused(bool streaming)

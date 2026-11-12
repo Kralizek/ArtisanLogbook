@@ -26,6 +26,12 @@ operation can see a newly committed batch; rollback, cancellation, conflicts,
 and database errors do not publish partial batches. Separate public read calls
 are separate snapshots, not a combined transaction.
 
+Ordinary reads and writes use Dapper directly with the owning connection and
+transaction; row collections are consumed within that scope with cancellation
+checks during iteration. Schema initialization and validation retain direct
+ADO.NET, as does connection-local native interruption. Stored timestamps,
+decimal quantities and evidence retain their existing representations.
+
 A short lifecycle lock admits/counts **all** operations, including connection
 opening and writers waiting for the writer lock. Neither it nor the writer lock
 is held during reader SQL/materialization. Connection/command/materialization
