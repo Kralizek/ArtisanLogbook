@@ -42,6 +42,11 @@ public sealed class HistoryStorePerformanceTests
             })));
             Report("4 x 100 reads", parallel.Elapsed);
             Measure("ReadAll 1000 crafts", () => Assert.That(store.ReadAll(), Has.Count.EqualTo(1000)));
+            Measure("100 dimension reads", () =>
+            {
+                for (int i = 0; i < 100; i++)
+                    Assert.That(store.ReadDimensions().Characters, Has.Count.EqualTo(1));
+            });
 
             using DuckDBConnection reused = new($"Data Source={path}");
             reused.Open();
