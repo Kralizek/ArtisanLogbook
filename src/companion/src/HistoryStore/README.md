@@ -44,6 +44,14 @@ snapshot; individual page requests do not. Imports after a page may appear on
 later pages only if their ordering position is after that page's continuation.
 Unobserved child collections remain null, distinct from observed empty ones.
 
+`QueryCharacterCraftPages` batches up to 50 independently bounded character
+pages in partitioned SQL, followed by shared batched child materialization in
+the same snapshot. Dimension page queries use context-aware keyset positions,
+and dimension batch reads match exact context/identity pairs rather than
+independent sets of contexts and IDs. Recipe slot reads use the canonical
+schematic table, not historical craft evidence. Each such operation owns one
+read connection and snapshot and accepts cancellation.
+
 A short lifecycle lock admits/counts **all** operations, including connection
 opening and writers waiting for the writer lock. Neither it nor the writer lock
 is held during reader SQL/materialization. Connection/command/materialization

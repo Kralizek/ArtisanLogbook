@@ -72,6 +72,12 @@ public sealed partial class HistoryStore
         AddFilter(query.ProfessionExpansionKey, " AND c.ProfessionExpansionKey = $ExpansionKey", "ExpansionKey");
         AddFilter(query.InputItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $InputItemId)", "InputItemId");
         AddFilter(query.OutputItemId, " AND EXISTS (SELECT 1 FROM CraftOutput o WHERE o.CraftKey = c.CraftKey AND o.ItemId = $OutputItemId)", "OutputItemId");
+        if (query.Identity is not null)
+        {
+            sql.Append(" AND i.IdentityOrigin = $IdentityOrigin AND i.IdentityObservation = $IdentityObservation");
+            parameters.Add("IdentityOrigin", query.Identity.Origin);
+            parameters.Add("IdentityObservation", query.Identity.Observation);
+        }
         if (query.From is DateTimeOffset from)
         {
             sql.Append($" AND ({timeKey} > CAST($From AS TIMESTAMPTZ) OR ({timeKey} = CAST($From AS TIMESTAMPTZ) AND {tickKey} >= SUBSTRING($From, 27, 1)))");
@@ -111,8 +117,23 @@ public sealed partial class HistoryStore
         if (hasNext) rows.RemoveAt(first);
         OnReadCheckpoint("CraftPageHeaders", transaction, token);
         if (rows.Count == 0) return new([], false, null);
+        IReadOnlyList<CraftObservation> crafts = MaterializeCanonicalCrafts(rows, transaction, token);
+        CraftObservation last = crafts[^1];
+        return new(crafts, hasNext, new(last.RecordedAt, last.Identity));
 
-        long[] keys = rows.Select(row => row.CraftKey).ToArray();
+        void AddFilter<T>(T? value, string predicate, string parameter)
+        {
+            if (value is null) return;
+            sql.Append(predicate);
+            parameters.Add(parameter, value);
+        }
+    }
+
+    private static IReadOnlyList<CraftObservation> MaterializeCanonicalCrafts(
+        IReadOnlyList<CanonicalCraftRow> rows, DbTransaction transaction, CancellationToken token)
+    {
+        if (rows.Count == 0) return [];
+        long[] keys = rows.Select(row => row.CraftKey).Distinct().ToArray();
         Dictionary<long, List<CraftReagent>> reagents = [];
         foreach ((long CraftKey, int ItemId, long? Allocated, string? Returned) row in
             transaction.Connection!.Query<(long, int, long?, string?)>("""
@@ -158,21 +179,14 @@ public sealed partial class HistoryStore
                 InputsComplete: row.InputsComplete, ResourcefulnessComplete: row.ResourcefulnessComplete,
                 OutputsComplete: row.OutputsComplete));
         }
-        CraftObservation last = crafts[^1];
-        return new(crafts, hasNext, new(last.RecordedAt, last.Identity));
-
-        void AddFilter<T>(T? value, string predicate, string parameter)
-        {
-            if (value is null) return;
-            sql.Append(predicate);
-            parameters.Add(parameter, value);
-        }
+        return crafts;
     }
 
     private static string Timestamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
 
     private sealed class CanonicalCraftRow
     {
+        public int BatchIndex { get; set; }
         public long CraftKey { get; set; }
         public string IdentityOrigin { get; set; } = null!;
         public string IdentityObservation { get; set; } = null!;

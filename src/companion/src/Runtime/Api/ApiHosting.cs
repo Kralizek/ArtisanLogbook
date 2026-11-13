@@ -1,4 +1,7 @@
 using ArtisanLogbook.CompanionApi.Endpoints;
+using ArtisanLogbook.Runtime.GraphQL;
+
+using HotChocolate.AspNetCore;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics;
@@ -24,6 +27,42 @@ internal static class CompanionApiHosting
         services.AddSingleton<ImportOperationLimits>();
         services.AddSingleton<ImportOperations>();
         services.AddHostedService(provider => provider.GetRequiredService<ImportOperations>());
+        services.AddDataLoader<CharacterLoader>();
+        services.AddDataLoader<CharacterCraftPageLoader>();
+        services.AddDataLoader<RecipeLoader>();
+        services.AddDataLoader<ProfessionLoader>();
+        services.AddDataLoader<ExpansionLoader>();
+        services.AddDataLoader<ItemLoader>();
+        services.AddDataLoader<RecipeSlotLoader>();
+        services.AddGraphQLServer(maxAllowedRequestSize: LocalApiSecurityMiddleware.MaxGraphQLBodyBytes)
+            .AddQueryType<HistoryQuery>()
+            .AddErrorFilter<HistoryErrorFilter>(provider => new(
+                provider.GetRootServiceProvider().GetRequiredService<ILogger<HistoryErrorFilter>>()))
+            .DisableIntrospection(false)
+            .AddMaxExecutionDepthRule(12)
+            .ModifyParserOptions(options => options.MaxAllowedFields = 100)
+            .ModifyRequestOptions(options =>
+            {
+                options.ExecutionTimeout = TimeSpan.FromSeconds(30);
+                options.IncludeExceptionDetails = false;
+            })
+            .ModifyCostOptions(options =>
+            {
+                options.EnforceCostLimits = true;
+                options.ApplySlicingArgumentDefaultValue = true;
+                options.DefaultListSize = 20;
+                options.MaxFieldCost = 1_000_000;
+                options.MaxTypeCost = 1_000_000;
+            })
+            .ModifyServerOptions(options =>
+            {
+                options.EnableGetRequests = false;
+                options.EnableSchemaRequests = false;
+                options.EnableMultipartRequests = false;
+                options.Batching = AllowedBatching.None;
+                options.MaxBatchSize = 1;
+                options.MaxConcurrentExecutions = 8;
+            });
         services.AddTransient<IStartupFilter, CompanionApiStartupFilter>();
         return services;
     }
@@ -60,6 +99,7 @@ internal static class CompanionApiHosting
             {
                 endpoints.MapMinimalOpenApiEndpoints();
                 endpoints.MapOpenApiSchemas();
+                endpoints.MapGraphQLHttp("/graphql");
             });
             next(app);
         };

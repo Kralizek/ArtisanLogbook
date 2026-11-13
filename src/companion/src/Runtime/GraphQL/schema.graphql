@@ -1,0 +1,382 @@
+schema {
+  query: Query
+}
+
+type Query {
+  craft(id: ID!): Craft @cost(weight: "10")
+  crafts(first: Int! = 20, after: String, filter: CraftFilterInput): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  character(id: ID!): Character @cost(weight: "10")
+  characters(first: Int! = 20, after: String): CharacterConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  recipe(id: ID!): Recipe @cost(weight: "10")
+  recipes(first: Int! = 20, after: String): RecipeConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  profession(id: ID!): Profession @cost(weight: "10")
+  professions(first: Int! = 20, after: String): ProfessionConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  item(id: ID!): Item @cost(weight: "10")
+  items(first: Int! = 20, after: String): ItemConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  expansion(id: ID!): Expansion @cost(weight: "10")
+  expansions(first: Int! = 20, after: String): ExpansionConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  gameContext(id: ID!): GameContext @cost(weight: "10")
+  gameContexts(first: Int! = 20, after: String): GameContextConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+}
+
+type Character {
+  crafts(first: Int! = 20, after: String): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  id: ID!
+  name: String
+  classFile: String
+  game: GameContext!
+}
+
+type CharacterConnection {
+  nodes: [Character!]!
+  pageInfo: HistoryPageInfo!
+}
+
+type Craft {
+  character: Character! @cost(weight: "10")
+  recipe: Recipe @cost(weight: "10")
+  profession: Profession @cost(weight: "10")
+  professionExpansion: Expansion @cost(weight: "10")
+  id: ID!
+  recordedAt: DateTime!
+  game: GameContext!
+  concentrationSpent: Int
+  ingenuityRefund: Int
+  concentrationCurrencyId: Int
+  hasIngenuityProc: Boolean
+  hasResourcefulnessProc: Boolean
+  multicraftBonus: Int
+  inputsComplete: Boolean
+  resourcefulnessComplete: Boolean
+  outputsComplete: Boolean
+  reagents: [CraftReagent!]
+  outputs: [CraftOutput!]
+}
+
+type CraftConnection {
+  nodes: [Craft!]!
+  pageInfo: HistoryPageInfo!
+}
+
+type CraftOutput {
+  item: Item! @cost(weight: "10")
+  quality: Int
+  quantity: Long
+}
+
+type CraftReagent {
+  item: Item! @cost(weight: "10")
+  allocatedQuantity: Long
+  returnedQuantity: Decimal
+}
+
+type Expansion {
+  recipes(first: Int! = 20, after: String): RecipeConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  crafts(first: Int! = 20, after: String): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  id: ID!
+  key: String!
+  name: String
+  game: GameContext!
+}
+
+type ExpansionConnection {
+  nodes: [Expansion!]!
+  pageInfo: HistoryPageInfo!
+}
+
+type GameContext {
+  characters(first: Int! = 20, after: String): CharacterConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  professions(first: Int! = 20, after: String): ProfessionConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  recipes(first: Int! = 20, after: String): RecipeConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  expansions(first: Int! = 20, after: String): ExpansionConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  items(first: Int! = 20, after: String): ItemConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  crafts(first: Int! = 20, after: String): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  id: ID!
+  project: Int!
+  progressionTrack: String
+}
+
+type GameContextConnection {
+  nodes: [GameContext!]!
+  pageInfo: HistoryPageInfo!
+}
+
+type HistoryPageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
+type Item {
+  consumingCrafts(first: Int! = 20, after: String): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  producingCrafts(first: Int! = 20, after: String): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  id: ID!
+  blizzardId: Int!
+  name: String
+  game: GameContext!
+}
+
+type ItemConnection {
+  nodes: [Item!]!
+  pageInfo: HistoryPageInfo!
+}
+
+type Profession {
+  parent: Profession @cost(weight: "10")
+  children(first: Int! = 20, after: String): ProfessionConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  recipes(first: Int! = 20, after: String): RecipeConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  crafts(first: Int! = 20, after: String): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  id: ID!
+  blizzardId: Int!
+  name: String
+  game: GameContext!
+}
+
+type ProfessionConnection {
+  nodes: [Profession!]!
+  pageInfo: HistoryPageInfo!
+}
+
+type Recipe {
+  profession: Profession @cost(weight: "10")
+  expansion: Expansion @cost(weight: "10")
+  reagentSlots: [RecipeReagentSlot!]! @cost(weight: "10")
+  crafts(first: Int! = 20, after: String): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  id: ID!
+  blizzardId: Int!
+  name: String
+  maxQuality: Int
+  game: GameContext!
+}
+
+type RecipeConnection {
+  nodes: [Recipe!]!
+  pageInfo: HistoryPageInfo!
+}
+
+type RecipeReagentSlot {
+  recipe: Recipe! @cost(weight: "10")
+  candidateItems: [Item!] @cost(weight: "10")
+  id: ID!
+  dataSlotType: RecipeReagentDataSlotType
+  dataSlotIndex: Int!
+  slotIndex: Int
+  reagentType: RecipeReagentType
+  isRequired: Boolean
+  requiredQuantity: Int
+}
+
+input CraftFilterInput {
+  gameId: ID
+  characterId: ID
+  recipeId: ID
+  professionId: ID
+  expansionId: ID
+  from: DateTime
+  to: DateTime
+  inputItemId: ID
+  outputItemId: ID
+}
+
+enum RecipeReagentDataSlotType {
+  REAGENT
+  MODIFIED_REAGENT
+}
+
+enum RecipeReagentType {
+  MODIFYING
+  BASIC
+  FINISHING
+  AUTOMATIC
+}
+
+"The `DateTime` scalar type represents a date and time with time zone offset information."
+scalar DateTime
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/date-time.html")
+
+"The `Decimal` scalar type represents a decimal floating-point number with high precision."
+scalar Decimal
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/decimal.html")
+
+"The `Long` scalar type represents a signed 64-bit integer."
+scalar Long
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/long.html")
+
+"The purpose of the `cost` directive is to define a `weight` for GraphQL types, fields, and arguments. Static analysis can use these weights when calculating the overall cost of a query or response."
+directive @cost(
+  "The `weight` argument defines what value to add to the overall cost for every appearance, or possible appearance, of a type, field, argument, etc."
+  weight: String!
+) on
+  | SCALAR
+  | OBJECT
+  | FIELD_DEFINITION
+  | ARGUMENT_DEFINITION
+  | ENUM
+  | INPUT_FIELD_DEFINITION
+
+"The purpose of the `@listSize` directive is to either inform the static analysis about the size of returned lists (if that information is statically available), or to point the analysis to where to find that information."
+directive @listSize(
+  "The `assumedSize` argument can be used to statically define the maximum length of a list returned by a field."
+  assumedSize: Int
+  "The `slicingArguments` argument can be used to define which of the field's arguments with numeric type are slicing arguments, so that their value determines the size of the list returned by that field. It may specify a list of multiple slicing arguments."
+  slicingArguments: [String!]
+  "The `slicingArgumentDefaultValue` argument can be used to define a default value for a slicing argument, which is used if the argument is not present in a query."
+  slicingArgumentDefaultValue: Int
+  "The `sizedFields` argument can be used to define that the value of the `assumedSize` argument or of a slicing argument does not affect the size of a list returned by a field itself, but that of a list returned by one of its sub-fields."
+  sizedFields: [String!]
+  "The `requireOneSlicingArgument` argument can be used to inform the static analysis that it should expect that exactly one of the defined slicing arguments is present in a query. If that is not the case (i.e., if none or multiple slicing arguments are present), the static analysis may throw an error."
+  requireOneSlicingArgument: Boolean = true
+) on FIELD_DEFINITION

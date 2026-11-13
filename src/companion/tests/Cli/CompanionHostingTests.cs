@@ -89,7 +89,7 @@ public sealed class CompanionHostingTests
                 Assert.That(_runtimeLogs, Has.Some.Matches<string>(line =>
                     line.StartsWith("HTTP API listening on http://127.0.0.1:", StringComparison.Ordinal) && line.EndsWith("(preferred port 48721).", StringComparison.Ordinal)));
                 Assert.That(_runtimeLogs, Does.Not.Contain("Artisan Logbook Companion started. Monitoring preference: False."));
-                Assert.That(app.Services.GetServices<IHostedService>().Count(), Is.EqualTo(4));
+                Assert.That(app.Services.GetServices<IHostedService>().Count(), Is.EqualTo(5));
                 Assert.That(app.Services.GetRequiredService<IServer>().Features
                     .Get<IServerAddressesFeature>()!.Addresses.Single(), Does.StartWith("http://127.0.0.1:"));
             });

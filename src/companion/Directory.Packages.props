@@ -6,6 +6,7 @@
   <ItemGroup>
     <PackageVersion Include="Dapper" Version="2.1.89" />
     <PackageVersion Include="DuckDB.NET.Data.Full" Version="1.5.6.1" />
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.7.5" />
     <PackageVersion Include="MinimalOpenAPI" Version="1.1.0" />
     <PackageVersion Include="System.Reactive" Version="7.0.0" />
     <PackageVersion Include="Microsoft.Reactive.Testing" Version="7.0.0" />

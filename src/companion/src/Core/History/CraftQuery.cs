@@ -10,7 +10,8 @@ public sealed record CraftQuery(
     DateTimeOffset? From = null,
     DateTimeOffset? To = null,
     int? InputItemId = null,
-    int? OutputItemId = null);
+    int? OutputItemId = null,
+    CraftIdentity? Identity = null);
 
 /// <summary>A continuation position in descending recorded-time and ascending identity order.</summary>
 public sealed record CraftPagePosition(DateTimeOffset RecordedAt, CraftIdentity Identity);
@@ -20,3 +21,9 @@ public sealed record CraftPage(
     IReadOnlyList<CraftObservation> Crafts,
     bool HasNextPage,
     CraftPagePosition? EndPosition);
+
+/// <summary>One independently bounded character-history page in a batch.</summary>
+public sealed record CharacterCraftPageRequest(
+    DimensionIdentity<CharacterIdentity> Character,
+    int First = 20,
+    CraftPagePosition? After = null);

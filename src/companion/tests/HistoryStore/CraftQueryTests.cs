@@ -167,6 +167,48 @@ public sealed class CraftQueryTests
             Is.EqualTo(new[] { "b", "a" }));
     }
 
+    [Test]
+    public void CharacterBatchPreservesIndependentPositionsAndExactContexts()
+    {
+        int batches = 0;
+        using Store store = new(_path)
+        {
+            ReadCheckpoint = checkpoint =>
+            {
+                if (checkpoint == "CharacterCraftPageHeaders") batches++;
+            }
+        };
+        DateTimeOffset instant = DateTimeOffset.Parse("2026-01-02T00:00:00Z");
+        CharacterIdentity other = new("other");
+        foreach (CraftObservation observation in new[]
+        {
+            Craft("new", instant.AddTicks(1)) with { Reagents = [new(10, 1, null)] },
+            Craft("same", instant),
+            Craft("old", instant.AddTicks(-1)),
+            Craft("other-new", instant) with { Character = other, Outputs = [new(11, null, 1)] },
+            Craft("foreign", instant) with { Game = Forever }
+        })
+            Assert.That(store.Write(observation).IsSuccessful, Is.True);
+
+        CharacterCraftPageRequest retail = new(new(Retail, Character), 1);
+        CharacterCraftPageRequest otherPage = new(new(Retail, other), 1);
+        CharacterCraftPageRequest foreign = new(new(Forever, Character), 1);
+        IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> pages = store.QueryCharacterCraftPages([retail, otherPage, foreign]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(batches, Is.EqualTo(1));
+            Assert.That(pages[retail].Crafts.Single().Identity.Observation, Is.EqualTo("new"));
+            Assert.That(pages[retail].HasNextPage, Is.True);
+            Assert.That(pages[otherPage].Crafts.Single().Outputs, Has.Count.EqualTo(1));
+            Assert.That(pages[otherPage].HasNextPage, Is.False);
+            Assert.That(pages[foreign].Crafts.Single().Identity.Observation, Is.EqualTo("foreign"));
+        });
+        CharacterCraftPageRequest second = retail with { After = pages[retail].EndPosition, First = 2 };
+        IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> continuation = store.QueryCharacterCraftPages([second, otherPage]);
+        Assert.That(continuation[second].Crafts.Select(x => x.Identity.Observation), Is.EqualTo(new[] { "same", "old" }));
+        Assert.That(continuation[second].HasNextPage, Is.False);
+    }
+
     private static CraftObservation Craft(string id, DateTimeOffset at) =>
         new(new("origin", id), Retail, at, null, Character);
 }

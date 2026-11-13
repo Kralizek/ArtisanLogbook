@@ -6,14 +6,20 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 using ArtisanLogbook.Cli;
+using ArtisanLogbook.History;
 using ArtisanLogbook.ImportService;
 using ArtisanLogbook.Runtime;
+using ArtisanLogbook.Runtime.GraphQL;
+using ArtisanLogbook.Runtime.History;
+
+using HotChocolate.Execution;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 using NUnit.Framework;
 
@@ -41,6 +47,308 @@ public sealed class CompanionApiTests
 
     [TearDown]
     public void TearDown() => Directory.Delete(_directory, recursive: true);
+
+    [Test]
+    public async Task GraphQLSchemaMatchesTheVersionControlledContract()
+    {
+        await using ApiHost host = await Start();
+        IRequestExecutor executor = await host.App.Services.GetRequestExecutorAsync();
+        string actual = executor.Schema.ToString()!.Replace("\r\n", "\n");
+        string contract = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory,
+            "../../../../../src/Runtime/GraphQL/schema.graphql"));
+        if (Environment.GetEnvironmentVariable("UPDATE_GRAPHQL_SCHEMA") == "1")
+            await File.WriteAllTextAsync(contract, actual);
+        Assert.That(File.Exists(contract), Is.True, "Generate the GraphQL schema snapshot before running the contract test.");
+        Assert.That(actual, Is.EqualTo((await File.ReadAllTextAsync(contract)).Replace("\r\n", "\n")));
+    }
+
+    [Test]
+    public async Task GraphQLQueriesCanonicalHistoryThroughTheExistingHost()
+    {
+        await using ApiHost host = await Start(configure: services =>
+            services.Replace(ServiceDescriptor.Singleton<IHistoryDimensionRepository>(provider =>
+                new CountingDimensionRepository(provider.GetRequiredService<Store>()))));
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext game = new(GameProject.Retail);
+        CharacterIdentity character = new("player");
+        CraftDimensions dimensions = new(
+            [new(game, character, "Artisan", "MAGE")],
+            [new(game, 12, "Potion", 34, "expansion")],
+            [new(game, 34, "Alchemy")],
+            [new(game, 56, "Herb"), new(game, 78, "Potion")],
+            [new(game, "expansion", "Expansion")]);
+        Assert.That(store.WriteDimensions(dimensions).IsSuccessful, Is.True);
+        CraftObservation craft = new(new("origin", "one"), game, DateTimeOffset.Parse("2026-01-02T00:00:00Z"),
+            12, character, ProfessionId: 34, ConcentrationSpent: 0, HasIngenuityProc: false,
+            Reagents: [new(56, 5_000_000_000L, 0.123456789012345678m)],
+            Outputs: [new(78, 1, 5_000_000_000L)]);
+        Assert.That(store.Write(craft).IsSuccessful, Is.True);
+        Assert.That(store.Write(craft with { Identity = new("origin", "two") }).IsSuccessful, Is.True);
+        string query = """
+            { characters(first: 10) { nodes { id name crafts(first: 20) { nodes {
+                id recordedAt concentrationSpent hasIngenuityProc recipe { name profession { name } }
+                reagents { item { name } allocatedQuantity returnedQuantity }
+                outputs { item { name } quality quantity }
+            } pageInfo { hasNextPage endCursor } } } } }
+            """;
+        using HttpResponseMessage response = await host.Post("/graphql", JsonSerializer.Serialize(new { query }));
+        string text = await response.Content.ReadAsStringAsync();
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), text);
+        JsonElement body = JsonDocument.Parse(text).RootElement;
+        Assert.That(body.TryGetProperty("errors", out _), Is.False, text);
+        JsonElement node = body.GetProperty("data").GetProperty("characters").GetProperty("nodes")[0];
+        Assert.That(node.GetProperty("name").GetString(), Is.EqualTo("Artisan"));
+        JsonElement observed = node.GetProperty("crafts").GetProperty("nodes")[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed.GetProperty("recipe").GetProperty("profession").GetProperty("name").GetString(), Is.EqualTo("Alchemy"));
+            Assert.That(observed.GetProperty("reagents")[0].GetProperty("item").GetProperty("name").GetString(), Is.EqualTo("Herb"));
+            Assert.That(observed.GetProperty("outputs")[0].GetProperty("item").GetProperty("name").GetString(), Is.EqualTo("Potion"));
+            Assert.That(observed.GetProperty("reagents")[0].GetProperty("allocatedQuantity").GetInt64(), Is.EqualTo(5_000_000_000L));
+            Assert.That(observed.GetProperty("reagents")[0].GetProperty("returnedQuantity").GetDecimal(), Is.EqualTo(0.123456789012345678m));
+            Assert.That(observed.GetProperty("outputs")[0].GetProperty("quantity").GetInt64(), Is.EqualTo(5_000_000_000L));
+            Assert.That(observed.GetProperty("concentrationSpent").GetInt32(), Is.Zero);
+            Assert.That(observed.GetProperty("hasIngenuityProc").GetBoolean(), Is.False);
+        });
+        CountingDimensionRepository dimensionsRepository =
+            (CountingDimensionRepository)host.App.Services.GetRequiredService<IHistoryDimensionRepository>();
+        Assert.That(dimensionsRepository.ItemBatchCalls, Is.EqualTo(1));
+        Assert.That(dimensionsRepository.ItemBatchKeys, Is.EqualTo(2));
+        Assert.That(dimensionsRepository.RecipeBatchCalls, Is.EqualTo(1));
+        Assert.That(dimensionsRepository.RecipeBatchKeys, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task GraphQLFiltersAndReverseNavigationUseScopedOpaqueIds()
+    {
+        await using ApiHost host = await Start();
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext retail = new(GameProject.Retail);
+        GameContext forever = new(GameProject.Forever, "track");
+        CharacterIdentity character = new("player");
+        foreach (GameContext game in new[] { retail, forever })
+        {
+            Assert.That(store.WriteDimensions(new(
+                [new(game, character, game == retail ? "Retail" : "Forever")],
+                [new(game, 1, "Recipe")], [], [new(game, 10, "Reagent")], [])).IsSuccessful, Is.True);
+            Assert.That(store.Write(new CraftObservation(new("origin", ((int)game.Project).ToString()), game,
+                DateTimeOffset.Parse("2026-01-02T00:00:00Z"), 1, character,
+                Reagents: [new(10, null, null)], Outputs: null)).IsSuccessful, Is.True);
+        }
+        JsonElement list = await GraphQL(host, "{ items(first: 10) { nodes { id name game { project } } } }");
+        JsonElement[] items = list.GetProperty("data").GetProperty("items").GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.That(items, Has.Length.EqualTo(2));
+        Assert.That(items[0].GetProperty("id").GetString(), Is.Not.EqualTo(items[1].GetProperty("id").GetString()));
+        string id = items.Single(item => item.GetProperty("game").GetProperty("project").GetInt32() == 1)
+            .GetProperty("id").GetString()!;
+        JsonElement result = await GraphQL(host, """
+            query Usage($id: ID!) {
+                item(id: $id) { name consumingCrafts(first: 10) { nodes {
+                    character { name } reagents { allocatedQuantity returnedQuantity } outputs { quantity }
+                } } }
+                crafts(filter: {inputItemId: $id}, first: 10) { nodes { character { name } } }
+            }
+            """, new { id });
+        JsonElement observed = result.GetProperty("data").GetProperty("item").GetProperty("consumingCrafts").GetProperty("nodes")[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed.GetProperty("character").GetProperty("name").GetString(), Is.EqualTo("Retail"));
+            Assert.That(observed.GetProperty("reagents")[0].GetProperty("allocatedQuantity").ValueKind, Is.EqualTo(JsonValueKind.Null));
+            Assert.That(observed.GetProperty("reagents")[0].GetProperty("returnedQuantity").ValueKind, Is.EqualTo(JsonValueKind.Null));
+            Assert.That(observed.GetProperty("outputs").ValueKind, Is.EqualTo(JsonValueKind.Null));
+            Assert.That(result.GetProperty("data").GetProperty("crafts").GetProperty("nodes").GetArrayLength(), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task GraphQLNestedCraftPagesAreIndependent()
+    {
+        await using ApiHost host = await Start(configure: services =>
+            services.Replace(ServiceDescriptor.Singleton<ICraftHistoryRepository>(provider =>
+                new CountingCraftRepository(provider.GetRequiredService<Store>()))));
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext game = new(GameProject.Retail);
+        DateTimeOffset date = DateTimeOffset.Parse("2026-01-02T00:00:00Z");
+        foreach (string character in new[] { "alice", "bob" })
+            for (int i = 0; i < 2; i++)
+                Assert.That(store.Write(new CraftObservation(new(character, i.ToString()), game, date.AddMinutes(i), null,
+                    new(character))).IsSuccessful, Is.True);
+        JsonElement result = await GraphQL(host, """
+            { characters(first: 10) { nodes { crafts(first: 1) { nodes { id } pageInfo { hasNextPage endCursor } } } } }
+            """);
+        JsonElement[] parents = result.GetProperty("data").GetProperty("characters").GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.That(parents, Has.Length.EqualTo(2));
+        foreach (JsonElement parent in parents)
+        {
+            JsonElement crafts = parent.GetProperty("crafts");
+            Assert.That(crafts.GetProperty("nodes").GetArrayLength(), Is.EqualTo(1));
+            Assert.That(crafts.GetProperty("pageInfo").GetProperty("hasNextPage").GetBoolean(), Is.True);
+            Assert.That(crafts.GetProperty("pageInfo").GetProperty("endCursor").GetString(), Is.Not.Empty);
+        }
+        CountingCraftRepository repository = (CountingCraftRepository)host.App.Services.GetRequiredService<ICraftHistoryRepository>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(repository.BatchCalls, Is.EqualTo(1));
+            Assert.That(repository.BatchedPages, Is.EqualTo(2));
+            Assert.That(repository.IndividualCalls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task GraphQLKeepsRecipeSchematicsSeparateFromObservedReagents()
+    {
+        await using ApiHost host = await Start();
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext game = new(GameProject.Retail);
+        CraftDimensions dimensions = new([], [new(game, 77, "Recipe")], [],
+            [new(game, 10, "Candidate"), new(game, 11, "Observed")], [])
+        {
+            RecipeReagentSlots =
+            [
+                new(game, 77, RecipeReagentDataSlotType.Reagent, 1, 2, RecipeReagentType.Basic, true, 3, [10])
+            ]
+        };
+        Assert.That(store.WriteDimensions(dimensions).IsSuccessful, Is.True);
+        Assert.That(store.Write(new CraftObservation(new("origin", "slot"), game,
+            DateTimeOffset.Parse("2026-01-02T00:00:00Z"), 77, new("player"), Reagents: [new(11, 1, null)])).IsSuccessful,
+            Is.True);
+        JsonElement result = await GraphQL(host, """
+            { recipes { nodes { name reagentSlots { id dataSlotType dataSlotIndex slotIndex reagentType
+                isRequired requiredQuantity recipe { id } candidateItems { blizzardId name } }
+                crafts { nodes { reagents { item { blizzardId } } } }
+            } } }
+            """);
+        JsonElement recipe = result.GetProperty("data").GetProperty("recipes").GetProperty("nodes")[0];
+        JsonElement slot = recipe.GetProperty("reagentSlots")[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(slot.GetProperty("dataSlotType").GetString(), Is.EqualTo("REAGENT"));
+            Assert.That(slot.GetProperty("requiredQuantity").GetInt32(), Is.EqualTo(3));
+            Assert.That(slot.GetProperty("candidateItems")[0].GetProperty("blizzardId").GetInt32(), Is.EqualTo(10));
+            Assert.That(recipe.GetProperty("crafts").GetProperty("nodes")[0].GetProperty("reagents")[0]
+                .GetProperty("item").GetProperty("blizzardId").GetInt32(), Is.EqualTo(11));
+        });
+    }
+
+    [Test]
+    public async Task GraphQLRejectsUnsupportedTransportsAndInvalidRequests()
+    {
+        await using ApiHost host = await Start();
+        Assert.That((await host.Http.GetAsync("/graphql?query=%7B__typename%7D")).StatusCode, Is.Not.EqualTo(HttpStatusCode.OK));
+        using HttpRequestMessage missingHeader = new(HttpMethod.Post, "/graphql")
+        {
+            Content = new StringContent("{\"query\":\"{__typename}\"}", Encoding.UTF8, "application/json")
+        };
+        Assert.That((await host.Http.SendAsync(missingHeader)).StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
+        using HttpRequestMessage crossOrigin = host.Request(HttpMethod.Post, "/graphql", "{\"query\":\"{__typename}\"}");
+        crossOrigin.Headers.Add("Origin", "http://evil.example");
+        Assert.That((await host.Http.SendAsync(crossOrigin)).StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
+        using HttpResponseMessage batch = await host.Post("/graphql", "[{\"query\":\"{__typename}\"},{\"query\":\"{__typename}\"}]");
+        string batchBody = await batch.Content.ReadAsStringAsync();
+        Assert.That(batch.StatusCode, Is.Not.EqualTo(HttpStatusCode.OK), batchBody);
+        JsonElement badId = await Json(await host.Post("/graphql", "{\"query\":\"{ item(id: \\\"bad\\\") { name } }\"}"));
+        Assert.That(badId.GetProperty("errors")[0].GetProperty("extensions").GetProperty("code").GetString(),
+            Is.EqualTo("INVALID_ID_OR_CURSOR"));
+        JsonElement badCursor = await Json(await host.Post("/graphql", "{\"query\":\"{ crafts(after: \\\"bad\\\") { nodes { id } } }\"}"));
+        Assert.That(badCursor.GetProperty("errors")[0].GetProperty("extensions").GetProperty("code").GetString(),
+            Is.EqualTo("INVALID_ID_OR_CURSOR"));
+        JsonElement badSize = await Json(await host.Post("/graphql", "{\"query\":\"{ crafts(first: 101) { nodes { id } } }\"}"));
+        Assert.That(badSize.GetProperty("errors")[0].GetProperty("extensions").GetProperty("code").GetString(),
+            Is.EqualTo("INVALID_PAGE_SIZE"));
+        using HttpResponseMessage mutation = await host.Post("/graphql", "{\"query\":\"mutation { __typename }\"}");
+        Assert.That((await Json(mutation)).TryGetProperty("errors", out _), Is.True);
+        JsonElement introspection = await GraphQL(host, "{ __schema { queryType { name } } }");
+        Assert.That(introspection.GetProperty("data").GetProperty("__schema").GetProperty("queryType").GetProperty("name").GetString(),
+            Is.EqualTo("Query"));
+        string aliases = "{ " + string.Join(" ", Enumerable.Range(0, 120).Select(i => $"a{i}: __typename")) + " }";
+        using HttpResponseMessage excessive = await host.Post("/graphql", JsonSerializer.Serialize(new { query = aliases }));
+        Assert.That(excessive.StatusCode, Is.Not.EqualTo(HttpStatusCode.OK));
+        string deep = "{ gameContexts { nodes { " +
+            string.Concat(Enumerable.Repeat("crafts(first: 1) { nodes { game { ", 5)) +
+            "id " + string.Concat(Enumerable.Repeat("} } } ", 5)) + "} } }";
+        using HttpResponseMessage deepResponse = await host.Post("/graphql", JsonSerializer.Serialize(new { query = deep }));
+        Assert.That((await Json(deepResponse)).TryGetProperty("errors", out _), Is.True);
+        const string costly = "{ characters(first: 100) { nodes { crafts(first: 100) { nodes { recipe { crafts(first: 100) { nodes { id } } } } } } } }";
+        using HttpResponseMessage costlyResponse = await host.Post("/graphql", JsonSerializer.Serialize(new { query = costly }));
+        Assert.That((await Json(costlyResponse)).GetProperty("errors")[0].GetProperty("extensions").GetProperty("code").GetString(),
+            Is.EqualTo(HotChocolate.ErrorCodes.Execution.CostExceeded));
+        using HttpRequestMessage multipart = new(HttpMethod.Post, "/graphql") { Content = new MultipartFormDataContent() };
+        multipart.Headers.Add("X-Artisan-Logbook-Client", "tests");
+        Assert.That((await host.Http.SendAsync(multipart)).StatusCode, Is.EqualTo(HttpStatusCode.UnsupportedMediaType));
+        using HttpResponseMessage restLarge = await host.Post("/api/v1/imports", "{\"padding\":\"" + new string('a', 5000) + "\"}");
+        Assert.That(restLarge.StatusCode, Is.EqualTo(HttpStatusCode.RequestEntityTooLarge));
+        JsonElement missing = await GraphQL(host, "query($id: ID!) { item(id: $id) { id } }",
+            new { id = HistoryTokens.Dimension("item", new(GameProject.Retail), "999") });
+        Assert.That(missing.GetProperty("data").GetProperty("item").ValueKind, Is.EqualTo(JsonValueKind.Null));
+        using HttpResponseMessage graphLarge = await host.Post("/graphql", "{\"query\":\"" + new string('a', 17000) + "\"}");
+        Assert.That(graphLarge.StatusCode, Is.EqualTo(HttpStatusCode.RequestEntityTooLarge));
+    }
+
+    [Test]
+    public async Task GraphQLDoesNotExposeInternalExceptionDetails()
+    {
+        CapturingGraphQLLogger logger = new();
+        await using ApiHost host = await Start(configure: services =>
+        {
+            services.Replace(ServiceDescriptor.Singleton<ICraftHistoryRepository>(new FailingCraftRepository()));
+            services.Replace(ServiceDescriptor.Singleton<ILogger<HistoryErrorFilter>>(logger));
+        });
+        using HttpResponseMessage response = await host.Post("/graphql",
+            JsonSerializer.Serialize(new { query = "{ crafts { nodes { id } } }" }));
+        string text = await response.Content.ReadAsStringAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Contain("errors"));
+            Assert.That(text, Does.Not.Contain("private-file").And.Not.Contain("SELECT secret").And.Not.Contain("stackTrace"));
+            Assert.That(logger.Exception, Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public async Task GraphQLPropagatesClientCancellationToRepository()
+    {
+        using BlockingCraftRepository repository = new();
+        await using ApiHost host = await Start(configure: services =>
+            services.Replace(ServiceDescriptor.Singleton<ICraftHistoryRepository>(repository)));
+        using CancellationTokenSource cancellation = new();
+        using HttpRequestMessage request = host.Request(HttpMethod.Post, "/graphql",
+            "{\"query\":\"{ crafts { nodes { id } } }\"}");
+        Task<HttpResponseMessage> response = host.Http.SendAsync(request, cancellation.Token);
+        try
+        {
+            Assert.That(repository.Entered.Wait(Timeout()), Is.True);
+            await cancellation.CancelAsync();
+            Assert.CatchAsync<OperationCanceledException>(async () => await response);
+            Assert.That(repository.Cancelled.Wait(Timeout()), Is.True);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+        }
+    }
+
+    [Test]
+    public async Task GraphQLRemainsAvailableWhileAnImportIsActive()
+    {
+        _settings.Save(CompanionSettings.ForRoots(_root));
+        Ledger("_retail_", "ACCOUNT1", 1);
+        await using ApiHost host = await Start(gated: true);
+        string operation = await Accept(host, "{}");
+        try
+        {
+            await host.Imports!.Entered.WaitAsync(Timeout());
+            Task<JsonElement>[] reads = Enumerable.Range(0, 3)
+                .Select(_ => GraphQL(host, "{ crafts(first: 5) { nodes { id recordedAt } } }")).ToArray();
+            JsonElement[] responses = await Task.WhenAll(reads).WaitAsync(Timeout());
+            Assert.That(responses.All(response => response.GetProperty("data").GetProperty("crafts")
+                .GetProperty("nodes").GetArrayLength() > 0), Is.True);
+        }
+        finally
+        {
+            host.Imports!.Gate.TrySetResult();
+        }
+        Assert.That((await host.WaitFor(operation)).GetProperty("status").GetString(), Is.EqualTo("Completed"));
+    }
 
     [Test]
     public async Task HealthAndStatusReportEmptyDatabaseWithVersionedJson()
@@ -619,8 +927,9 @@ public sealed class CompanionApiTests
         Assert.That((await second.Http.GetAsync("/api/v1/health")).StatusCode, Is.EqualTo(HttpStatusCode.OK));
     }
 
-    private async Task<ApiHost> Start(bool gated = false, ImportOperationLimits? limits = null, int? port = null) =>
-        await ApiHost.StartAsync(_paths, _settings, gated, limits, port);
+    private async Task<ApiHost> Start(bool gated = false, ImportOperationLimits? limits = null, int? port = null,
+        Action<IServiceCollection>? configure = null) =>
+        await ApiHost.StartAsync(_paths, _settings, gated, limits, port, configure);
 
     private string Ledger(string client, string account, int project)
     {
@@ -641,6 +950,16 @@ public sealed class CompanionApiTests
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
 
+    private static async Task<JsonElement> GraphQL(ApiHost host, string query, object? variables = null)
+    {
+        using HttpResponseMessage response = await host.Post("/graphql", JsonSerializer.Serialize(new { query, variables }));
+        string text = await response.Content.ReadAsStringAsync();
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK), text);
+        JsonElement body = JsonDocument.Parse(text).RootElement.Clone();
+        Assert.That(body.TryGetProperty("errors", out _), Is.False, text);
+        return body;
+    }
+
     private static TimeSpan Timeout() => TimeSpan.FromSeconds(30);
 
     private static int FreePort()
@@ -648,6 +967,117 @@ public sealed class CompanionApiTests
         using TcpListener listener = new(IPAddress.Loopback, 0);
         listener.Start();
         return ((IPEndPoint)listener.LocalEndpoint).Port;
+    }
+
+    private sealed class CountingCraftRepository(Store store) : ICraftHistoryRepository
+    {
+        public int BatchCalls { get; private set; }
+        public int BatchedPages { get; private set; }
+        public int IndividualCalls { get; private set; }
+
+        public CraftPage Query(CraftQuery query, int first = 20, CraftPagePosition? after = null,
+            CancellationToken cancellationToken = default)
+        {
+            IndividualCalls++;
+            return store.QueryCrafts(query, first, after, cancellationToken);
+        }
+
+        public IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> CharacterPages(
+            IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default)
+        {
+            BatchCalls++;
+            BatchedPages += requests.Count;
+            return store.QueryCharacterCraftPages(requests, cancellationToken);
+        }
+    }
+
+    private sealed class CapturingGraphQLLogger : ILogger<HistoryErrorFilter>
+    {
+        public Exception? Exception { get; private set; }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Exception = exception;
+    }
+
+    private sealed class FailingCraftRepository : ICraftHistoryRepository
+    {
+        public CraftPage Query(CraftQuery query, int first = 20, CraftPagePosition? after = null,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("SELECT secret from /private-file");
+
+        public IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> CharacterPages(
+            IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("SELECT secret from /private-file");
+    }
+
+    private sealed class BlockingCraftRepository : ICraftHistoryRepository, IDisposable
+    {
+        public ManualResetEventSlim Entered { get; } = new();
+        public ManualResetEventSlim Cancelled { get; } = new();
+
+        public CraftPage Query(CraftQuery query, int first = 20, CraftPagePosition? after = null,
+            CancellationToken cancellationToken = default)
+        {
+            Entered.Set();
+            if (!cancellationToken.WaitHandle.WaitOne(Timeout()))
+                throw new TimeoutException("GraphQL cancellation did not reach the repository.");
+            Cancelled.Set();
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("Cancellation was expected.");
+        }
+
+        public IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> CharacterPages(
+            IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public void Dispose()
+        {
+            Entered.Dispose();
+            Cancelled.Dispose();
+        }
+    }
+
+    private sealed class CountingDimensionRepository(Store store) : IHistoryDimensionRepository
+    {
+        public int ItemBatchCalls { get; private set; }
+        public int ItemBatchKeys { get; private set; }
+        public int RecipeBatchCalls { get; private set; }
+        public int RecipeBatchKeys { get; private set; }
+        public DimensionPage<CharacterDimension, CharacterIdentity> Characters(GameContext? game, int first,
+            DimensionIdentity<CharacterIdentity>? after, CancellationToken token) => store.QueryCharacters(game, first, after, token);
+        public DimensionPage<RecipeDimension, int> Recipes(RecipeQuery query, int first,
+            DimensionIdentity<int>? after, CancellationToken token) => store.QueryRecipes(query, first, after, token);
+        public DimensionPage<ProfessionDimension, int> Professions(ProfessionQuery query, int first,
+            DimensionIdentity<int>? after, CancellationToken token) => store.QueryProfessions(query, first, after, token);
+        public DimensionPage<ItemDimension, int> Items(GameContext? game, int first,
+            DimensionIdentity<int>? after, CancellationToken token) => store.QueryItems(game, first, after, token);
+        public DimensionPage<ExpansionDimension, string> Expansions(GameContext? game, int first,
+            DimensionIdentity<string>? after, CancellationToken token) => store.QueryExpansions(game, first, after, token);
+        public GameContextPage GameContexts(int first, GameContext? after, CancellationToken token) =>
+            store.QueryGameContexts(first, after, token);
+        public IReadOnlyList<CharacterDimension> Characters(IReadOnlyCollection<DimensionIdentity<CharacterIdentity>> keys, CancellationToken token) =>
+            store.ReadCharacters(keys, token);
+        public IReadOnlyList<RecipeDimension> Recipes(IReadOnlyCollection<DimensionIdentity<int>> keys, CancellationToken token)
+        {
+            RecipeBatchCalls++;
+            RecipeBatchKeys += keys.Count;
+            return store.ReadRecipes(keys, token);
+        }
+        public IReadOnlyList<ProfessionDimension> Professions(IReadOnlyCollection<DimensionIdentity<int>> keys, CancellationToken token) =>
+            store.ReadProfessions(keys, token);
+        public IReadOnlyList<ItemDimension> Items(IReadOnlyCollection<DimensionIdentity<int>> keys, CancellationToken token)
+        {
+            ItemBatchCalls++;
+            ItemBatchKeys += keys.Count;
+            return store.ReadItems(keys, token);
+        }
+        public IReadOnlyList<ExpansionDimension> Expansions(IReadOnlyCollection<DimensionIdentity<string>> keys, CancellationToken token) =>
+            store.ReadExpansions(keys, token);
+        public IReadOnlyList<RecipeReagentSlot> RecipeSlots(IReadOnlyCollection<DimensionIdentity<int>> keys, CancellationToken token) =>
+            store.ReadRecipeReagentSlots(keys, token);
+        public IReadOnlyList<GameContext> GameContexts(IReadOnlyCollection<GameContext> games, CancellationToken token) =>
+            store.ReadGameContexts(games, token);
     }
 
     private sealed class GatedImports : CompanionRuntimeImports
@@ -687,7 +1117,8 @@ public sealed class CompanionApiTests
         public GatedImports? Imports { get; init; }
 
         public static async Task<ApiHost> StartAsync(
-            ApplicationPaths paths, CompanionSettingsStore settings, bool gated, ImportOperationLimits? limits, int? port)
+            ApplicationPaths paths, CompanionSettingsStore settings, bool gated, ImportOperationLimits? limits, int? port,
+            Action<IServiceCollection>? configure = null)
         {
             WebApplicationBuilder builder = WebApplication.CreateEmptyBuilder(new()
             {
@@ -698,6 +1129,7 @@ public sealed class CompanionApiTests
             builder.ConfigureCompanionHost(configuration);
             if (port is null) builder.WebHost.UseUrls("http://127.0.0.1:0");
             builder.Services.AddArtisanLogbookCompanion(paths, configuration);
+            configure?.Invoke(builder.Services);
             if (gated)
                 builder.Services.Replace(ServiceDescriptor.Singleton<CompanionRuntimeImports>(provider =>
                     new GatedImports(provider.GetRequiredService<CompanionWorkAdmission>(),

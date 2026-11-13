@@ -13,6 +13,7 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
 {
     public const string ClientHeader = "X-Artisan-Logbook-Client";
     public const int MaxRequestBodyBytes = 4096;
+    public const int MaxGraphQLBodyBytes = 16384;
 
     private static readonly string[] LoopbackHosts = ["127.0.0.1", "localhost", "[::1]"];
 
@@ -65,14 +66,15 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
                     "The request Content-Type must be application/json.");
                 return;
             }
-            if (request.ContentLength is null or > MaxRequestBodyBytes)
+            int maximumBodyBytes = request.Path == "/graphql" ? MaxGraphQLBodyBytes : MaxRequestBodyBytes;
+            if (request.ContentLength is null || request.ContentLength > maximumBodyBytes)
             {
                 await Reject(context,
                     request.ContentLength is null ? StatusCodes.Status411LengthRequired : StatusCodes.Status413PayloadTooLarge,
                     request.ContentLength is null ? "content-length-required" : "request-too-large",
                     request.ContentLength is null
                         ? "A Content-Length header is required."
-                        : $"The request body must not exceed {MaxRequestBodyBytes} bytes.");
+                        : $"The request body must not exceed {maximumBodyBytes} bytes.");
                 return;
             }
         }

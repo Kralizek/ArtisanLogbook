@@ -6,6 +6,9 @@ implemented with ASP.NET Core Minimal APIs and **MinimalOpenAPI**: the contract 
 `src/companion/src/Runtime/Api/Contracts/openapi.yaml` generates the endpoint
 base classes, and the same document is published by the running host.
 
+The same host exposes canonical crafting history through the separate read-only
+[GraphQL API](graphql.md); it does not replace these operational endpoints.
+
 ## Starting the API and port selection
 
 ```bash
@@ -159,7 +162,7 @@ The API is a privileged local interface and defends against browser-driven acces
 
 - Only `Host` values `127.0.0.1`, `localhost` and `[::1]` are accepted (DNS-rebinding defense).
 - Requests with a cross-site `Sec-Fetch-Site` or a foreign `Origin` are rejected with 403. CORS is not enabled, so browsers cannot read responses cross-origin.
-- `POST` and `PUT` require the `X-Artisan-Logbook-Client` header (any non-empty value), which cross-site forms cannot send and which forces a CORS preflight that is denied, plus `Content-Type: application/json`, a `Content-Length` and a body of at most 4 KiB. Other mutation methods return 405.
+- `POST` and `PUT` require the `X-Artisan-Logbook-Client` header (any non-empty value), which cross-site forms cannot send and which forces a CORS preflight that is denied, plus `Content-Type: application/json` and a `Content-Length`. The REST body limit is 4 KiB; `/graphql` has a 16 KiB limit. Other mutation methods return 405.
 - Clients cannot supply paths; unknown or malformed source ids are rejected.
 - Responses carry `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.
 
