@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { readFile, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -66,3 +66,21 @@ assert.doesNotMatch(
   "An unchanged build must not restore or bundle the frontend again.",
 );
 console.log("Unchanged incremental build skipped npm restore and bundling.");
+
+const sourceIndex = path.join(root, "web", "index.html");
+const timestamps = await stat(sourceIndex);
+try {
+  const now = new Date();
+  await utimes(sourceIndex, now, now);
+  build();
+  assert.doesNotMatch(
+    build(),
+    /artisan-logbook-web@.* (?:build|postinstall)/,
+    "Unchanged asset names must not leave the output-list timestamp stale.",
+  );
+  console.log(
+    "Source timestamp changes do not cause repeated frontend builds.",
+  );
+} finally {
+  await utimes(sourceIndex, timestamps.atime, timestamps.mtime);
+}

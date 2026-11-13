@@ -38,7 +38,7 @@
       <BuiltFrontendOutput Include="$(WebDirectory)dist/**/*" />
     </ItemGroup>
     <WriteLinesToFile File="$(WebDirectory)node_modules/.companion-outputs" Lines="@(BuiltFrontendOutput->'%(FullPath)')"
-                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+                      Overwrite="true" />
   </Target>
   <!-- Enumerate after Vite, not during project evaluation on a clean checkout. -->
   <Target Name="IncludeFrontend" BeforeTargets="_CalculateEmbeddedFilesManifestInputs;AssignTargetPaths" DependsOnTargets="BuildFrontend"
