@@ -60,6 +60,11 @@ MSBuild/npm restore invocations concurrently against the same checkout: npm ci
 replaces node_modules. Parallel project builds in one solution graph share the
 single WebAssets project normally.
 
+The existing `dotnet pack --no-build` tool-package workflow remains supported
+after a normal production build. The pinned .NET SDK also routes tool packing
+through publish targets; the publish guard distinguishes that SDK packing mode
+from an executable publish rather than breaking the existing package pipeline.
+
 Only GET/HEAD `/`, `/history` and `/history/` fall back to the document. The API,
 GraphQL, OpenAPI, unknown routes and missing assets do not fall back. Add known
 routes explicitly when adding browser pages. HTML and hashed assets currently
