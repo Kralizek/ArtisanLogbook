@@ -1,6 +1,7 @@
 using System.Reactive.Concurrency;
 
 using ArtisanLogbook.ImportService;
+using ArtisanLogbook.Runtime.History;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -22,7 +23,7 @@ public static class CompanionHostingExtensions
     {
         CompanionHttpEndpoint endpoint = CompanionHttpEndpoint.Select(configuration.EffectiveSettings.Http.PreferredPort);
         builder.Services.AddSingleton(endpoint);
-        builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = LocalApiSecurityMiddleware.MaxRequestBodyBytes)
+        builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = LocalApiSecurityMiddleware.MaxGraphQLBodyBytes)
             .UseUrls(endpoint.RequestedUrl);
         builder.Host.UseConsoleLifetime();
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
@@ -87,6 +88,8 @@ public static class CompanionHostingExtensions
         services.AddSingleton(_ => new MonitoringCheckpointStore(configuration.DatabasePath + ".monitoring.json"));
         services.AddSingleton<MonitoringCheckpoints>();
         services.AddSingleton<Store>(_ => new Store(configuration.DatabasePath));
+        services.AddSingleton<ICraftHistoryRepository, CraftHistoryRepository>();
+        services.AddSingleton<IHistoryDimensionRepository, HistoryDimensionRepository>();
         services.AddSingleton<CompanionImportService>();
         services.AddSingleton<CompanionApplicationStatus>();
         services.AddSingleton<CompanionWorkAdmission>();

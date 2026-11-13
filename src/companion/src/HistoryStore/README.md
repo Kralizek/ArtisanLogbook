@@ -10,7 +10,7 @@ The store keeps one dedicated writer connection alive for its entire lifetime.
 are unchanged. Schema initialization/validation finishes before the constructor
 returns. No migration or schema change is required for existing schema-v2 files.
 
-`Read`, `ReadAll`, `ReadDimensions`, `ReadStatus`, and `SchemaVersion` each open
+`Read`, `ReadAll`, `ReadDimensions`, `ReadStatus`, `QueryCrafts`, and `SchemaVersion` each open
 and dispose their own connection. No connection is exposed to callers or shared
 between operations. Readers on a writable store use the same ordinary access
 mode as the writer, not a separately opened physically read-only database.
@@ -32,6 +32,37 @@ checks during iteration. Schema initialization and validation retain direct
 ADO.NET, as does connection-local native interruption. Stored timestamps,
 decimal quantities and evidence retain their existing representations.
 
+`QueryCrafts` accepts immutable `CraftQuery` criteria and returns a bounded page
+of `CraftQueryProjection` values. Each projection wraps the canonical facts
+needed for query results but intentionally excludes recorder evidence and
+provenance; its distinct type prevents accidental use as a complete persisted
+`CraftObservation` without an explicit access to `Facts`. Persistence still
+accepts complete `CraftObservation` values; if a caller explicitly unwraps and
+rewrites a projection, reconciliation treats missing evidence/provenance as
+unknown and preserves what was already stored. Character, recipe,
+profession, expansion and item filters require a game context. Date bounds are
+inclusive; results are ordered by recorded instant descending, then canonical
+origin and observation ascending. Timestamp ordering preserves 100-nanosecond
+precision even across differing UTC offsets. `CraftPagePosition` is a typed
+continuation position, not a serialized client cursor. Page sizes are 1–100
+(default 20). Header selection and batched reagent/output reads share one
+snapshot; individual page requests do not. Imports after a page may appear on
+later pages only if their ordering position is after that page's continuation.
+Unobserved child collections remain null, distinct from observed empty ones.
+
+Recipe and item dimension queries accept optional case-insensitive literal
+substring name searches. Empty searches are ignored; `%` and `_` are ordinary
+characters rather than SQL wildcards. Search criteria remain parameterized and
+combine with game context and recipe profession/expansion filters.
+
+`QueryCharacterCraftPages` batches up to 50 independently bounded character
+pages in partitioned SQL, followed by shared batched child materialization in
+the same snapshot. Dimension page queries use context-aware keyset positions,
+and dimension batch reads match exact context/identity pairs rather than
+independent sets of contexts and IDs. Recipe slot reads use the canonical
+schematic table, not historical craft evidence. Each such operation owns one
+read connection and snapshot and accepts cancellation.
+
 A short lifecycle lock admits/counts **all** operations, including connection
 opening and writers waiting for the writer lock. Neither it nor the writer lock
 is held during reader SQL/materialization. Connection/command/materialization
@@ -40,7 +71,7 @@ dispose connections, and release admission.
 
 ### Read cancellation and bounded shutdown
 
-`Read`, `ReadAll`, `ReadDimensions`, and `ReadStatus` accept an optional
+`Read`, `ReadAll`, `ReadDimensions`, `ReadStatus`, and `QueryCrafts` accept an optional
 `CancellationToken`, preserving existing callers and return types.
 `GetSchemaVersion(CancellationToken = default)` is the cancellable counterpart
 of the unchanged `SchemaVersion` property. A pre-cancelled call never enters

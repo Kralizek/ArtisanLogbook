@@ -70,7 +70,7 @@ public sealed record CraftHistoryBatchWriteResult(
 }
 
 /// <summary>Persists canonical craft observations in a local DuckDB database.</summary>
-public sealed class HistoryStore : IDisposable, IAsyncDisposable
+public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
 {
     private const int CurrentSchemaVersion = 2;
     private const int EvidenceFormatVersion = 1;

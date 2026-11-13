@@ -3,6 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <HotChocolateImplicitUsings>disable</HotChocolateImplicitUsings>
     <AssemblyName>ArtisanLogbook.Companion.Runtime</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
@@ -12,6 +13,7 @@
     <Using Include="Microsoft.AspNetCore.Routing" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="MinimalOpenAPI" />
+    <PackageReference Include="HotChocolate.AspNetCore" />
     <PackageReference Include="System.Reactive" />
     <ProjectReference Include="../ImportService/ImportService.csproj" />
     <OpenApi Include="Api/Contracts/openapi.yaml" Namespace="CompanionApi" PublishAs="/openapi/v1.yaml"
