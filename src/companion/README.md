@@ -23,7 +23,8 @@ Failures and discovery diagnostics remain visible in both modes.
 
 ## Get started
 
-The CLI currently requires the **.NET 10 SDK** to build from source.
+Building from source requires the **.NET 10 SDK** and **Node.js 26.13.1 LTS**
+with npm 11. Node is build/development tooling only, not a runtime dependency.
 
 From `src/companion`:
 
@@ -76,9 +77,9 @@ Older settings with omitted monitoring preferences use the new default without
 being rewritten. An explicit saved `"enabled": false` remains disabled.
 
 The host binds loopback only and serves the [local HTTP API](../../docs/companion/api.md)
-(`/api/v1`, OpenAPI at `/openapi/v1.yaml`); the URL is printed at startup. It has no
-browser pages yet. It does **not** provide a web interface, analytics
-dashboard, automatic synchronization, restoration into WoW, or OS service
+(`/api/v1`, OpenAPI at `/openapi/v1.yaml`); the URL is printed at startup. It has
+browser overview and recent-crafts pages at `/` and `/history`. It does **not**
+provide the complete C12 analytics dashboard, automatic synchronization, restoration into WoW, or OS service
 installation. Aggregate-only history cannot be recovered as individual crafts.
 
 Imports may include locally sensitive character/account information. Avoid sharing raw SavedVariables or diagnostic logs.
@@ -89,4 +90,6 @@ Imports may include locally sensitive character/account information. Avoid shari
 - [Command and configuration reference](../../docs/companion/cli.md): database paths, settings, discovery behavior, import reporting and suppression, verbose output, status details, and exit codes.
 - [Contributing](../../CONTRIBUTING.md): build, tests, and local deployment.
 - [Runtime contracts](src/Runtime/README.md): implementation-facing application services.
+- [Browser application](../../docs/companion/web.md): embedded production packaging,
+  Aspire development, generated API clients, fixtures and smoke verification.
 - [Main project](../../README.md).

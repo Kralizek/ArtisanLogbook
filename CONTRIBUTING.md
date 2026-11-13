@@ -22,16 +22,23 @@ On Windows, use `scripts/Deploy-WowAddon.ps1` for local game deployment. See [ad
 
 ## Companion development
 
-Use the .NET SDK pinned by `src/companion/global.json` (currently .NET 10). From `src/companion`:
+Use the .NET SDK pinned by `src/companion/global.json` (currently .NET 10),
+Node.js 26.13.1 LTS/npm 11, and Aspire CLI 13.6.5 for orchestrated development.
+From `src/companion`:
 
 ```sh
 dotnet restore ArtisanLogbook.Companion.slnx
-dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes
 dotnet build ArtisanLogbook.Companion.slnx -c Release -warnaserror
+dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes
 dotnet test ArtisanLogbook.Companion.slnx -c Release --no-build
 ```
 
 The Companion uses `src/companion/NuGet.Config`, which clears inherited NuGet package sources and configures only `nuget.org`. This prevents unrelated user-wide feeds from triggering NU1507 during centrally managed restores. The Windows deployment script explicitly selects this configuration during `dotnet publish`; it does not modify user-wide NuGet settings.
+
+MSBuild restores npm dependencies, generates API types and embeds the Vite build.
+Do not run a separate npm restore concurrently against the same checkout.
+See the [browser development guide](docs/companion/web.md) for Aspire startup,
+isolated fixtures, frontend checks and executable-only production verification.
 
 On Windows, the repository-root `scripts/Deploy-Companion.ps1` creates a local development installation. See the [Companion guide](src/companion/README.md) for user-facing commands.
 

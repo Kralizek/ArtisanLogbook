@@ -27,6 +27,20 @@ public sealed class ApplicationPathsTests
     }
 
     [Test]
+    public void ExplicitDataDirectoryIsolatesSettingsAndDefaultDatabase()
+    {
+        string development = Path.Combine(WorkingDirectory, ".artifacts", "development");
+        ApplicationPaths paths = new(CompanionPlatform.Linux, Home, LocalData, null, WorkingDirectory, development);
+        Assert.Multiple(() =>
+        {
+            Assert.That(paths.SettingsFile, Is.EqualTo(Path.Combine(development, "settings.json")));
+            Assert.That(paths.ResolveDatabase(null), Is.EqualTo(Path.Combine(development, "history.duckdb")));
+            Assert.That(() => new ApplicationPaths(CompanionPlatform.Linux, Home, LocalData, null, WorkingDirectory, "relative"),
+                Throws.ArgumentException);
+        });
+    }
+
+    [Test]
     public void WindowsUsesLocalApplicationData() =>
         Assert.That(Paths(CompanionPlatform.Windows).ResolveDatabase(null),
             Is.EqualTo(Path.Combine(LocalData, Suffix)));

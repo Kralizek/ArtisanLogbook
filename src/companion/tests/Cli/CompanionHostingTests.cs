@@ -96,7 +96,7 @@ public sealed class CompanionHostingTests
             using HttpClient http = new();
             string address = app.Services.GetRequiredService<IServer>().Features
                 .Get<IServerAddressesFeature>()!.Addresses.Single();
-            Assert.That((await http.GetAsync(address + "/")).StatusCode, Is.EqualTo(System.Net.HttpStatusCode.NotFound));
+            Assert.That((await http.GetAsync(address + "/")).StatusCode, Is.EqualTo(System.Net.HttpStatusCode.OK));
             Assert.That((await http.GetAsync(address + "/api/v1/status")).StatusCode, Is.EqualTo(System.Net.HttpStatusCode.OK));
             await app.StopAsync();
             Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopped));

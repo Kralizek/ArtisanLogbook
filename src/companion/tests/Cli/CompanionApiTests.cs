@@ -50,6 +50,73 @@ public sealed class CompanionApiTests
     public void TearDown() => Directory.Delete(_directory, recursive: true);
 
     [Test]
+    public void RequiredDevelopmentPortDoesNotSilentlyFallBack()
+    {
+        using TcpListener occupied = new(IPAddress.Loopback, 0);
+        occupied.Start();
+        int port = ((IPEndPoint)occupied.LocalEndpoint).Port;
+        CompanionRuntimeConfiguration configuration = CompanionRuntimeConfiguration.Resolve(_paths, _settings, port: port);
+        WebApplicationBuilder builder = WebApplication.CreateEmptyBuilder(new() { Args = [] });
+        Assert.That(() => builder.ConfigureCompanionHost(configuration, requirePreferredPort: true),
+            Throws.TypeOf<IOException>().With.Message.Contains(port.ToString()));
+    }
+
+    [Test]
+    public async Task EmbeddedFrontendServesDocumentRoutesAndRealBundles()
+    {
+        await using ApiHost host = await Start();
+        using HttpResponseMessage root = await host.Http.GetAsync("/");
+        string html = await root.Content.ReadAsStringAsync();
+        Assert.That(root.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(root.Content.Headers.ContentType?.MediaType, Is.EqualTo("text/html"));
+        Assert.That(root.Headers.CacheControl?.NoStore, Is.True);
+        foreach ((string extension, string contentType) in new[] { ("js", "text/javascript"), ("css", "text/css") })
+        {
+            Match asset = Regex.Match(html, $"""(?:src|href)="(/assets/[^"]+\.{extension})" """.TrimEnd());
+            Assert.That(asset.Success, Is.True, html);
+            using HttpResponseMessage response = await host.Http.GetAsync(asset.Groups[1].Value);
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo(contentType));
+            Assert.That(response.Headers.GetValues("X-Content-Type-Options"), Does.Contain("nosniff"));
+        }
+        using HttpResponseMessage route = await host.Http.GetAsync("/history");
+        Assert.That(await route.Content.ReadAsStringAsync(), Is.EqualTo(html));
+        using HttpResponseMessage head = await host.Http.SendAsync(new(HttpMethod.Head, "/"));
+        Assert.That(head.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(await head.Content.ReadAsByteArrayAsync(), Is.Empty);
+        using HttpResponseMessage post = await host.Post("/history", "{}");
+        Assert.That(post.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [TestCase("/assets/missing.js")]
+    [TestCase("/assets/missing.css")]
+    [TestCase("/api/v1/missing")]
+    [TestCase("/openapi/missing.yaml")]
+    [TestCase("/graphql/missing")]
+    [TestCase("/unknown-page")]
+    public async Task SpaFallbackNeverMasksMissingServerPaths(string path)
+    {
+        await using ApiHost host = await Start();
+        using HttpResponseMessage response = await host.Http.GetAsync(path);
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("application/problem+json"));
+    }
+
+    [TestCase("/", "host")]
+    [TestCase("/history", "origin")]
+    [TestCase("/assets/missing.js", "host")]
+    public async Task StaticFrontendCannotBypassLocalSecurity(string path, string invalidHeader)
+    {
+        await using ApiHost host = await Start();
+        using HttpRequestMessage request = new(HttpMethod.Get, path);
+        if (invalidHeader == "host") request.Headers.Host = "attacker.example";
+        else request.Headers.Add("Origin", "http://attacker.example");
+        using HttpResponseMessage response = await host.Http.SendAsync(request);
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
+        Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("application/problem+json"));
+    }
+
+    [Test]
     public async Task GraphQLSchemaMatchesTheVersionControlledContract()
     {
         await using ApiHost host = await Start();
@@ -679,7 +746,7 @@ public sealed class CompanionApiTests
         using HttpResponseMessage missing = await host.Http.GetAsync("/api/v1/nothing");
         Assert.That(missing.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
         Assert.That(missing.Content.Headers.ContentType!.MediaType, Is.EqualTo("application/problem+json"));
-        Assert.That((await host.Http.GetAsync("/")).StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That((await host.Http.GetAsync("/unknown")).StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
         using HttpResponseMessage put = await host.Send(HttpMethod.Put, "/api/v1/imports", "{}", post: true);
         Assert.That(put.StatusCode, Is.EqualTo(HttpStatusCode.MethodNotAllowed));
     }
