@@ -38,7 +38,7 @@
     <ItemGroup>
       <EmbeddedResource Include="$(WebDirectory)dist/**/*" />
       <EmbeddedResource Update="$(WebDirectory)dist/**/*">
-        <Link>wwwroot/%(EmbeddedResource.RecursiveDir)%(EmbeddedResource.Filename)%(EmbeddedResource.Extension)</Link>
+        <Link>$([System.IO.Path]::Combine('wwwroot', '%(EmbeddedResource.RecursiveDir)%(EmbeddedResource.Filename)%(EmbeddedResource.Extension)'))</Link>
       </EmbeddedResource>
     </ItemGroup>
   </Target>

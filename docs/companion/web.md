@@ -41,6 +41,8 @@ not evaluated before a clean checkout's first build. The package generates the
 embedded manifest, and Runtime serves streams through
 `ManifestEmbeddedFileProvider` and ASP.NET Core static-file middleware. Assets
 are not extracted and the entire bundle is not loaded into memory.
+Resource Link metadata uses native path separators so the manifest's `wwwroot`
+directory is generated correctly on both Windows and Linux.
 
 The authored OpenAPI YAML is also embedded in Runtime and streamed at its
 existing `/openapi/v1.yaml` route with the existing `text/yaml` type.
