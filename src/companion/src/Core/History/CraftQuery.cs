@@ -16,9 +16,15 @@ public sealed record CraftQuery(
 /// <summary>A continuation position in descending recorded-time and ascending identity order.</summary>
 public sealed record CraftPagePosition(DateTimeOffset RecordedAt, CraftIdentity Identity);
 
-/// <summary>A bounded page of canonical craft facts, excluding recorder evidence and provenance.</summary>
+/// <summary>
+/// Canonical facts materialized for queries. This projection intentionally excludes recorder evidence and
+/// provenance and must not be used as a complete persisted observation.
+/// </summary>
+public sealed record CraftQueryProjection(CraftObservation Facts);
+
+/// <summary>A bounded page of canonical craft query projections.</summary>
 public sealed record CraftPage(
-    IReadOnlyList<CraftObservation> Crafts,
+    IReadOnlyList<CraftQueryProjection> Crafts,
     bool HasNextPage,
     CraftPagePosition? EndPosition);
 

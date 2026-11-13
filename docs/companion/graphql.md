@@ -46,8 +46,13 @@ logged as an execution failure.
 ## Entities and observations
 
 Root collections and individual lookups cover crafts, characters, recipes,
-professions, expansions, items and game contexts. Each dimension ID includes its
-game context. A character is keyed by its canonical character identity, not its
+professions, expansions, items and game contexts. Recipe and item collections
+accept an optional `search` argument. It matches a case-insensitive literal
+substring of the stored name; `%` and `_` have no wildcard meaning. A null or
+empty search applies no name filter. Search combines with game-context,
+profession and expansion relationship scopes. Character name search is not
+provided. Each dimension ID includes its game context. A character is keyed by
+its canonical character identity, not its
 name; a craft is keyed by canonical origin and observation. Recipe, profession
 and item IDs use Blizzard IDs within the game context; expansion keys are the
 canonical stored keys. Project is an integer because the canonical model permits
@@ -82,6 +87,11 @@ evaluated; the initial API uses explicit typed lookups and a versioned composite
 identity encoding rather than introducing a second domain identity or exposing
 a Node contract.
 
+The decoder accepts long API-generated IDs and cursors without a separate
+character-count cap. Each request must still fit within the 16 KiB GraphQL POST
+body limit, including JSON and query overhead; clients should pass long values
+as variables rather than interpolating them into the query text.
+
 `crafts(filter: ...)` accepts `gameId`, `characterId`, `recipeId`, `professionId`,
 `expansionId`, `inputItemId`, `outputItemId`, and inclusive `from`/`to`
 timestamps. Dimension IDs imply their context; conflicting contexts or an
@@ -97,28 +107,53 @@ then origin and observation ascending. Dimensions order by canonical game-contex
 key and entity identity. Cursor positions are not frozen snapshots: an import
 between requests can add rows after the position that appear on later pages,
 while rows inserted before the position will not appear in that continuation.
+These are custom forward-only `nodes` connections, not a complete Relay
+connection contract; there are no edges, backward pagination, total counts or
+Node interface.
 
 ## Resource and consistency boundaries
 
 POST bodies are limited to 16 KiB for `/graphql`; REST retains its 4 KiB
 limit. Hot Chocolate enforces a 100-field parser limit, maximum execution
-depth 12, 30-second execution timeout, 1,000,000 field/type cost limits,
-and at most eight concurrent executions. List-size annotations account for
-the requested page size; other lists use an assumed size of 20 for static cost
-analysis. Request/variable batching is disabled and the maximum batch size is
+depth 12, 30-second execution timeout, a 35,000 field cost limit and a 50,000
+type cost limit, and
+at most eight concurrent executions. List-size annotations account for the
+requested page size; other lists use an assumed size of 20 for static cost
+analysis. DataLoader-backed lookups have low explicit field weights; reverse
+collections that issue a bounded repository operation per parent have higher
+weights. Request/variable batching is disabled and the maximum batch size is
 one. A single-element request array may be treated as a single request by the
 transport. These limits also apply to introspection.
+
+The limits were calibrated using Hot Chocolate's cost analysis with the pinned
+implementation. Representative field/type costs were 911/1,682 for recent
+crafts with metadata, 9,041/16,832 for the documented character-history query,
+2,162/2,154 for item usage, 22,031/41,522 for a larger dashboard page, and
+28,851/24,642 for schematic candidates plus observed reagents/outputs. Both a
+100-recipe-by-100-crafts query and 50 items with two 20-craft reverse
+collections scored 100,111 field cost and are rejected before repository
+resolvers run. A 100-character-by-100-craft page with reagent/output lists
+scored 20,211 field cost but 410,202 type cost, demonstrating independent
+rejection by the type limit before repository work. The accepted larger
+dashboard sample stays below both caps. These estimates bound permitted query
+shape and materialization; they are not a count of SQL statements or a
+database-connection limit.
+Concurrent GraphQL executions are capped at eight requests, but resolvers
+within a request can execute concurrently and HistoryStore opens independent
+read connections per repository operation. There is intentionally no global
+database concurrency manager or connection pool.
 
 Resolvers and request-local DataLoaders use focused craft/dimension repositories.
 Repositories invoke typed `HistoryStore` operations; neither layer owns a
 connection or emits SQL. HistoryStore uses handcrafted parameterized DuckDB SQL
 and Dapper on independent read connections. A craft page uses one header query
-and two batched child queries, inside one snapshot. Dimension lookups use exact
-context/key pairs in a single batch query. Character craft pages are grouped
-with partitioned SQL and materialized together; each parent still has its own
-page and cursor. Other nested reverse collections currently execute one bounded
-repository operation per parent; grouping arbitrary nested pagination is
-deliberately deferred.
+and two batched child queries, inside one snapshot. Shared dimension lookups
+use exact context/key pairs in batched queries, and recipe schematic slots are
+batched. Character craft pages are grouped with partitioned SQL and materialized
+together in groups of up to 50; each parent still has its own page and cursor.
+Other nested reverse collections currently execute one bounded repository
+operation per parent; grouping arbitrary nested pagination is deliberately
+deferred.
 
 Each repository operation has a snapshot across its SQL statements, not across
 the entire GraphQL request. Separate resolvers can observe different commits.

@@ -46,11 +46,11 @@ public sealed class CraftQueryTests
         CraftPage second = store.QueryCrafts(new(), 2, first.EndPosition);
         Assert.Multiple(() =>
         {
-            Assert.That(first.Crafts.Select(x => x.Identity.Observation), Is.EqualTo(new[] { "z", "a" }));
-            Assert.That(second.Crafts.Select(x => x.Identity.Observation), Is.EqualTo(new[] { "b", "old" }));
+            Assert.That(first.Crafts.Select(x => x.Facts.Identity.Observation), Is.EqualTo(new[] { "z", "a" }));
+            Assert.That(second.Crafts.Select(x => x.Facts.Identity.Observation), Is.EqualTo(new[] { "b", "old" }));
             Assert.That(first.HasNextPage, Is.True);
             Assert.That(second.HasNextPage, Is.False);
-            Assert.That(store.QueryCrafts(new(From: instant, To: instant)).Crafts.Select(x => x.Identity.Observation),
+            Assert.That(store.QueryCrafts(new(From: instant, To: instant)).Crafts.Select(x => x.Facts.Identity.Observation),
                 Is.EqualTo(new[] { "a", "b" }));
         });
     }
@@ -69,7 +69,8 @@ public sealed class CraftQueryTests
             Outputs = [new(78, null, 5_000_000_000L), new(78, 1, null)],
             HasIngenuityProc = false,
             ConcentrationSpent = 0,
-            Provenance = new("source")
+            Provenance = new("source"),
+            ConfigurationEvidence = [new("source", 197, "configuration snapshot")]
         };
         CraftObservation otherContext = expected with { Identity = new("origin", "other"), Game = Forever };
         CraftObservation unknown = Craft("unknown", now.AddSeconds(-1));
@@ -79,18 +80,25 @@ public sealed class CraftQueryTests
         CraftQuery filter = new(Retail, Character, 12, 34, "expansion", now, now, 56, 78);
         CraftPage page = store.QueryCrafts(filter);
         Assert.That(page.Crafts, Has.Count.EqualTo(1));
-        CraftObservation actual = page.Crafts[0];
+        CraftObservation actual = page.Crafts[0].Facts;
         Assert.Multiple(() =>
         {
             Assert.That(actual, Is.EqualTo(expected with { Provenance = null }));
             Assert.That(actual.Reagents![0].ReturnedQuantity, Is.EqualTo(0.123456789012345678m));
             Assert.That(actual.Outputs, Has.Count.EqualTo(2));
             Assert.That(actual.Provenance, Is.Null);
-            Assert.That(store.QueryCrafts(new(Game: Forever, InputItemId: 56)).Crafts.Single().Identity,
+            Assert.That(store.QueryCrafts(new(Game: Forever, InputItemId: 56)).Crafts.Single().Facts.Identity,
                 Is.EqualTo(otherContext.Identity));
-            CraftObservation unobserved = store.QueryCrafts(new(Game: Retail)).Crafts.Single(x => x.Identity == unknown.Identity);
+            CraftObservation unobserved = store.QueryCrafts(new(Game: Retail)).Crafts.Single(x => x.Facts.Identity == unknown.Identity).Facts;
             Assert.That(unobserved.Reagents, Is.Null);
             Assert.That(unobserved.Outputs, Is.Null);
+        });
+        Assert.That(store.Write(actual).Status, Is.EqualTo(CraftWriteStatus.AlreadyPresent));
+        CraftObservation persisted = store.Read(expected.Identity)!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(persisted.Provenance, Is.EqualTo(expected.Provenance));
+            Assert.That(persisted.ConfigurationEvidence, Is.EqualTo(expected.ConfigurationEvidence));
         });
     }
 
@@ -120,7 +128,7 @@ public sealed class CraftQueryTests
         Assert.That(store.Write(Craft("inserted-before", now.AddSeconds(1))).IsSuccessful, Is.True);
         Assert.That(store.Write(Craft("inserted-after", now.AddSeconds(-1))).IsSuccessful, Is.True);
         CraftPage second = store.QueryCrafts(new(), 10, first.EndPosition);
-        Assert.That(second.Crafts.Select(x => x.Identity.Observation),
+        Assert.That(second.Crafts.Select(x => x.Facts.Identity.Observation),
             Is.EqualTo(new[] { "inserted-after", "oldest" }));
     }
 
@@ -152,7 +160,7 @@ public sealed class CraftQueryTests
             resume.Set();
         }
         CraftPage page = await read.WaitAsync(TimeSpan.FromSeconds(20));
-        Assert.That(page.Crafts.Single().Reagents, Is.Null);
+        Assert.That(page.Crafts.Single().Facts.Reagents, Is.Null);
         Assert.That(store.Read(initial.Identity)!.Reagents, Has.Count.EqualTo(1));
     }
 
@@ -163,7 +171,7 @@ public sealed class CraftQueryTests
         DateTimeOffset instant = DateTimeOffset.UnixEpoch.AddTicks(-10);
         foreach (CraftObservation observation in new[] { Craft("a", instant), Craft("b", instant.AddTicks(1)) })
             Assert.That(store.Write(observation).IsSuccessful, Is.True);
-        Assert.That(store.QueryCrafts(new()).Crafts.Select(c => c.Identity.Observation),
+        Assert.That(store.QueryCrafts(new()).Crafts.Select(c => c.Facts.Identity.Observation),
             Is.EqualTo(new[] { "b", "a" }));
     }
 
@@ -197,15 +205,15 @@ public sealed class CraftQueryTests
         Assert.Multiple(() =>
         {
             Assert.That(batches, Is.EqualTo(1));
-            Assert.That(pages[retail].Crafts.Single().Identity.Observation, Is.EqualTo("new"));
+            Assert.That(pages[retail].Crafts.Single().Facts.Identity.Observation, Is.EqualTo("new"));
             Assert.That(pages[retail].HasNextPage, Is.True);
-            Assert.That(pages[otherPage].Crafts.Single().Outputs, Has.Count.EqualTo(1));
+            Assert.That(pages[otherPage].Crafts.Single().Facts.Outputs, Has.Count.EqualTo(1));
             Assert.That(pages[otherPage].HasNextPage, Is.False);
-            Assert.That(pages[foreign].Crafts.Single().Identity.Observation, Is.EqualTo("foreign"));
+            Assert.That(pages[foreign].Crafts.Single().Facts.Identity.Observation, Is.EqualTo("foreign"));
         });
         CharacterCraftPageRequest second = retail with { After = pages[retail].EndPosition, First = 2 };
         IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> continuation = store.QueryCharacterCraftPages([second, otherPage]);
-        Assert.That(continuation[second].Crafts.Select(x => x.Identity.Observation), Is.EqualTo(new[] { "same", "old" }));
+        Assert.That(continuation[second].Crafts.Select(x => x.Facts.Identity.Observation), Is.EqualTo(new[] { "same", "old" }));
         Assert.That(continuation[second].HasNextPage, Is.False);
     }
 

@@ -51,8 +51,8 @@ internal static class CompanionApiHosting
                 options.EnforceCostLimits = true;
                 options.ApplySlicingArgumentDefaultValue = true;
                 options.DefaultListSize = 20;
-                options.MaxFieldCost = 1_000_000;
-                options.MaxTypeCost = 1_000_000;
+                options.MaxFieldCost = 35_000;
+                options.MaxTypeCost = 50_000;
             })
             .ModifyServerOptions(options =>
             {

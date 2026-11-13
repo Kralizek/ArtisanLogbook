@@ -39,6 +39,11 @@ public sealed partial class HistoryStore
             conditions.Append(" AND d.ProfessionExpansionKey = $ExpansionKey");
             filters.Add("ExpansionKey", expansion);
         }
+        if (!string.IsNullOrEmpty(query.Search))
+        {
+            conditions.Append(" AND contains(lower(d.Name), lower($Search))");
+            filters.Add("Search", query.Search);
+        }
         return QueryDimensions(query.Game, first, after, "Recipe", "RecipeId",
             "d.Name, d.ProfessionId AS Number1, d.ProfessionExpansionKey AS Text1, d.MaxQuality AS Number2",
             conditions.ToString(), filters, key => key, row => int.Parse(row.Key, CultureInfo.InvariantCulture),
@@ -63,11 +68,27 @@ public sealed partial class HistoryStore
     }
 
     public DimensionPage<ItemDimension, int> QueryItems(
-        GameContext? game = null, int first = 20, DimensionIdentity<int>? after = null,
+        ItemQuery query, int first = 20, DimensionIdentity<int>? after = null,
         CancellationToken cancellationToken = default) =>
-        QueryDimensions(game, first, after, "Item", "ItemId", "d.Name", null, null, key => key,
+        QueryItemsCore(query, first, after, cancellationToken);
+
+    private DimensionPage<ItemDimension, int> QueryItemsCore(
+        ItemQuery query, int first, DimensionIdentity<int>? after, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        DynamicParameters? filters = null;
+        string? conditions = null;
+        if (!string.IsNullOrEmpty(query.Search))
+        {
+            conditions = " AND contains(lower(d.Name), lower($Search))";
+            filters = new();
+            filters.Add("Search", query.Search);
+        }
+        return QueryDimensions(query.Game, first, after, "Item", "ItemId", "d.Name", conditions, filters, key => key,
             row => int.Parse(row.Key, CultureInfo.InvariantCulture),
-            (row, context) => new ItemDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name), cancellationToken);
+            (row, context) => new ItemDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name),
+            cancellationToken);
+    }
 
     public DimensionPage<ExpansionDimension, string> QueryExpansions(
         GameContext? game = null, int first = 20, DimensionIdentity<string>? after = null,

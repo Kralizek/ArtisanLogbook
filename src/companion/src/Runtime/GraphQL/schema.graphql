@@ -22,7 +22,7 @@ type Query {
     )
     @cost(weight: "10")
   recipe(id: ID!): Recipe @cost(weight: "10")
-  recipes(first: Int! = 20, after: String): RecipeConnection!
+  recipes(first: Int! = 20, after: String, search: String): RecipeConnection!
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
@@ -40,7 +40,7 @@ type Query {
     )
     @cost(weight: "10")
   item(id: ID!): Item @cost(weight: "10")
-  items(first: Int! = 20, after: String): ItemConnection!
+  items(first: Int! = 20, after: String, search: String): ItemConnection!
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
@@ -76,7 +76,6 @@ type Character {
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   id: ID!
   name: String
   classFile: String
@@ -89,10 +88,10 @@ type CharacterConnection {
 }
 
 type Craft {
-  character: Character! @cost(weight: "10")
-  recipe: Recipe @cost(weight: "10")
-  profession: Profession @cost(weight: "10")
-  professionExpansion: Expansion @cost(weight: "10")
+  character: Character!
+  recipe: Recipe
+  profession: Profession
+  professionExpansion: Expansion
   id: ID!
   recordedAt: DateTime!
   game: GameContext!
@@ -115,34 +114,34 @@ type CraftConnection {
 }
 
 type CraftOutput {
-  item: Item! @cost(weight: "10")
+  item: Item!
   quality: Int
   quantity: Long
 }
 
 type CraftReagent {
-  item: Item! @cost(weight: "10")
+  item: Item!
   allocatedQuantity: Long
   returnedQuantity: Decimal
 }
 
 type Expansion {
-  recipes(first: Int! = 20, after: String): RecipeConnection!
+  recipes(first: Int! = 20, after: String, search: String): RecipeConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   crafts(first: Int! = 20, after: String): CraftConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   id: ID!
   key: String!
   name: String
@@ -156,53 +155,53 @@ type ExpansionConnection {
 
 type GameContext {
   characters(first: Int! = 20, after: String): CharacterConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   professions(first: Int! = 20, after: String): ProfessionConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
-  recipes(first: Int! = 20, after: String): RecipeConnection!
+  recipes(first: Int! = 20, after: String, search: String): RecipeConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   expansions(first: Int! = 20, after: String): ExpansionConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
-  items(first: Int! = 20, after: String): ItemConnection!
+  items(first: Int! = 20, after: String, search: String): ItemConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   crafts(first: Int! = 20, after: String): CraftConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   id: ID!
   project: Int!
   progressionTrack: String
@@ -220,21 +219,21 @@ type HistoryPageInfo {
 
 type Item {
   consumingCrafts(first: Int! = 20, after: String): CraftConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   producingCrafts(first: Int! = 20, after: String): CraftConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   id: ID!
   blizzardId: Int!
   name: String
@@ -247,31 +246,31 @@ type ItemConnection {
 }
 
 type Profession {
-  parent: Profession @cost(weight: "10")
+  parent: Profession
   children(first: Int! = 20, after: String): ProfessionConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
-  recipes(first: Int! = 20, after: String): RecipeConnection!
+  recipes(first: Int! = 20, after: String, search: String): RecipeConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   crafts(first: Int! = 20, after: String): CraftConnection!
+    @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
       slicingArgumentDefaultValue: 20
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
   id: ID!
   blizzardId: Int!
   name: String
@@ -284,9 +283,9 @@ type ProfessionConnection {
 }
 
 type Recipe {
-  profession: Profession @cost(weight: "10")
-  expansion: Expansion @cost(weight: "10")
-  reagentSlots: [RecipeReagentSlot!]! @cost(weight: "10")
+  profession: Profession
+  expansion: Expansion
+  reagentSlots: [RecipeReagentSlot!]!
   crafts(first: Int! = 20, after: String): CraftConnection!
     @listSize(
       slicingArguments: ["first"]
@@ -294,7 +293,7 @@ type Recipe {
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-    @cost(weight: "10")
+    @cost(weight: "1000")
   id: ID!
   blizzardId: Int!
   name: String
@@ -308,8 +307,8 @@ type RecipeConnection {
 }
 
 type RecipeReagentSlot {
-  recipe: Recipe! @cost(weight: "10")
-  candidateItems: [Item!] @cost(weight: "10")
+  recipe: Recipe!
+  candidateItems: [Item!]
   id: ID!
   dataSlotType: RecipeReagentDataSlotType
   dataSlotIndex: Int!

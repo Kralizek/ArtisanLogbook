@@ -117,8 +117,8 @@ public sealed partial class HistoryStore
         if (hasNext) rows.RemoveAt(first);
         OnReadCheckpoint("CraftPageHeaders", transaction, token);
         if (rows.Count == 0) return new([], false, null);
-        IReadOnlyList<CraftObservation> crafts = MaterializeCanonicalCrafts(rows, transaction, token);
-        CraftObservation last = crafts[^1];
+        IReadOnlyList<CraftQueryProjection> crafts = MaterializeCraftProjections(rows, transaction, token);
+        CraftObservation last = crafts[^1].Facts;
         return new(crafts, hasNext, new(last.RecordedAt, last.Identity));
 
         void AddFilter<T>(T? value, string predicate, string parameter)
@@ -129,7 +129,7 @@ public sealed partial class HistoryStore
         }
     }
 
-    private static IReadOnlyList<CraftObservation> MaterializeCanonicalCrafts(
+    private static IReadOnlyList<CraftQueryProjection> MaterializeCraftProjections(
         IReadOnlyList<CanonicalCraftRow> rows, DbTransaction transaction, CancellationToken token)
     {
         if (rows.Count == 0) return [];
@@ -159,7 +159,7 @@ public sealed partial class HistoryStore
                 outputs.Add(row.CraftKey, items = []);
             items.Add(new(row.ItemId, row.Quality, row.Quantity));
         }
-        List<CraftObservation> crafts = new(rows.Count);
+        List<CraftQueryProjection> crafts = new(rows.Count);
         foreach (CanonicalCraftRow row in rows)
         {
             token.ThrowIfCancellationRequested();
@@ -167,7 +167,7 @@ public sealed partial class HistoryStore
             outputs.TryGetValue(row.CraftKey, out List<CraftOutput>? outputRows);
             if ((!row.ReagentsObserved && reagentRows is not null) || (!row.OutputsObserved && outputRows is not null))
                 throw new InvalidDataException("A craft has child rows for an unobserved collection.");
-            crafts.Add(new CraftObservation(
+            CraftObservation facts = new(
                 new(row.IdentityOrigin, row.IdentityObservation),
                 new((GameProject)row.ProjectId, row.ProgressionTrack),
                 DateTimeOffset.ParseExact(row.RecordedAt, "O", CultureInfo.InvariantCulture, DateTimeStyles.None),
@@ -177,7 +177,8 @@ public sealed partial class HistoryStore
                 row.ReagentsObserved ? reagentRows ?? [] : null,
                 row.OutputsObserved ? outputRows ?? [] : null,
                 InputsComplete: row.InputsComplete, ResourcefulnessComplete: row.ResourcefulnessComplete,
-                OutputsComplete: row.OutputsComplete));
+                OutputsComplete: row.OutputsComplete);
+            crafts.Add(new(facts));
         }
         return crafts;
     }

@@ -84,16 +84,16 @@ public sealed partial class HistoryStore
                 else hasNext[row.BatchIndex] = true;
             }
             CanonicalCraftRow[] materializationRows = selected.OrderBy(x => x.Key).SelectMany(x => x.Value).ToArray();
-            IReadOnlyList<CraftObservation> observations = MaterializeCanonicalCrafts(materializationRows, transaction, token);
+            IReadOnlyList<CraftQueryProjection> observations = MaterializeCraftProjections(materializationRows, transaction, token);
             Dictionary<CharacterCraftPageRequest, CraftPage> pages = [];
             int offset = 0;
             for (int i = 0; i < distinct.Length; i++)
             {
                 token.ThrowIfCancellationRequested();
                 int count = selected.TryGetValue(i, out List<CanonicalCraftRow>? pageRows) ? pageRows.Count : 0;
-                CraftObservation[] crafts = observations.Skip(offset).Take(count).ToArray();
+                CraftQueryProjection[] crafts = observations.Skip(offset).Take(count).ToArray();
                 offset += count;
-                CraftObservation? last = crafts.LastOrDefault();
+                CraftObservation? last = crafts.LastOrDefault()?.Facts;
                 pages.Add(distinct[i], new(crafts, hasNext[i],
                     last is null ? null : new(last.RecordedAt, last.Identity)));
             }

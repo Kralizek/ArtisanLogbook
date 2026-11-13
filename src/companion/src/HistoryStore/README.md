@@ -33,7 +33,13 @@ ADO.NET, as does connection-local native interruption. Stored timestamps,
 decimal quantities and evidence retain their existing representations.
 
 `QueryCrafts` accepts immutable `CraftQuery` criteria and returns a bounded page
-of canonical facts without recorder evidence or provenance. Character, recipe,
+of `CraftQueryProjection` values. Each projection wraps the canonical facts
+needed for query results but intentionally excludes recorder evidence and
+provenance; its distinct type prevents accidental use as a complete persisted
+`CraftObservation` without an explicit access to `Facts`. Persistence still
+accepts complete `CraftObservation` values; if a caller explicitly unwraps and
+rewrites a projection, reconciliation treats missing evidence/provenance as
+unknown and preserves what was already stored. Character, recipe,
 profession, expansion and item filters require a game context. Date bounds are
 inclusive; results are ordered by recorded instant descending, then canonical
 origin and observation ascending. Timestamp ordering preserves 100-nanosecond
@@ -43,6 +49,11 @@ continuation position, not a serialized client cursor. Page sizes are 1–100
 snapshot; individual page requests do not. Imports after a page may appear on
 later pages only if their ordering position is after that page's continuation.
 Unobserved child collections remain null, distinct from observed empty ones.
+
+Recipe and item dimension queries accept optional case-insensitive literal
+substring name searches. Empty searches are ignored; `%` and `_` are ordinary
+characters rather than SQL wildcards. Search criteria remain parameterized and
+combine with game context and recipe profession/expansion filters.
 
 `QueryCharacterCraftPages` batches up to 50 independently bounded character
 pages in partitioned SQL, followed by shared batched child materialization in

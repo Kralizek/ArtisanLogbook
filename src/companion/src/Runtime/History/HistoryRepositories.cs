@@ -20,7 +20,7 @@ public interface IHistoryDimensionRepository
         DimensionIdentity<int>? after, CancellationToken cancellationToken);
     DimensionPage<ProfessionDimension, int> Professions(ProfessionQuery query, int first,
         DimensionIdentity<int>? after, CancellationToken cancellationToken);
-    DimensionPage<ItemDimension, int> Items(GameContext? game, int first,
+    DimensionPage<ItemDimension, int> Items(ItemQuery query, int first,
         DimensionIdentity<int>? after, CancellationToken cancellationToken);
     DimensionPage<ExpansionDimension, string> Expansions(GameContext? game, int first,
         DimensionIdentity<string>? after, CancellationToken cancellationToken);
@@ -51,8 +51,8 @@ internal sealed class HistoryDimensionRepository(Store store) : IHistoryDimensio
         DimensionIdentity<int>? after, CancellationToken token) => store.QueryRecipes(query, first, after, token);
     public DimensionPage<ProfessionDimension, int> Professions(ProfessionQuery query, int first,
         DimensionIdentity<int>? after, CancellationToken token) => store.QueryProfessions(query, first, after, token);
-    public DimensionPage<ItemDimension, int> Items(GameContext? game, int first,
-        DimensionIdentity<int>? after, CancellationToken token) => store.QueryItems(game, first, after, token);
+    public DimensionPage<ItemDimension, int> Items(ItemQuery query, int first,
+        DimensionIdentity<int>? after, CancellationToken token) => store.QueryItems(query, first, after, token);
     public DimensionPage<ExpansionDimension, string> Expansions(GameContext? game, int first,
         DimensionIdentity<string>? after, CancellationToken token) => store.QueryExpansions(game, first, after, token);
     public GameContextPage GameContexts(int first, GameContext? after, CancellationToken token) =>

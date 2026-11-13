@@ -27,7 +27,7 @@ internal static class HistoryConnections
 
     public static CraftConnection Crafts(CraftPage page)
     {
-        return new(page.Crafts.Select(craft => new CraftGraph(craft)).ToArray(),
+        return new(page.Crafts.Select(craft => new CraftGraph(craft.Facts)).ToArray(),
             new(page.HasNextPage, page.EndPosition is null ? null : HistoryTokens.CraftCursor(page.EndPosition)));
     }
 
@@ -64,11 +64,11 @@ internal static class HistoryConnections
             new(page.HasNextPage, page.EndPosition is null ? null : HistoryTokens.DimensionCursor("profession", page.EndPosition)));
     }
 
-    public static ItemConnection Items(IHistoryDimensionRepository repository, GameContext? game, int first, string? after, CancellationToken token)
+    public static ItemConnection Items(IHistoryDimensionRepository repository, ItemQuery query, int first, string? after, CancellationToken token)
     {
         ValidatePageSize(first);
-        DimensionIdentity<int>? position = IntegerCursor(after, "item", game);
-        DimensionPage<ItemDimension, int> page = repository.Items(game, first, position, token);
+        DimensionIdentity<int>? position = IntegerCursor(after, "item", query.Game);
+        DimensionPage<ItemDimension, int> page = repository.Items(query, first, position, token);
         return new(page.Items.Select(x => new ItemGraph(x)).ToArray(),
             new(page.HasNextPage, page.EndPosition is null ? null : HistoryTokens.DimensionCursor("item", page.EndPosition)));
     }

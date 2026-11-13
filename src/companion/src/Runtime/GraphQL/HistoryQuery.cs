@@ -25,7 +25,7 @@ public sealed class HistoryQuery
         ICraftHistoryRepository repository, CancellationToken token)
     {
         CraftPage page = repository.Query(new(Identity: HistoryTokens.ParseCraft(id)), 1, cancellationToken: token);
-        return page.Crafts.Count == 0 ? null : new(page.Crafts[0]);
+        return page.Crafts.Count == 0 ? null : new(page.Crafts[0].Facts);
     }
 
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
@@ -54,7 +54,8 @@ public sealed class HistoryQuery
 
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public RecipeConnection GetRecipes(IHistoryDimensionRepository repository, int first = 20, string? after = null,
-        CancellationToken token = default) => HistoryConnections.Recipes(repository, new(), first, after, token);
+        string? search = null, CancellationToken token = default) =>
+        HistoryConnections.Recipes(repository, new(Search: search), first, after, token);
 
     public async Task<ProfessionGraph?> GetProfessionAsync([GraphQLType(typeof(NonNullType<IdType>))] string id,
         ProfessionLoader loader, CancellationToken token)
@@ -76,7 +77,8 @@ public sealed class HistoryQuery
 
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public ItemConnection GetItems(IHistoryDimensionRepository repository, int first = 20, string? after = null,
-        CancellationToken token = default) => HistoryConnections.Items(repository, null, first, after, token);
+        string? search = null, CancellationToken token = default) =>
+        HistoryConnections.Items(repository, new(Search: search), first, after, token);
 
     public async Task<ExpansionGraph?> GetExpansionAsync([GraphQLType(typeof(NonNullType<IdType>))] string id,
         ExpansionLoader loader, CancellationToken token)

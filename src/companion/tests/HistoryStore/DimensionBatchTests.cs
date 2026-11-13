@@ -23,9 +23,10 @@ public sealed class DimensionBatchTests
             using Store store = new(Path.Combine(directory, "history.duckdb"));
             CraftDimensions dimensions = new(
                 [new(retail, character, "Name", "MAGE")],
-                [new(retail, 1, "First", 12, "expansion", 5), new(retail, 2, "Unrequested"), new(forever, 1, "Wrong"), new(forever, 2, null)],
+                [new(retail, 1, "First", 12, "expansion", 5), new(retail, 2, "Unrequested"),
+                    new(retail, 3, "Wild%_Recipe"), new(forever, 1, "Wrong"), new(forever, 2, null)],
                 [new(retail, 12, "Alchemy", 11)],
-                [new(retail, 10, "Reagent"), new(forever, 10, "Different")],
+                [new(retail, 10, "Reagent"), new(retail, 12, "Wild%_Item"), new(forever, 10, "Different")],
                 [new(retail, "expansion", "Expansion")])
             {
                 RecipeReagentSlots =
@@ -41,7 +42,7 @@ public sealed class DimensionBatchTests
             Assert.Multiple(() =>
             {
                 Assert.That(recipes, Has.Count.EqualTo(2));
-                Assert.That(recipes, Does.Contain(dimensions.Recipes[0]).And.Contain(dimensions.Recipes[3]));
+                Assert.That(recipes, Does.Contain(dimensions.Recipes[0]).And.Contain(dimensions.Recipes[4]));
                 Assert.That(store.ReadCharacters([new(retail, character)]), Is.EqualTo(dimensions.Characters));
                 Assert.That(store.ReadProfessions([new(retail, 12)]), Is.EqualTo(dimensions.Professions));
                 Assert.That(store.ReadItems([new(retail, 10)]), Is.EqualTo(new[] { dimensions.Items[0] }));
@@ -66,9 +67,18 @@ public sealed class DimensionBatchTests
                 Assert.That(paged, Is.EquivalentTo(dimensions.Recipes));
                 Assert.That(store.QueryRecipes(new(retail, 12, "expansion")).Items,
                     Is.EqualTo(new[] { dimensions.Recipes[0] }));
+                Assert.That(store.QueryRecipes(new(retail, 12, "expansion", "iRsT")).Items,
+                    Is.EqualTo(new[] { dimensions.Recipes[0] }));
+                Assert.That(store.QueryRecipes(new(retail, Search: "%_")).Items,
+                    Is.EqualTo(new[] { dimensions.Recipes[2] }));
                 Assert.That(store.QueryCharacters(retail).Items, Is.EqualTo(dimensions.Characters));
                 Assert.That(store.QueryProfessions(new(retail, 11)).Items, Is.EqualTo(dimensions.Professions));
-                Assert.That(store.QueryItems(retail).Items, Is.EqualTo(new[] { dimensions.Items[0], new ItemDimension(retail, 11) }));
+                Assert.That(store.QueryItems(new(retail)).Items,
+                    Is.EqualTo(new[] { dimensions.Items[0], new ItemDimension(retail, 11), dimensions.Items[1] }));
+                Assert.That(store.QueryItems(new(retail, Search: "rEaG")).Items,
+                    Is.EqualTo(new[] { dimensions.Items[0] }));
+                Assert.That(store.QueryItems(new(retail, Search: "%_")).Items,
+                    Is.EqualTo(new[] { dimensions.Items[1] }));
                 Assert.That(store.QueryExpansions(retail).Items, Is.EqualTo(dimensions.Expansions));
                 Assert.That(store.ReadGameContexts([retail, forever, new(GameProject.MistsClassic)]),
                     Is.EquivalentTo(new[] { retail, forever }));
