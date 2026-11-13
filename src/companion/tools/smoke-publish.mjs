@@ -23,8 +23,7 @@ const environment = {
   ARTISAN_LOGBOOK_DATA_DIRECTORY: path.join(directory, "data"),
 };
 // The application receives no Node/npm/Aspire PATH or source-tree working directory.
-environment.PATH =
-  process.platform === "win32" ? process.env.SystemRoot : "/usr/bin:/bin";
+environment.PATH = "";
 
 async function runHost(populated) {
   const listener = createServer();
