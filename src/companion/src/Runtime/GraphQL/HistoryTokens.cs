@@ -72,7 +72,7 @@ internal static class HistoryTokens
 
     private static Payload Decode(string value, string kind)
     {
-        if (string.IsNullOrEmpty(value) || value.Length > 4096) throw InvalidToken();
+        if (string.IsNullOrEmpty(value)) throw InvalidToken();
         try
         {
             string encoded = value.Replace('-', '+').Replace('_', '/');

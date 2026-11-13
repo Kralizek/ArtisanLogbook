@@ -161,6 +161,40 @@ public sealed class CompanionApiTests
     }
 
     [Test]
+    public async Task GraphQLLongCraftIdsAndCursorsRoundTrip()
+    {
+        GameContext game = new(GameProject.Retail);
+        string origin = new('o', 3000);
+        CraftObservation[] crafts =
+        [
+            new(new(origin, "one"), game, DateTimeOffset.Parse("2026-01-02T00:00:00Z"), null, new("player")),
+            new(new(origin + "x", "two"), game, DateTimeOffset.Parse("2026-01-01T00:00:00Z"), null, new("player"))
+        ];
+        await using ApiHost host = await Start(configure: services =>
+            services.Replace(ServiceDescriptor.Singleton<ICraftHistoryRepository>(new LongIdentityCraftRepository(crafts))));
+
+        JsonElement first = await GraphQL(host, "{ crafts(first: 1) { nodes { id } pageInfo { endCursor } } }");
+        JsonElement firstPage = first.GetProperty("data").GetProperty("crafts");
+        string id = firstPage.GetProperty("nodes")[0].GetProperty("id").GetString()!;
+        string cursor = firstPage.GetProperty("pageInfo").GetProperty("endCursor").GetString()!;
+        Assert.That(id.Length, Is.GreaterThan(4096));
+        Assert.That(cursor.Length, Is.GreaterThan(4096));
+
+        JsonElement lookup = await GraphQL(host, "query($id: ID!) { craft(id: $id) { id } }", new { id });
+        JsonElement nextPage = await GraphQL(host,
+            "query($after: String) { crafts(first: 1, after: $after) { nodes { id } pageInfo { hasNextPage } } }",
+            new { after = cursor });
+        Assert.Multiple(() =>
+        {
+            Assert.That(lookup.GetProperty("data").GetProperty("craft").GetProperty("id").GetString(), Is.EqualTo(id));
+            Assert.That(nextPage.GetProperty("data").GetProperty("crafts").GetProperty("nodes")[0]
+                .GetProperty("id").GetString(), Is.EqualTo(HistoryTokens.Craft(crafts[1].Identity)));
+            Assert.That(nextPage.GetProperty("data").GetProperty("crafts").GetProperty("pageInfo")
+                .GetProperty("hasNextPage").GetBoolean(), Is.False);
+        });
+    }
+
+    [Test]
     public async Task GraphQLNestedCraftPagesAreIndependent()
     {
         await using ApiHost host = await Start(configure: services =>
@@ -324,6 +358,81 @@ public sealed class CompanionApiTests
         finally
         {
             await cancellation.CancelAsync();
+        }
+    }
+
+    [Test]
+    public async Task GraphQLExecutionLimitBoundsConcurrentRequestsAndReleasesCapacityAfterCancellation()
+    {
+        using ConcurrentCraftRepository repository = new();
+        await using ApiHost host = await Start(configure: services =>
+            services.Replace(ServiceDescriptor.Singleton<ICraftHistoryRepository>(repository)));
+        List<CancellationTokenSource> cancellations = [];
+        List<Task<HttpResponseMessage>> requests = [];
+
+        Task<HttpResponseMessage> Send(CancellationToken token)
+        {
+            HttpRequestMessage request = host.Request(HttpMethod.Post, "/graphql",
+                "{\"query\":\"{ crafts(first: 1) { nodes { id } } }\"}");
+            return SendAndDisposeRequest(request, token);
+        }
+
+        async Task<HttpResponseMessage> SendAndDisposeRequest(HttpRequestMessage request, CancellationToken token)
+        {
+            using (request) return await host.Http.SendAsync(request, token);
+        }
+
+        try
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                CancellationTokenSource cancellation = new();
+                cancellations.Add(cancellation);
+                requests.Add(Send(cancellation.Token));
+            }
+            await repository.WaitForEntries(8);
+            Assert.That(repository.ActiveCount, Is.EqualTo(8));
+
+            CancellationTokenSource ninthCancellation = new();
+            cancellations.Add(ninthCancellation);
+            requests.Add(Send(ninthCancellation.Token));
+            await Task.Delay(200);
+            Assert.That(repository.MaxActiveCount, Is.EqualTo(8));
+            Assert.That(repository.ActiveCount, Is.EqualTo(8));
+
+            await cancellations[0].CancelAsync();
+            Assert.CatchAsync<OperationCanceledException>(async () => await requests[0]);
+            CancellationTokenSource recoveryCancellation = new();
+            cancellations.Add(recoveryCancellation);
+            requests.Add(Send(recoveryCancellation.Token));
+            await repository.WaitForEntries(9);
+            Assert.That(repository.MaxActiveCount, Is.EqualTo(8));
+
+            repository.Release();
+            foreach (Task<HttpResponseMessage> request in requests.Skip(1))
+            {
+                using HttpResponseMessage response = await request;
+                Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK),
+                    await response.Content.ReadAsStringAsync());
+            }
+        }
+        finally
+        {
+            repository.Release();
+            foreach (CancellationTokenSource cancellation in cancellations)
+                await cancellation.CancelAsync();
+            foreach (Task<HttpResponseMessage> request in requests)
+            {
+                try
+                {
+                    using HttpResponseMessage response = await request;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+            foreach (CancellationTokenSource cancellation in cancellations)
+                cancellation.Dispose();
         }
     }
 
@@ -998,6 +1107,88 @@ public sealed class CompanionApiTests
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter) => Exception = exception;
+    }
+
+    private sealed class LongIdentityCraftRepository(CraftObservation[] crafts) : ICraftHistoryRepository
+    {
+        public CraftPage Query(CraftQuery query, int first = 20, CraftPagePosition? after = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (query.Identity is not null)
+            {
+                CraftObservation? match = crafts.FirstOrDefault(craft => craft.Identity == query.Identity);
+                return new(match is null ? [] : [match], false, null);
+            }
+
+            int start = after is null
+                ? 0
+                : Array.FindIndex(crafts, craft => craft.Identity == after.Identity) + 1;
+            if (start < 0) return new([], false, null);
+            CraftObservation[] page = crafts.Skip(start).Take(first).ToArray();
+            bool hasNext = crafts.Length > start + page.Length;
+            CraftObservation? last = page.LastOrDefault();
+            return new(page, hasNext, last is null ? null : new(last.RecordedAt, last.Identity));
+        }
+
+        public IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> CharacterPages(
+            IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class ConcurrentCraftRepository : ICraftHistoryRepository, IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new();
+        private readonly TaskCompletionSource _eightEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _nineEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _active;
+        private int _maxActive;
+        private int _entered;
+
+        public int ActiveCount => Volatile.Read(ref _active);
+        public int MaxActiveCount => Volatile.Read(ref _maxActive);
+
+        public CraftPage Query(CraftQuery query, int first = 20, CraftPagePosition? after = null,
+            CancellationToken cancellationToken = default)
+        {
+            int active = Interlocked.Increment(ref _active);
+            UpdateMaximum(active);
+            int entered = Interlocked.Increment(ref _entered);
+            if (entered >= 8) _eightEntered.TrySetResult();
+            if (entered >= 9) _nineEntered.TrySetResult();
+            try
+            {
+                int signaled = WaitHandle.WaitAny([cancellationToken.WaitHandle, _release.WaitHandle], Timeout());
+                if (signaled == WaitHandle.WaitTimeout)
+                    throw new TimeoutException("The concurrent GraphQL request was not released.");
+                cancellationToken.ThrowIfCancellationRequested();
+                return new([], false, null);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
+        }
+
+        public IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> CharacterPages(
+            IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task WaitForEntries(int count) =>
+            (count <= 8 ? _eightEntered.Task : _nineEntered.Task).WaitAsync(Timeout());
+
+        public void Release() => _release.Set();
+
+        public void Dispose() => _release.Dispose();
+
+        private void UpdateMaximum(int active)
+        {
+            int current;
+            while (active > (current = Volatile.Read(ref _maxActive)) &&
+                Interlocked.CompareExchange(ref _maxActive, active, current) != current)
+            {
+            }
+        }
     }
 
     private sealed class FailingCraftRepository : ICraftHistoryRepository
