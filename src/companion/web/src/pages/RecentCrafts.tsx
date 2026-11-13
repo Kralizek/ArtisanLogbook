@@ -16,6 +16,7 @@ export function RecentCrafts() {
   const [after, setAfter] = useState<string>();
   const { data, error, loading, refetch } = useQuery(RecentCraftsDocument, {
     variables: { after },
+    fetchPolicy: "network-only",
     errorPolicy: "all",
     notifyOnNetworkStatusChange: true,
   });
@@ -61,7 +62,7 @@ export function RecentCrafts() {
                     </time>
                   </Table.Td>
                   <Table.Td>
-                    {craft.character.name ?? `Character ${craft.character.id}`}
+                    {craft.character.name ?? "Unknown character"}
                   </Table.Td>
                   <Table.Td>
                     {craft.recipe?.name ??
@@ -83,6 +84,15 @@ export function RecentCrafts() {
         </Table.ScrollContainer>
       )}
       <Group>
+        <Button
+          variant="default"
+          disabled={loading}
+          onClick={() => {
+            void refetch();
+          }}
+        >
+          Refresh
+        </Button>
         <Button
           variant="default"
           disabled={loading || !after}

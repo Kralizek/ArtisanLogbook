@@ -38,6 +38,8 @@ jobs:
           dotnet nuget list source --configfile NuGet.Config
       - run: dotnet restore ArtisanLogbook.Companion.slnx
       - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
+      - name: Verify incremental frontend asset recovery
+        run: node tools/smoke-incremental.mjs
       - run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
       # MSBuild already ran npm ci, offline contract generation, typecheck and Vite.
       - name: Verify frontend

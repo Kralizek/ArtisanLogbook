@@ -32,8 +32,13 @@ and Vite `dist` are ignored and regenerated during the build. An npm restore
 stamp changes with the dependency manifests; npm's postinstall also records a
 successful direct/Aspire restore so a subsequent MSBuild does not restore again.
 The frontend target uses source and
-contract timestamps plus a file-list stamp (so deletions are detected).
+contract timestamps plus a file-list stamp (so source deletions are detected).
+A successful build also records the generated output paths as MSBuild outputs;
+deleting a JS/CSS asset with `dist/index.html` retained triggers regeneration.
 An unchanged build skips restore and bundling.
+After the usual .NET restore, run `node tools/smoke-incremental.mjs` from
+`src/companion` to verify JS/CSS recovery and unchanged-build skipping. CI runs
+this same regression smoke on Windows and Linux.
 
 Resource inclusion happens in a target **before the embedded-provider manifest
 input calculation and AssignTargetPaths**, after Vite has finished. The glob is
@@ -231,6 +236,16 @@ canonical craft identity. No decoder or parallel cache identity is introduced.
 Pagination uses `nodes`, `pageInfo.endCursor` and `hasNextPage` explicitly;
 connections are not assumed to be full Relay connections. A page is replaced
 when advancing, with a Newest action to reset; no generic pagination merger.
+Recent crafts uses `network-only` on visits and cursor changes. Its Refresh
+button reloads the current page; Newest returns to the first page. Missing
+character names render as "Unknown character", not an opaque cache identifier.
+
+Operational status and craft counts refresh 30 seconds after each completed
+request while the document is visible, and immediately when it becomes visible
+again. Hidden documents do not start refresh requests; a pending request may
+finish. Requests are serialized, failures retain retry/error presentation and
+recover on the next refresh, and unmount/retry cancels superseded requests.
+No subscriptions or general cache-invalidation mechanism is involved.
 
 **Numeric policy:** standard JSON parsing is used. Generated Long/Decimal scalars
 are `number`, matching runtime, but this is **not exact arbitrary-precision

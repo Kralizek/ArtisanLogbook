@@ -36,23 +36,54 @@ export function useStatus() {
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    readStatus(controller.signal).then(
-      (value) => {
-        if (controller.signal.aborted) return;
-        setStatus(value);
-        setLoading(false);
-      },
-      (failure: unknown) => {
-        if (controller.signal.aborted) return;
-        setError(
-          failure instanceof Error
-            ? failure
-            : new Error("Status request failed."),
-        );
-        setLoading(false);
-      },
-    );
-    return () => controller.abort();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let pending = false;
+    function refresh() {
+      if (
+        pending ||
+        controller.signal.aborted ||
+        document.visibilityState === "hidden"
+      )
+        return;
+      pending = true;
+      readStatus(controller.signal)
+        .then(
+          (value) => {
+            if (controller.signal.aborted) return;
+            setStatus(value);
+            setError(undefined);
+            setLoading(false);
+          },
+          (failure: unknown) => {
+            if (controller.signal.aborted) return;
+            setError(
+              failure instanceof Error
+                ? failure
+                : new Error("Status request failed."),
+            );
+            setLoading(false);
+          },
+        )
+        .finally(() => {
+          pending = false;
+          if (
+            !controller.signal.aborted &&
+            document.visibilityState !== "hidden"
+          )
+            timer = setTimeout(refresh, 30_000);
+        });
+    }
+    function visibilityChanged() {
+      clearTimeout(timer);
+      if (document.visibilityState !== "hidden") refresh();
+    }
+    document.addEventListener("visibilitychange", visibilityChanged);
+    refresh();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
   }, [revision]);
   return {
     status,

@@ -24,12 +24,21 @@
   <Target Name="RecordFrontendInputs" DependsOnTargets="RestoreFrontend" Condition="'$(CompanionWebDevelopment)' != 'true'">
     <WriteLinesToFile File="$(WebDirectory)node_modules/.companion-inputs" Lines="@(FrontendInput->'%(FullPath)')"
                       Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ReadLinesFromFile File="$(WebDirectory)node_modules/.companion-outputs"
+                       Condition="Exists('$(WebDirectory)node_modules/.companion-outputs')">
+      <Output TaskParameter="Lines" ItemName="FrontendOutput" />
+    </ReadLinesFromFile>
   </Target>
   <Target Name="BuildFrontend" Condition="'$(CompanionWebDevelopment)' != 'true'"
           DependsOnTargets="RecordFrontendInputs"
           Inputs="@(FrontendInput);$(WebDirectory)node_modules/.companion-restore;$(WebDirectory)node_modules/.companion-inputs"
-          Outputs="$(WebDirectory)dist/index.html">
+          Outputs="$(WebDirectory)dist/index.html;$(WebDirectory)node_modules/.companion-outputs;@(FrontendOutput)">
     <Exec Command="$(NpmCommand) run build" WorkingDirectory="$(WebDirectory)" />
+    <ItemGroup>
+      <BuiltFrontendOutput Include="$(WebDirectory)dist/**/*" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(WebDirectory)node_modules/.companion-outputs" Lines="@(BuiltFrontendOutput->'%(FullPath)')"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
   </Target>
   <!-- Enumerate after Vite, not during project evaluation on a clean checkout. -->
   <Target Name="IncludeFrontend" BeforeTargets="_CalculateEmbeddedFilesManifestInputs;AssignTargetPaths" DependsOnTargets="BuildFrontend"
