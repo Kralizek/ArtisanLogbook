@@ -33,6 +33,11 @@ ordinary .NET builds intentionally skip the production frontend. Aspire restores
 npm dependencies, generates contracts and starts Vite after backend HTTP health
 succeeds. The first restore on a mounted checkout can take several minutes.
 Leave `web` waiting for `web-installer`; do not force Start during installation.
+Aspire's dashboard **Start** command overrides dependency waiting. A Running
+`web-installer` is still installing packages, not ready for Vite. Wait for its
+successful completion and the web log's `Finished waiting for resource
+'web-installer'` message; Vite then starts automatically. If web was started
+prematurely and failed, let the installer finish before starting web again.
 The development-only web resource explicitly sets `NODE_ENV=development`;
 otherwise a production-mode AppHost makes Vite disable React Fast Refresh.
 
@@ -199,6 +204,10 @@ agree. Vite's WebSocket uses the browser endpoint for HMR.
   shell initialization. `aspire logs web-installer` and `aspire logs web` show
   the executable DCP actually launches.
 - **Missing graphql-codegen:** wait for `web-installer` to exit successfully.
+  If the web log shows `Executing command 'start'` without first showing
+  `Finished waiting for resource 'web-installer'`, Start bypassed the install
+  dependency. Do not stop the whole AppHost while npm is still installing; allow
+  the installer to finish, then start the failed web resource again.
   Never run npm/MSBuild restores concurrently, including a deployment script on
   the host against the container's mounted checkout. Host and container npm ci
   replace the same `node_modules`; host .NET restores also overwrite shared
