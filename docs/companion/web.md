@@ -13,6 +13,60 @@ published executable, not mocked application data:
 ![Companion overview](images/web-overview.png)
 ![Recent canonical crafts](images/web-history.png)
 
+## Daily development: VS Code Dev Containers
+
+The repository devcontainer is the primary supported development environment.
+Open the checkout with **Dev Containers: Reopen in Container**. After changing
+`.devcontainer/devcontainer.json`, stop Aspire and use **Dev Containers: Rebuild
+Container**; opening another terminal in an old container does not install tools.
+
+From `src/companion`:
+
+```sh
+node tools/development.mjs import-fixture # optional; stop Aspire before importing
+aspire run
+```
+
+No separate backend/Vite commands, PATH edits, frontend build or environment
+variables are needed. The container defaults `CompanionWebDevelopment=true`:
+ordinary .NET builds intentionally skip the production frontend. Aspire restores
+npm dependencies, generates contracts and starts Vite after backend HTTP health
+succeeds. The first restore on a mounted checkout can take several minutes.
+Leave `web` waiting for `web-installer`; do not force Start during installation.
+The development-only web resource explicitly sets `NODE_ENV=development`;
+otherwise a production-mode AppHost makes Vite disable React Fast Refresh.
+
+Open the dashboard URL printed by Aspire, then the `web` endpoint. VS Code's
+**Ports** view also exposes forwarded endpoints; if a dynamic port is missing,
+choose **Forward a Port** and enter the port printed by Aspire. Keep forwards
+private and browser URLs on `localhost` or `127.0.0.1`. The dashboard uses HTTPS;
+Vite and Companion use HTTP. Container certificate trust does **not** trust the
+certificate on the host: follow [.NET's certificate guidance](https://aka.ms/dev-certs-trust)
+for the host browser before opening the HTTPS dashboard. Do not disable browser
+certificate validation. Opening the forwarded HTTP web endpoint directly avoids
+this dashboard-only certificate requirement.
+
+| Edit | Development loop |
+| --- | --- |
+| React / CSS | Save; Vite Fast Refresh / CSS HMR updates the browser without restarting Companion. Aspire enables 300 ms polling for mounted filesystems. |
+| Authored `.graphql` operation | Save, then run `npm run codegen` from `web`. Vite reloads the generated document; types and browser queries stay synchronized. |
+| Backend SDL / OpenAPI | Update the committed `src/Runtime/GraphQL/schema.graphql` / `src/Runtime/Api/Contracts/openapi.yaml` with the backend change, run contract tests, then `npm run codegen` and `npm run typecheck` from `web`. Rebuild the backend too. |
+| C# | Save, then use Companion's **Rebuild** dashboard command, or `aspire resource companion rebuild` in another terminal. **Restart** alone does not compile source. |
+| AppHost / orchestration | Stop with Ctrl+C, then `aspire run` again. |
+
+Contract generation is deliberately explicit after startup, not a background
+watcher. Editing an operation alone does not regenerate imported documents.
+One `npm run codegen` regenerates both offline contracts reliably on mounts that
+do not deliver native change events. GraphQL Code Generator's optional watch
+mode requires an additional native watcher; it is not part of this workflow.
+There is no custom backend watcher or promise of C# hot reload.
+
+Ctrl+C stops Aspire and its resources and releases the development database.
+Re-run `aspire run` to retain history. Stop Aspire before offline imports or
+`node tools/development.mjs reset --confirm`; reset deletes only isolated
+development data. See [isolated fixtures](#isolated-history-and-fixtures) and
+[production publishing](#publish-and-verify-one-executable).
+
 ## Production architecture
 
 ```text
@@ -86,34 +140,29 @@ a considered policy, not a blanket CSP that breaks components.
 
 ## Tooling and local development
 
-Required: repository-pinned .NET SDK **10.0.401**, Node **26.13.1 LTS**, npm **11**,
-and Aspire CLI **13.6.5**. Install Aspire using its
-[official installation instructions](https://aspire.dev/get-started/install-cli/).
-The AppHost SDK and integrations are pinned to 13.6.5. It uses the CLI bundle
-for its dashboard and orchestration. No Docker or external database is required.
+The declarative features provision .NET **10.0**, Node **26.13.1** with bundled
+npm **11** (no npm override), stable Aspire CLI, OS Python, PowerShell, GitHub CLI,
+Lua 5.1, LuaRocks, Ubuntu `lua-check`, PyYAML and jq. `postCreateCommand` only
+initializes certificate trust. No manual global npm/LuaRocks installation is
+required. The .NET SDK must satisfy `global.json` (**10.0.401**, allowing patch
+roll-forward within that feature band).
 
-From `src/companion`:
+AppHost SDK and hosting integrations are pinned to **13.6.5**. The official
+Aspire feature **3.1.0** supports `installCli` and `useDailyBuilds`, but **no CLI
+version option**. Its stable installer currently supplies compatible 13.6.5;
+the feature lock pins feature code, not that external download. Check
+`aspire --version` after rebuilding when updating tools. Do not add an unsupported
+`version` property or a second installer to `postCreateCommand`. No Docker or
+external database is required to run this AppHost.
 
-```sh
-aspire run
-```
-
-For the lean development build without a production bundle (POSIX):
-
-```sh
-CompanionWebDevelopment=true aspire run --apphost tools/AppHost/AppHost.csproj
-```
-
-PowerShell equivalent:
-
-```powershell
-$env:CompanionWebDevelopment = 'true'
-aspire run --apphost tools/AppHost/AppHost.csproj
-Remove-Item Env:CompanionWebDevelopment # before production publishing
-```
+Outside the container, provision the same prerequisites and use
+`CompanionWebDevelopment=true aspire run` (PowerShell:
+`$env:CompanionWebDevelopment='true'; aspire run`). The explicit
+`--apphost tools/AppHost/AppHost.csproj` option is optional; the committed
+`aspire.config.json` already selects it.
 
 The CLI prints the dashboard URL and access token. Open the `web` resource's
-HTTP endpoint from that dashboard. Aspire allocates **unproxied** endpoints for
+HTTP endpoint from that dashboard. Aspire allocates dynamic **unproxied** endpoints for
 both processes, so no Aspire HTTP proxy changes browser Host/Origin semantics.
 The Companion receives its allocated port through existing `--port` plus
 `--require-port` (fail on a conflict, never silently use an undiscovered port).
@@ -134,6 +183,39 @@ Sec-Fetch-Site before proxying, then rewrites **only validated** API Origins to
 the upstream Companion origin. `changeOrigin` sets the upstream Host. Client
 headers and bodies remain intact. Untrusted origins are rejected, not stripped.
 CORS is disabled; backend security is never disabled.
+
+VS Code auto-forwarding uses the official Aspire feature's hybrid detection;
+the repository overrides its default `ignore` action with `notify`. No fixed
+ports, public tunnels, wildcard binds or permissive origins are necessary.
+Different local forwarded ports are allowed as long as browser Host and Origin
+agree. Vite's WebSocket uses the browser endpoint for HMR.
+
+### Troubleshooting
+
+- **Missing node/npm:** rebuild the container, then restart Aspire. Check
+  `command -v node npm npx aspire dotnet` from a new terminal. Node's feature
+  supplies `/usr/local/share/nvm/current/bin` in the container PATH; Aspire's
+  feature supplies `/usr/local/bin/aspire`. They do not rely on interactive nvm
+  shell initialization. `aspire logs web-installer` and `aspire logs web` show
+  the executable DCP actually launches.
+- **Missing graphql-codegen:** wait for `web-installer` to exit successfully.
+  Never run npm/MSBuild restores concurrently, including a deployment script on
+  the host against the container's mounted checkout. Host and container npm ci
+  replace the same `node_modules`; host .NET restores also overwrite shared
+  `obj` assets with Windows paths. Use a separate checkout for host deployment.
+  If installation was interrupted,
+  stop Aspire and run `npm ci --include=dev` from `web`, then restart. Do not
+  install codegen globally. Run `dotnet restore ArtisanLogbook.Companion.slnx`
+  inside the container if the host overwrote NuGet assets.
+- **Certificate errors:** `aspire certs trust --non-interactive` and
+  `dotnet dev-certs https --check --trust` check container initialization.
+  `SSL_CERT_DIR` includes the user's dev-cert trust directory. Host browser
+  trust is separate; an HTTPS port forward alone does not establish it.
+- **Unreachable browser / HMR:** check the Ports view's actual forwarded address
+  and scheme, and use a private loopback HTTP address for Vite. Verify the HMR
+  WebSocket in browser developer tools. A public forwarding domain is
+  intentionally rejected. Do not disable Host/Origin checks, CORS or the client
+  header. A busy required Companion port fails explicitly instead of falling back.
 
 The direct AppHost alternative after installing/initializing the Aspire CLI
 bundle is:
@@ -203,16 +285,34 @@ npm run lint
 npm run format:check
 npm run test
 npm run build
-npx playwright install chromium
+npx playwright install --with-deps chromium
 npm run test:development
 ```
 
 The final command starts the actual Aspire AppHost with temporary data, imports
 through the CLI, verifies health/REST/GraphQL through Vite, rejects cross-origin
 requests, runs a real Chromium navigation smoke and verifies a CSS hot update.
-It restores the touched stylesheet and stops its helper processes. Playwright is
+It restores temporary React/CSS/GraphQL edits and stops its helper processes.
+It also verifies React Fast Refresh, explicit contract regeneration, pagination
+and Refresh using real imported history. Playwright is
 only a small smoke harness, not a second frontend testing framework or dashboard
-end-to-end suite. Linux CI installs browser OS dependencies with `--with-deps`.
+end-to-end suite. `--with-deps` supplies Chromium's OS libraries in minimal Linux
+containers as well as downloading the browser; it is only needed for browser
+tests, not ordinary Aspire startup.
+
+### .NET tests and asset modes
+
+Ordinary container builds use development assets. Tests that serve the embedded
+application need production resources; explicitly select that mode for their
+build (do not reuse a development build with `--no-build`):
+
+```sh
+dotnet test ArtisanLogbook.Companion.slnx -c Release -p:CompanionWebDevelopment=false
+```
+
+Other targeted backend tests may use the container default. GitHub Actions does
+not load devcontainer `remoteEnv`; its ordinary builds retain production assets.
+Stop Aspire before changing asset modes in shared build directories.
 
 ## Generated API contracts
 
@@ -266,10 +366,11 @@ dependency; codegen/lint/tests verify compatibility. `npm audit` is clean.
 ## Publish and verify one executable
 
 Supported distribution smoke targets are **linux-x64** and **win-x64**. From
-`src/companion`, unset CompanionWebDevelopment, then:
+`src/companion`, stop Aspire and explicitly override the container's development
+default for this invocation:
 
 ```sh
-dotnet publish src/Cli/Cli.csproj -c Release -r linux-x64 \
+env -u CompanionWebDevelopment dotnet publish src/Cli/Cli.csproj -c Release -r linux-x64 \
   --self-contained true -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false \
   -warnaserror -o .artifacts/publish/linux-x64
@@ -281,11 +382,17 @@ PowerShell:
 
 ```powershell
 dotnet publish src/Cli/Cli.csproj -c Release -r win-x64 --self-contained true `
+  -p:CompanionWebDevelopment=false `
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
   -p:PublishTrimmed=false -warnaserror -o .artifacts/publish/win-x64
 node tools/smoke-publish.mjs .artifacts/publish/win-x64/artisanlogbook.exe `
   ../addon/tests/fixtures/legacy/v1-outcome1.lua
 ```
+
+`-p:CompanionWebDevelopment=false` works on either OS without unsetting the
+environment variable. Publishing rebuilds the production provider even after
+development-only builds in the same directories. Do not use `--no-build`; both
+that shortcut and publishing with development assets remain rejected.
 
 The smoke harness copies **only the executable** into a new empty temporary
 directory, removes Node/npm/Aspire from the child's PATH, uses isolated writable

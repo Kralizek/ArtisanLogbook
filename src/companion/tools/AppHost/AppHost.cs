@@ -31,6 +31,7 @@ builder.AddViteApp("web", "../../web")
     })
     .WithEnvironment("COMPANION_URL", ReferenceExpression.Create(
         $"http://127.0.0.1:{companion.GetEndpoint("http").Property(EndpointProperty.Port)}"))
+    .WithEnvironment("NODE_ENV", "development")
     .WithEnvironment("VITE_USE_POLLING", "true")
     .WaitFor(companion);
 
