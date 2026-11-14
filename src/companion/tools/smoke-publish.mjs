@@ -8,11 +8,14 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { smokeBrowser } from "../web/scripts/smoke-browser.mjs";
 
-const [executable, fixture] = process.argv.slice(2);
+const [executable, fixture, ...options] = process.argv.slice(2);
 assert(
-  executable && fixture,
-  "Usage: node tools/smoke-publish.mjs <published executable> <fixture>",
+  executable &&
+    fixture &&
+    options.every((option) => option === "--skip-browser"),
+  "Usage: node tools/smoke-publish.mjs <published executable> <fixture> [--skip-browser]",
 );
+const skipBrowser = options.includes("--skip-browser");
 const directory = await mkdtemp(path.join(tmpdir(), "artisan-web-publish-"));
 const binary = path.join(directory, path.basename(executable));
 await copyFile(path.resolve(executable), binary);
@@ -126,12 +129,14 @@ async function runHost(populated) {
         .status,
       403,
     );
-    await smokeBrowser(
-      base,
-      populated ? "production-fixture" : "production-empty",
-    );
+    if (!skipBrowser) {
+      await smokeBrowser(
+        base,
+        populated ? "production-fixture" : "production-empty",
+      );
+    }
     console.log(
-      `Single-executable smoke passed (${populated ? "fixture history" : "empty history"}).`,
+      `Single-executable smoke passed (${populated ? "fixture history" : "empty history"}${skipBrowser ? ", browser skipped" : ""}).`,
     );
   } finally {
     if (child.exitCode === null) child.kill("SIGINT");
