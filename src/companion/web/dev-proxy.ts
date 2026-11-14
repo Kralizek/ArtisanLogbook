@@ -12,7 +12,21 @@ export function isLocalRequest(request: IncomingMessage): boolean {
   const url = new URL(`http://${host}`);
   if (!["127.0.0.1", "localhost"].includes(url.hostname)) return false;
   const site = request.headers["sec-fetch-site"];
-  if (site && site !== "same-origin" && site !== "none") return false;
+  const documentNavigation =
+    request.method === "GET" &&
+    ["/", "/history", "/history/"].includes(
+      (request.url ?? "").split("?")[0],
+    ) &&
+    request.headers["sec-fetch-mode"] === "navigate" &&
+    request.headers["sec-fetch-dest"] === "document" &&
+    request.headers["sec-fetch-user"] === "?1";
+  if (
+    site &&
+    site !== "same-origin" &&
+    site !== "none" &&
+    !(documentNavigation && (site === "same-site" || site === "cross-site"))
+  )
+    return false;
   const origin = request.headers.origin;
   return !origin || origin === url.origin;
 }

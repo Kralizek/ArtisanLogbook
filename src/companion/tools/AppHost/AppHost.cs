@@ -23,7 +23,7 @@ companion.WithArgs(context =>
 
 builder.AddViteApp("web", "../../web")
     .WithNpm(install: builder.Configuration.GetValue("Development:InstallFrontend", true),
-        installCommand: "ci", installArgs: ["--no-audit", "--no-fund"])
+        installCommand: "install", installArgs: ["--no-save", "--include=dev", "--no-audit", "--no-fund"])
     .WithEndpoint("http", endpoint =>
     {
         endpoint.IsProxied = false;

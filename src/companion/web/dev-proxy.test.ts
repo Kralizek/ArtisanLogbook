@@ -31,4 +31,55 @@ describe("development proxy trust boundary", () => {
   it("refuses a non-loopback upstream", () => {
     expect(() => localApiProxy("http://example.com")).toThrow("loopback");
   });
+  const navigation = {
+    method: "GET",
+    url: "/",
+    headers: {
+      host: "localhost:5173",
+      "sec-fetch-site": "same-site",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "document",
+      "sec-fetch-user": "?1",
+    },
+  };
+  it.each(["same-site", "cross-site"])(
+    "allows a user to open the SPA from a %s dashboard link",
+    (site) => {
+      expect(
+        isLocalRequest({
+          ...navigation,
+          headers: { ...navigation.headers, "sec-fetch-site": site },
+        } as IncomingMessage),
+      ).toBe(true);
+    },
+  );
+  it.each(["/api/v1/status", "/graphql", "/assets/index.js"])(
+    "does not relax fetch metadata for navigation to %s",
+    (url) => {
+      expect(isLocalRequest({ ...navigation, url } as IncomingMessage)).toBe(
+        false,
+      );
+    },
+  );
+  it("still rejects an untrusted origin on document navigation", () => {
+    expect(
+      isLocalRequest({
+        ...navigation,
+        headers: { ...navigation.headers, origin: "http://attacker.example" },
+      } as IncomingMessage),
+    ).toBe(false);
+  });
+  it("does not allow cross-port background fetches of the SPA", () => {
+    expect(
+      isLocalRequest({
+        ...navigation,
+        headers: { ...navigation.headers, "sec-fetch-mode": "cors" },
+      } as IncomingMessage),
+    ).toBe(false);
+  });
+  it("does not allow a cross-port POST to the SPA", () => {
+    expect(
+      isLocalRequest({ ...navigation, method: "POST" } as IncomingMessage),
+    ).toBe(false);
+  });
 });

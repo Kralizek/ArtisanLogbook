@@ -31,7 +31,10 @@ No separate backend/Vite commands, PATH edits, frontend build or environment
 variables are needed. The container defaults `CompanionWebDevelopment=true`:
 ordinary .NET builds intentionally skip the production frontend. Aspire restores
 npm dependencies, generates contracts and starts Vite after backend HTTP health
-succeeds. The first restore on a mounted checkout can take several minutes.
+succeeds. Development uses incremental `npm install --no-save --include=dev`:
+unchanged starts reuse `node_modules`, without rewriting the lockfile. The first
+restore on a mounted checkout can take several minutes. Production builds and CI
+retain clean `npm ci` restores.
 Leave `web` waiting for `web-installer`; do not force Start during installation.
 Aspire's dashboard **Start** command overrides dependency waiting. A Running
 `web-installer` is still installing packages, not ready for Vite. Wait for its
@@ -188,6 +191,11 @@ Sec-Fetch-Site before proxying, then rewrites **only validated** API Origins to
 the upstream Companion origin. `changeOrigin` sets the upstream Host. Client
 headers and bodies remain intact. Untrusted origins are rejected, not stripped.
 CORS is disabled; backend security is never disabled.
+User-initiated top-level GET navigation to `/`, `/history` or `/history/` may
+come from a dashboard on another origin. This exception serves only the SPA
+document, not API calls, assets or background fetches; Host and Origin checks
+still apply. Subsequent API requests must originate from the web application's
+own origin.
 
 VS Code auto-forwarding uses the official Aspire feature's hybrid detection;
 the repository overrides its default `ignore` action with `notify`. No fixed
@@ -248,7 +256,7 @@ Aspire normally uses random available ports. Optional `Development__CompanionPor
 for reproducible smoke tests or explicit developer overrides.
 `Development__InstallFrontend=false` skips Aspire's npm installer when dependencies
 have already been restored. The smoke harness uses this after the production
-build/npm restoration; ordinary AppHost startup defaults to reproducible npm ci.
+build/npm restoration; ordinary AppHost startup runs the incremental installer.
 
 ### Isolated history and fixtures
 
