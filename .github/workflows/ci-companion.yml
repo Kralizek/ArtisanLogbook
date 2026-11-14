@@ -26,14 +26,28 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           global-json-file: src/companion/global.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26.13.1'
+          cache: npm
+          cache-dependency-path: src/companion/web/package-lock.json
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lua5.1
       - name: Verify scoped NuGet sources
         run: |
           dotnet nuget list source --configfile NuGet.Config
       - run: dotnet restore ArtisanLogbook.Companion.slnx
-      - run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
       - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
+      - name: Verify incremental frontend asset recovery
+        run: node tools/smoke-incremental.mjs
+      - run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
+      # MSBuild already ran npm ci, offline contract generation, typecheck and Vite.
+      - name: Verify frontend
+        working-directory: src/companion/web
+        run: npm run typecheck && npm run lint && npm run format:check && npm run test && npm audit
+      - name: Install smoke-test browser
+        working-directory: src/companion/web
+        run: npx playwright install --with-deps chromium
       - run: dotnet test tests/Core/Tests.Core.csproj --no-build -c Release
       - run: dotnet test tests/HistoryStore/Tests.HistoryStore.csproj --no-build -c Release
       - run: dotnet test tests/ImportService/Tests.ImportService.csproj --no-build -c Release
@@ -46,6 +60,60 @@ jobs:
       - run: ./artifacts/tool/artisanlogbook --version
       - run: ./artifacts/tool/artisanlogbook import ../addon/tests/fixtures/legacy/v1-outcome1.lua --database artifacts/history.duckdb
       - run: ./artifacts/tool/artisanlogbook status --database artifacts/history.duckdb
+      - name: Install pinned Aspire CLI
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $rid = if ($IsWindows) { 'win-x64' } else { 'linux-x64' }
+          $extension = if ($IsWindows) { 'zip' } else { 'tar.gz' }
+          $archive = "aspire-cli-$rid-13.6.5.$extension"
+          $install = Join-Path '${{ runner.temp }}' 'aspire'
+          New-Item -ItemType Directory -Path $install -Force | Out-Null
+          gh release download v13.6.5 -R microsoft/aspire -p $archive -p "$archive.sha512" -D $install
+          if ($LASTEXITCODE -ne 0) { throw 'Aspire download failed' }
+          $expected = (Get-Content (Join-Path $install "$archive.sha512") -Raw).Trim()
+          if ((Get-FileHash (Join-Path $install $archive) -Algorithm SHA512).Hash -ne $expected) {
+            throw 'Aspire checksum mismatch'
+          }
+          if ($IsWindows) {
+            Expand-Archive (Join-Path $install $archive) -DestinationPath $install
+          } else {
+            tar -xzf (Join-Path $install $archive) -C $install
+            if ($LASTEXITCODE -ne 0) { throw 'Aspire extraction failed' }
+          }
+          $install >> $env:GITHUB_PATH
+      - name: Verify Aspire, browser proxy and hot reload
+        working-directory: src/companion/web
+        env:
+          SMOKE_SCREENSHOTS_DIRECTORY: ${{ runner.temp }}/web-screenshots
+        run: npm run test:development
+      - name: Verify executable-only distribution
+        shell: pwsh
+        env:
+          SMOKE_SCREENSHOTS_DIRECTORY: ${{ runner.temp }}/web-screenshots
+        run: |
+          $rid = if ($IsWindows) { 'win-x64' } else { 'linux-x64' }
+          $name = if ($IsWindows) { 'artisanlogbook.exe' } else { 'artisanlogbook' }
+          dotnet publish src/Cli/Cli.csproj -c Release -r $rid --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -warnaserror -o ".artifacts/publish/$rid"
+          if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
+          node tools/smoke-publish.mjs ".artifacts/publish/$rid/$name" ../addon/tests/fixtures/legacy/v1-outcome1.lua
+          if ($LASTEXITCODE -ne 0) { throw 'Executable-only smoke failed' }
+          Get-Item ".artifacts/publish/$rid/$name" | Select-Object Name,Length
+      - name: Reject stale and development-only publishing
+        shell: pwsh
+        run: |
+          dotnet publish src/Cli/Cli.csproj -c Release --no-build -p:CompanionWebDevelopment=true
+          if ($LASTEXITCODE -eq 0) { throw 'Development-only publishing must fail' }
+          dotnet publish src/Cli/Cli.csproj -c Release --no-build
+          if ($LASTEXITCODE -eq 0) { throw 'Publishing without current asset validation must fail' }
+          exit 0
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: companion-web-screenshots-${{ runner.os }}
+          path: ${{ runner.temp }}/web-screenshots
+          if-no-files-found: ignore
       - name: Smoke-test Windows self-contained local deployment
         if: runner.os == 'Windows'
         shell: pwsh

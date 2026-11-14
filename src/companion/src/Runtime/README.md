@@ -92,6 +92,16 @@ path or an async-disposal implementation.
 DI owns the store and provides fallback disposal after failed startup or host
 disposal without normal stopping.
 
+The same host also serves the embedded browser application. Runtime references
+the dedicated `WebAssets` assembly, not frontend source files or Aspire.
+`LocalApiSecurityMiddleware` runs before exception handling, embedded static
+files, routing and API endpoints. Only GET/HEAD `/`, `/history` and `/history/`
+are rewritten to the embedded document; unknown server routes and missing
+assets retain problem responses. All responses keep the existing `no-store`
+and `nosniff` policy. Browser clients consume the public REST/GraphQL contracts,
+never Runtime services or repositories.
+See [web architecture and development](../../../../docs/companion/web.md).
+
 C03 tracks admitted reads/writes so disposal cannot race a live connection.
 At `StoppedAsync`, Runtime starts C03 disposal before draining residual application
 leases. Database disposal uses C03's grace period (five seconds by default);

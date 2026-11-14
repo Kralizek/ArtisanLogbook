@@ -24,4 +24,9 @@
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
+  <Target Name="ValidateFrontendPublish" BeforeTargets="PrepareForPublish">
+    <Error Condition="'$(CompanionWebDevelopment)' == 'true'" Text="Production publish cannot use CompanionWebDevelopment=true." />
+    <!-- The SDK routes dotnet tool packing through publish targets as well. -->
+    <Error Condition="'$(NoBuild)' == 'true' and '$(_IsPacking)' != 'true'" Text="Companion publishing requires a build to validate and embed current frontend assets. Do not use --no-build." />
+  </Target>
 </Project>

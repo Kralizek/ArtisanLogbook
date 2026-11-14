@@ -5,16 +5,41 @@
     "ghcr.io/devcontainers/features/dotnet:2": {
       "version": "10.0"
     },
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/microsoft/aspire-devcontainer-feature/aspire:3": {},
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "26.13.1",
+      "npmVersion": "none",
+      "pnpmVersion": "none"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "os-provided",
+      "installTools": false
+    },
+    "ghcr.io/devcontainers/features/powershell:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
+      "packages": "lua5.1,luarocks,lua-check,python3-yaml,jq"
+    }
   },
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y lua5.1 luarocks python3 python3-yaml jq && sudo luarocks install luacheck",
+  "remoteEnv": {
+    "CompanionWebDevelopment": "true",
+    "SSL_CERT_DIR": "/home/vscode/.aspnet/dev-certs/trust:/usr/lib/ssl/certs"
+  },
+  "postCreateCommand": "aspire certs trust --non-interactive",
   "remoteUser": "vscode",
   "customizations": {
     "vscode": {
+      "settings": {
+        "remote.otherPortsAttributes": {
+          "onAutoForward": "notify"
+        }
+      },
       "extensions": [
         "GitHub.copilot",
         "GitHub.copilot-chat",
-        "ms-dotnettools.csdevkit"
+        "ms-dotnettools.csdevkit",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
       ]
     }
   }
