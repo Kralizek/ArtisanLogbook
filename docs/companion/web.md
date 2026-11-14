@@ -30,8 +30,11 @@ aspire run
 No separate backend/Vite commands, PATH edits, frontend build or environment
 variables are needed. The container defaults `CompanionWebDevelopment=true`:
 ordinary .NET builds intentionally skip the production frontend. Aspire restores
-npm dependencies, generates contracts and starts Vite after backend HTTP health
-succeeds. Development uses incremental `npm install --no-save --include=dev`:
+npm dependencies, checks generated contracts and starts Vite after backend HTTP health
+succeeds. Development startup regenerates contracts only when their inputs or
+generated files change; unchanged starts reuse them. The first generation can
+take tens of seconds on mounted checkouts after `web-installer` completes.
+Development uses incremental `npm install --no-save --include=dev`:
 unchanged starts reuse `node_modules`, without rewriting the lockfile. The first
 restore on a mounted checkout can take several minutes. Production builds and CI
 retain clean `npm ci` restores.
@@ -39,7 +42,8 @@ Leave `web` waiting for `web-installer`; do not force Start during installation.
 Aspire's dashboard **Start** command overrides dependency waiting. A Running
 `web-installer` is still installing packages, not ready for Vite. Wait for its
 successful completion and the web log's `Finished waiting for resource
-'web-installer'` message; Vite then starts automatically. If web was started
+'web-installer'` message; the contract check and Vite then run automatically.
+If web was started
 prematurely and failed, let the installer finish before starting web again.
 The development-only web resource explicitly sets `NODE_ENV=development`;
 otherwise a production-mode AppHost makes Vite disable React Fast Refresh.

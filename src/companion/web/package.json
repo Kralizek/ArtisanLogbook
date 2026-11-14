@@ -9,7 +9,7 @@
   },
   "scripts": {
     "postinstall": "node -e \"require('node:fs').writeFileSync('node_modules/.companion-restore', '')\"",
-    "dev": "npm run codegen && vite",
+    "dev": "node scripts/codegen.mjs && vite",
     "build": "npm run codegen && npm run typecheck && vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
