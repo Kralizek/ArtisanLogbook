@@ -23,7 +23,28 @@
   },
   "remoteEnv": {
     "CompanionWebDevelopment": "true",
+    "Development__CompanionPort": "48721",
+    "Development__WebPort": "5173",
+    "ASPNETCORE_URLS": "https://localhost:18888",
     "SSL_CERT_DIR": "/home/vscode/.aspnet/dev-certs/trust:/usr/lib/ssl/certs"
+  },
+  "forwardPorts": [18888, 5173, 48721],
+  "portsAttributes": {
+    "18888": {
+      "label": "Aspire dashboard",
+      "protocol": "https",
+      "requireLocalPort": true
+    },
+    "5173": {
+      "label": "Companion web",
+      "protocol": "http",
+      "requireLocalPort": true
+    },
+    "48721": {
+      "label": "Companion API",
+      "protocol": "http",
+      "requireLocalPort": true
+    }
   },
   "postCreateCommand": "aspire certs trust --non-interactive",
   "remoteUser": "vscode",

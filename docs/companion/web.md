@@ -45,9 +45,15 @@ The development-only web resource explicitly sets `NODE_ENV=development`;
 otherwise a production-mode AppHost makes Vite disable React Fast Refresh.
 
 Open the dashboard URL printed by Aspire, then the `web` endpoint. VS Code's
-**Ports** view also exposes forwarded endpoints; if a dynamic port is missing,
-choose **Forward a Port** and enter the port printed by Aspire. Keep forwards
-private and browser URLs on `localhost` or `127.0.0.1`. The dashboard uses HTTPS;
+**Ports** view also exposes the explicitly forwarded, fixed container endpoints:
+
+| Resource | Container and host URL |
+| --- | --- |
+| Aspire dashboard | `https://localhost:18888` (use the printed login link/token) |
+| Web application | `http://localhost:5173` |
+| Companion API | `http://localhost:48721` |
+
+Keep forwards private and browser URLs on `localhost` or `127.0.0.1`. The dashboard uses HTTPS;
 Vite and Companion use HTTP. Container certificate trust does **not** trust the
 certificate on the host: follow [.NET's certificate guidance](https://aka.ms/dev-certs-trust)
 for the host browser before opening the HTTPS dashboard. Do not disable browser
@@ -170,7 +176,7 @@ Outside the container, provision the same prerequisites and use
 `aspire.config.json` already selects it.
 
 The CLI prints the dashboard URL and access token. Open the `web` resource's
-HTTP endpoint from that dashboard. Aspire allocates dynamic **unproxied** endpoints for
+HTTP endpoint from that dashboard. Aspire allocates **unproxied** endpoints for
 both processes, so no Aspire HTTP proxy changes browser Host/Origin semantics.
 The Companion receives its allocated port through existing `--port` plus
 `--require-port` (fail on a conflict, never silently use an undiscovered port).
@@ -197,9 +203,12 @@ document, not API calls, assets or background fetches; Host and Origin checks
 still apply. Subsequent API requests must originate from the web application's
 own origin.
 
-VS Code auto-forwarding uses the official Aspire feature's hybrid detection;
-the repository overrides its default `ignore` action with `notify`. No fixed
-ports, public tunnels, wildcard binds or permissive origins are necessary.
+The devcontainer pins and explicitly forwards the three browser-facing ports
+above, so dashboard links remain stable across restarts. VS Code requires the
+matching local port rather than silently forwarding to another number; resolve
+host port conflicts when prompted. Internal Aspire service/OTLP ports remain
+dynamic. Outside the devcontainer the browser-facing ports remain dynamic too.
+No public tunnels, wildcard binds or permissive origins are necessary.
 Different local forwarded ports are allowed as long as browser Host and Origin
 agree. Vite's WebSocket uses the browser endpoint for HMR.
 
@@ -251,7 +260,7 @@ dotnet run --project src/Cli/Cli.csproj -p:CompanionWebDevelopment=true -- \
 COMPANION_URL=http://127.0.0.1:48721 npm run dev
 ```
 
-Aspire normally uses random available ports. Optional `Development__CompanionPort`,
+Outside the devcontainer Aspire normally uses random available ports. Optional `Development__CompanionPort`,
 `Development__WebPort` and `Development__DataDirectory` settings are available
 for reproducible smoke tests or explicit developer overrides.
 `Development__InstallFrontend=false` skips Aspire's npm installer when dependencies
