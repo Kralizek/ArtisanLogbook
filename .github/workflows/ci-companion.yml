@@ -170,6 +170,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw 'Development-only publishing must fail' }
           dotnet publish src/Cli/Cli.csproj -c Release --no-build
           if ($LASTEXITCODE -eq 0) { throw 'Publishing without current asset validation must fail' }
+          exit 0
       - uses: actions/upload-artifact@v6
         if: always()
         with:
