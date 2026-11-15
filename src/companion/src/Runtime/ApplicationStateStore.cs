@@ -29,6 +29,15 @@ internal sealed record SavedInvestigation(
     DateTimeOffset UpdatedAt,
     long Revision);
 
+internal sealed record SavedInvestigationSummary(
+    string Id,
+    string Name,
+    GameContext Context,
+    int DefinitionVersion,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    long Revision);
+
 internal sealed class ApplicationStatePersistenceException(string message, Exception innerException)
     : IOException(message, innerException);
 
@@ -67,22 +76,9 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
                 ?? throw new InvalidOperationException("The application-state database must have a parent directory.");
             Directory.CreateDirectory(directory);
 
-            bool created = false;
-            try
-            {
-                using FileStream reservation = new(_path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                created = true;
-            }
-            catch (IOException) when (File.Exists(_path))
-            {
-            }
-
-            await using SqliteConnection connection = CreateConnection(readOnly: false);
+            await using SqliteConnection connection = CreateConnection(readOnly: false, createIfMissing: true);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            if (created)
-                await CreateInitialSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-            else
-                await ValidateExistingDatabaseAsync(connection, cancellationToken).ConfigureAwait(false);
+            await InitializeDatabaseAsync(connection, cancellationToken).ConfigureAwait(false);
             _initialized = true;
         }
         catch (OperationCanceledException)
@@ -122,7 +118,8 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
             return rows.Select(MapPreference).ToArray();
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or
+                                          ArgumentException or FormatException or OverflowException)
         {
             throw PersistenceFailure(exception);
         }
@@ -214,59 +211,6 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
         }
     }
 
-    public async Task<GameContext?> GetLastSelectedContextAsync(CancellationToken cancellationToken = default)
-    {
-        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await using SqliteConnection connection = CreateConnection(readOnly: true);
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            ContextRow? row = await connection.QuerySingleOrDefaultAsync<ContextRow>(new CommandDefinition(
-                """
-                SELECT project_id AS ProjectId, progression_track AS ProgressionTrack
-                FROM remembered_context WHERE id = 1
-                """, cancellationToken: cancellationToken)).ConfigureAwait(false);
-            return row is null ? null : MapContext(row.ProjectId, row.ProgressionTrack);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException)
-        {
-            throw PersistenceFailure(exception);
-        }
-    }
-
-    public async Task SetLastSelectedContextAsync(
-        GameContext context, CancellationToken cancellationToken = default)
-    {
-        ValidateContext(context);
-        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await using SqliteConnection connection = CreateConnection(readOnly: false);
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await connection.ExecuteAsync(new CommandDefinition(
-                """
-                INSERT INTO remembered_context (id, project_id, progression_track)
-                VALUES (1, @ProjectId, @ProgressionTrack)
-                ON CONFLICT(id) DO UPDATE SET
-                    project_id = excluded.project_id,
-                    progression_track = excluded.progression_track
-                """,
-                new { ProjectId = (int)context.Project, ProgressionTrack = TrackKey(context) },
-                cancellationToken: cancellationToken)).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException)
-        {
-            throw PersistenceFailure(exception);
-        }
-        finally
-        {
-            _writeGate.Release();
-        }
-    }
-
     public async Task<SavedInvestigation> CreateInvestigationAsync(
         string name, GameContext context, int definitionVersion, JsonElement definition,
         CancellationToken cancellationToken = default)
@@ -334,70 +278,53 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
             return row is null ? null : MapInvestigation(row);
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or
+                                          ArgumentException or FormatException or OverflowException or JsonException)
         {
             throw PersistenceFailure(exception);
         }
     }
 
-    public async Task<IReadOnlyList<SavedInvestigation>> ListInvestigationsAsync(
-        int? projectId = null, string? progressionTrack = null,
+    public async Task<IReadOnlyList<SavedInvestigationSummary>> ListInvestigationsAsync(
+        GameContext? context = null,
         CancellationToken cancellationToken = default)
     {
-        if (projectId is <= 0)
-            throw new ArgumentOutOfRangeException(nameof(projectId), "A game project must be positive.");
-        if (progressionTrack is not null && projectId is null)
-            throw new ArgumentException("A progression-track filter requires a project ID.", nameof(progressionTrack));
-        if (progressionTrack is { Length: > MaximumProgressionTrackLength } ||
-            progressionTrack is not null && string.IsNullOrWhiteSpace(progressionTrack))
-            throw new ArgumentException("The progression-track filter is invalid.", nameof(progressionTrack));
+        if (context is not null)
+            ValidateContext(context);
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        string filter = projectId is null ? "" : progressionTrack is null
-            ? " WHERE project_id = @ProjectId"
-            : " WHERE project_id = @ProjectId AND progression_track = @ProgressionTrack";
+        string filter = context is null ? "" :
+            " WHERE project_id = @ProjectId AND progression_track = @ProgressionTrack";
         try
         {
             await using SqliteConnection connection = CreateConnection(readOnly: true);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            IEnumerable<InvestigationRow> rows = await connection.QueryAsync<InvestigationRow>(new CommandDefinition(
-                SelectInvestigation + filter + " ORDER BY created_at, id",
+            IEnumerable<InvestigationSummaryRow> rows = await connection.QueryAsync<InvestigationSummaryRow>(new CommandDefinition(
+                SelectInvestigationSummary + filter + " ORDER BY created_at, id",
                 new
                 {
-                    ProjectId = projectId,
-                    ProgressionTrack = progressionTrack
+                    ProjectId = context is null ? (int?)null : (int)context.Project,
+                    ProgressionTrack = context is null ? null : TrackKey(context)
                 }, cancellationToken: cancellationToken)).ConfigureAwait(false);
-            return rows.Select(MapInvestigation).ToArray();
+            return rows.Select(MapInvestigationSummary).ToArray();
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or
+                                          ArgumentException or FormatException or OverflowException or JsonException)
         {
             throw PersistenceFailure(exception);
         }
     }
 
-    public Task<SavedInvestigation?> RenameInvestigationAsync(
-        string id, string name, long expectedRevision, CancellationToken cancellationToken = default) =>
-        UpdateInvestigationAsync(id, name, null, null, expectedRevision, cancellationToken);
-
-    public Task<SavedInvestigation?> ReplaceInvestigationDefinitionAsync(
-        string id, int definitionVersion, JsonElement definition, long expectedRevision,
+    public async Task<SavedInvestigation?> UpdateInvestigationAsync(
+        string id, string name, int definitionVersion, JsonElement definition, long expectedRevision,
         CancellationToken cancellationToken = default)
-    {
-        ValidateDefinition(definitionVersion, definition);
-        return UpdateInvestigationAsync(id, null, definitionVersion, definition, expectedRevision, cancellationToken);
-    }
-
-    private async Task<SavedInvestigation?> UpdateInvestigationAsync(
-        string id, string? name, int? definitionVersion, JsonElement? definition, long expectedRevision,
-        CancellationToken cancellationToken)
     {
         ValidateInvestigationId(id);
         if (expectedRevision <= 0)
             throw new ArgumentOutOfRangeException(nameof(expectedRevision));
-        if (name is not null) name = ValidateName(name);
-        if ((definitionVersion is null) != (definition is null))
-            throw new ArgumentException("Definition version and document must be provided together.");
-        string? definitionJson = definition?.GetRawText();
+        name = ValidateName(name);
+        ValidateDefinition(definitionVersion, definition);
+        string definitionJson = definition.GetRawText();
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -408,9 +335,9 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
             int updated = await connection.ExecuteAsync(new CommandDefinition(
                 """
                 UPDATE saved_investigations
-                SET name = COALESCE(@Name, name),
-                    definition_version = COALESCE(@DefinitionVersion, definition_version),
-                    definition_json = COALESCE(@DefinitionJson, definition_json),
+                SET name = @Name,
+                    definition_version = @DefinitionVersion,
+                    definition_json = @DefinitionJson,
                     updated_at = @UpdatedAt,
                     revision = revision + 1
                 WHERE id = @Id AND revision = @ExpectedRevision
@@ -441,7 +368,8 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
         }
         catch (OperationCanceledException) { throw; }
         catch (SavedInvestigationRevisionConflictException) { throw; }
-        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException or
+                                          ArgumentException or FormatException or OverflowException or JsonException)
         {
             throw PersistenceFailure(exception);
         }
@@ -508,20 +436,78 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
-    private SqliteConnection CreateConnection(bool readOnly) => new(new SqliteConnectionStringBuilder
+    private SqliteConnection CreateConnection(bool readOnly, bool createIfMissing = false) => new(new SqliteConnectionStringBuilder
     {
         DataSource = _path,
-        Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
+        Mode = readOnly ? SqliteOpenMode.ReadOnly :
+            createIfMissing ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite,
         Cache = SqliteCacheMode.Private,
         Pooling = false,
         DefaultTimeout = 5
     }.ToString());
 
-    private static async Task CreateInitialSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    private static async Task InitializeDatabaseAsync(
+        SqliteConnection connection, CancellationToken cancellationToken)
     {
-        await connection.ExecuteAsync(new CommandDefinition("PRAGMA journal_mode = WAL", cancellationToken: cancellationToken))
-            .ConfigureAwait(false);
         await using SqliteTransaction transaction = connection.BeginTransaction(deferred: false);
+        string? integrity = await connection.ExecuteScalarAsync<string>(
+            new CommandDefinition("PRAGMA quick_check(1)", transaction: transaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        if (!string.Equals(integrity, "ok", StringComparison.Ordinal))
+            throw new InvalidDataException("The application-state database failed its integrity check.");
+
+        int applicationId = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition("PRAGMA application_id", transaction: transaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        int schemaVersion = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition("PRAGMA user_version", transaction: transaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        long pageCount = await connection.ExecuteScalarAsync<long>(
+            new CommandDefinition("PRAGMA page_count", transaction: transaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        long freePageCount = await connection.ExecuteScalarAsync<long>(
+            new CommandDefinition("PRAGMA freelist_count", transaction: transaction,
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+        long applicationObjectCount = await connection.ExecuteScalarAsync<long>(
+            new CommandDefinition(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                transaction: transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+
+        if (applicationId == 0 && schemaVersion == 0 && pageCount <= 1 && freePageCount == 0 &&
+            applicationObjectCount == 0)
+            await CreateInitialSchemaAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        else
+            await ValidateExistingDatabaseAsync(
+                connection, transaction, applicationId, schemaVersion, cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        string? journalMode = await connection.ExecuteScalarAsync<string>(
+            new CommandDefinition("PRAGMA journal_mode", cancellationToken: cancellationToken)).ConfigureAwait(false);
+        if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                journalMode = await connection.ExecuteScalarAsync<string>(
+                    new CommandDefinition("PRAGMA journal_mode = WAL", cancellationToken: cancellationToken))
+                    .ConfigureAwait(false);
+            }
+            catch (SqliteException)
+            {
+                journalMode = await connection.ExecuteScalarAsync<string>(
+                    new CommandDefinition("PRAGMA journal_mode", cancellationToken: cancellationToken))
+                    .ConfigureAwait(false);
+                if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
+                    throw;
+            }
+            if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The application-state database could not enter WAL mode.");
+        }
+    }
+
+    private static async Task CreateInitialSchemaAsync(
+        SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
         await connection.ExecuteAsync(new CommandDefinition(
             """
             CREATE TABLE entity_preferences (
@@ -533,12 +519,6 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
                 hidden INTEGER NOT NULL CHECK (hidden IN (0, 1)),
                 PRIMARY KEY (project_id, progression_track, entity_kind, entity_id)
             ) WITHOUT ROWID;
-
-            CREATE TABLE remembered_context (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                project_id INTEGER NOT NULL CHECK (project_id > 0),
-                progression_track TEXT NOT NULL
-            );
 
             CREATE TABLE saved_investigations (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -558,28 +538,19 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
         await connection.ExecuteAsync(new CommandDefinition(
             $"PRAGMA application_id = {ApplicationId}; PRAGMA user_version = {CurrentSchemaVersion};",
             transaction: transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task ValidateExistingDatabaseAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    private static async Task ValidateExistingDatabaseAsync(
+        SqliteConnection connection, SqliteTransaction transaction, int applicationId, int schemaVersion,
+        CancellationToken cancellationToken)
     {
-        int applicationId = await connection.ExecuteScalarAsync<int>(
-            new CommandDefinition("PRAGMA application_id", cancellationToken: cancellationToken)).ConfigureAwait(false);
-        int schemaVersion = await connection.ExecuteScalarAsync<int>(
-            new CommandDefinition("PRAGMA user_version", cancellationToken: cancellationToken)).ConfigureAwait(false);
         if (applicationId != ApplicationId)
             throw new InvalidDataException("The file is not an Artisan Logbook application-state database.");
         if (schemaVersion != CurrentSchemaVersion)
             throw new InvalidDataException($"Unsupported application-state schema version {schemaVersion}.");
-
-        string? integrity = await connection.ExecuteScalarAsync<string>(
-            new CommandDefinition("PRAGMA quick_check(1)", cancellationToken: cancellationToken)).ConfigureAwait(false);
-        if (!string.Equals(integrity, "ok", StringComparison.Ordinal))
-            throw new InvalidDataException("The application-state database failed its integrity check.");
         (string Name, string[] Columns)[] tables =
         [
             ("entity_preferences", ["project_id", "progression_track", "entity_kind", "entity_id", "pinned", "hidden"]),
-            ("remembered_context", ["id", "project_id", "progression_track"]),
             ("saved_investigations", ["id", "name", "project_id", "progression_track", "definition_version",
                 "definition_json", "created_at", "updated_at", "revision"])
         ];
@@ -587,7 +558,7 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
         {
             IEnumerable<string> columns = await connection.QueryAsync<string>(new CommandDefinition(
                 "SELECT name FROM pragma_table_info(@Name)",
-                new { Name = table }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+                new { Name = table }, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
             HashSet<string> columnNames = columns.ToHashSet(StringComparer.Ordinal);
             if (requiredColumns.Any(column => !columnNames.Contains(column)))
                 throw new InvalidDataException("The application-state database is missing a required table or column.");
@@ -636,6 +607,9 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
             AllowTrailingCommas = false,
             CommentHandling = JsonCommentHandling.Disallow
         });
+        if (document.RootElement.EnumerateObject()
+            .Any(property => string.Equals(property.Name, "context", StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("Game context belongs to the saved investigation envelope.", nameof(definition));
         if (CompanionSettingsStore.HasDuplicateProperties(document.RootElement))
             throw new ArgumentException("Duplicate properties are not allowed in a saved investigation definition.", nameof(definition));
     }
@@ -669,6 +643,13 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
             row.Revision);
     }
 
+    private static SavedInvestigationSummary MapInvestigationSummary(InvestigationSummaryRow row) =>
+        new(row.Id, row.Name, MapContext(row.ProjectId, row.ProgressionTrack),
+            checked((int)row.DefinitionVersion),
+            DateTimeOffset.Parse(row.CreatedAt, CultureInfo.InvariantCulture, DateTimeStyles.None),
+            DateTimeOffset.Parse(row.UpdatedAt, CultureInfo.InvariantCulture, DateTimeStyles.None),
+            row.Revision);
+
     private static string FormatTimestamp(DateTimeOffset timestamp) =>
         timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
@@ -684,12 +665,22 @@ internal sealed class ApplicationStateStore : IAsyncDisposable
         FROM saved_investigations
         """;
 
+    private const string SelectInvestigationSummary =
+        """
+        SELECT id AS Id, name AS Name, project_id AS ProjectId, progression_track AS ProgressionTrack,
+               definition_version AS DefinitionVersion, created_at AS CreatedAt,
+               updated_at AS UpdatedAt, revision AS Revision
+        FROM saved_investigations
+        """;
+
     private sealed record PreferenceRow(
         long ProjectId, string ProgressionTrack, string EntityKind, long EntityId, long Pinned, long Hidden);
-    private sealed record ContextRow(long ProjectId, string ProgressionTrack);
     private sealed record InvestigationRow(
         string Id, string Name, long ProjectId, string ProgressionTrack, long DefinitionVersion,
         string DefinitionJson, string CreatedAt, string UpdatedAt, long Revision);
+    private sealed record InvestigationSummaryRow(
+        string Id, string Name, long ProjectId, string ProgressionTrack, long DefinitionVersion,
+        string CreatedAt, string UpdatedAt, long Revision);
 }
 
 internal sealed class SavedInvestigationRevisionConflictException()

@@ -97,8 +97,13 @@ The same `serve` host owns a separate `ApplicationStateStore` backed by
 `application-state.sqlite3` in `ApplicationPaths.DataDirectory`. It uses
 `Microsoft.Data.Sqlite` with Dapper and initializes schema version 1 during host
 startup; unknown application IDs, schema versions, corrupt files and persistence
-failures fail explicitly without replacing the file. The SQLite schema is
-versioned with `PRAGMA user_version`; no speculative migration framework or
+failures are reported without replacing the file. Canonical history remains the
+fatal startup dependency; unavailable application-state storage degrades that
+capability while the host continues with healthy history. The SQLite schema is
+versioned with `PRAGMA user_version`; schema creation and its identity/version
+markers commit atomically. A truly empty database left by interrupted first
+initialization is recoverable on restart, while non-empty unknown, corrupt, and
+unsupported files are never discarded. No speculative migration framework or
 automatic repair is present. The provider bundles the native SQLite dependency
 for supported self-contained distributions, with normal .NET single-file native
 library extraction enabled. Users need no SQLite installation or service.
@@ -114,15 +119,18 @@ not by unrelated short-lived CLI commands, and its lifetime follows the host.
 
 The initial relational data is deliberately narrow: recipe/item preferences
 are keyed by complete game context and entity identity, with independent
-idempotent pin and hide mutations; the remembered context is a nullable startup
-fallback, never shared navigation or query scope. Saved investigations use a
-stable ID, context, version, timestamps and optimistic revision metadata around
+idempotent pin and hide mutations. Saved investigations use a stable ID,
+immutable context, version, timestamps and optimistic revision metadata around
 a bounded JSON document. The document is authoritative for the analytical
 definition; relational context and management fields are not duplicated
-editable document data. JSON is structurally checked (object root, bounded size
-and depth, no duplicate properties) but is not claimed to be an executable C12
-investigation. Updates require the revision read by the caller, so a stale tab
-gets a conflict rather than overwriting another save. See the [versioned REST
+editable document data, and a top-level document `context` is rejected. Lists
+return metadata only; the selected definition is retrieved separately. JSON is
+structurally checked (object root, bounded size and depth, no duplicate
+properties) but is not claimed to be an executable C12 investigation. Complete
+updates change name and definition atomically with one revision increment.
+Stale saves conflict rather than overwriting another tab's changes. Browser
+presentation preferences, including the remembered context, remain local to
+the browser and are not backend persistence. See the [versioned REST
 contract](../../../../docs/companion/api.md#application-state).
 
 The same host also serves the embedded browser application. Runtime references
@@ -155,6 +163,16 @@ No database, source, or craft semantics have changed.
 DuckDB locking, not a second lock/ownership persistence system, rejects other
 processes. Short-lived CLI commands retain their own existing open/dispose
 behavior and actionable contention errors; they do not forward requests.
+
+Application-state initialization failure is a degraded C10 capability, not a
+Companion lifecycle failure. `/api/v1/status` exposes its availability and a
+redacted failure code independently from DuckDB; history health remains healthy
+when the history store is available. State endpoints fail explicitly with 503
+instead of substituting empty results. The application-state store owns no
+persistent SQLite connection: each operation disposes its short-lived
+connection, and host shutdown stops the HTTP server before its final lifecycle
+callback. Resolving the database issue requires restarting the Companion; no
+automatic replacement, background retry, or repair path is attempted.
 
 `CompanionApplicationStatus.Read()` returns the entry application's informational
 version, startup UTC time, lifecycle state, effective configuration, database

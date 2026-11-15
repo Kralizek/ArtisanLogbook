@@ -254,6 +254,81 @@ public sealed class CompanionApiTests
     }
 
     [Test]
+    public async Task GraphQLCanonicalEntityFieldsDriveContextQualifiedPreferenceMutations()
+    {
+        await using ApiHost host = await Start();
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext[] contexts =
+        [
+            new(GameProject.Retail),
+            new(GameProject.Retail, "Track X"),
+            new(GameProject.Forever, "Hardcore")
+        ];
+        foreach (GameContext context in contexts)
+        {
+            Assert.That(store.WriteDimensions(new CraftDimensions(
+                [],
+                [new(context, 441, "Recipe", 34, "expansion")],
+                [new(context, 34, "Alchemy")],
+                [new(context, 441, "Item")],
+                [new(context, "expansion", "Expansion")])).IsSuccessful, Is.True);
+        }
+
+        JsonElement graph = await GraphQL(host, """
+            {
+              recipes(first: 10) { nodes { id blizzardId game { project progressionTrack } } }
+              items(first: 10) { nodes { id blizzardId game { project progressionTrack } } }
+            }
+            """);
+        JsonElement[] recipes = graph.GetProperty("data").GetProperty("recipes")
+            .GetProperty("nodes").EnumerateArray().ToArray();
+        JsonElement[] items = graph.GetProperty("data").GetProperty("items")
+            .GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.That(recipes, Has.Length.EqualTo(contexts.Length));
+        Assert.That(items, Has.Length.EqualTo(contexts.Length));
+        Assert.That(recipes.Select(item => item.GetProperty("blizzardId").GetInt32()), Is.All.EqualTo(441));
+        Assert.That(items.Select(item => item.GetProperty("blizzardId").GetInt32()), Is.All.EqualTo(441));
+
+        foreach ((string kind, JsonElement[] nodes, string property) in new[]
+                 {
+                     ("Recipe", recipes, "pinned"),
+                     ("Item", items, "hidden")
+                 })
+        {
+            foreach (JsonElement node in nodes)
+            {
+                JsonElement context = node.GetProperty("game");
+                string? progressionTrack = context.GetProperty("progressionTrack").ValueKind == JsonValueKind.Null
+                    ? null : context.GetProperty("progressionTrack").GetString();
+                Dictionary<string, object> payload = new()
+                {
+                    ["context"] = new { project = context.GetProperty("project").GetInt32(), progressionTrack },
+                    [property] = true
+                };
+                string body = JsonSerializer.Serialize(payload);
+                using HttpResponseMessage changed = await host.Send(HttpMethod.Put,
+                    $"/api/v1/entity-preferences/{kind}/{node.GetProperty("blizzardId").GetInt32()}/{(property == "pinned" ? "pin" : "hidden")}",
+                    body, post: true);
+                Assert.That(changed.StatusCode, Is.EqualTo(HttpStatusCode.OK), await changed.Content.ReadAsStringAsync());
+                Assert.That((await Json(changed)).GetProperty(property).GetBoolean(), Is.True);
+            }
+        }
+
+        foreach (GameContext context in contexts)
+        {
+            string query = $"/api/v1/entity-preferences?project={(int)context.Project}" +
+                (context.ProgressionTrack is null ? "" : $"&progressionTrack={Uri.EscapeDataString(context.ProgressionTrack)}");
+            JsonElement preferences = await Json(await host.Http.GetAsync(query));
+            JsonElement[] values = preferences.GetProperty("preferences").EnumerateArray().ToArray();
+            Assert.That(values, Has.Length.EqualTo(2));
+            Assert.That(values.Single(value => value.GetProperty("kind").GetString() == "Recipe")
+                .GetProperty("pinned").GetBoolean(), Is.True);
+            Assert.That(values.Single(value => value.GetProperty("kind").GetString() == "Item")
+                .GetProperty("hidden").GetBoolean(), Is.True);
+        }
+    }
+
+    [Test]
     public async Task GraphQLLongCraftIdsAndCursorsRoundTrip()
     {
         GameContext game = new(GameProject.Retail);
@@ -736,6 +811,8 @@ public sealed class CompanionApiTests
             Assert.That(status.GetProperty("startedAt").ValueKind, Is.EqualTo(JsonValueKind.String));
             Assert.That(status.GetProperty("database").GetProperty("available").GetBoolean(), Is.True);
             Assert.That(status.GetProperty("database").GetProperty("schemaVersion").GetInt32(), Is.Positive);
+            Assert.That(status.GetProperty("applicationState").GetProperty("available").GetBoolean(), Is.True);
+            Assert.That(status.GetProperty("applicationState").GetProperty("failure").ValueKind, Is.EqualTo(JsonValueKind.Null));
             Assert.That(status.GetProperty("history").GetProperty("craftCount").GetInt64(), Is.Zero);
             Assert.That(status.GetProperty("history").GetProperty("gameContexts").GetArrayLength(), Is.Zero);
             Assert.That(status.TryGetProperty("failure", out _), Is.False.Or.True);
@@ -778,16 +855,16 @@ public sealed class CompanionApiTests
             "/api/v1/entity-preferences", "/api/v1/entity-preferences/{kind}/{id}/hidden",
             "/api/v1/entity-preferences/{kind}/{id}/pin", "/api/v1/health", "/api/v1/imports",
             "/api/v1/imports/{id}", "/api/v1/monitoring", "/api/v1/monitoring/reconcile",
-            "/api/v1/preferences/last-selected-context", "/api/v1/saved-investigations",
-            "/api/v1/saved-investigations/{id}", "/api/v1/saved-investigations/{id}/definition",
-            "/api/v1/saved-investigations/{id}/name", "/api/v1/sources", "/api/v1/status"
+            "/api/v1/saved-investigations", "/api/v1/saved-investigations/{id}",
+            "/api/v1/sources", "/api/v1/status"
         }.Order().ToArray()));
         foreach (string operation in new[] { "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport",
             "getMonitoring", "updateMonitoring", "reconcileMonitoring", "getEntityPreferences", "setEntityPinned",
-            "setEntityHidden", "getLastSelectedContext", "setLastSelectedContext", "listSavedInvestigations",
-            "createSavedInvestigation", "getSavedInvestigation", "renameSavedInvestigation",
-            "replaceSavedInvestigationDefinition", "deleteSavedInvestigation" })
+            "setEntityHidden", "listSavedInvestigations", "createSavedInvestigation", "getSavedInvestigation",
+            "updateSavedInvestigation", "deleteSavedInvestigation" })
             Assert.That(document, Does.Contain($"operationId: {operation}"));
+        Assert.That(document, Does.Not.Contain("&BadRequest").And.Not.Contain("*BadRequest")
+            .And.Not.Contain("last-selected-context").And.Not.Contain("/name").And.Not.Contain("/definition"));
     }
 
     [Test]
@@ -795,47 +872,41 @@ public sealed class CompanionApiTests
     {
         await using ApiHost host = await Start();
 
-        using HttpResponseMessage absentResponse =
-            await host.Http.GetAsync("/api/v1/preferences/last-selected-context");
-        string absentText = await absentResponse.Content.ReadAsStringAsync();
-        Assert.That(absentResponse.StatusCode, Is.EqualTo(HttpStatusCode.OK), absentText);
-        JsonElement absent = JsonDocument.Parse(absentText).RootElement;
-        Assert.That(absent.TryGetProperty("context", out JsonElement absentContext), Is.True, absentText);
-        Assert.That(absentContext.ValueKind, Is.EqualTo(JsonValueKind.Null));
-        using (HttpResponseMessage remember = await host.Send(HttpMethod.Put,
-            "/api/v1/preferences/last-selected-context", """{"project":18,"progressionTrack":"Hardcore"}""", post: true))
-        {
-            Assert.That(remember.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-        }
-        JsonElement remembered = await Json(await host.Http.GetAsync("/api/v1/preferences/last-selected-context"));
-        Assert.That(remembered.GetProperty("context").GetProperty("project").GetInt32(), Is.EqualTo(18));
-        Assert.That(remembered.GetProperty("context").GetProperty("progressionTrack").GetString(), Is.EqualTo("Hardcore"));
-
         using (HttpRequestMessage missingHeader = new(HttpMethod.Put, "/api/v1/entity-preferences/Recipe/441/pin"))
         {
-            missingHeader.Content = JsonContent.Create(new { project = 1, pinned = true });
+            missingHeader.Content = JsonContent.Create(new
+            {
+                context = new { project = 1, progressionTrack = (string?)null },
+                pinned = true
+            });
             using HttpResponseMessage forbidden = await host.Http.SendAsync(missingHeader);
             Assert.That(forbidden.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
             Assert.That((await Json(forbidden)).GetProperty("code").GetString(), Is.EqualTo("client-header-required"));
         }
         using (HttpResponseMessage invalidKind = await host.Send(HttpMethod.Put,
-            "/api/v1/entity-preferences/1/441/pin", """{"project":1,"pinned":true}""", post: true))
+            "/api/v1/entity-preferences/1/441/pin",
+            """{"context":{"project":1,"progressionTrack":null},"pinned":true}""", post: true))
             Assert.That(invalidKind.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
 
         using (HttpResponseMessage pinned = await host.Send(HttpMethod.Put,
-            "/api/v1/entity-preferences/Recipe/441/pin", """{"project":1,"pinned":true}""", post: true))
+            "/api/v1/entity-preferences/Recipe/441/pin",
+            """{"context":{"project":1,"progressionTrack":null},"pinned":true}""", post: true))
             Assert.That(pinned.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage hidden = await host.Send(HttpMethod.Put,
-            "/api/v1/entity-preferences/Recipe/441/hidden", """{"project":1,"hidden":true}""", post: true))
+            "/api/v1/entity-preferences/Recipe/441/hidden",
+            """{"context":{"project":1,"progressionTrack":null},"hidden":true}""", post: true))
             Assert.That(hidden.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage item = await host.Send(HttpMethod.Put,
-            "/api/v1/entity-preferences/Item/441/pin", """{"project":1,"pinned":true}""", post: true))
+            "/api/v1/entity-preferences/Item/441/pin",
+            """{"context":{"project":1,"progressionTrack":null},"pinned":true}""", post: true))
             Assert.That(item.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage forever = await host.Send(HttpMethod.Put,
-            "/api/v1/entity-preferences/Recipe/441/pin", """{"project":18,"pinned":true}""", post: true))
+            "/api/v1/entity-preferences/Recipe/441/pin",
+            """{"context":{"project":18,"progressionTrack":"Hardcore"},"pinned":true}""", post: true))
             Assert.That(forever.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage unpin = await host.Send(HttpMethod.Put,
-            "/api/v1/entity-preferences/Recipe/441/pin", """{"project":1,"pinned":false}""", post: true))
+            "/api/v1/entity-preferences/Recipe/441/pin",
+            """{"context":{"project":1,"progressionTrack":null},"pinned":false}""", post: true))
         {
             JsonElement current = await Json(unpin);
             Assert.That(current.GetProperty("pinned").GetBoolean(), Is.False);
@@ -846,8 +917,16 @@ public sealed class CompanionApiTests
         Assert.That(retail.GetProperty("preferences").EnumerateArray()
             .Single(preference => preference.GetProperty("kind").GetString() == "Recipe")
             .GetProperty("hidden").GetBoolean(), Is.True);
-        JsonElement foreverPreferences = await Json(await host.Http.GetAsync("/api/v1/entity-preferences?project=18"));
+        JsonElement foreverPreferences = await Json(await host.Http.GetAsync(
+            "/api/v1/entity-preferences?project=18&progressionTrack=Hardcore"));
         Assert.That(foreverPreferences.GetProperty("preferences").GetArrayLength(), Is.EqualTo(1));
+        using (HttpResponseMessage trackPreference = await host.Send(HttpMethod.Put,
+            "/api/v1/entity-preferences/Recipe/441/pin",
+            """{"context":{"project":1,"progressionTrack":"Track X"},"pinned":true}""", post: true))
+            Assert.That(trackPreference.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        JsonElement trackPreferences = await Json(await host.Http.GetAsync(
+            "/api/v1/entity-preferences?project=1&progressionTrack=Track%20X"));
+        Assert.That(trackPreferences.GetProperty("preferences").GetArrayLength(), Is.EqualTo(1));
 
         string definition = """
             {
@@ -859,7 +938,7 @@ public sealed class CompanionApiTests
             }
             """;
         using HttpResponseMessage created = await host.Post("/api/v1/saved-investigations",
-            $$"""{"name":"Alchemy review","project":1,"definitionVersion":3,"definition":{{definition}}}""");
+            $$"""{"name":"Alchemy review","context":{"project":1,"progressionTrack":null},"definitionVersion":3,"definition":{{definition}}}""");
         Assert.That(created.StatusCode, Is.EqualTo(HttpStatusCode.Created), await created.Content.ReadAsStringAsync());
         string location = created.Headers.Location!.ToString();
         JsonElement saved = await Json(created);
@@ -869,15 +948,43 @@ public sealed class CompanionApiTests
         Assert.That(saved.GetProperty("definition").GetProperty("filters").GetProperty("future")
             .GetProperty("keep").GetBoolean(), Is.True);
         Assert.That((await Json(await host.Http.GetAsync(location))).GetProperty("definitionVersion").GetInt32(), Is.EqualTo(3));
+        using (HttpResponseMessage trackX = await host.Post("/api/v1/saved-investigations",
+            $$"""{"name":"Track X","context":{"project":1,"progressionTrack":"Track X"},"definitionVersion":1,"definition":{{definition}}}"""))
+            Assert.That(trackX.StatusCode, Is.EqualTo(HttpStatusCode.Created));
+        using (HttpResponseMessage trackY = await host.Post("/api/v1/saved-investigations",
+            $$"""{"name":"Track Y","context":{"project":1,"progressionTrack":"Track Y"},"definitionVersion":1,"definition":{{definition}}}"""))
+            Assert.That(trackY.StatusCode, Is.EqualTo(HttpStatusCode.Created));
+        using (HttpResponseMessage otherProject = await host.Post("/api/v1/saved-investigations",
+            $$"""{"name":"Other project","context":{"project":18,"progressionTrack":"Hardcore"},"definitionVersion":1,"definition":{{definition}}}"""))
+            Assert.That(otherProject.StatusCode, Is.EqualTo(HttpStatusCode.Created));
+        JsonElement noTrackList = await Json(await host.Http.GetAsync("/api/v1/saved-investigations?project=1"));
+        JsonElement trackXList = await Json(await host.Http.GetAsync(
+            "/api/v1/saved-investigations?project=1&progressionTrack=Track%20X"));
+        JsonElement trackYList = await Json(await host.Http.GetAsync(
+            "/api/v1/saved-investigations?project=1&progressionTrack=Track%20Y"));
+        JsonElement allInvestigations = await Json(await host.Http.GetAsync("/api/v1/saved-investigations"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(noTrackList.GetProperty("investigations").GetArrayLength(), Is.EqualTo(1));
+            Assert.That(noTrackList.GetProperty("investigations")[0].GetProperty("context")
+                .GetProperty("progressionTrack").ValueKind, Is.EqualTo(JsonValueKind.Null));
+            Assert.That(trackXList.GetProperty("investigations")[0].GetProperty("name").GetString(), Is.EqualTo("Track X"));
+            Assert.That(trackYList.GetProperty("investigations")[0].GetProperty("name").GetString(), Is.EqualTo("Track Y"));
+            Assert.That(allInvestigations.GetProperty("investigations").GetArrayLength(), Is.EqualTo(4));
+            Assert.That(allInvestigations.GetProperty("investigations")[0].TryGetProperty("definition", out _), Is.False);
+        });
+        using (HttpResponseMessage incompleteFilter = await host.Http.GetAsync(
+            "/api/v1/saved-investigations?progressionTrack=Track%20X"))
+            Assert.That(incompleteFilter.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
         using (HttpResponseMessage duplicate = await host.Post("/api/v1/saved-investigations",
-            """{"name":"Duplicate","project":1,"definitionVersion":1,"definition":{"same":1,"same":2}}"""))
+            """{"name":"Duplicate","context":{"project":1,"progressionTrack":null},"definitionVersion":1,"definition":{"same":1,"same":2}}"""))
         {
             Assert.That(duplicate.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
             Assert.That((await Json(duplicate)).GetProperty("code").GetString(), Is.EqualTo("invalid-request"));
         }
         string oversizedValue = new('x', LocalApiSecurityMiddleware.MaxApplicationStateBodyBytes);
         string oversizedBody =
-            "{\"name\":\"Oversized\",\"project\":1,\"definitionVersion\":1,\"definition\":{\"value\":\"" +
+            "{\"name\":\"Oversized\",\"context\":{\"project\":1,\"progressionTrack\":null},\"definitionVersion\":1,\"definition\":{\"value\":\"" +
             oversizedValue + "\"}}";
         using (HttpResponseMessage oversized = await host.Post("/api/v1/saved-investigations", oversizedBody))
         {
@@ -885,20 +992,24 @@ public sealed class CompanionApiTests
             Assert.That((await Json(oversized)).GetProperty("code").GetString(), Is.EqualTo("request-too-large"));
         }
 
-        using HttpResponseMessage renamed = await host.Send(HttpMethod.Put, $"/api/v1/saved-investigations/{id}/name",
-            """{"name":"Renamed","revision":1}""", post: true);
-        Assert.That(renamed.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-        Assert.That((await Json(renamed)).GetProperty("revision").GetInt64(), Is.EqualTo(2));
+        using HttpResponseMessage updated = await host.Send(HttpMethod.Put,
+            $"/api/v1/saved-investigations/{id}",
+            $$"""{"name":"Renamed","definitionVersion":4,"definition":{"new":true},"revision":1}""", post: true);
+        Assert.That(updated.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        JsonElement updatedBody = await Json(updated);
+        Assert.That(updatedBody.GetProperty("revision").GetInt64(), Is.EqualTo(2));
+        Assert.That(updatedBody.GetProperty("name").GetString(), Is.EqualTo("Renamed"));
+        Assert.That(updatedBody.GetProperty("definitionVersion").GetInt32(), Is.EqualTo(4));
 
         using HttpResponseMessage stale = await host.Send(HttpMethod.Put,
-            $"/api/v1/saved-investigations/{id}/definition",
-            $$"""{"definitionVersion":4,"definition":{"new":true},"revision":1}""", post: true);
+            $"/api/v1/saved-investigations/{id}",
+            $$"""{"name":"Stale name","definitionVersion":5,"definition":{"stale":true},"revision":1}""", post: true);
         Assert.That(stale.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
         Assert.That((await Json(stale)).GetProperty("code").GetString(), Is.EqualTo("investigation-revision-conflict"));
-
-        using (HttpResponseMessage invalid = await host.Send(HttpMethod.Put,
-            "/api/v1/preferences/last-selected-context", """{"project":0}""", post: true))
-            Assert.That(invalid.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        JsonElement afterStale = await Json(await host.Http.GetAsync(location));
+        Assert.That(afterStale.GetProperty("name").GetString(), Is.EqualTo("Renamed"));
+        Assert.That(afterStale.GetProperty("definitionVersion").GetInt32(), Is.EqualTo(4));
+        Assert.That(afterStale.GetProperty("definition").GetProperty("new").GetBoolean(), Is.True);
 
         using HttpRequestMessage staleDelete = new(HttpMethod.Delete, $"/api/v1/saved-investigations/{id}?revision=1");
         staleDelete.Headers.Add(LocalApiSecurityMiddleware.ClientHeader, "tests");
@@ -910,6 +1021,36 @@ public sealed class CompanionApiTests
             Assert.That(deleted.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
         using (HttpResponseMessage missing = await host.Http.GetAsync(location))
             Assert.That(missing.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task UnavailableApplicationStateDoesNotPreventHistoryApiStartup()
+    {
+        Directory.CreateDirectory(_paths.DataDirectory);
+        byte[] invalidDatabase = "not an application-state database"u8.ToArray();
+        await File.WriteAllBytesAsync(_paths.ApplicationStateDatabase, invalidDatabase);
+
+        await using ApiHost host = await Start();
+        JsonElement status = await Json(await host.Http.GetAsync("/api/v1/status"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.GetProperty("state").GetString(), Is.EqualTo("Running"));
+            Assert.That(status.GetProperty("database").GetProperty("available").GetBoolean(), Is.True);
+            Assert.That(status.GetProperty("applicationState").GetProperty("available").GetBoolean(), Is.False);
+            Assert.That(status.GetProperty("applicationState").GetProperty("failure").GetProperty("code").GetString(),
+                Is.EqualTo("application-state-unavailable"));
+        });
+        Assert.That((await host.Http.GetAsync("/api/v1/health")).StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        JsonElement graph = await GraphQL(host, "{ crafts(first: 1) { nodes { id } } }");
+        Assert.That(graph.GetProperty("data").GetProperty("crafts").GetProperty("nodes").GetArrayLength(), Is.Zero);
+
+        using HttpResponseMessage preferences = await host.Http.GetAsync("/api/v1/entity-preferences?project=1");
+        Assert.That(preferences.StatusCode, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
+        Assert.That((await Json(preferences)).GetProperty("code").GetString(), Is.EqualTo("application-state-unavailable"));
+        using HttpResponseMessage investigations = await host.Http.GetAsync("/api/v1/saved-investigations");
+        Assert.That(investigations.StatusCode, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
+        Assert.That((await Json(investigations)).GetProperty("code").GetString(), Is.EqualTo("application-state-unavailable"));
+        Assert.That(await File.ReadAllBytesAsync(_paths.ApplicationStateDatabase), Is.EqualTo(invalidDatabase));
     }
 
     [Test]

@@ -111,6 +111,15 @@ internal sealed class GetStatusEndpoint(CompanionApplicationStatus status) : Get
             State = ApiMapping.Map(current.LifecycleState),
             StartedAt = current.StartupTime,
             Database = new() { Available = current.DatabaseAvailable, SchemaVersion = current.DatabaseSchemaVersion },
+            ApplicationState = new()
+            {
+                Available = current.ApplicationStateAvailable,
+                Failure = current.ApplicationStateFailure is null ? null! : new()
+                {
+                    Code = current.ApplicationStateFailure.Code,
+                    Message = current.ApplicationStateFailure.Message
+                }
+            },
             History = current.CanonicalCraftCount is long count && current.CanonicalContexts is { } contexts
                 ? new()
                 {

@@ -37,7 +37,6 @@ public sealed class ApplicationStateStoreTests
         Assert.That(File.Exists(_database), Is.True);
 
         GameContext context = new(GameProject.Forever, "Hardcore");
-        await first.SetLastSelectedContextAsync(context);
         EntityPreference pinned = await first.SetPinnedAsync(context, PreferredEntityKind.Recipe, 77, true);
         EntityPreference hidden = await first.SetHiddenAsync(context, PreferredEntityKind.Recipe, 77, true);
         Assert.That(pinned.Pinned, Is.True);
@@ -46,10 +45,35 @@ public sealed class ApplicationStateStoreTests
 
         ApplicationStateStore reopened = new(_database);
         await reopened.InitializeAsync();
-        Assert.That(await reopened.GetLastSelectedContextAsync(), Is.EqualTo(context));
         EntityPreference preference = (await reopened.GetEntityPreferencesAsync(context)).Single();
         Assert.That(preference, Is.EqualTo(new EntityPreference(context, PreferredEntityKind.Recipe, 77, true, true)));
         await reopened.DisposeAsync();
+    }
+
+    [Test]
+    public async Task EmptyDatabaseFromInterruptedFirstInitializationCanBeRecovered()
+    {
+        Directory.CreateDirectory(_directory);
+        await File.WriteAllBytesAsync(_database, []);
+
+        await using ApplicationStateStore store = new(_database);
+        await store.InitializeAsync();
+        GameContext context = new(GameProject.Retail);
+        await store.SetPinnedAsync(context, PreferredEntityKind.Recipe, 9, true);
+
+        Assert.That((await store.GetEntityPreferencesAsync(context)).Single().Pinned, Is.True);
+    }
+
+    [Test]
+    public async Task ConcurrentInitializersSerializeAndCreateOneUsableSchema()
+    {
+        await using ApplicationStateStore first = new(_database);
+        await using ApplicationStateStore second = new(_database);
+        await Task.WhenAll(first.InitializeAsync(), second.InitializeAsync());
+
+        GameContext context = new(GameProject.Retail);
+        await first.SetPinnedAsync(context, PreferredEntityKind.Recipe, 9, true);
+        Assert.That((await second.GetEntityPreferencesAsync(context)).Single().Pinned, Is.True);
     }
 
     [Test]
@@ -114,6 +138,8 @@ public sealed class ApplicationStateStoreTests
     public async Task SavedInvestigationsRoundTripDocumentsAndRejectStaleRevisions()
     {
         GameContext retail = new(GameProject.Retail);
+        GameContext retailTrackX = new(GameProject.Retail, "Track X");
+        GameContext retailTrackY = new(GameProject.Retail, "Track Y");
         GameContext forever = new(GameProject.Forever);
         string source = """
             {
@@ -135,35 +161,49 @@ public sealed class ApplicationStateStoreTests
 
             SavedInvestigation otherContext = await store.CreateInvestigationAsync(
                 "Forever investigation", forever, 2, document.RootElement);
-            IReadOnlyList<SavedInvestigation> retailItems =
-                await store.ListInvestigationsAsync((int)GameProject.Retail);
-            IReadOnlyList<SavedInvestigation> foreverItems =
-                await store.ListInvestigationsAsync((int)GameProject.Forever);
+            SavedInvestigation trackX = await store.CreateInvestigationAsync(
+                "Track X investigation", retailTrackX, 1, document.RootElement);
+            SavedInvestigation trackY = await store.CreateInvestigationAsync(
+                "Track Y investigation", retailTrackY, 1, document.RootElement);
+            IReadOnlyList<SavedInvestigationSummary> retailItems = await store.ListInvestigationsAsync(retail);
+            IReadOnlyList<SavedInvestigationSummary> trackXItems = await store.ListInvestigationsAsync(retailTrackX);
+            IReadOnlyList<SavedInvestigationSummary> trackYItems = await store.ListInvestigationsAsync(retailTrackY);
+            IReadOnlyList<SavedInvestigationSummary> foreverItems = await store.ListInvestigationsAsync(forever);
+            IReadOnlyList<SavedInvestigationSummary> allItems = await store.ListInvestigationsAsync();
             Assert.That(retailItems.Select(item => item.Id), Is.EqualTo(new[] { created.Id }));
+            Assert.That(trackXItems.Select(item => item.Id), Is.EqualTo(new[] { trackX.Id }));
+            Assert.That(trackYItems.Select(item => item.Id), Is.EqualTo(new[] { trackY.Id }));
             Assert.That(foreverItems.Select(item => item.Id), Is.EqualTo(new[] { otherContext.Id }));
+            Assert.That(allItems, Has.Count.EqualTo(4));
             SavedInvestigation retrieved = (await store.GetInvestigationAsync(id))!;
             Assert.That(retrieved.Definition.GetRawText(), Is.EqualTo(created.Definition.GetRawText()));
 
-            SavedInvestigation renamed = (await store.RenameInvestigationAsync(id, "Renamed", 1))!;
-            Assert.That(renamed.Revision, Is.EqualTo(2));
-            Assert.That(renamed.CreatedAt, Is.EqualTo(created.CreatedAt));
-            Assert.That(renamed.UpdatedAt, Is.GreaterThanOrEqualTo(created.UpdatedAt));
+            using JsonDocument updatedDefinition = JsonDocument.Parse("""{"period":{"kind":"absolute","from":"2025-01-01"}}""");
+            SavedInvestigation updated = (await store.UpdateInvestigationAsync(
+                id, "Renamed", 8, updatedDefinition.RootElement, 1))!;
+            Assert.That(updated.Name, Is.EqualTo("Renamed"));
+            Assert.That(updated.DefinitionVersion, Is.EqualTo(8));
+            Assert.That(updated.Definition.GetRawText(), Is.EqualTo(updatedDefinition.RootElement.GetRawText()));
+            Assert.That(updated.Context, Is.EqualTo(retail));
+            Assert.That(updated.Revision, Is.EqualTo(2));
+            Assert.That(updated.CreatedAt, Is.EqualTo(created.CreatedAt));
+            Assert.That(updated.UpdatedAt, Is.GreaterThanOrEqualTo(created.UpdatedAt));
             Assert.ThrowsAsync<SavedInvestigationRevisionConflictException>(async () =>
-                await store.ReplaceInvestigationDefinitionAsync(id, 8, document.RootElement, 1));
-
-            SavedInvestigation replaced = (await store.ReplaceInvestigationDefinitionAsync(id, 8, document.RootElement, 2))!;
-            Assert.That(replaced.Revision, Is.EqualTo(3));
-            Assert.That(replaced.DefinitionVersion, Is.EqualTo(8));
+                await store.UpdateInvestigationAsync(id, "Stale name", 9, document.RootElement, 1));
+            SavedInvestigation afterStale = (await store.GetInvestigationAsync(id))!;
+            Assert.That(afterStale.Name, Is.EqualTo("Renamed"));
+            Assert.That(afterStale.DefinitionVersion, Is.EqualTo(8));
+            Assert.That(afterStale.Definition.GetRawText(), Is.EqualTo(updated.Definition.GetRawText()));
             Assert.ThrowsAsync<SavedInvestigationRevisionConflictException>(async () =>
-                await store.DeleteInvestigationAsync(id, 2));
-            Assert.That(await store.DeleteInvestigationAsync(id, 3), Is.True);
+                await store.DeleteInvestigationAsync(id, 1));
+            Assert.That(await store.DeleteInvestigationAsync(id, 2), Is.True);
             Assert.That(await store.GetInvestigationAsync(id), Is.Null);
         }
 
         await using ApplicationStateStore reopened = new(_database);
         await reopened.InitializeAsync();
-        Assert.That(await reopened.ListInvestigationsAsync((int)GameProject.Retail), Is.Empty);
-        Assert.That(await reopened.ListInvestigationsAsync((int)GameProject.Forever), Has.Count.EqualTo(1));
+        Assert.That(await reopened.ListInvestigationsAsync(retail), Is.Empty);
+        Assert.That(await reopened.ListInvestigationsAsync(forever), Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -178,6 +218,9 @@ public sealed class ApplicationStateStoreTests
         using JsonDocument duplicate = JsonDocument.Parse("""{"x":1,"x":2}""");
         Assert.ThrowsAsync<ArgumentException>(async () => await store.CreateInvestigationAsync(
             "Invalid", new(GameProject.Retail), 1, duplicate.RootElement));
+        using JsonDocument conflictingContext = JsonDocument.Parse("""{"context":{"project":18}}""");
+        Assert.ThrowsAsync<ArgumentException>(async () => await store.UpdateInvestigationAsync(
+            saved.Id, "Conflicting context", 2, conflictingContext.RootElement, saved.Revision));
 
         string oversizedJson = $$"""{"value":"{{new string('x', ApplicationStateStore.MaximumInvestigationDefinitionBytes)}}"}""";
         using JsonDocument oversized = JsonDocument.Parse(oversizedJson);
@@ -187,7 +230,7 @@ public sealed class ApplicationStateStoreTests
         using CancellationTokenSource cancelled = new();
         cancelled.Cancel();
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
-            await store.RenameInvestigationAsync(saved.Id, "Never saved", 1, cancelled.Token));
+            await store.UpdateInvestigationAsync(saved.Id, "Never saved", 1, original.RootElement, 1, cancelled.Token));
 
         using (SqliteConnection connection = new(new SqliteConnectionStringBuilder
         {
@@ -207,10 +250,40 @@ public sealed class ApplicationStateStoreTests
             command.ExecuteNonQuery();
         }
         Assert.ThrowsAsync<ApplicationStatePersistenceException>(async () =>
-            await store.RenameInvestigationAsync(saved.Id, "Failed write", 1));
+            await store.UpdateInvestigationAsync(saved.Id, "Failed write", 2, original.RootElement, 1));
         SavedInvestigation current = (await store.GetInvestigationAsync(saved.Id))!;
         Assert.That(current.Name, Is.EqualTo(saved.Name));
+        Assert.That(current.DefinitionVersion, Is.EqualTo(saved.DefinitionVersion));
+        Assert.That(current.Definition.GetRawText(), Is.EqualTo(saved.Definition.GetRawText()));
         Assert.That(current.Revision, Is.EqualTo(saved.Revision));
+    }
+
+    [Test]
+    public async Task ConcurrentUpdatesToIndependentInvestigationsBothSucceed()
+    {
+        await using ApplicationStateStore firstStore = new(_database);
+        await using ApplicationStateStore secondStore = new(_database);
+        await Task.WhenAll(firstStore.InitializeAsync(), secondStore.InitializeAsync());
+        using JsonDocument definition = JsonDocument.Parse("""{"kind":"comparison"}""");
+        SavedInvestigation first = await firstStore.CreateInvestigationAsync(
+            "First", new(GameProject.Retail), 1, definition.RootElement);
+        SavedInvestigation second = await firstStore.CreateInvestigationAsync(
+            "Second", new(GameProject.Retail), 1, definition.RootElement);
+
+        TaskCompletionSource start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<SavedInvestigation?> UpdateAsync(ApplicationStateStore store, string id, string name) =>
+            Task.Run(async () =>
+            {
+                await start.Task;
+                return await store.UpdateInvestigationAsync(id, name, 2, definition.RootElement, 1);
+            });
+        Task<SavedInvestigation?> firstUpdate = UpdateAsync(firstStore, first.Id, "First updated");
+        Task<SavedInvestigation?> secondUpdate = UpdateAsync(secondStore, second.Id, "Second updated");
+        start.SetResult();
+
+        SavedInvestigation[] updated = (await Task.WhenAll(firstUpdate, secondUpdate)).Select(item => item!).ToArray();
+        Assert.That(updated.Select(item => item.Name), Is.EquivalentTo(new[] { "First updated", "Second updated" }));
+        Assert.That(updated.Select(item => item.Revision), Is.All.EqualTo(2));
     }
 
     [Test]

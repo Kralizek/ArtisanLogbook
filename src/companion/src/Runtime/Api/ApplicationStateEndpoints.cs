@@ -10,8 +10,9 @@ using Microsoft.Extensions.Logging;
 
 using ApiEntityPreference = ArtisanLogbook.CompanionApi.Contracts.EntityPreference;
 using ApiEntityPreferenceKind = ArtisanLogbook.CompanionApi.Contracts.EntityPreferenceKind;
-using ApiLastSelectedContextContext = ArtisanLogbook.CompanionApi.Contracts.LastSelectedContextContext;
+using ApiGameContext = ArtisanLogbook.CompanionApi.Contracts.GameContext;
 using ApiSavedInvestigation = ArtisanLogbook.CompanionApi.Contracts.SavedInvestigation;
+using ApiSavedInvestigationSummary = ArtisanLogbook.CompanionApi.Contracts.SavedInvestigationSummary;
 using DomainGameContext = ArtisanLogbook.History.GameContext;
 using StoredEntityPreference = ArtisanLogbook.Runtime.EntityPreference;
 using StoredSavedInvestigation = ArtisanLogbook.Runtime.SavedInvestigation;
@@ -22,8 +23,7 @@ internal static class ApplicationStateApiMapping
 {
     public static ApiEntityPreference Map(StoredEntityPreference preference) => new()
     {
-        Project = (int)preference.Context.Project,
-        ProgressionTrack = preference.Context.ProgressionTrack,
+        Context = Map(preference.Context),
         Kind = Enum.Parse<ApiEntityPreferenceKind>(preference.Kind.ToString(), ignoreCase: false),
         EntityId = preference.EntityId,
         Pinned = preference.Pinned,
@@ -34,8 +34,7 @@ internal static class ApplicationStateApiMapping
     {
         Id = Guid.ParseExact(investigation.Id, "D"),
         Name = investigation.Name,
-        Project = (int)investigation.Context.Project,
-        ProgressionTrack = investigation.Context.ProgressionTrack,
+        Context = Map(investigation.Context),
         DefinitionVersion = investigation.DefinitionVersion,
         Definition = investigation.Definition.EnumerateObject()
             .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal),
@@ -44,14 +43,32 @@ internal static class ApplicationStateApiMapping
         Revision = investigation.Revision
     };
 
-    public static LastSelectedContext Map(DomainGameContext? context) => new()
+    public static ApiSavedInvestigationSummary Map(SavedInvestigationSummary investigation) => new()
     {
-        Context = context is null ? null : new ApiLastSelectedContextContext
-        {
-            Project = (int)context.Project,
-            ProgressionTrack = context.ProgressionTrack
-        }
+        Id = Guid.ParseExact(investigation.Id, "D"),
+        Name = investigation.Name,
+        Context = Map(investigation.Context),
+        DefinitionVersion = investigation.DefinitionVersion,
+        CreatedAt = investigation.CreatedAt,
+        UpdatedAt = investigation.UpdatedAt,
+        Revision = investigation.Revision
     };
+
+    private static ApiGameContext Map(DomainGameContext context) => new()
+    {
+        Project = (int)context.Project,
+        ProgressionTrack = context.ProgressionTrack
+    };
+
+    public static bool TryContext(ApiGameContext? apiContext, out DomainGameContext? context)
+    {
+        if (apiContext is null)
+        {
+            context = null;
+            return false;
+        }
+        return TryContext(apiContext.Project, apiContext.ProgressionTrack, out context);
+    }
 
     public static bool TryContext(int project, string? progressionTrack, out DomainGameContext? context)
     {
@@ -85,6 +102,32 @@ internal static class ApplicationStateApiMapping
         ApiMapping.Problem(StatusCodes.Status503ServiceUnavailable, "application-state-unavailable",
             "Application-state persistence is unavailable or the Companion is stopping.");
 
+    public static JsonHttpResult<Problem> Response(Problem problem, int statusCode) =>
+        TypedResults.Json(problem, contentType: "application/problem+json", statusCode: statusCode);
+
+    public static JsonHttpResult<Problem> InvalidRequestResponse(string detail) =>
+        Response(InvalidRequest(detail), StatusCodes.Status400BadRequest);
+
+    public static JsonHttpResult<Problem> MissingInvestigationResponse() =>
+        Response(MissingInvestigation(), StatusCodes.Status404NotFound);
+
+    public static JsonHttpResult<Problem> RevisionConflictResponse() =>
+        Response(RevisionConflict(), StatusCodes.Status409Conflict);
+
+    public static JsonHttpResult<Problem> UnavailableResponse() =>
+        Response(Unavailable(), StatusCodes.Status503ServiceUnavailable);
+
+    public static Results<T1, T2, IResult> AsResult<T1, T2>(JsonHttpResult<Problem> result)
+        where T1 : IResult where T2 : IResult => result;
+
+    public static Results<T1, T2, T3, IResult> AsResult<T1, T2, T3>(JsonHttpResult<Problem> result)
+        where T1 : IResult where T2 : IResult where T3 : IResult =>
+        result;
+
+    public static Results<T1, T2, T3, T4, IResult> AsResult<T1, T2, T3, T4>(JsonHttpResult<Problem> result)
+        where T1 : IResult where T2 : IResult where T3 : IResult where T4 : IResult =>
+        result;
+
     public static void LogPersistenceFailure(ILogger logger, Exception exception) =>
         logger.LogWarning("Application-state persistence failed ({ExceptionType}).", exception.GetType().Name);
 }
@@ -92,11 +135,12 @@ internal static class ApplicationStateApiMapping
 internal sealed class GetEntityPreferencesEndpoint(
     ApplicationStateStore store, ILogger<GetEntityPreferencesEndpoint> logger) : GetEntityPreferencesEndpointBase
 {
-    public override async Task<Results<Ok<EntityPreferenceList>, BadRequestProblem, Status503Problem>> HandleAsync(
+    public override async Task<Results<Ok<EntityPreferenceList>, BadRequest, IResult>> HandleAsync(
         Parameters parameters, CancellationToken cancellationToken)
     {
         if (!ApplicationStateApiMapping.TryContext(parameters.Project, parameters.ProgressionTrack, out DomainGameContext? context))
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The game context is invalid."));
+            return ApplicationStateApiMapping.AsResult<Ok<EntityPreferenceList>, BadRequest>(
+                ApplicationStateApiMapping.InvalidRequestResponse("The game context is invalid."));
         try
         {
             IReadOnlyList<StoredEntityPreference> preferences =
@@ -109,11 +153,13 @@ internal sealed class GetEntityPreferencesEndpoint(
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<EntityPreferenceList>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<EntityPreferenceList>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 }
@@ -121,13 +167,13 @@ internal sealed class GetEntityPreferencesEndpoint(
 internal sealed class SetEntityPinnedEndpoint(
     ApplicationStateStore store, ILogger<SetEntityPinnedEndpoint> logger) : SetEntityPinnedEndpointBase
 {
-    public override async Task<Results<Ok<ApiEntityPreference>, SetEntityPinnedEndpointBase.BadRequestProblem,
-        SetEntityPinnedEndpointBase.Status503Problem>> HandleAsync(
+    public override async Task<Results<Ok<ApiEntityPreference>, BadRequest, IResult>> HandleAsync(
         string kind, int id, SetPinnedPreference request, CancellationToken cancellationToken)
     {
-        if (!TryKind(kind, id, request.Project, request.ProgressionTrack, out PreferredEntityKind entityKind,
+        if (!TryKind(kind, id, request.Context, out PreferredEntityKind entityKind,
                 out DomainGameContext? context, out Problem? problem))
-            return new BadRequestProblem(problem!);
+            return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
+                ApplicationStateApiMapping.Response(problem!, StatusCodes.Status400BadRequest));
         try
         {
             StoredEntityPreference preference = await store.SetPinnedAsync(
@@ -137,15 +183,17 @@ internal sealed class SetEntityPinnedEndpoint(
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 
-    internal static bool TryKind(string kind, int id, int project, string? progressionTrack,
+    internal static bool TryKind(string kind, int id, ApiGameContext? apiContext,
         out PreferredEntityKind entityKind, out DomainGameContext? context, out Problem? problem)
     {
         entityKind = default;
@@ -153,7 +201,7 @@ internal sealed class SetEntityPinnedEndpoint(
         problem = null;
         if (kind is not (nameof(PreferredEntityKind.Recipe) or nameof(PreferredEntityKind.Item)) ||
             !Enum.TryParse(kind, ignoreCase: false, out entityKind) || id <= 0 ||
-            !ApplicationStateApiMapping.TryContext(project, progressionTrack, out context))
+            !ApplicationStateApiMapping.TryContext(apiContext, out context))
         {
             problem = ApplicationStateApiMapping.InvalidRequest(
                 "The entity kind, entity ID or game context is invalid.");
@@ -166,13 +214,13 @@ internal sealed class SetEntityPinnedEndpoint(
 internal sealed class SetEntityHiddenEndpoint(
     ApplicationStateStore store, ILogger<SetEntityHiddenEndpoint> logger) : SetEntityHiddenEndpointBase
 {
-    public override async Task<Results<Ok<ApiEntityPreference>, SetEntityHiddenEndpointBase.BadRequestProblem,
-        SetEntityHiddenEndpointBase.Status503Problem>> HandleAsync(
+    public override async Task<Results<Ok<ApiEntityPreference>, BadRequest, IResult>> HandleAsync(
         string kind, int id, SetHiddenPreference request, CancellationToken cancellationToken)
     {
-        if (!SetEntityPinnedEndpoint.TryKind(kind, id, request.Project, request.ProgressionTrack,
+        if (!SetEntityPinnedEndpoint.TryKind(kind, id, request.Context,
                 out PreferredEntityKind entityKind, out DomainGameContext? context, out Problem? problem))
-            return new BadRequestProblem(problem!);
+            return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
+                ApplicationStateApiMapping.Response(problem!, StatusCodes.Status400BadRequest));
         try
         {
             StoredEntityPreference preference = await store.SetHiddenAsync(
@@ -182,59 +230,13 @@ internal sealed class SetEntityHiddenEndpoint(
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
-        }
-    }
-}
-
-internal sealed class GetLastSelectedContextEndpoint(
-    ApplicationStateStore store, ILogger<GetLastSelectedContextEndpoint> logger) : GetLastSelectedContextEndpointBase
-{
-    public override async Task<Results<Ok<LastSelectedContext>, Status503Problem>> HandleAsync(
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            DomainGameContext? context = await store.GetLastSelectedContextAsync(cancellationToken).ConfigureAwait(false);
-            return TypedResults.Ok(ApplicationStateApiMapping.Map(context));
-        }
-        catch (ApplicationStatePersistenceException exception)
-        {
-            ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
-        }
-        catch (InvalidOperationException)
-        {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
-        }
-    }
-}
-
-internal sealed class SetLastSelectedContextEndpoint(
-    ApplicationStateStore store, ILogger<SetLastSelectedContextEndpoint> logger) : SetLastSelectedContextEndpointBase
-{
-    public override async Task<Results<Ok<LastSelectedContext>, BadRequestProblem, Status503Problem>> HandleAsync(
-        GameContextPreference request, CancellationToken cancellationToken)
-    {
-        if (!ApplicationStateApiMapping.TryContext(request.Project, request.ProgressionTrack, out DomainGameContext? context))
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The game context is invalid."));
-        try
-        {
-            await store.SetLastSelectedContextAsync(context!, cancellationToken).ConfigureAwait(false);
-            return TypedResults.Ok(ApplicationStateApiMapping.Map(context));
-        }
-        catch (ApplicationStatePersistenceException exception)
-        {
-            ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
-        }
-        catch (InvalidOperationException)
-        {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 }
@@ -242,30 +244,40 @@ internal sealed class SetLastSelectedContextEndpoint(
 internal sealed class ListSavedInvestigationsEndpoint(
     ApplicationStateStore store, ILogger<ListSavedInvestigationsEndpoint> logger) : ListSavedInvestigationsEndpointBase
 {
-    public override async Task<Results<Ok<SavedInvestigationList>, BadRequestProblem, Status503Problem>> HandleAsync(
+    public override async Task<Results<Ok<SavedInvestigationList>, BadRequest, IResult>> HandleAsync(
         Parameters parameters, CancellationToken cancellationToken)
     {
+        DomainGameContext? context = null;
+        if (parameters.Project is int project)
+        {
+            if (!ApplicationStateApiMapping.TryContext(project, parameters.ProgressionTrack, out context))
+                return ApplicationStateApiMapping.AsResult<Ok<SavedInvestigationList>, BadRequest>(
+                    ApplicationStateApiMapping.InvalidRequestResponse("The game-context filter is invalid."));
+        }
+        else if (parameters.ProgressionTrack is not null)
+        {
+            return ApplicationStateApiMapping.AsResult<Ok<SavedInvestigationList>, BadRequest>(
+                ApplicationStateApiMapping.InvalidRequestResponse("A progression-track filter requires a project."));
+        }
         try
         {
-            IReadOnlyList<StoredSavedInvestigation> investigations = await store.ListInvestigationsAsync(
-                parameters.Project, parameters.ProgressionTrack, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<SavedInvestigationSummary> investigations =
+                await store.ListInvestigationsAsync(context, cancellationToken).ConfigureAwait(false);
             return TypedResults.Ok(new SavedInvestigationList
             {
                 Investigations = investigations.Select(ApplicationStateApiMapping.Map).ToArray()
             });
         }
-        catch (ArgumentException)
-        {
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The game-context filter is invalid."));
-        }
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<SavedInvestigationList>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<SavedInvestigationList>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 }
@@ -273,12 +285,12 @@ internal sealed class ListSavedInvestigationsEndpoint(
 internal sealed class CreateSavedInvestigationEndpoint(
     ApplicationStateStore store, ILogger<CreateSavedInvestigationEndpoint> logger) : CreateSavedInvestigationEndpointBase
 {
-    public override async Task<Results<Created<ApiSavedInvestigation>, CreateSavedInvestigationEndpointBase.BadRequestProblem,
-        CreateSavedInvestigationEndpointBase.Status503Problem>> HandleAsync(
+    public override async Task<Results<Created<ApiSavedInvestigation>, BadRequest, IResult>> HandleAsync(
         CreateSavedInvestigation request, CancellationToken cancellationToken)
     {
-        if (!ApplicationStateApiMapping.TryContext(request.Project, request.ProgressionTrack, out DomainGameContext? context))
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The game context is invalid."));
+        if (!ApplicationStateApiMapping.TryContext(request.Context, out DomainGameContext? context))
+            return ApplicationStateApiMapping.AsResult<Created<ApiSavedInvestigation>, BadRequest>(
+                ApplicationStateApiMapping.InvalidRequestResponse("The game context is invalid."));
         try
         {
             StoredSavedInvestigation investigation = await store.CreateInvestigationAsync(
@@ -289,21 +301,26 @@ internal sealed class CreateSavedInvestigationEndpoint(
         }
         catch (ArgumentException)
         {
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest(
-                "The saved investigation name or definition is invalid."));
+            return ApplicationStateApiMapping.AsResult<Created<ApiSavedInvestigation>, BadRequest>(
+                ApplicationStateApiMapping.InvalidRequestResponse(
+                    "The saved investigation name or definition is invalid."));
         }
         catch (JsonException)
         {
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The saved investigation definition is invalid."));
+            return ApplicationStateApiMapping.AsResult<Created<ApiSavedInvestigation>, BadRequest>(
+                ApplicationStateApiMapping.InvalidRequestResponse(
+                    "The saved investigation definition is invalid."));
         }
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Created<ApiSavedInvestigation>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Created<ApiSavedInvestigation>, BadRequest>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 }
@@ -311,26 +328,28 @@ internal sealed class CreateSavedInvestigationEndpoint(
 internal sealed class GetSavedInvestigationEndpoint(
     ApplicationStateStore store, ILogger<GetSavedInvestigationEndpoint> logger) : GetSavedInvestigationEndpointBase
 {
-    public override async Task<Results<Ok<ApiSavedInvestigation>, GetSavedInvestigationEndpointBase.NotFoundProblem,
-        GetSavedInvestigationEndpointBase.Status503Problem>> HandleAsync(
+    public override async Task<Results<Ok<ApiSavedInvestigation>, NotFound, IResult>> HandleAsync(
         Guid id, CancellationToken cancellationToken)
     {
         try
         {
             StoredSavedInvestigation? investigation = await store.GetInvestigationAsync(id.ToString("D"), cancellationToken)
                 .ConfigureAwait(false);
-            return investigation is null
-                ? new NotFoundProblem(ApplicationStateApiMapping.MissingInvestigation())
-                : TypedResults.Ok(ApplicationStateApiMapping.Map(investigation));
+            if (investigation is null)
+                return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, NotFound>(
+                    ApplicationStateApiMapping.MissingInvestigationResponse());
+            return TypedResults.Ok(ApplicationStateApiMapping.Map(investigation));
         }
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, NotFound>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, NotFound>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 }
@@ -338,122 +357,93 @@ internal sealed class GetSavedInvestigationEndpoint(
 internal sealed class DeleteSavedInvestigationEndpoint(
     ApplicationStateStore store, ILogger<DeleteSavedInvestigationEndpoint> logger) : DeleteSavedInvestigationEndpointBase
 {
-    public override async Task<Results<NoContent, DeleteSavedInvestigationEndpointBase.BadRequestProblem,
-        DeleteSavedInvestigationEndpointBase.NotFoundProblem, DeleteSavedInvestigationEndpointBase.ConflictProblem,
-        DeleteSavedInvestigationEndpointBase.Status503Problem>>
+    public override async Task<Results<NoContent, BadRequest, NotFound, Conflict, IResult>>
         HandleAsync(Guid id, Parameters parameters, CancellationToken cancellationToken)
     {
         if (parameters.Revision <= 0)
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The revision must be positive."));
+            return ApplicationStateApiMapping.AsResult<NoContent, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.InvalidRequestResponse("The revision must be positive."));
         try
         {
             bool deleted = await store.DeleteInvestigationAsync(id.ToString("D"), parameters.Revision, cancellationToken)
                 .ConfigureAwait(false);
-            return deleted ? TypedResults.NoContent() :
-                new NotFoundProblem(ApplicationStateApiMapping.MissingInvestigation());
+            if (!deleted)
+                return ApplicationStateApiMapping.AsResult<NoContent, BadRequest, NotFound, Conflict>(
+                    ApplicationStateApiMapping.MissingInvestigationResponse());
+            return TypedResults.NoContent();
         }
         catch (ArgumentException)
         {
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The saved investigation ID is invalid."));
+            return ApplicationStateApiMapping.AsResult<NoContent, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.InvalidRequestResponse("The saved investigation ID is invalid."));
         }
         catch (SavedInvestigationRevisionConflictException)
         {
-            return new ConflictProblem(ApplicationStateApiMapping.RevisionConflict());
+            return ApplicationStateApiMapping.AsResult<NoContent, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.RevisionConflictResponse());
         }
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<NoContent, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<NoContent, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 }
 
-internal sealed class RenameSavedInvestigationEndpoint(
-    ApplicationStateStore store, ILogger<RenameSavedInvestigationEndpoint> logger) : RenameSavedInvestigationEndpointBase
+internal sealed class UpdateSavedInvestigationEndpoint(
+    ApplicationStateStore store, ILogger<UpdateSavedInvestigationEndpoint> logger)
+    : UpdateSavedInvestigationEndpointBase
 {
-    public override async Task<Results<Ok<ApiSavedInvestigation>, RenameSavedInvestigationEndpointBase.BadRequestProblem,
-        RenameSavedInvestigationEndpointBase.NotFoundProblem, RenameSavedInvestigationEndpointBase.ConflictProblem,
-        RenameSavedInvestigationEndpointBase.Status503Problem>>
-        HandleAsync(Guid id, RenameSavedInvestigation request, CancellationToken cancellationToken)
+    public override async Task<Results<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict, IResult>>
+        HandleAsync(Guid id, UpdateSavedInvestigation request, CancellationToken cancellationToken)
     {
         if (request.Revision <= 0)
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The revision must be positive."));
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.InvalidRequestResponse("The revision must be positive."));
         try
         {
-            StoredSavedInvestigation? investigation = await store.RenameInvestigationAsync(
-                id.ToString("D"), request.Name, request.Revision, cancellationToken).ConfigureAwait(false);
-            return investigation is null
-                ? new NotFoundProblem(ApplicationStateApiMapping.MissingInvestigation())
-                : TypedResults.Ok(ApplicationStateApiMapping.Map(investigation));
-        }
-        catch (ArgumentException)
-        {
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest(
-                "The saved investigation name is invalid."));
-        }
-        catch (SavedInvestigationRevisionConflictException)
-        {
-            return new ConflictProblem(ApplicationStateApiMapping.RevisionConflict());
-        }
-        catch (ApplicationStatePersistenceException exception)
-        {
-            ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
-        }
-        catch (InvalidOperationException)
-        {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
-        }
-    }
-}
-
-internal sealed class ReplaceSavedInvestigationDefinitionEndpoint(
-    ApplicationStateStore store, ILogger<ReplaceSavedInvestigationDefinitionEndpoint> logger)
-    : ReplaceSavedInvestigationDefinitionEndpointBase
-{
-    public override async Task<Results<Ok<ApiSavedInvestigation>, ReplaceSavedInvestigationDefinitionEndpointBase.BadRequestProblem,
-        ReplaceSavedInvestigationDefinitionEndpointBase.NotFoundProblem,
-        ReplaceSavedInvestigationDefinitionEndpointBase.ConflictProblem,
-        ReplaceSavedInvestigationDefinitionEndpointBase.Status503Problem>>
-        HandleAsync(Guid id, ReplaceSavedInvestigationDefinition request, CancellationToken cancellationToken)
-    {
-        if (request.Revision <= 0)
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The revision must be positive."));
-        try
-        {
-            StoredSavedInvestigation? investigation = await store.ReplaceInvestigationDefinitionAsync(
-                id.ToString("D"), request.DefinitionVersion, JsonSerializer.SerializeToElement(request.Definition),
-                request.Revision, cancellationToken)
+            StoredSavedInvestigation? investigation = await store.UpdateInvestigationAsync(
+                id.ToString("D"), request.Name, request.DefinitionVersion,
+                JsonSerializer.SerializeToElement(request.Definition), request.Revision, cancellationToken)
                 .ConfigureAwait(false);
-            return investigation is null
-                ? new NotFoundProblem(ApplicationStateApiMapping.MissingInvestigation())
-                : TypedResults.Ok(ApplicationStateApiMapping.Map(investigation));
+            if (investigation is null)
+                return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict>(
+                    ApplicationStateApiMapping.MissingInvestigationResponse());
+            return TypedResults.Ok(ApplicationStateApiMapping.Map(investigation));
         }
         catch (ArgumentException)
         {
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest(
-                "The saved investigation definition is invalid."));
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.InvalidRequestResponse(
+                    "The saved investigation name or definition is invalid."));
         }
         catch (JsonException)
         {
-            return new BadRequestProblem(ApplicationStateApiMapping.InvalidRequest("The saved investigation definition is invalid."));
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.InvalidRequestResponse(
+                    "The saved investigation definition is invalid."));
         }
         catch (SavedInvestigationRevisionConflictException)
         {
-            return new ConflictProblem(ApplicationStateApiMapping.RevisionConflict());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.RevisionConflictResponse());
         }
         catch (ApplicationStatePersistenceException exception)
         {
             ApplicationStateApiMapping.LogPersistenceFailure(logger, exception);
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
         catch (InvalidOperationException)
         {
-            return new Status503Problem(ApplicationStateApiMapping.Unavailable());
+            return ApplicationStateApiMapping.AsResult<Ok<ApiSavedInvestigation>, BadRequest, NotFound, Conflict>(
+                ApplicationStateApiMapping.UnavailableResponse());
         }
     }
 }

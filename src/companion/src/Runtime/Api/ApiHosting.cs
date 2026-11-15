@@ -84,6 +84,7 @@ internal static class CompanionApiHosting
                     .LogError(exception, "Unhandled API failure on {Method} {Path}.", context.Request.Method, context.Request.Path);
                 await ProblemResponses.Write(context, 500, "internal-error", "An unexpected error occurred.");
             }));
+            app.UseMiddleware<SavedInvestigationRequestValidationMiddleware>();
             app.UseStatusCodePages(context => ProblemResponses.Write(
                 context.HttpContext, context.HttpContext.Response.StatusCode,
                 context.HttpContext.Response.StatusCode switch

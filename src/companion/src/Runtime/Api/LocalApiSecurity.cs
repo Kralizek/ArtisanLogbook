@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 
 using Microsoft.AspNetCore.Http;
 
@@ -94,34 +93,6 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
                         ? "A Content-Length header is required."
                         : $"The request body must not exceed {maximumBodyBytes} bytes.");
                 return;
-            }
-            if (request.Path.StartsWithSegments("/api/v1/saved-investigations"))
-            {
-                request.EnableBuffering();
-                try
-                {
-                    using JsonDocument body = await JsonDocument.ParseAsync(request.Body,
-                        new JsonDocumentOptions
-                        {
-                            MaxDepth = ApplicationStateStore.MaximumInvestigationDepth + 2
-                        }, request.HttpContext.RequestAborted);
-                    if (CompanionSettingsStore.HasDuplicateProperties(body.RootElement))
-                    {
-                        await Reject(context, StatusCodes.Status400BadRequest, "invalid-request",
-                            "Saved-investigation requests must not contain duplicate JSON property names.");
-                        return;
-                    }
-                }
-                catch (JsonException)
-                {
-                    await Reject(context, StatusCodes.Status400BadRequest, "invalid-request",
-                        "The request body must be valid JSON within the supported nesting limit.");
-                    return;
-                }
-                finally
-                {
-                    request.Body.Position = 0;
-                }
             }
         }
 

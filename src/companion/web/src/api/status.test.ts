@@ -10,6 +10,7 @@ function response(count: number) {
     applicationVersion: "test",
     state: "Running",
     database: { available: true, schemaVersion: 1 },
+    applicationState: { available: true, failure: null },
     history: { craftCount: count, gameContexts: [] },
   };
   return { data, response: new Response() };

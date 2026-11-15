@@ -127,17 +127,6 @@ try {
     assert(graph.data.crafts.nodes.length > 0);
 
     const context = { project: 18, progressionTrack: "Hardcore" };
-    const remembered = await stateRequest(
-      "/api/v1/preferences/last-selected-context",
-      "PUT",
-      context,
-    );
-    assert.equal(remembered.status, 200);
-    const rememberedContext = await (
-      await fetch(`${base}/api/v1/preferences/last-selected-context`)
-    ).json();
-    assert.deepEqual(rememberedContext.context, context);
-
     const preferenceRoute =
       "/api/v1/entity-preferences/Item/987654321";
     for (const [suffix, property] of [
@@ -147,7 +136,7 @@ try {
       const mutation = await stateRequest(
         `${preferenceRoute}${suffix}`,
         "PUT",
-        { ...context, [property]: true },
+        { context, [property]: true },
       );
       assert.equal(mutation.status, 200);
       assert.equal((await mutation.json())[property], true);
@@ -167,7 +156,7 @@ try {
       "POST",
       {
         name: "Published smoke",
-        ...context,
+        context,
         definitionVersion: 1,
         definition: {
           futureField: { preserve: true },
@@ -187,6 +176,17 @@ try {
       { kind: "relative", days: 90 },
       { kind: "fixed", from: "2025-01-01", to: "2025-02-01" },
     ]);
+    const updatedResponse = await stateRequest(investigationPath, "PUT", {
+      name: "Published smoke updated",
+      definitionVersion: 2,
+      definition: { futureField: { preserve: true } },
+      revision: 1,
+    });
+    assert.equal(updatedResponse.status, 200);
+    const updated = await updatedResponse.json();
+    assert.equal(updated.name, "Published smoke updated");
+    assert.equal(updated.definitionVersion, 2);
+    assert.equal(updated.revision, 2);
 
     if (!options.includes("--skip-browser")) await smokeBrowser(base);
     child.kill("SIGINT");
@@ -215,13 +215,7 @@ try {
       (await (
         await fetch(`${base}${investigationPath}`)
       ).json()).definition,
-      retrieved.definition,
-    );
-    assert.deepEqual(
-      (await (
-        await fetch(`${base}/api/v1/preferences/last-selected-context`)
-      ).json()).context,
-      context,
+      updated.definition,
     );
     assert(
       (await readdir(path.join(directory, "data"))).includes(

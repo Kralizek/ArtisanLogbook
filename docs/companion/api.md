@@ -31,8 +31,8 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/health` | 200 when running, 503 while starting, stopping or failed |
-| GET | `/api/v1/status` | Version, lifecycle state, start time, database availability and schema version, canonical craft count and per-GameContext counts, safe failure info |
+| GET | `/api/v1/health` | 200 when canonical history is available and running; 503 while starting, stopping or history is unavailable |
+| GET | `/api/v1/status` | Version, lifecycle state, canonical-history availability and counts, independent application-state capability, safe failure info |
 | GET | `/api/v1/sources` | Discovered SavedVariables sources with stable ids (`src_…`) and discovery diagnostics |
 | GET | `/api/v1/monitoring` | Saved/effective preferences, override indicators, monitoring state and diagnostics |
 | PUT | `/api/v1/monitoring` | Persist monitoring preferences and apply their effective values |
@@ -40,14 +40,12 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 | GET | `/api/v1/imports?limit=N` | Recent import operations (1–100, default 20), newest first |
 | GET | `/api/v1/imports/{id}` | One operation, or 404 |
 | POST | `/api/v1/imports` | Start an import; returns 202 with `Location` |
-| GET | `/api/v1/entity-preferences?project=N[&progressionTrack=…]` | List recipe and item preferences for one context |
+| GET | `/api/v1/entity-preferences?project=N[&progressionTrack=…]` | List recipe and item preferences for the exact context; omitted track means null |
 | PUT | `/api/v1/entity-preferences/{Recipe|Item}/{id}/pin` | Set one entity's pinned state |
 | PUT | `/api/v1/entity-preferences/{Recipe|Item}/{id}/hidden` | Set one entity's hidden state |
-| GET, PUT | `/api/v1/preferences/last-selected-context` | Read or set the startup fallback context |
-| GET, POST | `/api/v1/saved-investigations` | List or create named JSON investigation definitions |
+| GET, POST | `/api/v1/saved-investigations` | List metadata or create named JSON investigation definitions |
 | GET, DELETE | `/api/v1/saved-investigations/{id}` | Retrieve or revision-check and delete a saved investigation |
-| PUT | `/api/v1/saved-investigations/{id}/name` | Rename using the expected revision |
-| PUT | `/api/v1/saved-investigations/{id}/definition` | Replace the versioned JSON definition using the expected revision |
+| PUT | `/api/v1/saved-investigations/{id}` | Atomically update name and versioned JSON definition using the expected revision |
 | GET | `/openapi/v1.yaml` | OpenAPI 3.0 document |
 
 Enum values are serialized as written in the OpenAPI document (for example `Running`,
@@ -57,7 +55,7 @@ Enum values are serialized as written in the OpenAPI document (for example `Runn
 `checkpoint-capacity-exceeded`,
 `application-stopping`, `host-not-allowed`, `origin-not-allowed`,
 `client-header-required`, `unsupported-content-type`, `request-too-large`,
-`internal-error`).
+`application-state-unavailable`, `internal-error`).
 
 Source ids identify a discovered `SavedVariables` file; they are not GameContext
 identities and no project or progression track is inferred from the installation
@@ -179,39 +177,49 @@ Terminal tools and local scripts send the client header on `POST` and `PUT`.
 
 ## Application state
 
-The mutable state API is a separate capability from canonical history queries.
-It is persisted by `application-state.sqlite3` in the per-user application data
-directory, independently of the selected DuckDB history path. Recipe and item
-preferences are qualified by the complete `(project, progressionTrack)` context
-and entity ID. Pin and hide are independent desired-state values; repeating a
+Mutable application data is a separate capability from canonical history
+queries. It is persisted by `application-state.sqlite3` in the per-user
+application data directory, independently of the selected DuckDB history path.
+Recipe and item preferences are qualified by the complete `context` object and
+entity ID. Pin and hide are independent desired-state values; repeating a
 mutation is harmless, and changing one never overwrites the other. Preferences
 do not alter capture, canonical history, or analytical totals.
 
-The last-selected context is a nullable startup fallback: the GET returns
-`{"context":null}` until a preference is set. It is not shared server-side
-navigation state and does not scope GraphQL or REST history queries. Tabs can
-continue using independent explicit contexts.
+Entity mutation routes use the `blizzardId` and `game.project` /
+`game.progressionTrack` fields already returned by GraphQL recipe and item
+objects. Clients do not decode opaque GraphQL IDs or invent identity mappings.
+The entity kind remains explicit in the route, and the complete game context
+keeps overlapping numeric IDs isolated.
+
+The last-selected context, theme, sidebar presentation, and other browser
+preferences belong in browser-local storage, not this API. Active context,
+filters, and unsaved investigation state belong to each URL/browser tab. C12
+context-qualified routes take precedence over a browser's remembered startup
+context; tabs remain independent.
 
 Saved investigations persist a named, versioned JSON object—not query results.
-The JSON document is authoritative for the analytical definition; its context,
-name, stable ID, timestamps and revision are relational management fields. The
-Companion preserves nested and unknown definition fields, but only checks that
-the document is an object, has no duplicate property names, stays within 256 KiB
-and depth 32, and has a positive document version. It does not claim that a
+The relational envelope owns the authoritative context, name, stable ID,
+timestamps, and optimistic-concurrency revision; the JSON document owns the
+analytical definition and cannot contain its own top-level `context`. Listing
+returns metadata only; fetch the selected definition by ID. The Companion
+preserves nested and unknown definition fields, but only checks that the
+document is an object, has no duplicate property names, stays within 256 KiB
+and depth 32, and has a positive definition version. It does not claim that a
 definition is a valid or executable C12 investigation. Relative and fixed date
 periods remain unchanged JSON; storage does not resolve them.
 
 Create with `POST /api/v1/saved-investigations`, then retain the returned `id`
-and `revision`. Rename and definition replacement send the revision last read:
+and `revision`. The context is immutable after creation. A complete update sends
+the name and definition together with the revision last read:
 
 ```bash
-curl -s -X PUT "$BASE/api/v1/saved-investigations/<id>/definition" \
+curl -s -X PUT "$BASE/api/v1/saved-investigations/<id>" \
   -H 'X-Artisan-Logbook-Client: curl' \
   -H 'Content-Type: application/json' \
-  -d '{"definitionVersion":1,"definition":{"period":{"kind":"relative","days":90}},"revision":1}'
+  -d '{"name":"90-day review","definitionVersion":1,"definition":{"period":{"kind":"relative","days":90}},"revision":1}'
 ```
 
-Successful updates increment the revision. A stale revision returns 409
+Name and definition update atomically with a single revision increment. A stale revision returns 409
 `investigation-revision-conflict`; a missing ID returns 404
 `unknown-investigation`. Deletion uses `?revision=N` and no request body.
 Application-state persistence failures return a redacted 503
@@ -219,11 +227,31 @@ Application-state persistence failures return a redacted 503
 
 The runtime uses `Microsoft.Data.Sqlite` and Dapper. The native SQLite library
 is part of the self-contained distribution, so users need no database service
-or SQLite installation. Schema version 1 is recorded in SQLite metadata;
-unrecognized application IDs, unsupported versions and invalid databases fail
-explicitly and are never silently replaced. See [Runtime ownership and
+or SQLite installation. SQLite's `user_version` tracks physical schema
+compatibility independently from the JSON definition version and investigation
+revision. First schema creation and its application/version markers commit in
+one SQLite transaction. A genuinely empty file left by interrupted first
+initialization can be initialized on restart; any non-empty unknown, corrupt,
+or unsupported database is preserved and reported, never automatically replaced.
+
+If SQLite application-state initialization fails, the Companion remains running
+when canonical history is healthy. `/api/v1/status` reports the degraded
+application-state capability, while affected operations return explicit 503
+`application-state-unavailable`; they never return fake empty collections.
+Resolve or restore the database and restart the Companion to reinitialize it.
+This does not affect history collection, imports, analytical queries, or
+embedded assets. See [Runtime ownership and
 lifecycle](../../src/companion/src/Runtime/README.md#host-composition-and-ownership)
 for the C10/C11 boundary and DuckDB independence.
+
+The OpenAPI contract uses standard `components.responses` references without
+YAML anchors. MinimalOpenAPI currently resolves these response references in
+the served contract but generates status-only (`BadRequest`, `NotFound`,
+`Conflict`) or generic `IResult` handler unions instead of its endpoint-specific
+`*Problem` wrappers for inline response schemas. Affected handlers therefore
+return the same redacted `application/problem+json` body through the generated
+`IResult` union. The generated C# contracts and TypeScript client are validated
+from the shared authored contract; generated code is not hand-edited.
 
 ## Operational behavior
 

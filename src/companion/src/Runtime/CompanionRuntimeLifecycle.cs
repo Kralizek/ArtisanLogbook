@@ -50,6 +50,7 @@ internal sealed class CompanionRuntimeLifecycle(
             cancellationToken.ThrowIfCancellationRequested();
             _applicationStateStore = services.GetRequiredService<ApplicationStateStore>();
             await _applicationStateStore.InitializeAsync(cancellationToken).ConfigureAwait(false);
+            status.ApplicationStateOpened();
         }
         catch (OperationCanceledException)
         {
@@ -57,9 +58,7 @@ internal sealed class CompanionRuntimeLifecycle(
         }
         catch (Exception exception)
         {
-            status.Fail("application-state-startup-failed",
-                "Cannot initialize the application-state database.", exception);
-            throw;
+            status.ApplicationStateUnavailable(exception);
         }
 
         LogInstallationFlavors();
@@ -137,6 +136,7 @@ internal sealed class CompanionRuntimeLifecycle(
             Task applicationStateDisposal = _applicationStateStore?.DisposeAsync().AsTask() ?? Task.CompletedTask;
             await Task.WhenAll(disposal, applicationStateDisposal, admission.DrainAsync(cancellationToken)).ConfigureAwait(false);
             status.DatabaseClosed();
+            status.ApplicationStateClosed();
             if (status.Transition(CompanionLifecycleState.Stopped))
                 logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");
         }
