@@ -10,8 +10,10 @@ guarantees remain unverified.
 ## First Forever crafting adapter
 
 Core now supports **ordinary personal, deterministic item crafts** on Forever
-through the shared modern capture pipeline and schema-5 ledger. The production
-UI remains unvalidated and refuses initialization on Forever. Tracer remains
+through the shared modern capture pipeline and schema-5 ledger. At the first adapter milestone the production UI was not yet supported.
+The UI now initializes on Forever, with initial live acceptance documented in
+[the production UI guide](ui.md#forever-support-and-presentation-evidence).
+Tracer remains
 independently usable, including when Core is disabled.
 
 ### Architecture and acceptance boundary
@@ -64,10 +66,11 @@ independently usable, including when Core is disabled.
   the diagnostics snapshot includes the latest unsupported reason. Core can
   initialize without the UI, Tracer, optional identity/profession APIs or quotes.
 
-There is no ledger schema change, migration, adapter-specific storage or
-production UI implementation. Existing schema-5 files reload through the same
-ledger. Tokens and pending requests do not survive reload. Forever remains
-`release: false`; no release or CurseForge publication is enabled.
+The initial adapter introduced no ledger schema change, migration, adapter-specific
+storage or production UI implementation. Existing schema-5 files reload through the
+same ledger. Tokens and pending requests do not survive reload. Forever was not
+release-eligible at that milestone; current release eligibility is defined in
+[`.flavors.yml`](../../.flavors.yml) and described in [deployment](deployment.md#supported-flavors).
 
 ### Runtime fixture provenance
 
@@ -246,10 +249,10 @@ delivery/payloads and item/reagent correlation still require the session above.
 Earlier beta persistence/project-ID reports must not be treated as current
 runtime evidence.
 
-`.flavors.yml` enables Forever CI/local artifacts with `release: false`. The
-release matrix excludes it, preserving Retail release/CurseForge semantics.
-At that milestone Core/UI Forever archives were buildable artifacts **only**.
-The adapter above supersedes the Core restriction; UI remains unvalidated.
+At that historical milestone, `.flavors.yml` enabled Forever CI/local artifacts
+with `release: false`, excluding it from release publication. Core/UI archives
+were buildable artifacts only. The later adapter and [UI acceptance](ui.md#forever-support-and-presentation-evidence)
+supersede those restrictions; current eligibility is in [deployment](deployment.md#supported-flavors).
 
 ## Build and Install
 
@@ -763,13 +766,13 @@ Research baseline: [live UI mirror commit 09b9db7](https://github.com/Gethe/wow-
   include optional `castBarID` and conditional secret payloads. The tracer uses
   `issecretvalue` where available and never attempts to bypass restrictions.
 
-The shared flavor registry identifies known client families and dispatches a
+At the original Retail research milestone, the shared flavor registry identified known client families and dispatches a
 registered adapter by project ID. It provides an empty capability fallback for
 other clients, so core loading, manual markers, and saved evidence do not require
 Retail. The Retail event/call adapter is the only implementation in this slice;
 the capability `measurements` map remains empty because evidence findings have
-not been turned into product capability declarations. Forever remains deferred
-until its exact client/API is known. CraftSim and TSM are neither read nor
+not been turned into product capability declarations. Forever was deferred until its exact client/API was known; the first Forever adapter
+above supersedes that historical limitation. CraftSim and TSM are neither read nor
 required.
 
 ## Evidence Register and Gate

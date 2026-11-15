@@ -1,0 +1,26 @@
+{
+  "skill": "addon-companion-contracts",
+  "cases": [
+    {
+      "id": "contracts-aggregate-only",
+      "prompt": "Import a historical ledger whose old detailed crafts were pruned but aggregate counts remain.",
+      "expected": "Report aggregate-only coverage without inventing canonical observations.",
+      "assertions": ["Do not reconstruct or count nonexistent individual crafts.", "Preserve coverage diagnostics and source lineage.", "Exercise the existing sanitized historical fixture."],
+      "references": ["SKILL.md", "../../../src/companion/src/SavedVariables/README.md"]
+    },
+    {
+      "id": "contracts-ledger-extension",
+      "prompt": "Extend the current addon ledger and Companion adapter with a new observed field.",
+      "expected": "Preserve supported historical schemas and source evidence across round trips.",
+      "assertions": ["Use the established migration and validation paths without dropping prior data.", "Keep missing and explicit zero or false distinct.", "Test addon loading and Companion import/export of relevant old and new fixtures."],
+      "references": ["references/fixtures-and-migration.md", "../../../docs/addon/storage.md"]
+    },
+    {
+      "id": "contracts-fixture-provenance",
+      "prompt": "Update a schema-1 fixture to cover an extra legacy case.",
+      "expected": "Retain reproducible historical provenance and sanitized inputs.",
+      "assertions": ["Use the documented historical Ledger revision and generator.", "Label synthetic substitutions and never commit personal SavedVariables.", "Run the fixture provenance regression as well as affected product tests."],
+      "references": ["references/fixtures-and-migration.md", "../../../src/addon/tests/fixtures/legacy/generate.lua"]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "skill": "companion-web-development",
+  "cases": [
+    {
+      "id": "web-local-codegen",
+      "prompt": "Aspire's web resource fails because graphql-codegen is missing. Diagnose and restore the development workflow.",
+      "expected": "Diagnose the local installer and resource readiness before repairing dependencies.",
+      "assertions": ["Inspect installer and web logs and local node_modules/.bin.", "Do not install codegen globally or bypass the installer wait.", "Explain the supported clean restore and restart if installation was interrupted."],
+      "references": ["references/development-environment.md", "../../../src/companion/tools/AppHost/AppHost.cs"]
+    },
+    {
+      "id": "web-production-publish",
+      "prompt": "Publish the embedded Companion from the devcontainer after running Aspire.",
+      "expected": "Publish and verify current production assets rather than development-only output.",
+      "assertions": ["Stop competing builds and Aspire first.", "Explicitly select production asset mode and build during publish.", "Use the documented executable-only validation and report what actually ran."],
+      "references": ["references/production-packaging.md", "../../../docs/companion/web.md"]
+    },
+    {
+      "id": "web-dashboard-extension",
+      "prompt": "Add a small recent-history dashboard view using the existing API.",
+      "expected": "Extend the existing frontend and preserve browser history semantics.",
+      "assertions": ["Reuse existing clients and components without a speculative state framework.", "Treat IDs and cursors as opaque and retain unknowns and precision limits.", "Use generated operation types and validate relevant application behavior."],
+      "references": ["references/frontend-contracts.md", "../../../docs/companion/graphql.md"]
+    },
+    {
+      "id": "web-dashboard-proxy",
+      "prompt": "Make dashboard navigation work without weakening local API security.",
+      "expected": "Preserve the document-navigation exception without allowing cross-origin API calls.",
+      "assertions": ["Limit the exception to supported top-level document navigation.", "Retain loopback Host, Origin and Fetch Metadata checks.", "Do not disable certificate validation or introduce wildcard CORS."],
+      "references": ["references/local-security.md", "../../../src/companion/web/dev-proxy.ts"]
+    }
+  ]
+}
