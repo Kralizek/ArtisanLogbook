@@ -5,22 +5,59 @@
       "id": "addon-forever-zero-operation",
       "prompt": "Forever results have operationID zero. Fix duplicate handling without losing valid crafts.",
       "expected": "Preserve zero and use the documented conservative cast correlation.",
-      "assertions": ["Do not fabricate a game operation ID.", "Consume matched cast tokens only for supported structured results.", "Quarantine ambiguous cases and keep unsupported measurements unknown."],
-      "references": ["references/capture-and-compatibility.md", "../../../docs/addon/capture.md"]
+      "assertions": [
+        "Do not fabricate a game operation ID.",
+        "Consume matched cast tokens only for supported structured results.",
+        "Quarantine ambiguous cases and keep unsupported measurements unknown."
+      ],
+      "references": [
+        "references/capture-and-compatibility.md",
+        "../../../docs/addon/capture.md"
+      ]
     },
     {
       "id": "addon-cast-stopped",
       "prompt": "Treat every UPDATE_TRADESKILL_CAST_STOPPED(false) as a cancelled craft on Forever.",
       "expected": "Reject the proposed interpretation and preserve documented normal completion behavior.",
-      "assertions": ["Explain that this event also occurs before a normal final result.", "Use matched failure/interruption ownership for cancellation.", "Distinguish fixture evidence from untested runtime delivery."],
-      "references": ["references/capture-and-compatibility.md", "../../../docs/addon/capture.md"]
+      "assertions": [
+        "Explain that this event also occurs before a normal final result.",
+        "Use matched failure/interruption ownership for cancellation.",
+        "Distinguish fixture evidence from untested runtime delivery."
+      ],
+      "references": [
+        "references/capture-and-compatibility.md",
+        "../../../docs/addon/capture.md"
+      ]
     },
     {
       "id": "addon-flavor-package",
       "prompt": "Change the addon UI and package it for Retail and Forever.",
       "expected": "Follow configured flavor packaging and distinguish initial Forever UI evidence from full certification.",
-      "assertions": ["Preserve Core/UI/Tracer ownership and TOC dependencies.", "Use configured flavor packaging and relevant automated tests.", "Report real-client and visual acceptance separately."],
-      "references": ["references/ui-and-packaging.md", "../../../docs/addon/deployment.md"]
+      "assertions": [
+        "Preserve Core/UI/Tracer ownership and TOC dependencies.",
+        "Use configured flavor packaging and relevant automated tests.",
+        "Report real-client and visual acceptance separately."
+      ],
+      "references": [
+        "references/ui-and-packaging.md",
+        "../../../docs/addon/deployment.md"
+      ]
+    },
+    {
+      "id": "addon-pinned-api-research",
+      "prompt": "Add a native WoW UI control or event handler that must work on Retail and Forever. Verify its API contract before implementing.",
+      "expected": "Use the pinned WoWAddonAPIAgents assistant to research both target clients and reconcile findings with Artisan Logbook's actual compatibility and evidence.",
+      "assertions": [
+        "Initialize the pinned tools/wow-api submodule if missing and identify the checked-out revision and relevant client/build.",
+        "Use the API index and relevant narrow symbol/domain references rather than guessing or loading unrelated upstream skills.",
+        "Distinguish declaration, runtime availability, permission and observed behavior; report unresolved runtime validation.",
+        "Preserve Artisan Logbook's architecture and avoid changing the submodule pin or adding runtime dependencies."
+      ],
+      "references": [
+        "references/capture-and-compatibility.md",
+        "../../../tools/wow-api/skills/wow-api-index/SKILL.md",
+        "../../../docs/addon/capture.md"
+      ]
     }
   ]
 }
