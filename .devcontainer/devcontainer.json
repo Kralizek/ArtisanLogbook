@@ -28,6 +28,9 @@
     "ASPNETCORE_URLS": "https://localhost:18888",
     "SSL_CERT_DIR": "/home/vscode/.aspnet/dev-certs/trust:/usr/lib/ssl/certs"
   },
+  "mounts": [
+    "source=${devcontainerId}-companion-node-modules,target=${containerWorkspaceFolder}/src/companion/web/node_modules,type=volume,volume-nocopy"
+  ],
   "forwardPorts": [18888, 5173, 48721],
   "portsAttributes": {
     "18888": {
@@ -46,7 +49,7 @@
       "requireLocalPort": true
     }
   },
-  "postCreateCommand": "aspire certs trust --non-interactive",
+  "postCreateCommand": "sudo chown vscode:vscode src/companion/web/node_modules && aspire certs trust --non-interactive",
   "remoteUser": "vscode",
   "customizations": {
     "vscode": {

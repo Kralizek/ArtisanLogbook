@@ -67,12 +67,12 @@ production architecture.
   Check installation and DCP's launched executable in logs before changing PATH.
   For interrupted installation, stop Aspire, run `npm ci --include=dev` from
   `web`, then restart. Do not install codegen globally.
-- Never run host/container npm restores or deployment builds against the same
-  mounted checkout concurrently. npm ci replaces shared `node_modules`; host
-  .NET restore can overwrite shared `obj` assets with Windows paths. Use a
-  separate host checkout for deployment. If assets were overwritten, stop
-  conflicting builds and run `dotnet restore ArtisanLogbook.Companion.slnx`
-  inside the container. Stop Aspire before switching shared build asset modes.
+- Rebuild the devcontainer to mount its checkout-specific `node_modules` volume.
+  Windows host dependencies stay in the checkout; .NET outputs are partitioned
+  by OS and asset mode. Stop Aspire before deploying from the same checkout,
+  then restart it. Never run host/container builds concurrently: generated
+  sources and `dist` remain shared. Restore .NET with the same asset mode used
+  by any `--no-restore` build.
 
 See [daily workflow and troubleshooting](../../../docs/companion/web.md#daily-development-vs-code-dev-containers)
 for recovery and the supported separate-process alternative.
@@ -202,7 +202,9 @@ for recovery and the supported separate-process alternative.
   isolated directory after a busy-database probe. Never point the development
   writer at production history; explicitly copy data when needed.
 - MSBuild owns npm restore, offline generation, bundling and embedding. Its
-  incremental targets track inputs, file lists and outputs, including deleted
+  production restore stamp identifies the current platform, runtime, manifests
+  and installed tree; development installation invalidates it before npm runs.
+  Incremental targets track inputs, file lists and outputs, including deleted
   assets. Enumerate embedded resources after bundling and before manifest/target
   path calculation; preserve native-separator resource Link paths for Windows.
 - Publication must rebuild production assets: use

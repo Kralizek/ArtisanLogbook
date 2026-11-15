@@ -35,9 +35,21 @@ succeeds. Development startup regenerates contracts only when their inputs or
 generated files change; unchanged starts reuse them. The first generation can
 take tens of seconds on mounted checkouts after `web-installer` completes.
 Development uses incremental `npm install --no-save --include=dev`:
-unchanged starts reuse `node_modules`, without rewriting the lockfile. The first
-restore on a mounted checkout can take several minutes. Production builds and CI
-retain clean `npm ci` restores.
+unchanged starts reuse `node_modules`, without rewriting the lockfile.
+The devcontainer mounts a checkout-specific Docker volume at `web/node_modules`;
+the `vscode` user owns it, it survives container rebuilds, and the host's
+`node_modules` remains separate. Rebuild the container once to apply this mount.
+Dependency changes are installed on the next Aspire start.
+
+For Windows host deployment from this same checkout, stop Aspire, then run
+`.\scripts\Deploy-Companion.ps1` in Windows PowerShell at the repository root.
+Install the .NET 10 SDK and Node.js 26.13.1 (or a later 26.x release) with npm
+11 on Windows; container tooling is not available to the host. The script
+publishes production assets to a staging directory before replacing an existing
+installation. Return to the container and run `aspire run` again. Do not run
+host and container builds simultaneously: generated frontend files and `dist`
+remain shared. No separate checkout or manual dependency repair is needed for
+sequential switching.
 Leave `web` waiting for `web-installer`; do not force Start during installation.
 Aspire's dashboard **Start** command overrides dependency waiting. A Running
 `web-installer` is still installing packages, not ready for Vite. Wait for its
@@ -101,8 +113,15 @@ container, production Node process or Aspire deployment.
 The WebAssets MSBuild targets run **npm ci -> offline codegen -> strict
 TypeScript check -> Vite build**. The lockfile is committed; generated TypeScript
 and Vite `dist` are ignored and regenerated during the build. An npm restore
-stamp changes with the dependency manifests; npm's postinstall also records a
-successful direct/Aspire restore so a subsequent MSBuild does not restore again.
+stamp records a successful MSBuild-owned `npm ci`, the manifests, installed
+lockfile, platform, architecture, Node and npm versions. MSBuild also checks
+the dependency tree, required executables and Rolldown's native binding.
+An incompatible or incomplete tree is restored again. Aspire's development
+installer invalidates the production stamp *before* starting npm, and ordinary
+npm lifecycle hooks invalidate it too; an incremental development install is not
+a production `npm ci`. Consequently the first production build after development
+in the same dependency tree restores once. Unchanged production builds reuse
+the successful restore.
 The frontend target uses source and
 contract timestamps plus a file-list stamp (so source deletions are detected).
 A successful build also records the generated output paths as MSBuild outputs;
@@ -134,10 +153,12 @@ That builds a deliberately empty development provider and skips npm/bundling.
 **Publishing with that property is rejected**. `dotnet publish --no-build` is
 also rejected, even with the property unset, because it could reuse a development
 assembly or stale frontend resources. Publish normally to validate/rebuild/include
-the production provider. Do not run separate
-MSBuild/npm restore invocations concurrently against the same checkout: npm ci
-replaces node_modules. Parallel project builds in one solution graph share the
-single WebAssets project normally.
+the production provider. The .NET `bin` and `obj` paths are partitioned by
+Windows versus Unix and by development versus production asset mode, including
+NuGet project assets. Restore with the same `CompanionWebDevelopment` value as
+the subsequent `--no-restore` build. Do not run separate MSBuild/npm builds
+concurrently against the same checkout; generated sources and `dist` are shared.
+Parallel project builds in one solution graph share WebAssets normally.
 
 The existing `dotnet pack --no-build` tool-package workflow remains supported
 after a normal production build. The pinned .NET SDK also routes tool packing
@@ -229,14 +250,14 @@ agree. Vite's WebSocket uses the browser endpoint for HMR.
   `Finished waiting for resource 'web-installer'`, Start bypassed the install
   dependency. Do not stop the whole AppHost while npm is still installing; allow
   the installer to finish, then start the failed web resource again.
-  Never run npm/MSBuild restores concurrently, including a deployment script on
-  the host against the container's mounted checkout. Host and container npm ci
-  replace the same `node_modules`; host .NET restores also overwrite shared
-  `obj` assets with Windows paths. Use a separate checkout for host deployment.
-  If installation was interrupted,
-  stop Aspire and run `npm ci --include=dev` from `web`, then restart. Do not
-  install codegen globally. Run `dotnet restore ArtisanLogbook.Companion.slnx`
-  inside the container if the host overwrote NuGet assets.
+  If installation was interrupted, stop and restart Aspire; its installer runs
+  again. Do not install codegen globally. For detailed diagnostics, run
+  `npm run install:development` and `npm run dev` from `src/companion/web`.
+  On Windows, check `Get-Command dotnet,node,npm.cmd`, then from
+  `src/companion/web` run `npm ci --include=dev` and `npm run build` to see the
+  full codegen/Vite error. Fix the reported problem before retrying deployment;
+  failed publication does not replace the existing installation. Avoid
+  concurrent host/container builds.
 - **Certificate errors:** `aspire certs trust --non-interactive` and
   `dotnet dev-certs https --check --trust` check container initialization.
   `SSL_CERT_DIR` includes the user's dev-cert trust directory. Host browser

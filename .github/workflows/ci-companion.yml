@@ -190,6 +190,8 @@ jobs:
         run: dotnet nuget list source --configfile NuGet.Config
       - run: dotnet restore ArtisanLogbook.Companion.slnx
       - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
+      - name: Verify incremental frontend asset recovery
+        run: node tools/smoke-incremental.mjs
       - name: Verify CLI integration tests
         run: dotnet test tests/Cli/Tests.Cli.csproj --no-build -c Release --logger "trx;LogFileName=cli-tests-windows.trx" --results-directory artifacts/test-results
       - name: Summarize CLI test durations
@@ -244,6 +246,8 @@ jobs:
           cache-dependency-path: src/companion/web/package-lock.json
       - name: Smoke-test Windows self-contained local deployment
         shell: pwsh
+        env:
+          CompanionWebDevelopment: "true"
         run: |
           $install = Join-Path '${{ runner.temp }}' 'ArtisanLogbookCompanion'
           & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
@@ -254,3 +258,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Alias smoke test failed' }
           node tools/smoke-publish.mjs (Join-Path $install 'artisanlogbook.exe') ../addon/tests/fixtures/legacy/v1-outcome1.lua --skip-browser
           if ($LASTEXITCODE -ne 0) { throw 'Windows executable-only HTTP/API smoke failed' }
+          $exe = Join-Path $install 'artisanlogbook.exe'
+          $originalHash = (Get-FileHash $exe).Hash
+          $originalPath = $env:PATH
+          $dotnetDirectory = Split-Path (Get-Command dotnet -CommandType Application).Source
+          try {
+            $env:PATH = $dotnetDirectory
+            try {
+              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
+              throw 'Deployment unexpectedly succeeded without Node/npm'
+            } catch {
+              if ($_.Exception.Message -notmatch "Required host tool 'node'") { throw }
+            }
+          } finally { $env:PATH = $originalPath }
+          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Missing prerequisites changed the installation' }
+          $codegen = 'web/codegen.ts'
+          $originalCodegen = [IO.File]::ReadAllText((Resolve-Path $codegen))
+          try {
+            [IO.File]::WriteAllText((Resolve-Path $codegen), "throw new Error('forced codegen failure');`n$originalCodegen")
+            try {
+              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
+              throw 'Deployment unexpectedly succeeded with broken codegen'
+            } catch {
+              if ($_.Exception.Message -notmatch 'dotnet publish failed') { throw }
+            }
+          } finally { [IO.File]::WriteAllText((Resolve-Path $codegen), $originalCodegen) }
+          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Failed frontend build changed the installation' }
+          exit 0

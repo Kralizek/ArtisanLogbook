@@ -44,7 +44,10 @@ MSBuild restores npm dependencies, generates API types and embeds the Vite build
 The devcontainer intentionally defaults to development-only assets; the test
 command above explicitly builds production resources required by hosting tests.
 Use `-p:CompanionWebDevelopment=false` for production builds/publishes too.
-Do not run a separate npm restore concurrently against the same checkout.
+Stop Aspire before deploying from the Windows host using the same checkout.
+The devcontainer isolates npm dependencies in a volume, and .NET outputs are
+partitioned by platform and asset mode. Do not run host/container builds or
+a separate npm restore concurrently against the same checkout.
 See the [browser development guide](docs/companion/web.md) for Aspire startup,
 isolated fixtures, frontend checks and executable-only production verification.
 

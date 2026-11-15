@@ -40,6 +40,10 @@ On Windows, a local development deployment script is available from the reposito
 .\scripts\Deploy-Companion.ps1
 ```
 
+The Windows host needs the .NET 10 SDK and Node.js 26.13.1 or later 26.x with
+npm 11. Stop Aspire before deploying from a shared devcontainer checkout; see
+the [shared-checkout workflow](../../docs/companion/web.md#daily-development-vs-code-dev-containers).
+
 This installs a local `al` command alias; it is **not a published end-user installer**. Open a new terminal after installation and run:
 
 ```text

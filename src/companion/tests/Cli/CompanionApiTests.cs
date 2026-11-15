@@ -122,8 +122,12 @@ public sealed class CompanionApiTests
         await using ApiHost host = await Start();
         IRequestExecutor executor = await host.App.Services.GetRequestExecutorAsync();
         string actual = executor.Schema.ToString()!.Replace("\r\n", "\n");
-        string contract = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory,
-            "../../../../../src/Runtime/GraphQL/schema.graphql"));
+        DirectoryInfo? directory = new(TestContext.CurrentContext.TestDirectory);
+        while (directory is not null &&
+            !File.Exists(Path.Combine(directory.FullName, "src", "Runtime", "Runtime.csproj")))
+            directory = directory.Parent;
+        Assert.That(directory, Is.Not.Null, "Could not locate the Companion source directory.");
+        string contract = Path.Combine(directory!.FullName, "src", "Runtime", "GraphQL", "schema.graphql");
         if (Environment.GetEnvironmentVariable("UPDATE_GRAPHQL_SCHEMA") == "1")
             await File.WriteAllTextAsync(contract, actual);
         Assert.That(File.Exists(contract), Is.True, "Generate the GraphQL schema snapshot before running the contract test.");

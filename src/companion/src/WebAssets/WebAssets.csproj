@@ -14,12 +14,10 @@
     <FrontendInput Include="$(WebDirectory)src/**/*;$(WebDirectory)*.ts;$(WebDirectory)*.js;$(WebDirectory)*.json;$(WebDirectory)index.html"
                    Exclude="$(WebDirectory)src/graphql/generated/**/*;$(WebDirectory)src/api/generated.ts" />
     <FrontendInput Include="../Runtime/GraphQL/schema.graphql;../Runtime/Api/Contracts/openapi.yaml" />
+    <FrontendInput Include="$(WebDirectory)scripts/**/*.mjs" />
   </ItemGroup>
-  <Target Name="RestoreFrontend" Condition="'$(CompanionWebDevelopment)' != 'true'"
-          Inputs="$(WebDirectory)package.json;$(WebDirectory)package-lock.json"
-          Outputs="$(WebDirectory)node_modules/.companion-restore">
-    <Exec Command="$(NpmCommand) ci --no-audit --no-fund" WorkingDirectory="$(WebDirectory)" />
-    <Touch Files="$(WebDirectory)node_modules/.companion-restore" AlwaysCreate="true" />
+  <Target Name="RestoreFrontend" Condition="'$(CompanionWebDevelopment)' != 'true'">
+    <Exec Command="node scripts/restore-production.mjs" WorkingDirectory="$(WebDirectory)" />
   </Target>
   <Target Name="RecordFrontendInputs" DependsOnTargets="RestoreFrontend" Condition="'$(CompanionWebDevelopment)' != 'true'">
     <WriteLinesToFile File="$(WebDirectory)node_modules/.companion-inputs" Lines="@(FrontendInput->'%(FullPath)')"
@@ -31,7 +29,7 @@
   </Target>
   <Target Name="BuildFrontend" Condition="'$(CompanionWebDevelopment)' != 'true'"
           DependsOnTargets="RecordFrontendInputs"
-          Inputs="@(FrontendInput);$(WebDirectory)node_modules/.companion-restore;$(WebDirectory)node_modules/.companion-inputs"
+          Inputs="@(FrontendInput);$(WebDirectory)node_modules/.companion-production-restore;$(WebDirectory)node_modules/.companion-inputs"
           Outputs="$(WebDirectory)dist/index.html;$(WebDirectory)node_modules/.companion-outputs;@(FrontendOutput)">
     <Exec Command="$(NpmCommand) run build" WorkingDirectory="$(WebDirectory)" />
     <ItemGroup>
