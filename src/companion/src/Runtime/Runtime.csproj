@@ -13,6 +13,8 @@
     <Using Include="Microsoft.AspNetCore.Routing" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="MinimalOpenAPI" />
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="HotChocolate.AspNetCore" />
     <PackageReference Include="System.Reactive" />
     <ProjectReference Include="../ImportService/ImportService.csproj" />

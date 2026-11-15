@@ -3,9 +3,9 @@ info:
   title: Artisan Logbook Companion local API
   version: 1.0.0
   description: >
-    Loopback-only management API of the Artisan Logbook Companion. State-changing requests must be
-    application/json and carry the X-Artisan-Logbook-Client header. Import operation identifiers are
-    process-local and are not durable across Companion restarts.
+    Loopback-only management API of the Artisan Logbook Companion. Requests with mutation bodies must
+    use application/json and carry the X-Artisan-Logbook-Client header; DELETE requests carry the
+    client header without a body. Import operation identifiers are process-local and are not durable.
 servers:
   - url: http://127.0.0.1:48721
     description: Preferred port; the actual port is printed by `artisanlogbook serve`.
@@ -17,7 +17,7 @@ paths:
       tags: [Operations]
       responses:
         "200":
-          description: The Companion is running.
+          description: Canonical history is available; nonessential application-state capabilities may be degraded.
           content:
             application/json:
               schema:
@@ -29,7 +29,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "503":
-          description: The Companion is not running (starting, stopping or failed).
+          description: Canonical history is unavailable (starting, stopping or failed).
           content:
             application/json:
               schema:
@@ -46,7 +46,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [applicationVersion, state, database]
+                required: [applicationVersion, state, database, applicationState]
                 properties:
                   applicationVersion:
                     type: string
@@ -66,6 +66,8 @@ paths:
                         type: integer
                         format: int32
                         nullable: true
+                  applicationState:
+                    $ref: "#/components/schemas/ApplicationStateStatus"
                   history:
                     type: object
                     description: Canonical craft counts; null when the database is unavailable.
@@ -79,19 +81,10 @@ paths:
                         type: array
                         items:
                           type: object
-                          required: [project, progressionTrack, craftCount]
+                          required: [context, craftCount]
                           properties:
-                            project:
-                              type: integer
-                              format: int32
-                              description: Blizzard WOW_PROJECT_ID of the GameContext.
-                            projectName:
-                              type: string
-                              nullable: true
-                              description: Known project name, null for unnamed future projects.
-                            progressionTrack:
-                              type: string
-                              nullable: true
+                            context:
+                              $ref: "#/components/schemas/GameContextMetadata"
                             craftCount:
                               type: integer
                               format: int64
@@ -479,8 +472,559 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /api/v1/games/{context}:
+    get:
+      operationId: getGameContextMetadata
+      summary: Resolve one canonical context identifier or route alias
+      description: Returns derived context metadata without requiring history observations or application-state persistence.
+      tags: [Operations]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+      responses:
+        "200":
+          description: The resolved canonical game context and its stable route metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameContextMetadata"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/games/{context}/entity-preferences:
+    get:
+      operationId: getEntityPreferences
+      summary: List recipe and item preferences for one exact game context
+      description: The context route accepts a stable route alias or canonical context identifier and always selects one exact context.
+      tags: [ApplicationState]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+      responses:
+        "200":
+          description: Preferences for the exact canonical game context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityPreferenceList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/games/{context}/entity-preferences/{kind}/{id}/pin:
+    put:
+      operationId: setEntityPinned
+      summary: Set the desired pinned state for one recipe or item
+      tags: [ApplicationState]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+        - name: kind
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Recipe, Item]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPinnedPreference"
+      responses:
+        "200":
+          description: The updated preference state for the entity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityPreference"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/games/{context}/entity-preferences/{kind}/{id}/hidden:
+    put:
+      operationId: setEntityHidden
+      summary: Set the desired hidden state for one recipe or item
+      tags: [ApplicationState]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+        - name: kind
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Recipe, Item]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetHiddenPreference"
+      responses:
+        "200":
+          description: The updated preference state for the entity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityPreference"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/saved-investigations:
+    get:
+      operationId: listSavedInvestigations
+      summary: List saved analytical investigation metadata
+      description: Lists the global catalogue of named user-created definitions. Definitions are retrieved separately by ID.
+      tags: [SavedInvestigations]
+      responses:
+        "200":
+          description: Metadata ordered by creation time and stable ID; definitions are not included.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigationList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/games/{context}/saved-investigations:
+    get:
+      operationId: listContextSavedInvestigations
+      summary: List saved investigation metadata for one exact context
+      tags: [SavedInvestigations]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+      responses:
+        "200":
+          description: Metadata ordered by creation time and stable ID for the exact canonical context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigationList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    post:
+      operationId: createSavedInvestigation
+      summary: Save a named, versioned analytical definition
+      description: The resolved route context becomes immutable envelope metadata. The bounded JSON definition cannot override it and is not validated as executable C12 analytics.
+      tags: [SavedInvestigations]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSavedInvestigation"
+      responses:
+        "201":
+          description: Created. Location identifies the saved investigation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/saved-investigations/{id}:
+    get:
+      operationId: getSavedInvestigation
+      summary: Retrieve a saved investigation without changing it
+      tags: [SavedInvestigations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The saved investigation and its current revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    put:
+      operationId: updateSavedInvestigation
+      summary: Update a saved investigation atomically
+      description: Updates the name and complete versioned JSON definition together using optimistic concurrency. Context, identity and creation time remain immutable.
+      tags: [SavedInvestigations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSavedInvestigation"
+      responses:
+        "200":
+          description: Updated saved investigation with one revision increment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    delete:
+      operationId: deleteSavedInvestigation
+      summary: Delete a saved investigation using its expected revision
+      description: Requires X-Artisan-Logbook-Client and an empty request body.
+      tags: [SavedInvestigations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: revision
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
 components:
+  parameters:
+    GameContextLocator:
+      name: context
+      in: path
+      required: true
+      description: Established supported-game alias or canonical game context identifier. Canonical identifiers are the fallback route alias.
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    BadRequest:
+      description: Invalid request or canonical identity.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Host, Origin, Fetch-Metadata or client-header check failed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: The saved investigation does not exist.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: The supplied saved-investigation revision is stale.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    LengthRequired:
+      description: Content-Length is required for a mutation body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    TooLarge:
+      description: Request body exceeds its endpoint-specific limit.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnsupportedMediaType:
+      description: Content-Type is not application/json.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalError:
+      description: Unexpected failure.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unavailable:
+      description: Application-state persistence is unavailable or the application is stopping.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
   schemas:
+    GameContext:
+      type: string
+      description: Canonical game context identifier, using a positive project ID and an optional exact progression-track suffix. In the suffix, ASCII letters, digits, dot, underscore and hyphen are literal; every other UTF-16 code unit is encoded as tilde plus four uppercase hexadecimal digits.
+      example: "18-Hardcore"
+    GameContextLocator:
+      type: string
+      description: Established supported-game alias or canonical game context identifier. Canonical identifiers are the fallback route alias.
+      example: retail
+    GameContextMetadata:
+      type: object
+      required: [canonicalId, routeAlias, displayName, project, progressionTrack]
+      properties:
+        canonicalId:
+          type: string
+          description: Canonical game context identifier.
+        routeAlias:
+          type: string
+          description: Stable URL-friendly context route alias.
+        displayName:
+          type: string
+          description: Friendly display name; not used as identity.
+        project:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Blizzard WOW_PROJECT_ID, including positive future values.
+        progressionTrack:
+          type: string
+          nullable: true
+          description: Exact progression-track identity, null when the context has no track.
+    EntityPreference:
+      type: object
+      required: [context, kind, entityId, pinned, hidden]
+      properties:
+        context:
+          type: string
+          description: Canonical game context identifier.
+        kind:
+          type: string
+          enum: [Recipe, Item]
+        entityId:
+          type: integer
+          format: int32
+        pinned:
+          type: boolean
+        hidden:
+          type: boolean
+    EntityPreferenceList:
+      type: object
+      required: [preferences]
+      properties:
+        preferences:
+          type: array
+          items:
+            $ref: "#/components/schemas/EntityPreference"
+    SetPinnedPreference:
+      type: object
+      additionalProperties: false
+      required: [pinned]
+      properties:
+        pinned:
+          type: boolean
+    SetHiddenPreference:
+      type: object
+      additionalProperties: false
+      required: [hidden]
+      properties:
+        hidden:
+          type: boolean
+    CreateSavedInvestigation:
+      type: object
+      additionalProperties: false
+      required: [name, definitionVersion, definition]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        definitionVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        definition:
+          type: object
+          description: Bounded versioned JSON document; analytical fields are owned by C12 and the top-level context property is reserved for the envelope.
+          additionalProperties: true
+    UpdateSavedInvestigation:
+      type: object
+      additionalProperties: false
+      required: [name, definitionVersion, definition, revision]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        definitionVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        definition:
+          type: object
+          description: Bounded versioned JSON document; analytical fields are owned by C12 and the top-level context property is reserved for the envelope.
+          additionalProperties: true
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+    SavedInvestigation:
+      type: object
+      required: [id, name, context, definitionVersion, definition, createdAt, updatedAt, revision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        context:
+          type: string
+          description: Canonical game context identifier.
+        definitionVersion:
+          type: integer
+          format: int32
+        definition:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        revision:
+          type: integer
+          format: int64
+    SavedInvestigationSummary:
+      type: object
+      required: [id, name, context, definitionVersion, createdAt, updatedAt, revision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        context:
+          type: string
+          description: Canonical game context identifier.
+        definitionVersion:
+          type: integer
+          format: int32
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        revision:
+          type: integer
+          format: int64
+    SavedInvestigationList:
+      type: object
+      required: [investigations]
+      properties:
+        investigations:
+          type: array
+          items:
+            $ref: "#/components/schemas/SavedInvestigationSummary"
     MonitoringPreferences:
       type: object
       description: Monitoring preferences shared deliberately by saved and effective projections.
@@ -548,6 +1092,16 @@ components:
                 nullable: true
         diagnosticsTruncated:
           type: boolean
+    ApplicationStateStatus:
+      type: object
+      required: [available, failure]
+      properties:
+        available:
+          type: boolean
+        failure:
+          allOf:
+            - $ref: "#/components/schemas/Failure"
+          nullable: true
     LifecycleState:
       type: string
       enum: [Created, Starting, Running, Stopping, Stopped, Failed]

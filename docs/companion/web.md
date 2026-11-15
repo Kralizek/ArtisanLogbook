@@ -182,13 +182,44 @@ There are no CDNs, remote fonts, icons, analytics, cookies or authentication
 services. A stricter CSP is deferred: Mantine's runtime style properties require
 a considered policy, not a blanket CSP that breaks components.
 
+## C12 context-qualified browser routing
+
+The full C12 experience is not implemented by this foundation. Its analytical
+browser destinations should begin with the backend-provided stable route alias
+(for example `/retail/overview` or `/forever/recipes/441`). Resolve that
+explicit route through shared context metadata at `GET /api/v1/games/{context}`,
+and use the returned canonical string ID for analytical scope and cache
+identity. The only current friendly aliases are the base Retail and Forever
+contexts; other contexts use their canonical ID as the alias (for example
+`/18-Hardcore/overview`). Do not construct canonical IDs, decode opaque
+GraphQL entity IDs, or derive aliases in frontend code.
+
+An eventual route hierarchy may use a context segment and a loader, but C12
+will choose its actual React Router/state implementation. An explicit route
+identity takes precedence over the browser-local remembered startup context;
+the latter is only a default when a destination contains no context. Keep each
+tab's context and filters in its own URL/state, with no server-side active
+context. Global management destinations, including the saved-investigation
+catalogue, stay outside the analytical context hierarchy.
+
+The current production SPA fallback admits only `/`, `/history` and `/history/`.
+Add future C12 document routes explicitly; never make `/api`, `/graphql`,
+`/openapi`, missing assets, or arbitrary unknown paths fall back to HTML.
+Similarly, the Vite development proxy's cross-origin top-level navigation
+exception is narrow and presently covers only the foundation routes. When C12
+adds alias-based pages, extend it only for the intended browser document
+navigation paths; do not broaden API forwarding, Host/Origin checks or CORS.
+See the [C12 requirements](https://github.com/Kralizek/ArtisanLogbook/issues/81).
+
 ## Tooling and local development
 
 The declarative features provision .NET **10.0**, Node **26.13.1** with bundled
 npm **11** (no npm override), stable Aspire CLI, OS Python, PowerShell, GitHub CLI,
 Lua 5.1, LuaRocks, Ubuntu `lua-check`, PyYAML and jq. `postCreateCommand` only
-initializes certificate trust. No manual global npm/LuaRocks installation is
-required. The .NET SDK must satisfy `global.json` (**10.0.401**, allowing patch
+initializes volume ownership and certificate trust, installs frontend development
+dependencies, and provisions Playwright's Chromium headless shell and Linux
+dependencies. No manual global npm/LuaRocks installation is required. The .NET
+SDK must satisfy `global.json` (**10.0.401**, allowing patch
 roll-forward within that feature band).
 
 AppHost SDK and hosting integrations are pinned to **13.6.5**. The official
@@ -454,9 +485,10 @@ directory, removes Node/npm/Aspire from the child's PATH, uses isolated writable
 data, imports the fixture with the copied executable, retrieves HTML and every
 referenced JS/CSS bundle with content-type checks, and checks representative
 REST/OpenAPI/POST GraphQL responses. On Linux it also uses Chromium to check
-that the application renders and makes real REST and GraphQL requests. Install
-the browser and system dependencies with `npx playwright install --with-deps
---only-shell chromium` from `web`; Windows can use `--skip-browser`.
+that the application renders and makes real REST and GraphQL requests. The
+devcontainer provisions Chromium; on other Linux environments install the
+browser and system dependencies with `npx playwright install --with-deps
+--only-shell chromium` from `web`. Windows can use `--skip-browser`.
 Linux shutdown must exit successfully; Node's Windows process signal
 terminates the child rather than delivering console Ctrl+C, so this smoke does
 not claim a Windows graceful-shutdown test. Existing backend lifecycle tests

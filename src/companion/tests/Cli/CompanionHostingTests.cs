@@ -76,6 +76,8 @@ public sealed class CompanionHostingTests
                 Assert.That(running.LifecycleState, Is.EqualTo(CompanionLifecycleState.Running));
                 Assert.That(running.DatabaseAvailable, Is.True);
                 Assert.That(running.DatabaseSchemaVersion, Is.EqualTo(store.SchemaVersion));
+                Assert.That(running.ApplicationStateAvailable, Is.True);
+                Assert.That(running.ApplicationStateFailure, Is.Null);
                 Assert.That(running.CanonicalCraftCount, Is.Zero);
                 Assert.That(running.Configuration.EffectiveSettings.Monitoring.Enabled, Is.EqualTo(monitoring ?? true));
                 Assert.That(running.CriticalFailure, Is.Null);
@@ -101,6 +103,7 @@ public sealed class CompanionHostingTests
             await app.StopAsync();
             Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopped));
             Assert.That(status.Read().DatabaseAvailable, Is.False);
+            Assert.That(status.Read().ApplicationStateAvailable, Is.False);
             Assert.That(() => store.ReadStatus(), Throws.TypeOf<ObjectDisposedException>());
         }
         Assert.That(status.Read().LifecycleState, Is.EqualTo(CompanionLifecycleState.Stopped));
@@ -529,7 +532,7 @@ public sealed class CompanionHostingTests
         CompanionApplicationStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>();
         Assert.ThrowsAsync<IOException>(async () => await app.RunCompanionAsync());
         await app.DisposeAsync();
-        Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("database-startup-failed"));
+        Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("host-failed"));
         Assert.That(_runtimeLogs, Has.None.Contains("database ownership released"));
         AssertDatabaseReleased();
     }

@@ -58,6 +58,16 @@ and item IDs use Blizzard IDs within the game context; expansion keys are the
 canonical stored keys. Project is an integer because the canonical model permits
 future project IDs not represented by today's enum.
 
+`GameContext.id` remains the opaque, versioned GraphQL history identity.
+`GameContext.canonicalId` is the canonical public string (`1`, `18`, or
+`18-Hardcore`); `routeAlias` is the stable route segment (`retail` and
+`forever` for their base contexts, otherwise the canonical ID); and
+`displayName` is presentation metadata. REST responses and application-state
+records use `canonicalId`, while browser navigation should use `routeAlias`.
+The frontend must not decode opaque GraphQL IDs, construct canonical strings,
+or derive aliases itself. Context metadata is derived without requiring a
+current history observation and does not imply capability support.
+
 Craft reagent and output rows are actual observations. Reagent quantities are
 independently nullable, and outputs have item/quality grain. Recipe reagent
 slots are canonical schematic slots, not historical request evidence or

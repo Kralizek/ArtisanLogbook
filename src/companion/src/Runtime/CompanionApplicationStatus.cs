@@ -22,7 +22,9 @@ internal sealed record CompanionStatus(
     long? CanonicalCraftCount,
     CompanionRuntimeConfiguration Configuration,
     CompanionFailure? CriticalFailure,
-    IReadOnlyList<ArtisanLogbook.HistoryStore.GameContextCraftCount>? CanonicalContexts = null);
+    IReadOnlyList<ArtisanLogbook.HistoryStore.GameContextCraftCount>? CanonicalContexts = null,
+    bool ApplicationStateAvailable = false,
+    CompanionFailure? ApplicationStateFailure = null);
 
 /// <summary>Operational status; canonical counts are queried from C03, never cached.</summary>
 internal sealed class CompanionApplicationStatus(
@@ -35,6 +37,8 @@ internal sealed class CompanionApplicationStatus(
     private DateTimeOffset? _startupTime;
     private Store? _store;
     private CompanionFailure? _failure;
+    private bool _applicationStateAvailable;
+    private CompanionFailure? _applicationStateFailure;
 
     public CompanionStatus Read()
     {
@@ -59,7 +63,8 @@ internal sealed class CompanionApplicationStatus(
                     Fail("database-status-failed", "Cannot read canonical history status.", exception);
                 }
             }
-            return new(_version, _startupTime, _state, available, schema, count, configuration, _failure, contexts);
+            return new(_version, _startupTime, _state, available, schema, count, configuration, _failure, contexts,
+                _applicationStateAvailable, _applicationStateFailure);
         }
     }
 
@@ -90,6 +95,32 @@ internal sealed class CompanionApplicationStatus(
     internal void DatabaseClosed()
     {
         lock (_gate) _store = null;
+    }
+
+    internal void ApplicationStateOpened()
+    {
+        lock (_gate)
+        {
+            _applicationStateAvailable = true;
+            _applicationStateFailure = null;
+        }
+    }
+
+    internal void ApplicationStateUnavailable(Exception exception)
+    {
+        lock (_gate)
+        {
+            _applicationStateAvailable = false;
+            _applicationStateFailure = new(
+                "application-state-unavailable", "Application-state persistence is unavailable.");
+            logger.LogWarning("Companion capability {FailureCode}: {FailureMessage} ({ExceptionType})",
+                _applicationStateFailure.Code, _applicationStateFailure.Message, exception.GetType().Name);
+        }
+    }
+
+    internal void ApplicationStateClosed()
+    {
+        lock (_gate) _applicationStateAvailable = false;
     }
 
     internal void Fail(string code, string message, Exception exception)

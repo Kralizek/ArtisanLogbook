@@ -15,6 +15,7 @@ vi.mock("../api/status", async (importOriginal) => ({
       applicationVersion: "test",
       state: "Running",
       database: { available: true, schemaVersion: 1 },
+      applicationState: { available: true, failure: null },
       history: { craftCount: 0, gameContexts: [] },
     },
     error: undefined,
@@ -64,6 +65,7 @@ it("does not present an unsafe REST count as exact", () => {
             applicationVersion: "test",
             state: "Running",
             database: { available: true, schemaVersion: 1 },
+            applicationState: { available: true, failure: null },
             history: {
               craftCount: Number.MAX_SAFE_INTEGER + 1,
               gameContexts: [],

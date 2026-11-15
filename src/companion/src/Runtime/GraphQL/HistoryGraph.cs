@@ -189,6 +189,9 @@ public sealed class GameContextGraph(GameContext value)
 {
     [GraphQLType(typeof(NonNullType<IdType>))]
     public string Id => HistoryTokens.Context(value);
+    public string CanonicalId => GameContextCodec.Encode(value);
+    public string RouteAlias => GameContextRouteResolver.Describe(value).RouteAlias;
+    public string DisplayName => GameContextRouteResolver.Describe(value).DisplayName;
     public int Project => (int)value.Project;
     public string? ProgressionTrack => value.ProgressionTrack;
     [Cost(1_000)]
