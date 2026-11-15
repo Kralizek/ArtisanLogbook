@@ -25,6 +25,7 @@ same name; read it by path when discovery is ambiguous.
 
 - Preserve architectural boundaries and established contracts; prefer existing
   components and abstractions. Avoid speculative frameworks and completionism.
+  Preserve the [frozen Companion component catalog](docs/companion/components.md).
 - Preserve unknown and incomplete observations, provenance and canonical
   identity; maintain recorded-history and supported-client compatibility.
 - Use the supported devcontainer and isolated development data. Never modify
