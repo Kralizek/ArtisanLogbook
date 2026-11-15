@@ -117,7 +117,7 @@ jobs:
           $trxPath = Join-Path (Get-Location) 'artifacts/test-results/cli-tests-linux.trx'
           if (-not (Test-Path $trxPath)) { Write-Host 'No CLI TRX was produced.'; exit 0 }
           $trx = [xml](Get-Content $trxPath -Raw)
-          $slow = @($trx.SelectNodes("//*[local-name()='UnitTestResult]") | Where-Object { $_.GetAttribute('outcome') -ne 'NotExecuted' } | ForEach-Object {
+          $slow = @($trx.SelectNodes("//*[local-name()='UnitTestResult']") | Where-Object { $_.GetAttribute('outcome') -ne 'NotExecuted' } | ForEach-Object {
             [pscustomobject]@{ Test = $_.GetAttribute('testName'); Duration = [timespan]::Parse($_.GetAttribute('duration')) }
           } | Sort-Object Duration -Descending | Select-Object -First 15)
           '### Slowest CLI tests (Linux)' | Add-Content $env:GITHUB_STEP_SUMMARY
@@ -227,6 +227,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw 'Development-only publishing must fail' }
           dotnet publish src/Cli/Cli.csproj -c Release --no-build
           if ($LASTEXITCODE -eq 0) { throw 'Publishing without current asset validation must fail' }
+          exit 0
       - uses: actions/upload-artifact@v6
         if: always()
         with:
