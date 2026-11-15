@@ -1167,10 +1167,16 @@ components:
           type: string
     ImportSourceResult:
       type: object
-      required: [sourceId, status, outcome, counts, diagnostics, diagnosticsTruncated]
+      required: [sourceId, status, outcome, counts, gameContexts, diagnostics, diagnosticsTruncated]
       properties:
         sourceId:
           type: string
+        gameContexts:
+          type: array
+          nullable: true
+          description: Canonical context IDs represented by accepted source crafts; null before a successful import, empty for an accepted source with no crafts. Not inferred from the source path.
+          items:
+            type: string
         status:
           type: string
           enum: [Queued, Running, Completed, Failed, Cancelled]
@@ -1182,7 +1188,7 @@ components:
         counts:
           type: object
           nullable: true
-          required: [observations, inserted, alreadyPresent, enriched, rejectedOrConflicting, dimensionsInserted, dimensionsEnriched]
+          required: [observations, inserted, alreadyPresent, enriched, rejectedOrConflicting, dimensionsInserted, dimensionsEnriched, distinctRecipeCount]
           properties:
             observations:
               type: integer
@@ -1205,6 +1211,11 @@ components:
             dimensionsEnriched:
               type: integer
               format: int32
+            distinctRecipeCount:
+              type: integer
+              format: int32
+              nullable: true
+              description: Number of distinct (GameContext, recipe ID) pairs in successfully accepted source craft observations, including replays and enrichments; excludes unknown recipe IDs and rollups. Null when rejected, failed, or not yet available. Not newly inserted crafts or a catalog size.
         diagnostics:
           type: array
           items:

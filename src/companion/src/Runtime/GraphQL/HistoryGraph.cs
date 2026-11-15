@@ -7,6 +7,8 @@ using HotChocolate;
 using HotChocolate.CostAnalysis.Types;
 using HotChocolate.Types;
 
+using Store = ArtisanLogbook.HistoryStore.HistoryStore;
+
 namespace ArtisanLogbook.Runtime.GraphQL;
 
 [GraphQLName("Craft")]
@@ -27,6 +29,16 @@ public sealed class CraftGraph(CraftObservation value)
     public bool? OutputsComplete => value.OutputsComplete;
     public IReadOnlyList<CraftReagentGraph>? Reagents => value.Reagents?.Select(x => new CraftReagentGraph(value.Game, x)).ToArray();
     public IReadOnlyList<CraftOutputGraph>? Outputs => value.Outputs?.Select(x => new CraftOutputGraph(value.Game, x)).ToArray();
+
+    [Cost(100)]
+    public RecordedCraftConfigurations GetRecordedConfigurations(ICraftConfigurationRepository repository, CancellationToken token)
+    {
+        IReadOnlyList<CraftConfigurationEvidence>? evidence = repository.Read(value.Identity, token)?.ConfigurationEvidence;
+        string[] payloads = (evidence ?? [])
+            .Select(evidence => evidence.Payload).Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal).Take(Store.MaximumAnalysisRows + 1).ToArray();
+        return new(value.Game, payloads, evidence is not null);
+    }
 
     [Cost(1)]
     public async Task<CharacterGraph> GetCharacterAsync(CharacterLoader loader, CancellationToken token) =>
@@ -194,6 +206,38 @@ public sealed class GameContextGraph(GameContext value)
     public string DisplayName => GameContextRouteResolver.Describe(value).DisplayName;
     public int Project => (int)value.Project;
     public string? ProgressionTrack => value.ProgressionTrack;
+    [Cost(100)]
+    [ListSize(AssumedSize = 100)]
+    public IReadOnlyList<RecipeGraph> GetRecipesByBlizzardIds(
+        IReadOnlyList<int> ids, IHistoryDimensionRepository repository, CancellationToken token)
+    {
+        ValidateIds(ids);
+        IReadOnlyDictionary<int, RecipeDimension> found = repository.Recipes(
+            ids.Distinct().Select(id => new DimensionIdentity<int>(value, id)).ToArray(), token)
+            .ToDictionary(recipe => recipe.Id);
+        return ids.Select(id => new RecipeGraph(found.TryGetValue(id, out RecipeDimension? recipe)
+            ? recipe : new RecipeDimension(value, id))).ToArray();
+    }
+
+    [Cost(100)]
+    [ListSize(AssumedSize = 100)]
+    public IReadOnlyList<ItemGraph> GetItemsByBlizzardIds(
+        IReadOnlyList<int> ids, IHistoryDimensionRepository repository, CancellationToken token)
+    {
+        ValidateIds(ids);
+        IReadOnlyDictionary<int, ItemDimension> found = repository.Items(
+            ids.Distinct().Select(id => new DimensionIdentity<int>(value, id)).ToArray(), token)
+            .ToDictionary(item => item.Id);
+        return ids.Select(id => new ItemGraph(found.TryGetValue(id, out ItemDimension? item)
+            ? item : new ItemDimension(value, id))).ToArray();
+    }
+
+    private static void ValidateIds(IReadOnlyList<int> ids)
+    {
+        if (ids.Count <= 100 && ids.All(id => id > 0)) return;
+        throw new GraphQLException(ErrorBuilder.New().SetMessage("The dimension lookup is invalid or too large.")
+            .SetCode("INVALID_FILTER").Build());
+    }
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public CharacterConnection GetCharacters(IHistoryDimensionRepository repository, int first = 20, string? after = null,
@@ -226,7 +270,9 @@ public sealed class GameContextGraph(GameContext value)
 public sealed class CraftReagentGraph(GameContext game, CraftReagent value)
 {
     public long? AllocatedQuantity => value.AllocatedQuantity;
+    public string? AllocatedQuantityExact => value.AllocatedQuantity?.ToString(CultureInfo.InvariantCulture);
     public decimal? ReturnedQuantity => value.ReturnedQuantity;
+    public string? ReturnedQuantityExact => value.ReturnedQuantity?.ToString(CultureInfo.InvariantCulture);
     [Cost(1)]
     public async Task<ItemGraph> GetItemAsync(ItemLoader loader, CancellationToken token) =>
         new(await loader.LoadAsync(new DimensionIdentity<int>(game, value.ItemId), token) ?? new(game, value.ItemId));
@@ -237,6 +283,7 @@ public sealed class CraftOutputGraph(GameContext game, CraftOutput value)
 {
     public int? Quality => value.Quality;
     public long? Quantity => value.Quantity;
+    public string? QuantityExact => value.Quantity?.ToString(CultureInfo.InvariantCulture);
     [Cost(1)]
     public async Task<ItemGraph> GetItemAsync(ItemLoader loader, CancellationToken token) =>
         new(await loader.LoadAsync(new DimensionIdentity<int>(game, value.ItemId), token) ?? new(game, value.ItemId));

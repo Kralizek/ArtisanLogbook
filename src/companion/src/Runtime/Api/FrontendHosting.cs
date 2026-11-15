@@ -15,10 +15,28 @@ internal static class FrontendHosting
         {
             // Only known browser routes get the document; API and missing-asset paths stay 404.
             if ((HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method)) &&
-                context.Request.Path.Value is "/" or "/history" or "/history/")
+                BrowserRoutes.IsDocument(context.Request.Path.Value))
                 context.Request.Path = "/index.html";
             await next(context);
         });
         app.UseStaticFiles(options);
+    }
+}
+
+internal static class BrowserRoutes
+{
+    public static bool IsDocument(string? path)
+    {
+        if (path is "/" or "/history" or "/history/" or "/companion" or "/companion/") return true;
+        string[] segments = (path ?? "").Trim('/').Split('/');
+        if (segments.Length == 2 && segments[0] == "saved")
+            return Guid.TryParse(segments[1], out _);
+        if (segments.Length is not (2 or 3) ||
+            !GameContextRouteResolver.TryResolve(segments[0], out _)) return false;
+        return segments.Length == 2
+            ? segments[1] is "activity" or "library" or "crafts"
+            : segments[1] is "recipes" or "items" or "crafts" &&
+                segments[2].Length > 0 && segments[2].All(c =>
+                    char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
     }
 }

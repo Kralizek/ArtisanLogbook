@@ -50,6 +50,17 @@ snapshot; individual page requests do not. Imports after a page may appear on
 later pages only if their ordering position is after that page's continuation.
 Unobserved child collections remain null, distinct from observed empty ones.
 
+`Analyze` and `AnalysisSignature` require one full game context. They run
+parameterized grouped SQL over the selected canonical craft population in an
+independent read snapshot; there is no durable analytical snapshot. The
+analytical read includes its signature and all grouped results in that same
+snapshot. Separate signature polls can observe newer commits. Ranking and
+timeline results are capped at 100 rows plus a truncation probe; integer sums
+use wide integer arithmetic, and returned decimal quantities retain their
+fractional precision as strings. Unknown quantity rows are counted separately
+from known zeroes. Configuration IDs hash recorded supplementary payload
+variants; they are not mutable recipe or character dimensions.
+
 Recipe and item dimension queries accept optional case-insensitive literal
 substring name searches. Empty searches are ignored; `%` and `_` are ordinary
 characters rather than SQL wildcards. Search criteria remain parameterized and

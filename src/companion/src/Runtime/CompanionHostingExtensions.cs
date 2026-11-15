@@ -92,6 +92,8 @@ public static class CompanionHostingExtensions
         services.AddSingleton<MonitoringCheckpoints>();
         services.AddSingleton<Store>(_ => new Store(configuration.DatabasePath));
         services.AddSingleton<ICraftHistoryRepository, CraftHistoryRepository>();
+        services.AddSingleton<ICraftConfigurationRepository, CraftConfigurationRepository>();
+        services.AddSingleton<IHistoryAnalysisRepository, HistoryAnalysisRepository>();
         services.AddSingleton<IHistoryDimensionRepository, HistoryDimensionRepository>();
         services.AddSingleton<CompanionImportService>();
         services.AddSingleton<CompanionApplicationStatus>();

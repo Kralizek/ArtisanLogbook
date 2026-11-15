@@ -119,6 +119,15 @@ and per-source counts and diagnostics mirror the C07 import result. The `origin`
 field is `Manual` for explicit HTTP imports and `Automatic` for imports admitted by
 monitoring. Re-importing an unchanged source is idempotent (observations are
 reported as already present).
+Each source's nullable `counts.distinctRecipeCount` counts distinct (GameContext,
+recipe ID) pairs among **accepted source craft observations**, including replays
+and enrichment, not only newly inserted crafts. Unknown recipe IDs and historical
+aggregate-only coverage are excluded. It is null for rejected/failed imports or
+while pending, and zero for a successful import with no known recipes. Nullable
+`gameContexts` lists canonical context IDs from accepted source crafts, including
+crafts with unknown recipe IDs; it is null until a successful import and may be
+empty for an accepted source with no crafts. Source paths and client directory
+labels never establish context identity.
 
 ## Monitoring
 

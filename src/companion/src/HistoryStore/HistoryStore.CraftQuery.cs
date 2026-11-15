@@ -24,10 +24,20 @@ public sealed partial class HistoryStore
             throw new ArgumentOutOfRangeException(nameof(first));
         if (query.Game is null && (query.Character is not null || query.RecipeId is not null ||
             query.ProfessionId is not null || query.ProfessionExpansionKey is not null ||
-            query.InputItemId is not null || query.OutputItemId is not null))
+            query.InputItemId is not null || query.OutputItemId is not null ||
+            query.ReturnedItemId is not null || query.ItemId is not null ||
+            query.ConfigurationSignature is not null || query.BuffSpellId is not null ||
+            query.FinishingItemId is not null || query.AbsentBuffSpellId is not null ||
+            query.AbsentFinishingItemId is not null))
             throw new ArgumentException("Dimension criteria require a game context.", nameof(query));
         if (query.RecipeId is <= 0 || query.ProfessionId is <= 0 ||
             query.InputItemId is <= 0 || query.OutputItemId is <= 0 ||
+            query.ReturnedItemId is <= 0 || query.ItemId is <= 0 ||
+            query.BuffSpellId is <= 0 || query.FinishingItemId is <= 0 ||
+            query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 ||
+            (query.ConfigurationSignature is not null &&
+                (query.ConfigurationSignature.Length != 64 ||
+                query.ConfigurationSignature.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))) ||
             (query.ProfessionExpansionKey is not null && string.IsNullOrWhiteSpace(query.ProfessionExpansionKey)) ||
             query.From > query.To)
             throw new ArgumentException("Craft query criteria are invalid.", nameof(query));
@@ -72,6 +82,16 @@ public sealed partial class HistoryStore
         AddFilter(query.ProfessionExpansionKey, " AND c.ProfessionExpansionKey = $ExpansionKey", "ExpansionKey");
         AddFilter(query.InputItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $InputItemId)", "InputItemId");
         AddFilter(query.OutputItemId, " AND EXISTS (SELECT 1 FROM CraftOutput o WHERE o.CraftKey = c.CraftKey AND o.ItemId = $OutputItemId)", "OutputItemId");
+        AddFilter(query.ReturnedItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $ReturnedItemId AND TRY_CAST(r.ReturnedQuantity AS DOUBLE) > 0)", "ReturnedItemId");
+        if (query.ItemId is int itemId)
+        {
+            sql.Append("""
+                 AND (EXISTS (SELECT 1 FROM CraftOutput o WHERE o.CraftKey = c.CraftKey AND o.ItemId = $ItemId)
+                   OR EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $ItemId))
+                """);
+            parameters.Add("ItemId", itemId);
+        }
+        AppendConfigurationSelection(query, sql, parameters);
         if (query.Identity is not null)
         {
             sql.Append(" AND i.IdentityOrigin = $IdentityOrigin AND i.IdentityObservation = $IdentityObservation");

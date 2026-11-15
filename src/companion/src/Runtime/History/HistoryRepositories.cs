@@ -12,6 +12,17 @@ public interface ICraftHistoryRepository
         IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default);
 }
 
+public interface ICraftConfigurationRepository
+{
+    CraftObservation? Read(CraftIdentity identity, CancellationToken cancellationToken = default);
+}
+
+public interface IHistoryAnalysisRepository
+{
+    CraftAnalysis Analyze(AnalysisQuery query, CancellationToken cancellationToken = default);
+    string Signature(CraftQuery query, CancellationToken cancellationToken = default);
+}
+
 public interface IHistoryDimensionRepository
 {
     DimensionPage<CharacterDimension, CharacterIdentity> Characters(GameContext? game, int first,
@@ -41,6 +52,20 @@ internal sealed class CraftHistoryRepository(Store store) : ICraftHistoryReposit
     public IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage> CharacterPages(
         IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default) =>
         store.QueryCharacterCraftPages(requests, cancellationToken);
+}
+
+internal sealed class CraftConfigurationRepository(Store store) : ICraftConfigurationRepository
+{
+    public CraftObservation? Read(CraftIdentity identity, CancellationToken cancellationToken = default) =>
+        store.Read(identity, cancellationToken);
+}
+
+internal sealed class HistoryAnalysisRepository(Store store) : IHistoryAnalysisRepository
+{
+    public CraftAnalysis Analyze(AnalysisQuery query, CancellationToken cancellationToken = default) =>
+        store.Analyze(query, cancellationToken);
+    public string Signature(CraftQuery query, CancellationToken cancellationToken = default) =>
+        store.AnalysisSignature(query, cancellationToken);
 }
 
 internal sealed class HistoryDimensionRepository(Store store) : IHistoryDimensionRepository
