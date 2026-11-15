@@ -19,7 +19,9 @@ Load the relevant skill and only the references needed for the task:
 Use multiple skills when work crosses boundaries. If your harness does not
 discover `.agents/skills/`, read the linked `SKILL.md` files explicitly. The
 repository addon skill is project-specific even if a general WoW skill has the
-same name; read it by path when discovery is ambiguous.
+same name; read it by path when discovery is ambiguous. For WoW API research,
+use the pinned `tools/wow-api` submodule as an assistant; follow the addon skill
+for client-specific lookups and evidence boundaries.
 
 ## Repository-wide constraints
 
