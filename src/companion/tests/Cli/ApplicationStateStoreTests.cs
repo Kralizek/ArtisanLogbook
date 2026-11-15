@@ -189,7 +189,11 @@ public sealed class ApplicationStateStoreTests
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await store.RenameInvestigationAsync(saved.Id, "Never saved", 1, cancelled.Token));
 
-        using (SqliteConnection connection = new(new SqliteConnectionStringBuilder { DataSource = _database }.ToString()))
+        using (SqliteConnection connection = new(new SqliteConnectionStringBuilder
+        {
+            DataSource = _database,
+            Pooling = false
+        }.ToString()))
         {
             connection.Open();
             using SqliteCommand command = connection.CreateCommand();
@@ -225,7 +229,11 @@ public sealed class ApplicationStateStoreTests
         await using ApplicationStateStore initial = new(unsupportedPath);
         await initial.InitializeAsync();
         await initial.DisposeAsync();
-        using (SqliteConnection connection = new(new SqliteConnectionStringBuilder { DataSource = unsupportedPath }.ToString()))
+        using (SqliteConnection connection = new(new SqliteConnectionStringBuilder
+        {
+            DataSource = unsupportedPath,
+            Pooling = false
+        }.ToString()))
         {
             connection.Open();
             using SqliteCommand command = connection.CreateCommand();
@@ -235,7 +243,11 @@ public sealed class ApplicationStateStoreTests
         ApplicationStateStore unsupported = new(unsupportedPath);
         Assert.ThrowsAsync<ApplicationStatePersistenceException>(async () => await unsupported.InitializeAsync());
         await unsupported.DisposeAsync();
-        using SqliteConnection verify = new(new SqliteConnectionStringBuilder { DataSource = unsupportedPath }.ToString());
+        using SqliteConnection verify = new(new SqliteConnectionStringBuilder
+        {
+            DataSource = unsupportedPath,
+            Pooling = false
+        }.ToString());
         verify.Open();
         using SqliteCommand version = verify.CreateCommand();
         version.CommandText = "PRAGMA user_version";
@@ -244,7 +256,11 @@ public sealed class ApplicationStateStoreTests
         string malformedPath = Path.Combine(_directory, "malformed.sqlite3");
         await using (ApplicationStateStore malformedInitial = new(malformedPath))
             await malformedInitial.InitializeAsync();
-        using (SqliteConnection connection = new(new SqliteConnectionStringBuilder { DataSource = malformedPath }.ToString()))
+        using (SqliteConnection connection = new(new SqliteConnectionStringBuilder
+        {
+            DataSource = malformedPath,
+            Pooling = false
+        }.ToString()))
         {
             connection.Open();
             using SqliteCommand command = connection.CreateCommand();
