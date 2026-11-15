@@ -67,7 +67,12 @@ Open the dashboard URL printed by Aspire, then the `web` endpoint. VS Code's
 | --- | --- |
 | Aspire dashboard | `https://localhost:18888` (use the printed login link/token) |
 | Web application | `http://localhost:5173` |
-| Companion API | `http://localhost:48721` |
+| Companion API | `http://localhost:48722` |
+
+The development API uses 48722 so the host's production Companion can use
+its default port, 48721. After rebuilding the container, stop any old 48721
+forward in the VS Code Ports view. Development uses its own isolated history;
+do not point both Companion instances at the same database.
 
 Keep forwards private and browser URLs on `localhost` or `127.0.0.1`. The dashboard uses HTTPS;
 Vite and Companion use HTTP. Container certificate trust does **not** trust the
@@ -280,9 +285,9 @@ For separate backend/frontend development:
 ```sh
 ARTISAN_LOGBOOK_DATA_DIRECTORY="$(pwd)/.artifacts/development" \
 dotnet run --project src/Cli/Cli.csproj -p:CompanionWebDevelopment=true -- \
-  serve --monitoring false --port 48721 --require-port
+  serve --monitoring false --port 48722 --require-port
 # In another terminal, from src/companion/web:
-COMPANION_URL=http://127.0.0.1:48721 npm run dev
+COMPANION_URL=http://127.0.0.1:48722 npm run dev
 ```
 
 Outside the devcontainer Aspire normally uses random available ports. Optional `Development__CompanionPort`,

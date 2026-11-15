@@ -84,7 +84,8 @@ for recovery and the supported separate-process alternative.
   a required busy backend port fails rather than silently falling back.
   Frontend code uses relative `/graphql` and `/api/v1`, never compiled-in ports.
 - The container explicitly forwards dashboard HTTPS `18888`, web HTTP `5173`
-  and API HTTP `48721` with matching required local ports. Outside this setup,
+  and API HTTP `48722` with matching required local ports, leaving the host's
+  production default `48721` free. Outside this setup,
   Aspire allocates dynamic app ports; internal service/OTLP ports remain dynamic.
   Use the printed resource endpoint and VS Code Ports view's actual local
   forward, not guessed port numbers. `Development__CompanionPort` and

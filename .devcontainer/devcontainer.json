@@ -23,7 +23,7 @@
   },
   "remoteEnv": {
     "CompanionWebDevelopment": "true",
-    "Development__CompanionPort": "48721",
+    "Development__CompanionPort": "48722",
     "Development__WebPort": "5173",
     "ASPNETCORE_URLS": "https://localhost:18888",
     "SSL_CERT_DIR": "/home/vscode/.aspnet/dev-certs/trust:/usr/lib/ssl/certs"
@@ -31,7 +31,7 @@
   "mounts": [
     "source=${devcontainerId}-companion-node-modules,target=${containerWorkspaceFolder}/src/companion/web/node_modules,type=volume,volume-nocopy"
   ],
-  "forwardPorts": [18888, 5173, 48721],
+  "forwardPorts": [18888, 5173, 48722],
   "portsAttributes": {
     "18888": {
       "label": "Aspire dashboard",
@@ -43,7 +43,7 @@
       "protocol": "http",
       "requireLocalPort": true
     },
-    "48721": {
+    "48722": {
       "label": "Companion API",
       "protocol": "http",
       "requireLocalPort": true
