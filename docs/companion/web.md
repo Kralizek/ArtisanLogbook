@@ -182,6 +182,34 @@ There are no CDNs, remote fonts, icons, analytics, cookies or authentication
 services. A stricter CSP is deferred: Mantine's runtime style properties require
 a considered policy, not a blanket CSP that breaks components.
 
+## C12 context-qualified browser routing
+
+The full C12 experience is not implemented by this foundation. Its analytical
+browser destinations should begin with the backend-provided stable route alias
+(for example `/retail/overview` or `/forever-hardcore/items/67890`). Resolve
+that explicit route through shared context metadata, such as
+`GET /api/v1/game-contexts/{context}`, and use the returned canonical string ID
+for analytical scope and cache identity. Use the alias for readable browser
+navigation. Do not construct canonical IDs, decode opaque GraphQL entity IDs,
+or derive aliases in frontend code.
+
+An eventual route hierarchy may use a context segment and a loader, but C12
+will choose its actual React Router/state implementation. An explicit route
+identity takes precedence over the browser-local remembered startup context;
+the latter is only a default when a destination contains no context. Keep each
+tab's context and filters in its own URL/state, with no server-side active
+context. Global management destinations, including the saved-investigation
+catalogue, stay outside the analytical context hierarchy.
+
+The current production SPA fallback admits only `/`, `/history` and `/history/`.
+Add future C12 document routes explicitly; never make `/api`, `/graphql`,
+`/openapi`, missing assets, or arbitrary unknown paths fall back to HTML.
+Similarly, the Vite development proxy's cross-origin top-level navigation
+exception is narrow and presently covers only the foundation routes. When C12
+adds alias-based pages, extend it only for the intended browser document
+navigation paths; do not broaden API forwarding, Host/Origin checks or CORS.
+See the [C12 requirements](https://github.com/Kralizek/ArtisanLogbook/issues/81).
+
 ## Tooling and local development
 
 The declarative features provision .NET **10.0**, Node **26.13.1** with bundled

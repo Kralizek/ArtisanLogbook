@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 using ApiEntityPreference = ArtisanLogbook.CompanionApi.Contracts.EntityPreference;
 using ApiEntityPreferenceKind = ArtisanLogbook.CompanionApi.Contracts.EntityPreferenceKind;
-using ApiGameContext = ArtisanLogbook.CompanionApi.Contracts.GameContext;
+using ApiGameContext = ArtisanLogbook.CompanionApi.Contracts.GameContextMetadata;
 using ApiSavedInvestigation = ArtisanLogbook.CompanionApi.Contracts.SavedInvestigation;
 using ApiSavedInvestigationSummary = ArtisanLogbook.CompanionApi.Contracts.SavedInvestigationSummary;
 using DomainGameContext = ArtisanLogbook.History.GameContext;
@@ -23,7 +23,7 @@ internal static class ApplicationStateApiMapping
 {
     public static ApiEntityPreference Map(StoredEntityPreference preference) => new()
     {
-        Context = Map(preference.Context),
+        Context = GameContextCodec.Encode(preference.Context),
         Kind = Enum.Parse<ApiEntityPreferenceKind>(preference.Kind.ToString(), ignoreCase: false),
         EntityId = preference.EntityId,
         Pinned = preference.Pinned,
@@ -34,7 +34,7 @@ internal static class ApplicationStateApiMapping
     {
         Id = Guid.ParseExact(investigation.Id, "D"),
         Name = investigation.Name,
-        Context = Map(investigation.Context),
+        Context = GameContextCodec.Encode(investigation.Context),
         DefinitionVersion = investigation.DefinitionVersion,
         Definition = investigation.Definition.EnumerateObject()
             .ToDictionary(property => property.Name, property => property.Value.Clone(), StringComparer.Ordinal),
@@ -47,44 +47,30 @@ internal static class ApplicationStateApiMapping
     {
         Id = Guid.ParseExact(investigation.Id, "D"),
         Name = investigation.Name,
-        Context = Map(investigation.Context),
+        Context = GameContextCodec.Encode(investigation.Context),
         DefinitionVersion = investigation.DefinitionVersion,
         CreatedAt = investigation.CreatedAt,
         UpdatedAt = investigation.UpdatedAt,
         Revision = investigation.Revision
     };
 
-    private static ApiGameContext Map(DomainGameContext context) => new()
+    public static ApiGameContext Map(ResolvedGameContext context) => new()
     {
-        Project = (int)context.Project,
-        ProgressionTrack = context.ProgressionTrack
+        Id = context.CanonicalId,
+        RouteAlias = context.RouteAlias,
+        DisplayName = context.DisplayName,
+        Project = (int)context.Value.Project,
+        ProgressionTrack = context.Value.ProgressionTrack
     };
 
-    public static bool TryContext(ApiGameContext? apiContext, out DomainGameContext? context)
-    {
-        if (apiContext is null)
-        {
-            context = null;
-            return false;
-        }
-        return TryContext(apiContext.Project, apiContext.ProgressionTrack, out context);
-    }
-
-    public static bool TryContext(int project, string? progressionTrack, out DomainGameContext? context)
+    public static bool TryContext(string locator, out DomainGameContext? context)
     {
         context = null;
-        if (progressionTrack is { Length: > ApplicationStateStore.MaximumProgressionTrackLength } ||
-            progressionTrack is not null && string.IsNullOrWhiteSpace(progressionTrack))
+        if (!GameContextRouteResolver.TryResolve(locator, out ResolvedGameContext? resolved) ||
+            resolved!.Value.ProgressionTrack is { Length: > ApplicationStateStore.MaximumProgressionTrackLength })
             return false;
-        try
-        {
-            context = new((GameProject)project, progressionTrack);
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        context = resolved!.Value;
+        return true;
     }
 
     public static Problem InvalidRequest(string detail) =>
@@ -132,19 +118,34 @@ internal static class ApplicationStateApiMapping
         logger.LogWarning("Application-state persistence failed ({ExceptionType}).", exception.GetType().Name);
 }
 
+internal sealed class GetGameContextMetadataEndpoint : GetGameContextMetadataEndpointBase
+{
+    public override Task<Results<Ok<GameContextMetadata>, BadRequest, IResult>> HandleAsync(
+        string context, CancellationToken cancellationToken)
+    {
+        if (!GameContextRouteResolver.TryResolve(context, out ResolvedGameContext? resolved))
+            return Task.FromResult(ApplicationStateApiMapping.AsResult<Ok<GameContextMetadata>, BadRequest>(
+                ApplicationStateApiMapping.InvalidRequestResponse(
+                    "The game context identifier or route alias is invalid.")));
+
+        return Task.FromResult<Results<Ok<GameContextMetadata>, BadRequest, IResult>>(
+            TypedResults.Ok(ApplicationStateApiMapping.Map(resolved!)));
+    }
+}
+
 internal sealed class GetEntityPreferencesEndpoint(
     ApplicationStateStore store, ILogger<GetEntityPreferencesEndpoint> logger) : GetEntityPreferencesEndpointBase
 {
     public override async Task<Results<Ok<EntityPreferenceList>, BadRequest, IResult>> HandleAsync(
-        Parameters parameters, CancellationToken cancellationToken)
+        string context, CancellationToken cancellationToken)
     {
-        if (!ApplicationStateApiMapping.TryContext(parameters.Project, parameters.ProgressionTrack, out DomainGameContext? context))
+        if (!ApplicationStateApiMapping.TryContext(context, out DomainGameContext? gameContext))
             return ApplicationStateApiMapping.AsResult<Ok<EntityPreferenceList>, BadRequest>(
-                ApplicationStateApiMapping.InvalidRequestResponse("The game context is invalid."));
+                ApplicationStateApiMapping.InvalidRequestResponse("The game context identifier or route alias is invalid."));
         try
         {
             IReadOnlyList<StoredEntityPreference> preferences =
-                await store.GetEntityPreferencesAsync(context!, cancellationToken).ConfigureAwait(false);
+                await store.GetEntityPreferencesAsync(gameContext!, cancellationToken).ConfigureAwait(false);
             return TypedResults.Ok(new EntityPreferenceList
             {
                 Preferences = preferences.Select(ApplicationStateApiMapping.Map).ToArray()
@@ -168,16 +169,16 @@ internal sealed class SetEntityPinnedEndpoint(
     ApplicationStateStore store, ILogger<SetEntityPinnedEndpoint> logger) : SetEntityPinnedEndpointBase
 {
     public override async Task<Results<Ok<ApiEntityPreference>, BadRequest, IResult>> HandleAsync(
-        string kind, int id, SetPinnedPreference request, CancellationToken cancellationToken)
+        string context, string kind, int id, SetPinnedPreference request, CancellationToken cancellationToken)
     {
-        if (!TryKind(kind, id, request.Context, out PreferredEntityKind entityKind,
-                out DomainGameContext? context, out Problem? problem))
+        if (!TryKind(context, kind, id, out PreferredEntityKind entityKind,
+                out DomainGameContext? gameContext, out Problem? problem))
             return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
                 ApplicationStateApiMapping.Response(problem!, StatusCodes.Status400BadRequest));
         try
         {
             StoredEntityPreference preference = await store.SetPinnedAsync(
-                context!, entityKind, id, request.Pinned, cancellationToken).ConfigureAwait(false);
+                gameContext!, entityKind, id, request.Pinned, cancellationToken).ConfigureAwait(false);
             return TypedResults.Ok(ApplicationStateApiMapping.Map(preference));
         }
         catch (ApplicationStatePersistenceException exception)
@@ -193,7 +194,7 @@ internal sealed class SetEntityPinnedEndpoint(
         }
     }
 
-    internal static bool TryKind(string kind, int id, ApiGameContext? apiContext,
+    internal static bool TryKind(string locator, string kind, int id,
         out PreferredEntityKind entityKind, out DomainGameContext? context, out Problem? problem)
     {
         entityKind = default;
@@ -201,10 +202,10 @@ internal sealed class SetEntityPinnedEndpoint(
         problem = null;
         if (kind is not (nameof(PreferredEntityKind.Recipe) or nameof(PreferredEntityKind.Item)) ||
             !Enum.TryParse(kind, ignoreCase: false, out entityKind) || id <= 0 ||
-            !ApplicationStateApiMapping.TryContext(apiContext, out context))
+            !ApplicationStateApiMapping.TryContext(locator, out context))
         {
             problem = ApplicationStateApiMapping.InvalidRequest(
-                "The entity kind, entity ID or game context is invalid.");
+                "The context identifier, route alias, entity kind or entity ID is invalid.");
             return false;
         }
         return true;
@@ -215,16 +216,16 @@ internal sealed class SetEntityHiddenEndpoint(
     ApplicationStateStore store, ILogger<SetEntityHiddenEndpoint> logger) : SetEntityHiddenEndpointBase
 {
     public override async Task<Results<Ok<ApiEntityPreference>, BadRequest, IResult>> HandleAsync(
-        string kind, int id, SetHiddenPreference request, CancellationToken cancellationToken)
+        string context, string kind, int id, SetHiddenPreference request, CancellationToken cancellationToken)
     {
-        if (!SetEntityPinnedEndpoint.TryKind(kind, id, request.Context,
-                out PreferredEntityKind entityKind, out DomainGameContext? context, out Problem? problem))
+        if (!SetEntityPinnedEndpoint.TryKind(context, kind, id,
+                out PreferredEntityKind entityKind, out DomainGameContext? gameContext, out Problem? problem))
             return ApplicationStateApiMapping.AsResult<Ok<ApiEntityPreference>, BadRequest>(
                 ApplicationStateApiMapping.Response(problem!, StatusCodes.Status400BadRequest));
         try
         {
             StoredEntityPreference preference = await store.SetHiddenAsync(
-                context!, entityKind, id, request.Hidden, cancellationToken).ConfigureAwait(false);
+                gameContext!, entityKind, id, request.Hidden, cancellationToken).ConfigureAwait(false);
             return TypedResults.Ok(ApplicationStateApiMapping.Map(preference));
         }
         catch (ApplicationStatePersistenceException exception)
@@ -245,20 +246,13 @@ internal sealed class ListSavedInvestigationsEndpoint(
     ApplicationStateStore store, ILogger<ListSavedInvestigationsEndpoint> logger) : ListSavedInvestigationsEndpointBase
 {
     public override async Task<Results<Ok<SavedInvestigationList>, BadRequest, IResult>> HandleAsync(
-        Parameters parameters, CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        await ListAsync(store, logger, context: null, cancellationToken).ConfigureAwait(false);
+
+    internal static async Task<Results<Ok<SavedInvestigationList>, BadRequest, IResult>> ListAsync(
+        ApplicationStateStore store, ILogger logger, DomainGameContext? context,
+        CancellationToken cancellationToken)
     {
-        DomainGameContext? context = null;
-        if (parameters.Project is int project)
-        {
-            if (!ApplicationStateApiMapping.TryContext(project, parameters.ProgressionTrack, out context))
-                return ApplicationStateApiMapping.AsResult<Ok<SavedInvestigationList>, BadRequest>(
-                    ApplicationStateApiMapping.InvalidRequestResponse("The game-context filter is invalid."));
-        }
-        else if (parameters.ProgressionTrack is not null)
-        {
-            return ApplicationStateApiMapping.AsResult<Ok<SavedInvestigationList>, BadRequest>(
-                ApplicationStateApiMapping.InvalidRequestResponse("A progression-track filter requires a project."));
-        }
         try
         {
             IReadOnlyList<SavedInvestigationSummary> investigations =
@@ -282,19 +276,38 @@ internal sealed class ListSavedInvestigationsEndpoint(
     }
 }
 
+internal sealed class ListContextSavedInvestigationsEndpoint(
+    ApplicationStateStore store, ILogger<ListContextSavedInvestigationsEndpoint> logger)
+    : ListContextSavedInvestigationsEndpointBase
+{
+    public override Task<Results<Ok<SavedInvestigationList>, BadRequest, IResult>> HandleAsync(
+        string context, CancellationToken cancellationToken)
+    {
+        if (!ApplicationStateApiMapping.TryContext(context, out DomainGameContext? gameContext))
+            return Task.FromResult(
+                ApplicationStateApiMapping.AsResult<Ok<SavedInvestigationList>, BadRequest>(
+                    ApplicationStateApiMapping.InvalidRequestResponse(
+                        "The game context identifier or route alias is invalid.")));
+
+        return ListSavedInvestigationsEndpoint.ListAsync(store, logger, gameContext, cancellationToken);
+    }
+}
+
 internal sealed class CreateSavedInvestigationEndpoint(
     ApplicationStateStore store, ILogger<CreateSavedInvestigationEndpoint> logger) : CreateSavedInvestigationEndpointBase
 {
     public override async Task<Results<Created<ApiSavedInvestigation>, BadRequest, IResult>> HandleAsync(
-        CreateSavedInvestigation request, CancellationToken cancellationToken)
+        string context, CreateSavedInvestigation request, CancellationToken cancellationToken)
     {
-        if (!ApplicationStateApiMapping.TryContext(request.Context, out DomainGameContext? context))
+        if (!ApplicationStateApiMapping.TryContext(context, out DomainGameContext? gameContext))
             return ApplicationStateApiMapping.AsResult<Created<ApiSavedInvestigation>, BadRequest>(
-                ApplicationStateApiMapping.InvalidRequestResponse("The game context is invalid."));
+                ApplicationStateApiMapping.InvalidRequestResponse(
+                    "The game context identifier or route alias is invalid."));
         try
         {
             StoredSavedInvestigation investigation = await store.CreateInvestigationAsync(
-                request.Name, context!, request.DefinitionVersion, JsonSerializer.SerializeToElement(request.Definition),
+                request.Name, gameContext!, request.DefinitionVersion,
+                JsonSerializer.SerializeToElement(request.Definition),
                 cancellationToken).ConfigureAwait(false);
             ApiSavedInvestigation result = ApplicationStateApiMapping.Map(investigation);
             return TypedResults.Created($"/api/v1/saved-investigations/{investigation.Id}", result);

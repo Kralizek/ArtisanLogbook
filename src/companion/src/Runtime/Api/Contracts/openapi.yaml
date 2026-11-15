@@ -81,19 +81,10 @@ paths:
                         type: array
                         items:
                           type: object
-                          required: [project, progressionTrack, craftCount]
+                          required: [context, craftCount]
                           properties:
-                            project:
-                              type: integer
-                              format: int32
-                              description: Blizzard WOW_PROJECT_ID of the GameContext.
-                            projectName:
-                              type: string
-                              nullable: true
-                              description: Known project name, null for unnamed future projects.
-                            progressionTrack:
-                              type: string
-                              nullable: true
+                            context:
+                              $ref: "#/components/schemas/GameContextMetadata"
                             craftCount:
                               type: integer
                               format: int64
@@ -481,27 +472,37 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /api/v1/entity-preferences:
+  /api/v1/game-contexts/{context}:
+    get:
+      operationId: getGameContextMetadata
+      summary: Resolve one canonical context identifier or route alias
+      description: Returns derived context metadata without requiring history observations or application-state persistence.
+      tags: [Operations]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+      responses:
+        "200":
+          description: The resolved canonical game context and its stable route metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameContextMetadata"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/{context}/entity-preferences:
     get:
       operationId: getEntityPreferences
       summary: List recipe and item preferences for one exact game context
-      description: The required project and optional progressionTrack form one complete context. Omitting progressionTrack selects the context whose progression track is null.
+      description: The context route accepts a stable route alias or canonical context identifier and always selects one exact context.
       tags: [ApplicationState]
       parameters:
-        - name: project
-          in: query
-          required: true
-          schema:
-            type: integer
-            format: int32
-            minimum: 1
-        - name: progressionTrack
-          in: query
-          required: false
-          schema:
-            type: string
-            minLength: 1
-            maxLength: 256
+        - $ref: "#/components/parameters/GameContextLocator"
       responses:
         "200":
           description: Preferences for the exact canonical game context.
@@ -517,12 +518,13 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/Unavailable"
-  /api/v1/entity-preferences/{kind}/{id}/pin:
+  /api/v1/{context}/entity-preferences/{kind}/{id}/pin:
     put:
       operationId: setEntityPinned
       summary: Set the desired pinned state for one recipe or item
       tags: [ApplicationState]
       parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
         - name: kind
           in: path
           required: true
@@ -563,12 +565,13 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/Unavailable"
-  /api/v1/entity-preferences/{kind}/{id}/hidden:
+  /api/v1/{context}/entity-preferences/{kind}/{id}/hidden:
     put:
       operationId: setEntityHidden
       summary: Set the desired hidden state for one recipe or item
       tags: [ApplicationState]
       parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
         - name: kind
           in: path
           required: true
@@ -613,23 +616,8 @@ paths:
     get:
       operationId: listSavedInvestigations
       summary: List saved analytical investigation metadata
-      description: With no filters this returns the global catalogue. Supplying project scopes to exactly one context; an omitted progressionTrack means null. Supplying progressionTrack without project is invalid. Definitions are retrieved separately by ID.
+      description: Lists the global catalogue of named user-created definitions. Definitions are retrieved separately by ID.
       tags: [SavedInvestigations]
-      parameters:
-        - name: project
-          in: query
-          required: false
-          schema:
-            type: integer
-            format: int32
-            minimum: 1
-        - name: progressionTrack
-          in: query
-          required: false
-          schema:
-            type: string
-            minLength: 1
-            maxLength: 256
       responses:
         "200":
           description: Metadata ordered by creation time and stable ID; definitions are not included.
@@ -645,11 +633,35 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/Unavailable"
+  /api/v1/{context}/saved-investigations:
+    get:
+      operationId: listContextSavedInvestigations
+      summary: List saved investigation metadata for one exact context
+      tags: [SavedInvestigations]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
+      responses:
+        "200":
+          description: Metadata ordered by creation time and stable ID for the exact canonical context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigationList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
     post:
       operationId: createSavedInvestigation
       summary: Save a named, versioned analytical definition
-      description: The context is authoritative envelope metadata. The bounded JSON definition cannot override it and is not validated as executable C12 analytics.
+      description: The resolved route context becomes immutable envelope metadata. The bounded JSON definition cannot override it and is not validated as executable C12 analytics.
       tags: [SavedInvestigations]
+      parameters:
+        - $ref: "#/components/parameters/GameContextLocator"
       requestBody:
         required: true
         content:
@@ -782,6 +794,15 @@ paths:
         "503":
           $ref: "#/components/responses/Unavailable"
 components:
+  parameters:
+    GameContextLocator:
+      name: context
+      in: path
+      required: true
+      description: Stable route alias or canonical game context identifier.
+      schema:
+        type: string
+        minLength: 1
   responses:
     BadRequest:
       description: Invalid request or canonical identity.
@@ -839,9 +860,26 @@ components:
             $ref: "#/components/schemas/Problem"
   schemas:
     GameContext:
+      type: string
+      description: Canonical game context identifier, using a positive project ID and an optional exact progression-track suffix. In the suffix, ASCII letters, digits, dot, underscore and hyphen are literal; every other UTF-16 code unit is encoded as tilde plus four uppercase hexadecimal digits.
+      example: "18-Hardcore"
+    GameContextLocator:
+      type: string
+      description: Stable human-readable route alias or canonical game context identifier.
+      example: forever-hardcore
+    GameContextMetadata:
       type: object
-      required: [project, progressionTrack]
+      required: [id, routeAlias, displayName, project, progressionTrack]
       properties:
+        id:
+          type: string
+          description: Canonical game context identifier.
+        routeAlias:
+          type: string
+          description: Stable URL-friendly context route alias.
+        displayName:
+          type: string
+          description: Friendly display name; not used as identity.
         project:
           type: integer
           format: int32
@@ -850,13 +888,14 @@ components:
         progressionTrack:
           type: string
           nullable: true
-          maxLength: 256
+          description: Exact progression-track identity, null when the context has no track.
     EntityPreference:
       type: object
       required: [context, kind, entityId, pinned, hidden]
       properties:
         context:
-          $ref: "#/components/schemas/GameContext"
+          type: string
+          description: Canonical game context identifier.
         kind:
           type: string
           enum: [Recipe, Item]
@@ -878,32 +917,26 @@ components:
     SetPinnedPreference:
       type: object
       additionalProperties: false
-      required: [context, pinned]
+      required: [pinned]
       properties:
-        context:
-          $ref: "#/components/schemas/GameContext"
         pinned:
           type: boolean
     SetHiddenPreference:
       type: object
       additionalProperties: false
-      required: [context, hidden]
+      required: [hidden]
       properties:
-        context:
-          $ref: "#/components/schemas/GameContext"
         hidden:
           type: boolean
     CreateSavedInvestigation:
       type: object
       additionalProperties: false
-      required: [name, context, definitionVersion, definition]
+      required: [name, definitionVersion, definition]
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 120
-        context:
-          $ref: "#/components/schemas/GameContext"
         definitionVersion:
           type: integer
           format: int32
@@ -943,7 +976,8 @@ components:
         name:
           type: string
         context:
-          $ref: "#/components/schemas/GameContext"
+          type: string
+          description: Canonical game context identifier.
         definitionVersion:
           type: integer
           format: int32
@@ -969,7 +1003,8 @@ components:
         name:
           type: string
         context:
-          $ref: "#/components/schemas/GameContext"
+          type: string
+          description: Canonical game context identifier.
         definitionVersion:
           type: integer
           format: int32

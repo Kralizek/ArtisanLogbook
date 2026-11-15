@@ -81,7 +81,7 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
                 return;
             }
             int maximumBodyBytes = request.Path == "/graphql" ? MaxGraphQLBodyBytes :
-                request.Path.StartsWithSegments("/api/v1/saved-investigations")
+                ApplicationStateRoutePaths.IsSavedInvestigation(request.Path)
                     ? MaxApplicationStateBodyBytes
                     : MaxRequestBodyBytes;
             if (request.ContentLength is null || request.ContentLength > maximumBodyBytes)

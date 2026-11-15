@@ -33,6 +33,7 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 |---|---|---|
 | GET | `/api/v1/health` | 200 when canonical history is available and running; 503 while starting, stopping or history is unavailable |
 | GET | `/api/v1/status` | Version, lifecycle state, canonical-history availability and counts, independent application-state capability, safe failure info |
+| GET | `/api/v1/game-contexts/{context}` | Resolve one canonical context ID or stable route alias to derived identity/display metadata; does not require history or SQLite |
 | GET | `/api/v1/sources` | Discovered SavedVariables sources with stable ids (`src_…`) and discovery diagnostics |
 | GET | `/api/v1/monitoring` | Saved/effective preferences, override indicators, monitoring state and diagnostics |
 | PUT | `/api/v1/monitoring` | Persist monitoring preferences and apply their effective values |
@@ -40,10 +41,11 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 | GET | `/api/v1/imports?limit=N` | Recent import operations (1–100, default 20), newest first |
 | GET | `/api/v1/imports/{id}` | One operation, or 404 |
 | POST | `/api/v1/imports` | Start an import; returns 202 with `Location` |
-| GET | `/api/v1/entity-preferences?project=N[&progressionTrack=…]` | List recipe and item preferences for the exact context; omitted track means null |
-| PUT | `/api/v1/entity-preferences/{Recipe|Item}/{id}/pin` | Set one entity's pinned state |
-| PUT | `/api/v1/entity-preferences/{Recipe|Item}/{id}/hidden` | Set one entity's hidden state |
-| GET, POST | `/api/v1/saved-investigations` | List metadata or create named JSON investigation definitions |
+| GET | `/api/v1/{context}/entity-preferences` | List recipe and item preferences for one exact context |
+| PUT | `/api/v1/{context}/entity-preferences/{Recipe\|Item}/{id}/pin` | Set one entity's pinned state |
+| PUT | `/api/v1/{context}/entity-preferences/{Recipe\|Item}/{id}/hidden` | Set one entity's hidden state |
+| GET | `/api/v1/saved-investigations` | List the global saved-investigation catalogue metadata |
+| GET, POST | `/api/v1/{context}/saved-investigations` | List metadata or create an investigation in one exact context |
 | GET, DELETE | `/api/v1/saved-investigations/{id}` | Retrieve or revision-check and delete a saved investigation |
 | PUT | `/api/v1/saved-investigations/{id}` | Atomically update name and versioned JSON definition using the expected revision |
 | GET | `/openapi/v1.yaml` | OpenAPI 3.0 document |
@@ -61,6 +63,28 @@ Source ids identify a discovered `SavedVariables` file; they are not GameContext
 identities and no project or progression track is inferred from the installation
 directory. Responses never include filesystem paths, account names, raw
 SavedVariables, or stack traces.
+
+`{context}` accepts either the canonical string identifier or its stable route
+alias. For example, `18-Hardcore` and `forever-hardcore` resolve to the same
+structured identity; `/api/v1/1/...` and `/api/v1/retail/...` likewise match.
+The canonical identifier is authoritative public identity, while the alias is
+for readable URLs. Invalid locators return an explicit 400 problem response;
+the API never falls back to another or remembered context. Aliases are derived
+without consulting history or SQLite and are stable across imports and restarts.
+The conventional `forever-hardcore` alias is not evidence that such a context is
+currently present in history.
+Status and GraphQL context metadata expose the canonical ID, alias, display
+name, project and optional exact progression track. The GraphQL opaque `id`
+remains a separate history identity.
+
+Canonical IDs retain the `{project}-{progressionTrack}` form for ordinary
+ASCII track names. Within a track suffix, ASCII letters, digits, `.`, `_` and
+`-` remain literal; each other UTF-16 code unit is encoded as `~` plus four
+uppercase hexadecimal digits. Thus spaces, Unicode, reserved characters,
+literal `~` sequences and even individual surrogate code units round-trip
+without case folding or ambiguous percent decoding. The decoder accepts only
+the unique canonical spelling. For example, `18-Hardcore` remains unchanged,
+while a slash in a track is represented as `~002F`.
 
 ## Examples
 
@@ -180,16 +204,23 @@ Terminal tools and local scripts send the client header on `POST` and `PUT`.
 Mutable application data is a separate capability from canonical history
 queries. It is persisted by `application-state.sqlite3` in the per-user
 application data directory, independently of the selected DuckDB history path.
-Recipe and item preferences are qualified by the complete `context` object and
-entity ID. Pin and hide are independent desired-state values; repeating a
+Recipe and item preferences are qualified by the complete structured
+`GameContext` and entity ID. Their REST response `context` is the canonical
+string ID. Context is supplied by the route, not repeated in mutation bodies.
+Pin and hide are independent desired-state values; repeating a
 mutation is harmless, and changing one never overwrites the other. Preferences
 do not alter capture, canonical history, or analytical totals.
 
-Entity mutation routes use the `blizzardId` and `game.project` /
-`game.progressionTrack` fields already returned by GraphQL recipe and item
-objects. Clients do not decode opaque GraphQL IDs or invent identity mappings.
-The entity kind remains explicit in the route, and the complete game context
-keeps overlapping numeric IDs isolated.
+Entity mutation routes use the recipe/item `blizzardId` and the `game`
+metadata returned by GraphQL. `game.canonicalId` is the canonical context
+identity and `game.routeAlias` is the preferred REST/browser route segment.
+Clients do not decode opaque GraphQL entity IDs, construct context strings, or
+slugify project/track names. The entity kind remains explicit in the route,
+and the complete game context keeps overlapping numeric IDs isolated.
+
+For example, `PUT /api/v1/retail/entity-preferences/Recipe/441/pin` accepts
+`{"pinned":true}`. The equivalent route using canonical identity is
+`/api/v1/1/entity-preferences/Recipe/441/pin`.
 
 The last-selected context, theme, sidebar presentation, and other browser
 preferences belong in browser-local storage, not this API. Active context,
@@ -208,8 +239,21 @@ and depth 32, and has a positive definition version. It does not claim that a
 definition is a valid or executable C12 investigation. Relative and fixed date
 periods remain unchanged JSON; storage does not resolve them.
 
-Create with `POST /api/v1/saved-investigations`, then retain the returned `id`
-and `revision`. The context is immutable after creation. A complete update sends
+Create with `POST /api/v1/{context}/saved-investigations`, for example
+`/api/v1/retail/saved-investigations`, then retain the returned `id` and
+`revision`. The context is derived from the route and immutable after creation.
+The request contains only editable investigation data:
+
+```json
+{
+  "name": "90-day review",
+  "definitionVersion": 1,
+  "definition": { "period": { "kind": "relative", "days": 90 } }
+}
+```
+
+The global `GET /api/v1/saved-investigations` remains a management catalogue;
+it does not create unscoped investigations. A complete update sends
 the name and definition together with the revision last read:
 
 ```bash
@@ -239,13 +283,23 @@ when canonical history is healthy. `/api/v1/status` reports the degraded
 application-state capability, while affected operations return explicit 503
 `application-state-unavailable`; they never return fake empty collections.
 Resolve or restore the database and restart the Companion to reinitialize it.
+This status is initialization/lifecycle availability; a later SQLite operation
+failure is reported by the affected request and does not permanently change the
+capability status or trigger background health checks.
 This does not affect history collection, imports, analytical queries, or
 embedded assets. See [Runtime ownership and
 lifecycle](../../src/companion/src/Runtime/README.md#host-composition-and-ownership)
 for the C10/C11 boundary and DuckDB independence.
 
-The OpenAPI contract uses standard `components.responses` references without
-YAML anchors. MinimalOpenAPI currently resolves these response references in
+The OpenAPI contract uses standard reusable path-parameter and
+`components.responses` references without YAML anchors. It defines
+`GameContext` as the canonical string schema and `GameContextLocator` as the
+accepted route locator. MinimalOpenAPI 1.1.0 does not map `$ref`s to primitive
+string schemas to C# `string` handler/DTO members; for generated C# contracts,
+the affected fields therefore inline the same string type and canonical-ID
+description. The component remains available to OpenAPI consumers, and the
+generated TypeScript client still sees these values as strings. MinimalOpenAPI
+currently resolves response references in
 the served contract but generates status-only (`BadRequest`, `NotFound`,
 `Conflict`) or generic `IResult` handler unions instead of its endpoint-specific
 `*Problem` wrappers for inline response schemas. Affected handlers therefore

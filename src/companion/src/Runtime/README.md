@@ -173,6 +173,17 @@ persistent SQLite connection: each operation disposes its short-lived
 connection, and host shutdown stops the HTTP server before its final lifecycle
 callback. Resolving the database issue requires restarting the Companion; no
 automatic replacement, background retry, or repair path is attempted.
+The status capability reflects successful initialization and lifecycle
+availability; a later persistence error is returned by the affected request
+without permanently changing that capability. There is no background health
+probe or automatic recovery subsystem.
+
+C11 derives public context metadata from the canonical `GameContext` through
+one codec and stateless route resolver. The canonical string ID and stable
+route alias do not replace structured context identity and do not depend on
+history observations or SQLite. Context-scoped endpoints resolve their explicit
+route locator at the API boundary, then pass the structured identity directly
+to C03 or the application-state store; no ambient active context is maintained.
 
 `CompanionApplicationStatus.Read()` returns the entry application's informational
 version, startup UTC time, lifecycle state, effective configuration, database

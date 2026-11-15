@@ -203,6 +203,9 @@ type GameContext {
       requireOneSlicingArgument: false
     )
   id: ID!
+  canonicalId: String!
+  routeAlias: String!
+  displayName: String!
   project: Int!
   progressionTrack: String
 }

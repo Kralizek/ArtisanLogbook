@@ -126,9 +126,9 @@ try {
     assert.equal(graph.errors, undefined, JSON.stringify(graph.errors));
     assert(graph.data.crafts.nodes.length > 0);
 
-    const context = { project: 18, progressionTrack: "Hardcore" };
+    const contextAlias = "forever-hardcore";
     const preferenceRoute =
-      "/api/v1/entity-preferences/Item/987654321";
+      `/api/v1/${contextAlias}/entity-preferences/Item/987654321`;
     for (const [suffix, property] of [
       ["/pin", "pinned"],
       ["/hidden", "hidden"],
@@ -136,14 +136,16 @@ try {
       const mutation = await stateRequest(
         `${preferenceRoute}${suffix}`,
         "PUT",
-        { context, [property]: true },
+        { [property]: true },
       );
       assert.equal(mutation.status, 200);
-      assert.equal((await mutation.json())[property], true);
+      const preference = await mutation.json();
+      assert.equal(preference[property], true);
+      assert.equal(preference.context, "18-Hardcore");
     }
     const preferenceList = await (
       await fetch(
-        `${base}/api/v1/entity-preferences?project=18&progressionTrack=Hardcore`,
+        `${base}/api/v1/${contextAlias}/entity-preferences`,
       )
     ).json();
     assert.equal(preferenceList.preferences.length, 1);
@@ -152,11 +154,10 @@ try {
     assert.equal(preferenceList.preferences[0].hidden, true);
 
     const investigationResponse = await stateRequest(
-      "/api/v1/saved-investigations",
+      `/api/v1/${contextAlias}/saved-investigations`,
       "POST",
       {
         name: "Published smoke",
-        context,
         definitionVersion: 1,
         definition: {
           futureField: { preserve: true },
@@ -169,6 +170,11 @@ try {
     );
     assert.equal(investigationResponse.status, 201);
     const investigation = await investigationResponse.json();
+    assert.equal(investigation.context, "18-Hardcore");
+    const contextCatalogue = await (
+      await fetch(`${base}/api/v1/${contextAlias}/saved-investigations`)
+    ).json();
+    assert.equal(contextCatalogue.investigations.length, 1);
     const investigationPath = `/api/v1/saved-investigations/${investigation.id}`;
     const retrieved = await (await fetch(`${base}${investigationPath}`)).json();
     assert.equal(retrieved.revision, 1);
@@ -206,7 +212,7 @@ try {
     await waitUntilHealthy();
     const recoveredPreferences = await (
       await fetch(
-        `${base}/api/v1/entity-preferences?project=18&progressionTrack=Hardcore`,
+        `${base}/api/v1/${contextAlias}/entity-preferences`,
       )
     ).json();
     assert.equal(recoveredPreferences.preferences[0].pinned, true);

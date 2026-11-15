@@ -29,6 +29,12 @@ The recorder's current persisted crafts expose recipe/output IDs, output quantit
 
 Each canonical `CraftObservation` has a **required** `GameContext(GameProject Project, string? ProgressionTrack)`. `GameProject` is an int-backed open enum of Blizzard project IDs, including Retail, Classic and Forever; a future positive numeric project ID remains representable. `ProgressionTrack` optionally identifies a distinct realm/ruleset history within the same game project (for example Classic Era versus Hardcore). It is **not an expansion** and must be established from trustworthy source context rather than guessed.
 
+`GameContextCodec` maps this structured identity to its canonical public string
+form. The domain, DuckDB history and SQLite application-state schemas continue to
+retain structured project/track values; the string is not a replacement model.
+Human-readable route aliases are derived by the Runtime API boundary, not by
+Core or persisted history.
+
 `ProfessionExpansionKey` is a separate **optional** craft classification, for filtering Retail Midnight crafts separately from Dragonflight crafts recorded in the same Retail game. Unknown classification stays null; it must not be inferred from the craft timestamp or assumed to be the current expansion. It is not a requirement for Classic or Forever to expose Retail-style profession divisions.
 
 All character/item/recipe/profession/expansion **dimension keys are scoped by `GameContext`**, including numeric Blizzard IDs, so a recipe ID reused by Forever cannot be accidentally merged with the Retail recipe of the same number. Same craft identity with contradictory game contexts is a conflict, not an automatic move. Source adapters must establish the context before promoting imported crafts into canonical history; background imports may run for multiple contexts, but analytical queries must be restricted to **one selected context**, with optional profession expansion filtering.

@@ -69,7 +69,7 @@ public sealed class ApplicationStateStoreTests
     {
         await using ApplicationStateStore first = new(_database);
         await using ApplicationStateStore second = new(_database);
-        await Task.WhenAll(first.InitializeAsync(), second.InitializeAsync());
+        await RunTogether(() => first.InitializeAsync(), () => second.InitializeAsync());
 
         GameContext context = new(GameProject.Retail);
         await first.SetPinnedAsync(context, PreferredEntityKind.Recipe, 9, true);
@@ -116,22 +116,39 @@ public sealed class ApplicationStateStoreTests
     [Test]
     public async Task ConcurrentEntityMutationsPreserveIndependentAndUnrelatedState()
     {
-        await using ApplicationStateStore store = new(_database);
-        await store.InitializeAsync();
+        await using ApplicationStateStore first = new(_database);
+        await using ApplicationStateStore second = new(_database);
+        await first.InitializeAsync();
+        await second.InitializeAsync();
         GameContext context = new(GameProject.Retail);
 
-        await Task.WhenAll(
-            store.SetPinnedAsync(context, PreferredEntityKind.Recipe, 10, true),
-            store.SetHiddenAsync(context, PreferredEntityKind.Recipe, 10, true),
-            store.SetPinnedAsync(context, PreferredEntityKind.Item, 10, true),
-            store.SetHiddenAsync(context, PreferredEntityKind.Recipe, 11, true));
+        await RunTogether(
+            () => first.SetPinnedAsync(context, PreferredEntityKind.Recipe, 10, true),
+            () => second.SetHiddenAsync(context, PreferredEntityKind.Recipe, 10, true),
+            () => first.SetPinnedAsync(context, PreferredEntityKind.Item, 10, true),
+            () => second.SetHiddenAsync(context, PreferredEntityKind.Recipe, 11, true));
 
-        IReadOnlyList<EntityPreference> preferences = await store.GetEntityPreferencesAsync(context);
+        IReadOnlyList<EntityPreference> preferences = await first.GetEntityPreferencesAsync(context);
         Assert.That(preferences, Has.Count.EqualTo(3));
         Assert.That(preferences.Single(item => item.Kind == PreferredEntityKind.Recipe && item.EntityId == 10),
             Is.EqualTo(new EntityPreference(context, PreferredEntityKind.Recipe, 10, true, true)));
         Assert.That(preferences.Single(item => item.Kind == PreferredEntityKind.Item).Pinned, Is.True);
         Assert.That(preferences.Single(item => item.EntityId == 11).Hidden, Is.True);
+    }
+
+    private static async Task RunTogether(params Func<Task>[] operations)
+    {
+        using Barrier start = new(operations.Length + 1);
+        Task[] tasks = operations.Select(operation => Task.Run(async () =>
+        {
+            if (!start.SignalAndWait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Concurrent application-state operations did not reach the start barrier.");
+            await operation();
+        })).ToArray();
+
+        if (!start.SignalAndWait(TimeSpan.FromSeconds(10)))
+            throw new TimeoutException("Concurrent application-state operations did not start.");
+        await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     [Test]

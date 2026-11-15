@@ -126,9 +126,8 @@ internal sealed class GetStatusEndpoint(CompanionApplicationStatus status) : Get
                     CraftCount = count,
                     GameContexts = contexts.Select(context => new OkResponseHistoryGameContextsItem
                     {
-                        Project = (int)context.Game.Project,
-                        ProjectName = Enum.IsDefined(context.Game.Project) ? context.Game.Project.ToString() : null,
-                        ProgressionTrack = context.Game.ProgressionTrack,
+                        Context = ApplicationStateApiMapping.Map(
+                            GameContextRouteResolver.Describe(context.Game)),
                         CraftCount = context.CraftCount
                     }).ToArray()
                 }
