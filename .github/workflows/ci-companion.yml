@@ -67,6 +67,12 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('src/companion/global.json', 'src/companion/NuGet.Config', 'src/companion/Directory.Packages.props', 'src/companion/**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
       - if: runner.os == 'Linux'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "26.13.1"
+          cache: npm
+          cache-dependency-path: src/companion/web/package-lock.json
+      - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lua5.1
       - run: dotnet restore ArtisanLogbook.Companion.slnx
       - run: dotnet test tests/Core/Tests.Core.csproj -c Release --no-restore
