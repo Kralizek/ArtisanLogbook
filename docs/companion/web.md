@@ -339,8 +339,8 @@ npm run test
 npm run build
 ```
 
-Normal CI builds production assets through MSBuild, then runs lint, formatting
-and frontend tests on Linux. For changes to Aspire or the Vite proxy, run
+Normal CI builds production assets through MSBuild, then runs lint, formatting,
+frontend tests and npm audit on Linux. For changes to Aspire or the Vite proxy, run
 `npm run test:development` from `web`: it imports a fixture into temporary data,
 starts the actual AppHost and checks backend health, Vite, REST and GraphQL.
 It runs the normal development dependency installer and stops its processes.

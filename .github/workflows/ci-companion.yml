@@ -63,7 +63,7 @@ jobs:
       - name: Verify frontend
         if: runner.os == 'Linux'
         working-directory: src/companion/web
-        run: npm run lint && npm run format:check && npm run test
+        run: npm run lint && npm run format:check && npm run test && npm audit
       - name: Verify NuGet tool packaging
         if: runner.os == 'Linux'
         run: |

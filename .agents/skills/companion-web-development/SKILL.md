@@ -245,8 +245,8 @@ for recovery and the supported separate-process alternative.
   browser. Browser validation needs `npx playwright install --with-deps
   --only-shell chromium`. A successful Vite build alone does not validate
   a single-executable distribution.
-- Normal CI runs the full .NET suite on both OSes and frontend lint, formatting
-  and unit tests on Linux. Existing backend tests cover security and contracts;
+- Normal CI runs the full .NET suite on both OSes and frontend lint, formatting,
+  unit tests and npm audit on Linux. Existing backend tests cover security and contracts;
   frontend component tests cover pagination, freshness, cancellation and errors.
   For Windows deployment failure changes, run
   `scripts/tests/Deploy-Companion.Tests.ps1` on Windows with no concurrent build:
