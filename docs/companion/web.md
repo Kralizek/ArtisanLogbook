@@ -186,12 +186,13 @@ a considered policy, not a blanket CSP that breaks components.
 
 The full C12 experience is not implemented by this foundation. Its analytical
 browser destinations should begin with the backend-provided stable route alias
-(for example `/retail/overview` or `/forever-hardcore/items/67890`). Resolve
-that explicit route through shared context metadata, such as
-`GET /api/v1/game-contexts/{context}`, and use the returned canonical string ID
-for analytical scope and cache identity. Use the alias for readable browser
-navigation. Do not construct canonical IDs, decode opaque GraphQL entity IDs,
-or derive aliases in frontend code.
+(for example `/retail/overview` or `/forever/recipes/441`). Resolve that
+explicit route through shared context metadata at `GET /api/v1/games/{context}`,
+and use the returned canonical string ID for analytical scope and cache
+identity. The only current friendly aliases are the base Retail and Forever
+contexts; other contexts use their canonical ID as the alias (for example
+`/18-Hardcore/overview`). Do not construct canonical IDs, decode opaque
+GraphQL entity IDs, or derive aliases in frontend code.
 
 An eventual route hierarchy may use a context segment and a loader, but C12
 will choose its actual React Router/state implementation. An explicit route

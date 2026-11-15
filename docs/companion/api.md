@@ -33,7 +33,7 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 |---|---|---|
 | GET | `/api/v1/health` | 200 when canonical history is available and running; 503 while starting, stopping or history is unavailable |
 | GET | `/api/v1/status` | Version, lifecycle state, canonical-history availability and counts, independent application-state capability, safe failure info |
-| GET | `/api/v1/game-contexts/{context}` | Resolve one canonical context ID or stable route alias to derived identity/display metadata; does not require history or SQLite |
+| GET | `/api/v1/games/{context}` | Resolve one canonical context ID or supported-game alias to derived identity/display metadata; does not require history or SQLite |
 | GET | `/api/v1/sources` | Discovered SavedVariables sources with stable ids (`src_…`) and discovery diagnostics |
 | GET | `/api/v1/monitoring` | Saved/effective preferences, override indicators, monitoring state and diagnostics |
 | PUT | `/api/v1/monitoring` | Persist monitoring preferences and apply their effective values |
@@ -41,11 +41,11 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 | GET | `/api/v1/imports?limit=N` | Recent import operations (1–100, default 20), newest first |
 | GET | `/api/v1/imports/{id}` | One operation, or 404 |
 | POST | `/api/v1/imports` | Start an import; returns 202 with `Location` |
-| GET | `/api/v1/{context}/entity-preferences` | List recipe and item preferences for one exact context |
-| PUT | `/api/v1/{context}/entity-preferences/{Recipe\|Item}/{id}/pin` | Set one entity's pinned state |
-| PUT | `/api/v1/{context}/entity-preferences/{Recipe\|Item}/{id}/hidden` | Set one entity's hidden state |
+| GET | `/api/v1/games/{context}/entity-preferences` | List recipe and item preferences for one exact context |
+| PUT | `/api/v1/games/{context}/entity-preferences/{Recipe\|Item}/{id}/pin` | Set one entity's pinned state |
+| PUT | `/api/v1/games/{context}/entity-preferences/{Recipe\|Item}/{id}/hidden` | Set one entity's hidden state |
 | GET | `/api/v1/saved-investigations` | List the global saved-investigation catalogue metadata |
-| GET, POST | `/api/v1/{context}/saved-investigations` | List metadata or create an investigation in one exact context |
+| GET, POST | `/api/v1/games/{context}/saved-investigations` | List metadata or create an investigation in one exact context |
 | GET, DELETE | `/api/v1/saved-investigations/{id}` | Retrieve or revision-check and delete a saved investigation |
 | PUT | `/api/v1/saved-investigations/{id}` | Atomically update name and versioned JSON definition using the expected revision |
 | GET | `/openapi/v1.yaml` | OpenAPI 3.0 document |
@@ -64,17 +64,24 @@ identities and no project or progression track is inferred from the installation
 directory. Responses never include filesystem paths, account names, raw
 SavedVariables, or stack traces.
 
-`{context}` accepts either the canonical string identifier or its stable route
-alias. For example, `18-Hardcore` and `forever-hardcore` resolve to the same
-structured identity; `/api/v1/1/...` and `/api/v1/retail/...` likewise match.
-The canonical identifier is authoritative public identity, while the alias is
-for readable URLs. Invalid locators return an explicit 400 problem response;
-the API never falls back to another or remembered context. Aliases are derived
-without consulting history or SQLite and are stable across imports and restarts.
-The conventional `forever-hardcore` alias is not evidence that such a context is
-currently present in history.
-Status and GraphQL context metadata expose the canonical ID, alias, display
-name, project and optional exact progression track. The GraphQL opaque `id`
+`{context}` is a complete GameContext locator under `/api/v1/games/`, not just
+a project ID. The current friendly aliases are `retail` and `forever` for their
+base contexts; `/api/v1/games/1/...` and `/api/v1/games/retail/...` resolve to
+the same identity. All other contexts use their canonical identifier as the
+route alias, including progression tracks such as `18-Hardcore` and unknown
+positive project IDs such as `98765`. Canonical IDs remain valid even when a
+friendly alias exists. Unsupported project IDs and progression tracks remain
+representable, but receiving metadata does not imply capture or analytical
+capability support.
+
+The canonical identifier is authoritative public identity; `routeAlias` is
+for readable browser navigation. Invalid locators return an explicit 400
+problem response; the API never falls back to another or remembered context.
+Aliases are derived without consulting history or SQLite and are stable across
+imports and restarts. `/api/v1/games/{context}` returns `canonicalId`,
+`routeAlias`, `displayName`, `project` and the optional exact
+`progressionTrack`. The same metadata is nested under
+`/api/v1/status`'s `history.gameContexts[].context`. The GraphQL opaque `id`
 remains a separate history identity.
 
 Canonical IDs retain the `{project}-{progressionTrack}` form for ordinary
@@ -218,9 +225,9 @@ Clients do not decode opaque GraphQL entity IDs, construct context strings, or
 slugify project/track names. The entity kind remains explicit in the route,
 and the complete game context keeps overlapping numeric IDs isolated.
 
-For example, `PUT /api/v1/retail/entity-preferences/Recipe/441/pin` accepts
-`{"pinned":true}`. The equivalent route using canonical identity is
-`/api/v1/1/entity-preferences/Recipe/441/pin`.
+For example, `PUT /api/v1/games/retail/entity-preferences/Recipe/441/pin`
+accepts `{"pinned":true}`. The equivalent route using canonical identity is
+`/api/v1/games/1/entity-preferences/Recipe/441/pin`.
 
 The last-selected context, theme, sidebar presentation, and other browser
 preferences belong in browser-local storage, not this API. Active context,
@@ -239,8 +246,8 @@ and depth 32, and has a positive definition version. It does not claim that a
 definition is a valid or executable C12 investigation. Relative and fixed date
 periods remain unchanged JSON; storage does not resolve them.
 
-Create with `POST /api/v1/{context}/saved-investigations`, for example
-`/api/v1/retail/saved-investigations`, then retain the returned `id` and
+Create with `POST /api/v1/games/{context}/saved-investigations`, for example
+`/api/v1/games/retail/saved-investigations`, then retain the returned `id` and
 `revision`. The context is derived from the route and immutable after creation.
 The request contains only editable investigation data:
 

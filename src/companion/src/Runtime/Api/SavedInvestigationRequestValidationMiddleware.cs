@@ -52,11 +52,19 @@ internal static class ApplicationStateRoutePaths
     public static bool IsSavedInvestigation(PathString path)
     {
         string[] segments = path.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries) ?? [];
-        return segments.Length >= 3 &&
-            string.Equals(segments[0], "api", StringComparison.Ordinal) &&
-            string.Equals(segments[1], "v1", StringComparison.Ordinal) &&
-            (string.Equals(segments[2], "saved-investigations", StringComparison.Ordinal) ||
-             segments.Length == 4 &&
-             string.Equals(segments[3], "saved-investigations", StringComparison.Ordinal));
+        if (segments.Length == 5 &&
+            IsLiteral(segments[0], "api") &&
+            IsLiteral(segments[1], "v1") &&
+            IsLiteral(segments[2], "games") &&
+            IsLiteral(segments[4], "saved-investigations"))
+            return true;
+
+        return segments.Length == 4 &&
+            IsLiteral(segments[0], "api") &&
+            IsLiteral(segments[1], "v1") &&
+            IsLiteral(segments[2], "saved-investigations");
     }
+
+    private static bool IsLiteral(string actual, string expected) =>
+        string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
 }

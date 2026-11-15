@@ -8,30 +8,23 @@ namespace Tests.Cli;
 [TestFixture]
 public sealed class GameContextRouteResolverTests
 {
-    [TestCase("retail", 1, null, "Retail")]
-    [TestCase("classic-era", 2, null, "Classic Era")]
-    [TestCase("wow-labs", 3, null, "WoW Labs")]
-    [TestCase("burning-crusade-classic", 5, null, "Burning Crusade Classic")]
-    [TestCase("wrath-classic", 11, null, "Wrath Classic")]
-    [TestCase("cataclysm-classic", 14, null, "Cataclysm Classic")]
-    [TestCase("forever", 18, null, "Forever")]
-    [TestCase("mists-classic", 19, null, "Mists of Pandaria Classic")]
-    [TestCase("forever-hardcore", 18, "Hardcore", "Forever Hardcore")]
-    public void EstablishedAliasesResolveWithoutHistory(
-        string alias, int project, string? track, string displayName)
+    [TestCase("retail", 1, "Retail")]
+    [TestCase("forever", 18, "Forever")]
+    public void SupportedGameAliasesResolveWithoutHistory(string alias, int project, string displayName)
     {
+        GameContext context = new((GameProject)project);
+
         Assert.That(GameContextRouteResolver.TryResolve(alias, out ResolvedGameContext? resolved), Is.True);
-        Assert.That(resolved, Is.EqualTo(new ResolvedGameContext(
-            new((GameProject)project, track), GameContextCodec.Encode(new((GameProject)project, track)),
-            alias, displayName)));
+        Assert.That(resolved, Is.EqualTo(new ResolvedGameContext(context, GameContextCodec.Encode(context), alias, displayName)));
     }
 
     [Test]
-    public void CanonicalIdsAndAliasesResolveToTheSameCompleteContext()
+    public void CanonicalIdsAndSupportedAliasesResolveToTheSameCompleteContext()
     {
         GameContext[] contexts =
         [
             new(GameProject.Retail),
+            new(GameProject.Forever),
             new(GameProject.Forever, "Hardcore"),
             new((GameProject)98765),
             new((GameProject)98765, "Track-A"),
@@ -42,6 +35,12 @@ public sealed class GameContextRouteResolverTests
         foreach (GameContext context in contexts)
         {
             ResolvedGameContext expected = GameContextRouteResolver.Describe(context);
+            string expectedAlias = context.ProgressionTrack is null && context.Project == GameProject.Retail
+                ? "retail"
+                : context.ProgressionTrack is null && context.Project == GameProject.Forever
+                    ? "forever"
+                    : expected.CanonicalId;
+            Assert.That(expected.RouteAlias, Is.EqualTo(expectedAlias));
             Assert.That(GameContextRouteResolver.TryResolve(expected.RouteAlias, out ResolvedGameContext? byAlias), Is.True);
             Assert.That(GameContextRouteResolver.TryResolve(expected.CanonicalId, out ResolvedGameContext? byId), Is.True);
             Assert.That(byAlias, Is.EqualTo(expected));
@@ -50,43 +49,49 @@ public sealed class GameContextRouteResolverTests
     }
 
     [Test]
-    public void FallbackAliasesAreReversibleUniqueAndReservedRouteSafe()
+    public void CanonicalIdentifiersAreFallbackAliasesForUnsupportedProjectsAndTracks()
     {
-        GameContext spaceTrack = new((GameProject)98765, "Track A");
-        GameContext hyphenTrack = new((GameProject)98765, "Track-A");
-        ResolvedGameContext space = GameContextRouteResolver.Describe(spaceTrack);
-        ResolvedGameContext hyphen = GameContextRouteResolver.Describe(hyphenTrack);
+        GameContext unknownProject = new((GameProject)98765);
+        GameContext unsupportedProject = new((GameProject)2);
+        GameContext unrecognizedTrack = new(GameProject.Forever, "Experimental");
+        GameContext spacedTrack = new(GameProject.Forever, "Track A");
+
+        ResolvedGameContext unknown = GameContextRouteResolver.Describe(unknownProject);
+        ResolvedGameContext unsupported = GameContextRouteResolver.Describe(unsupportedProject);
+        ResolvedGameContext experimental = GameContextRouteResolver.Describe(unrecognizedTrack);
+        ResolvedGameContext spaced = GameContextRouteResolver.Describe(spacedTrack);
 
         Assert.Multiple(() =>
         {
-            Assert.That(GameContextRouteResolver.Describe(new((GameProject)98765)).RouteAlias,
-                Is.EqualTo("project-98765"));
-            Assert.That(space.RouteAlias, Is.Not.EqualTo(hyphen.RouteAlias));
-            Assert.That(space.RouteAlias, Does.StartWith("ctx-"));
-            Assert.That(space.RouteAlias, Does.Not.Contain("/"));
-            Assert.That(space.RouteAlias, Does.Not.Contain("?"));
-            Assert.That(space.CanonicalId, Does.StartWith("98765-"));
-            Assert.That(space.RouteAlias, Is.Not.EqualTo(space.CanonicalId));
+            Assert.That(unknown.RouteAlias, Is.EqualTo("98765"));
+            Assert.That(unknown.DisplayName, Is.EqualTo("Project 98765"));
+            Assert.That(unsupported.RouteAlias, Is.EqualTo("2"));
+            Assert.That(unsupported.DisplayName, Is.EqualTo("Project 2"));
+            Assert.That(experimental.RouteAlias, Is.EqualTo("18-Experimental"));
+            Assert.That(spaced.RouteAlias, Is.EqualTo("18-Track~0020A"));
+            Assert.That(experimental.DisplayName, Is.EqualTo("Forever Experimental"));
         });
     }
 
+    [Test]
+    public void CanonicalIdentifierRemainsValidAlongsideFriendlyAlias()
+    {
+        Assert.That(GameContextRouteResolver.TryResolve("retail", out ResolvedGameContext? byAlias), Is.True);
+        Assert.That(GameContextRouteResolver.TryResolve("1", out ResolvedGameContext? byCanonicalId), Is.True);
+        Assert.That(byAlias, Is.EqualTo(byCanonicalId));
+        Assert.That(byCanonicalId!.CanonicalId, Is.EqualTo("1"));
+    }
+
+    [TestCase("")]
+    [TestCase("RETAIL")]
     [TestCase("status")]
-    [TestCase("health")]
-    [TestCase("monitoring")]
-    [TestCase("imports")]
-    [TestCase("sources")]
-    [TestCase("saved-investigations")]
-    [TestCase("entity-preferences")]
-    [TestCase("game-contexts")]
-    [TestCase("openapi")]
-    [TestCase("graphql")]
-    [TestCase("project-1")]
-    [TestCase("ctx-1-t-")]
-    [TestCase("project-0")]
-    [TestCase("ctx-18-t-")]
-    [TestCase("ctx-18-t-00zz")]
-    [TestCase("retail-forever")]
-    public void InvalidAliasesDoNotResolveOrFallBack(string locator)
+    [TestCase("forever-hardcore")]
+    [TestCase("project-98765")]
+    [TestCase("ctx-18-t-004100")]
+    [TestCase("18-")]
+    [TestCase("0")]
+    [TestCase("2147483648")]
+    public void InvalidOrObsoleteAliasesDoNotResolve(string locator)
     {
         Assert.That(GameContextRouteResolver.TryResolve(locator, out ResolvedGameContext? resolved), Is.False);
         Assert.That(resolved, Is.Null);

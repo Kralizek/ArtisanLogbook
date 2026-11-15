@@ -472,7 +472,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /api/v1/game-contexts/{context}:
+  /api/v1/games/{context}:
     get:
       operationId: getGameContextMetadata
       summary: Resolve one canonical context identifier or route alias
@@ -495,7 +495,7 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/Unavailable"
-  /api/v1/{context}/entity-preferences:
+  /api/v1/games/{context}/entity-preferences:
     get:
       operationId: getEntityPreferences
       summary: List recipe and item preferences for one exact game context
@@ -518,7 +518,7 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/Unavailable"
-  /api/v1/{context}/entity-preferences/{kind}/{id}/pin:
+  /api/v1/games/{context}/entity-preferences/{kind}/{id}/pin:
     put:
       operationId: setEntityPinned
       summary: Set the desired pinned state for one recipe or item
@@ -565,7 +565,7 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/Unavailable"
-  /api/v1/{context}/entity-preferences/{kind}/{id}/hidden:
+  /api/v1/games/{context}/entity-preferences/{kind}/{id}/hidden:
     put:
       operationId: setEntityHidden
       summary: Set the desired hidden state for one recipe or item
@@ -633,7 +633,7 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/Unavailable"
-  /api/v1/{context}/saved-investigations:
+  /api/v1/games/{context}/saved-investigations:
     get:
       operationId: listContextSavedInvestigations
       summary: List saved investigation metadata for one exact context
@@ -799,7 +799,7 @@ components:
       name: context
       in: path
       required: true
-      description: Stable route alias or canonical game context identifier.
+      description: Established supported-game alias or canonical game context identifier. Canonical identifiers are the fallback route alias.
       schema:
         type: string
         minLength: 1
@@ -865,13 +865,13 @@ components:
       example: "18-Hardcore"
     GameContextLocator:
       type: string
-      description: Stable human-readable route alias or canonical game context identifier.
-      example: forever-hardcore
+      description: Established supported-game alias or canonical game context identifier. Canonical identifiers are the fallback route alias.
+      example: retail
     GameContextMetadata:
       type: object
-      required: [id, routeAlias, displayName, project, progressionTrack]
+      required: [canonicalId, routeAlias, displayName, project, progressionTrack]
       properties:
-        id:
+        canonicalId:
           type: string
           description: Canonical game context identifier.
         routeAlias:

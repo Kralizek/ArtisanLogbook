@@ -126,9 +126,13 @@ try {
     assert.equal(graph.errors, undefined, JSON.stringify(graph.errors));
     assert(graph.data.crafts.nodes.length > 0);
 
-    const contextAlias = "forever-hardcore";
+    const contextLocator = "18-Hardcore";
+    const gameRoute = `/api/v1/games/${contextLocator}`;
+    const contextMetadata = await (await fetch(`${base}${gameRoute}`)).json();
+    assert.equal(contextMetadata.canonicalId, contextLocator);
+    assert.equal(contextMetadata.routeAlias, contextLocator);
     const preferenceRoute =
-      `/api/v1/${contextAlias}/entity-preferences/Item/987654321`;
+      `${gameRoute}/entity-preferences/Item/987654321`;
     for (const [suffix, property] of [
       ["/pin", "pinned"],
       ["/hidden", "hidden"],
@@ -145,7 +149,7 @@ try {
     }
     const preferenceList = await (
       await fetch(
-        `${base}/api/v1/${contextAlias}/entity-preferences`,
+        `${base}${gameRoute}/entity-preferences`,
       )
     ).json();
     assert.equal(preferenceList.preferences.length, 1);
@@ -154,7 +158,7 @@ try {
     assert.equal(preferenceList.preferences[0].hidden, true);
 
     const investigationResponse = await stateRequest(
-      `/api/v1/${contextAlias}/saved-investigations`,
+      `${gameRoute}/saved-investigations`,
       "POST",
       {
         name: "Published smoke",
@@ -172,7 +176,7 @@ try {
     const investigation = await investigationResponse.json();
     assert.equal(investigation.context, "18-Hardcore");
     const contextCatalogue = await (
-      await fetch(`${base}/api/v1/${contextAlias}/saved-investigations`)
+      await fetch(`${base}${gameRoute}/saved-investigations`)
     ).json();
     assert.equal(contextCatalogue.investigations.length, 1);
     const investigationPath = `/api/v1/saved-investigations/${investigation.id}`;
@@ -212,7 +216,7 @@ try {
     await waitUntilHealthy();
     const recoveredPreferences = await (
       await fetch(
-        `${base}/api/v1/${contextAlias}/entity-preferences`,
+        `${base}${gameRoute}/entity-preferences`,
       )
     ).json();
     assert.equal(recoveredPreferences.preferences[0].pinned, true);

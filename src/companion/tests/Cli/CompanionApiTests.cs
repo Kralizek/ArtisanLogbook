@@ -304,7 +304,7 @@ public sealed class CompanionApiTests
                 Dictionary<string, object> payload = new() { [property] = true };
                 string body = JsonSerializer.Serialize(payload);
                 using HttpResponseMessage changed = await host.Send(HttpMethod.Put,
-                    $"/api/v1/{locator}/entity-preferences/{kind}/{node.GetProperty("blizzardId").GetInt32()}/{(property == "pinned" ? "pin" : "hidden")}",
+                    $"/api/v1/games/{locator}/entity-preferences/{kind}/{node.GetProperty("blizzardId").GetInt32()}/{(property == "pinned" ? "pin" : "hidden")}",
                     body, post: true);
                 Assert.That(changed.StatusCode, Is.EqualTo(HttpStatusCode.OK), await changed.Content.ReadAsStringAsync());
                 JsonElement result = await Json(changed);
@@ -318,9 +318,9 @@ public sealed class CompanionApiTests
             JsonElement context = node.GetProperty("game");
             string alias = context.GetProperty("routeAlias").GetString()!;
             string canonicalId = context.GetProperty("canonicalId").GetString()!;
-            JsonElement preferences = await Json(await host.Http.GetAsync($"/api/v1/{alias}/entity-preferences"));
+            JsonElement preferences = await Json(await host.Http.GetAsync($"/api/v1/games/{alias}/entity-preferences"));
             JsonElement canonicalPreferences = await Json(await host.Http.GetAsync(
-                $"/api/v1/{Uri.EscapeDataString(canonicalId)}/entity-preferences"));
+                $"/api/v1/games/{Uri.EscapeDataString(canonicalId)}/entity-preferences"));
             JsonElement[] values = preferences.GetProperty("preferences").EnumerateArray().ToArray();
             Assert.That(values, Has.Length.EqualTo(2));
             Assert.That(canonicalPreferences.GetProperty("preferences").GetArrayLength(), Is.EqualTo(2));
@@ -337,37 +337,41 @@ public sealed class CompanionApiTests
         await using ApiHost host = await Start();
 
         JsonElement knownAlias = await Json(await host.Http.GetAsync(
-            "/api/v1/game-contexts/forever-hardcore"));
+            "/api/v1/games/forever"));
         JsonElement knownId = await Json(await host.Http.GetAsync(
-            "/api/v1/game-contexts/18-Hardcore"));
+            "/api/v1/games/18"));
         Assert.Multiple(() =>
         {
-            Assert.That(knownAlias.GetProperty("id").GetString(), Is.EqualTo("18-Hardcore"));
-            Assert.That(knownAlias.GetProperty("routeAlias").GetString(), Is.EqualTo("forever-hardcore"));
-            Assert.That(knownAlias.GetProperty("displayName").GetString(), Is.EqualTo("Forever Hardcore"));
+            Assert.That(knownAlias.GetProperty("canonicalId").GetString(), Is.EqualTo("18"));
+            Assert.That(knownAlias.GetProperty("routeAlias").GetString(), Is.EqualTo("forever"));
+            Assert.That(knownAlias.GetProperty("displayName").GetString(), Is.EqualTo("Forever"));
             Assert.That(knownAlias.GetProperty("project").GetInt32(), Is.EqualTo(18));
-            Assert.That(knownAlias.GetProperty("progressionTrack").GetString(), Is.EqualTo("Hardcore"));
-            Assert.That(knownId.GetProperty("id").GetString(), Is.EqualTo(knownAlias.GetProperty("id").GetString()));
-            Assert.That(knownId.GetProperty("routeAlias").GetString(),
-                Is.EqualTo(knownAlias.GetProperty("routeAlias").GetString()));
+            Assert.That(knownAlias.GetProperty("progressionTrack").ValueKind, Is.EqualTo(JsonValueKind.Null));
+            Assert.That(knownId.GetProperty("canonicalId").GetString(), Is.EqualTo(knownAlias.GetProperty("canonicalId").GetString()));
+            Assert.That(knownId.GetProperty("routeAlias").GetString(), Is.EqualTo("forever"));
         });
 
         GameContext unusual = new((GameProject)98765, "track /?%#雪");
         ResolvedGameContext description = GameContextRouteResolver.Describe(unusual);
         JsonElement future = await Json(await host.Http.GetAsync(
-            $"/api/v1/game-contexts/{description.RouteAlias}"));
+            $"/api/v1/games/{description.RouteAlias}"));
         JsonElement futureCanonical = await Json(await host.Http.GetAsync(
-            $"/api/v1/game-contexts/{Uri.EscapeDataString(description.CanonicalId)}"));
+            $"/api/v1/games/{Uri.EscapeDataString(description.CanonicalId)}"));
         Assert.Multiple(() =>
         {
-            Assert.That(future.GetProperty("id").GetString(), Is.EqualTo(description.CanonicalId));
+            Assert.That(description.RouteAlias, Is.EqualTo(description.CanonicalId));
+            Assert.That(future.GetProperty("canonicalId").GetString(), Is.EqualTo(description.CanonicalId));
             Assert.That(future.GetProperty("routeAlias").GetString(), Is.EqualTo(description.RouteAlias));
             Assert.That(future.GetProperty("project").GetInt32(), Is.EqualTo(98765));
             Assert.That(future.GetProperty("progressionTrack").GetString(), Is.EqualTo(unusual.ProgressionTrack));
-            Assert.That(futureCanonical.GetProperty("id").GetString(), Is.EqualTo(description.CanonicalId));
+            Assert.That(futureCanonical.GetProperty("canonicalId").GetString(), Is.EqualTo(description.CanonicalId));
         });
 
-        using HttpResponseMessage invalid = await host.Http.GetAsync("/api/v1/game-contexts/not-a-context");
+        JsonElement unsupported = await Json(await host.Http.GetAsync("/api/v1/games/2"));
+        Assert.That(unsupported.GetProperty("displayName").GetString(), Is.EqualTo("Project 2"));
+        Assert.That(unsupported.GetProperty("routeAlias").GetString(), Is.EqualTo("2"));
+
+        using HttpResponseMessage invalid = await host.Http.GetAsync("/api/v1/games/not-a-context");
         Assert.That(invalid.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
         Assert.That((await Json(invalid)).GetProperty("code").GetString(), Is.EqualTo("invalid-request"));
 
@@ -375,7 +379,7 @@ public sealed class CompanionApiTests
             GameProject.Retail,
             new string('x', ApplicationStateStore.MaximumProgressionTrackLength + 1))).RouteAlias;
         using HttpResponseMessage invalidStateContext = await host.Http.GetAsync(
-            $"/api/v1/{oversizedTrackAlias}/entity-preferences");
+            $"/api/v1/games/{oversizedTrackAlias}/entity-preferences");
         Assert.That(invalidStateContext.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
         Assert.That(host.App.Services.GetRequiredService<Store>().ReadStatus().Contexts, Is.Empty);
     }
@@ -896,6 +900,7 @@ public sealed class CompanionApiTests
             .And.Contain("Manual for explicitly requested imports"));
         Assert.That(document, Does.Contain("GameContext:\n      type: string")
             .And.Contain("GameContextLocator:\n      type: string")
+            .And.Contain("required: [canonicalId, routeAlias, displayName, project, progressionTrack]")
             .And.Contain("GameContextLocator:\n      name: context\n      in: path\n      required: true"));
         Assert.That(document, Does.Contain("parameters:\n        - $ref: \"#/components/parameters/GameContextLocator\""));
 
@@ -908,12 +913,13 @@ public sealed class CompanionApiTests
         Assert.That(mapped, Is.EqualTo(documented));
         Assert.That(documented, Is.EqualTo(new[]
         {
-            "/api/v1/game-contexts/{context}", "/api/v1/health", "/api/v1/imports",
+            "/api/v1/games/{context}", "/api/v1/health", "/api/v1/imports",
             "/api/v1/imports/{id}", "/api/v1/monitoring", "/api/v1/monitoring/reconcile",
             "/api/v1/saved-investigations", "/api/v1/saved-investigations/{id}",
-            "/api/v1/{context}/entity-preferences", "/api/v1/{context}/entity-preferences/{kind}/{id}/hidden",
-            "/api/v1/{context}/entity-preferences/{kind}/{id}/pin",
-            "/api/v1/{context}/saved-investigations",
+            "/api/v1/games/{context}/entity-preferences",
+            "/api/v1/games/{context}/entity-preferences/{kind}/{id}/hidden",
+            "/api/v1/games/{context}/entity-preferences/{kind}/{id}/pin",
+            "/api/v1/games/{context}/saved-investigations",
             "/api/v1/sources", "/api/v1/status"
         }.Order().ToArray()));
         foreach (string operation in new[] { "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport",
@@ -932,7 +938,7 @@ public sealed class CompanionApiTests
     {
         await using ApiHost host = await Start();
 
-        using (HttpRequestMessage missingHeader = new(HttpMethod.Put, "/api/v1/1/entity-preferences/Recipe/441/pin"))
+        using (HttpRequestMessage missingHeader = new(HttpMethod.Put, "/api/v1/games/1/entity-preferences/Recipe/441/pin"))
         {
             missingHeader.Content = JsonContent.Create(new { pinned = true });
             using HttpResponseMessage forbidden = await host.Http.SendAsync(missingHeader);
@@ -940,43 +946,43 @@ public sealed class CompanionApiTests
             Assert.That((await Json(forbidden)).GetProperty("code").GetString(), Is.EqualTo("client-header-required"));
         }
         using (HttpResponseMessage invalidKind = await host.Send(HttpMethod.Put,
-            "/api/v1/1/entity-preferences/Other/441/pin", """{"pinned":true}""", post: true))
+            "/api/v1/games/1/entity-preferences/Other/441/pin", """{"pinned":true}""", post: true))
             Assert.That(invalidKind.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
 
         using (HttpResponseMessage pinned = await host.Send(HttpMethod.Put,
-            "/api/v1/1/entity-preferences/Recipe/441/pin", """{"pinned":true}""", post: true))
+            "/api/v1/games/1/entity-preferences/Recipe/441/pin", """{"pinned":true}""", post: true))
             Assert.That(pinned.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage hidden = await host.Send(HttpMethod.Put,
-            "/api/v1/retail/entity-preferences/Recipe/441/hidden", """{"hidden":true}""", post: true))
+            "/api/v1/games/retail/entity-preferences/Recipe/441/hidden", """{"hidden":true}""", post: true))
             Assert.That(hidden.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage item = await host.Send(HttpMethod.Put,
-            "/api/v1/1/entity-preferences/Item/441/pin", """{"pinned":true}""", post: true))
+            "/api/v1/games/1/entity-preferences/Item/441/pin", """{"pinned":true}""", post: true))
             Assert.That(item.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage forever = await host.Send(HttpMethod.Put,
-            "/api/v1/forever-hardcore/entity-preferences/Recipe/441/pin",
+            "/api/v1/games/18-Hardcore/entity-preferences/Recipe/441/pin",
             """{"pinned":true}""", post: true))
             Assert.That(forever.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using (HttpResponseMessage unpin = await host.Send(HttpMethod.Put,
-            "/api/v1/1/entity-preferences/Recipe/441/pin", """{"pinned":false}""", post: true))
+            "/api/v1/games/1/entity-preferences/Recipe/441/pin", """{"pinned":false}""", post: true))
         {
             JsonElement current = await Json(unpin);
             Assert.That(current.GetProperty("pinned").GetBoolean(), Is.False);
             Assert.That(current.GetProperty("hidden").GetBoolean(), Is.True);
         }
-        JsonElement retail = await Json(await host.Http.GetAsync("/api/v1/retail/entity-preferences"));
+        JsonElement retail = await Json(await host.Http.GetAsync("/api/v1/games/retail/entity-preferences"));
         Assert.That(retail.GetProperty("preferences").GetArrayLength(), Is.EqualTo(2));
         Assert.That(retail.GetProperty("preferences").EnumerateArray()
             .Single(preference => preference.GetProperty("kind").GetString() == "Recipe")
             .GetProperty("hidden").GetBoolean(), Is.True);
         JsonElement foreverPreferences = await Json(await host.Http.GetAsync(
-            "/api/v1/18-Hardcore/entity-preferences"));
+            "/api/v1/games/18-Hardcore/entity-preferences"));
         Assert.That(foreverPreferences.GetProperty("preferences").GetArrayLength(), Is.EqualTo(1));
         using (HttpResponseMessage trackPreference = await host.Send(HttpMethod.Put,
-            "/api/v1/ctx-1-t-0054007200610063006b00200058/entity-preferences/Recipe/441/pin",
+            "/api/v1/games/1-Track~0020X/entity-preferences/Recipe/441/pin",
             """{"pinned":true}""", post: true))
             Assert.That(trackPreference.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         JsonElement trackPreferences = await Json(await host.Http.GetAsync(
-            "/api/v1/ctx-1-t-0054007200610063006b00200058/entity-preferences"));
+            "/api/v1/games/1-Track~0020X/entity-preferences"));
         Assert.That(trackPreferences.GetProperty("preferences").GetArrayLength(), Is.EqualTo(1));
 
         string definition = """
@@ -988,7 +994,7 @@ public sealed class CompanionApiTests
               ]
             }
             """;
-        using HttpResponseMessage created = await host.Post("/api/v1/retail/saved-investigations",
+        using HttpResponseMessage created = await host.Post("/api/v1/games/retail/saved-investigations",
             $$"""{"name":"Alchemy review","definitionVersion":3,"definition":{{definition}}}""");
         Assert.That(created.StatusCode, Is.EqualTo(HttpStatusCode.Created), await created.Content.ReadAsStringAsync());
         string location = created.Headers.Location!.ToString();
@@ -1000,20 +1006,20 @@ public sealed class CompanionApiTests
         Assert.That(saved.GetProperty("definition").GetProperty("filters").GetProperty("future")
             .GetProperty("keep").GetBoolean(), Is.True);
         Assert.That((await Json(await host.Http.GetAsync(location))).GetProperty("definitionVersion").GetInt32(), Is.EqualTo(3));
-        using (HttpResponseMessage trackX = await host.Post("/api/v1/ctx-1-t-0054007200610063006b00200058/saved-investigations",
+        using (HttpResponseMessage trackX = await host.Post("/api/v1/games/1-Track~0020X/saved-investigations",
             $$"""{"name":"Track X","definitionVersion":1,"definition":{{definition}}}"""))
             Assert.That(trackX.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-        using (HttpResponseMessage trackY = await host.Post("/api/v1/ctx-1-t-0054007200610063006b00200059/saved-investigations",
+        using (HttpResponseMessage trackY = await host.Post("/api/v1/games/1-Track~0020Y/saved-investigations",
             $$"""{"name":"Track Y","definitionVersion":1,"definition":{{definition}}}"""))
             Assert.That(trackY.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-        using (HttpResponseMessage otherProject = await host.Post("/api/v1/forever-hardcore/saved-investigations",
+        using (HttpResponseMessage otherProject = await host.Post("/api/v1/games/18-Hardcore/saved-investigations",
             $$"""{"name":"Other project","definitionVersion":1,"definition":{{definition}}}"""))
             Assert.That(otherProject.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-        JsonElement noTrackList = await Json(await host.Http.GetAsync("/api/v1/1/saved-investigations"));
+        JsonElement noTrackList = await Json(await host.Http.GetAsync("/api/v1/games/1/saved-investigations"));
         JsonElement trackXList = await Json(await host.Http.GetAsync(
-            "/api/v1/ctx-1-t-0054007200610063006b00200058/saved-investigations"));
+            "/api/v1/games/1-Track~0020X/saved-investigations"));
         JsonElement trackYList = await Json(await host.Http.GetAsync(
-            "/api/v1/ctx-1-t-0054007200610063006b00200059/saved-investigations"));
+            "/api/v1/games/1-Track~0020Y/saved-investigations"));
         JsonElement allInvestigations = await Json(await host.Http.GetAsync("/api/v1/saved-investigations"));
         Assert.Multiple(() =>
         {
@@ -1024,24 +1030,8 @@ public sealed class CompanionApiTests
             Assert.That(allInvestigations.GetProperty("investigations").GetArrayLength(), Is.EqualTo(4));
             Assert.That(allInvestigations.GetProperty("investigations")[0].TryGetProperty("definition", out _), Is.False);
         });
-        using (HttpResponseMessage invalidContext = await host.Http.GetAsync("/api/v1/unknown-context/entity-preferences"))
+        using (HttpResponseMessage invalidContext = await host.Http.GetAsync("/api/v1/games/unknown-context/entity-preferences"))
             Assert.That(invalidContext.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
-        using (HttpResponseMessage duplicate = await host.Post("/api/v1/retail/saved-investigations",
-            """{"name":"Duplicate","definitionVersion":1,"definition":{"same":1,"same":2}}"""))
-        {
-            Assert.That(duplicate.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
-            Assert.That((await Json(duplicate)).GetProperty("code").GetString(), Is.EqualTo("invalid-request"));
-        }
-        string oversizedValue = new('x', LocalApiSecurityMiddleware.MaxApplicationStateBodyBytes);
-        string oversizedBody =
-            "{\"name\":\"Oversized\",\"definitionVersion\":1,\"definition\":{\"value\":\"" +
-            oversizedValue + "\"}}";
-        using (HttpResponseMessage oversized = await host.Post("/api/v1/retail/saved-investigations", oversizedBody))
-        {
-            Assert.That(oversized.StatusCode, Is.EqualTo(HttpStatusCode.RequestEntityTooLarge));
-            Assert.That((await Json(oversized)).GetProperty("code").GetString(), Is.EqualTo("request-too-large"));
-        }
-
         using HttpResponseMessage updated = await host.Send(HttpMethod.Put,
             $"/api/v1/saved-investigations/{id}",
             $$"""{"name":"Renamed","definitionVersion":4,"definition":{"new":true},"revision":1}""", post: true);
@@ -1075,6 +1065,95 @@ public sealed class CompanionApiTests
     }
 
     [Test]
+    public async Task SavedInvestigationRequestProtectionsMatchCaseInsensitiveRoutes()
+    {
+        await using ApiHost host = await Start();
+
+        string largeValue = new('x', 5000);
+        string lowerCreateBody = JsonSerializer.Serialize(new
+        {
+            name = "Large lowercase",
+            definitionVersion = 1,
+            definition = new { payload = largeValue }
+        });
+        string mixedCaseCreateBody = JsonSerializer.Serialize(new
+        {
+            name = "Large mixed case",
+            definitionVersion = 1,
+            definition = new { payload = largeValue }
+        });
+        using HttpResponseMessage lowerCreate = await host.Post(
+            "/api/v1/games/retail/saved-investigations", lowerCreateBody);
+        Assert.That(lowerCreate.StatusCode, Is.EqualTo(HttpStatusCode.Created));
+        string id = (await Json(lowerCreate)).GetProperty("id").GetString()!;
+
+        using HttpResponseMessage mixedCaseCreate = await host.Post(
+            "/API/V1/GaMes/1/Saved-Investigations", mixedCaseCreateBody);
+        Assert.That(mixedCaseCreate.StatusCode, Is.EqualTo(HttpStatusCode.Created));
+
+        const string duplicateCreateBody =
+            """{"name":"Duplicate","name":"Overwritten","definitionVersion":1,"definition":{"same":1}}""";
+        await AssertProblemAsync(
+            await host.Post("/api/v1/games/retail/saved-investigations", duplicateCreateBody),
+            HttpStatusCode.BadRequest, "invalid-request");
+        await AssertProblemAsync(
+            await host.Post("/API/V1/GaMes/retail/Saved-Investigations", duplicateCreateBody),
+            HttpStatusCode.BadRequest, "invalid-request");
+
+        const string duplicateUpdateBody =
+            """{"name":"Duplicate","definitionVersion":1,"definition":{"same":1},"revision":1,"revision":2}""";
+        await AssertProblemAsync(
+            await host.Send(HttpMethod.Put, $"/api/v1/saved-investigations/{id}", duplicateUpdateBody, post: true),
+            HttpStatusCode.BadRequest, "invalid-request");
+        await AssertProblemAsync(
+            await host.Send(HttpMethod.Put, $"/API/V1/Saved-Investigations/{id}", duplicateUpdateBody, post: true),
+            HttpStatusCode.BadRequest, "invalid-request");
+
+        string largeUpdateBody = JsonSerializer.Serialize(new
+        {
+            name = "Large updated",
+            definitionVersion = 1,
+            definition = new { payload = largeValue },
+            revision = 1
+        });
+        using HttpResponseMessage lowerUpdate = await host.Send(
+            HttpMethod.Put, $"/api/v1/saved-investigations/{id}", largeUpdateBody, post: true);
+        Assert.That(lowerUpdate.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        string mixedCaseUpdateBody = JsonSerializer.Serialize(new
+        {
+            name = "Large mixed-case updated",
+            definitionVersion = 1,
+            definition = new { payload = largeValue },
+            revision = 2
+        });
+        using HttpResponseMessage mixedCaseUpdate = await host.Send(
+            HttpMethod.Put, $"/API/V1/Saved-Investigations/{id}", mixedCaseUpdateBody, post: true);
+        Assert.That(mixedCaseUpdate.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+
+        string oversizedValue = new('x', LocalApiSecurityMiddleware.MaxApplicationStateBodyBytes);
+        string oversizedBody = JsonSerializer.Serialize(new
+        {
+            name = "Oversized",
+            definitionVersion = 1,
+            definition = new { value = oversizedValue }
+        });
+        await AssertProblemAsync(
+            await host.Post("/api/v1/games/retail/saved-investigations", oversizedBody),
+            HttpStatusCode.RequestEntityTooLarge, "request-too-large");
+        await AssertProblemAsync(
+            await host.Post("/API/V1/GaMes/1/Saved-Investigations", oversizedBody),
+            HttpStatusCode.RequestEntityTooLarge, "request-too-large");
+
+        string ordinaryOversizedBody = JsonSerializer.Serialize(new
+        {
+            value = new string('x', LocalApiSecurityMiddleware.MaxRequestBodyBytes)
+        });
+        await AssertProblemAsync(
+            await host.Send(HttpMethod.Put, "/api/v1/monitoring", ordinaryOversizedBody, post: true),
+            HttpStatusCode.RequestEntityTooLarge, "request-too-large");
+    }
+
+    [Test]
     public async Task UnavailableApplicationStateDoesNotPreventHistoryApiStartup()
     {
         _settings.Save(CompanionSettings.ForRoots(_root));
@@ -1104,10 +1183,10 @@ public sealed class CompanionApiTests
         Assert.That((await Json(await host.Http.GetAsync("/api/v1/status"))).GetProperty("history")
             .GetProperty("craftCount").GetInt64(), Is.EqualTo(1));
         JsonElement contextMetadata = await Json(await host.Http.GetAsync(
-            "/api/v1/game-contexts/forever-hardcore"));
-        Assert.That(contextMetadata.GetProperty("id").GetString(), Is.EqualTo("18-Hardcore"));
+            "/api/v1/games/18-Hardcore"));
+        Assert.That(contextMetadata.GetProperty("canonicalId").GetString(), Is.EqualTo("18-Hardcore"));
 
-        using HttpResponseMessage preferences = await host.Http.GetAsync("/api/v1/1/entity-preferences");
+        using HttpResponseMessage preferences = await host.Http.GetAsync("/api/v1/games/1/entity-preferences");
         Assert.That(preferences.StatusCode, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
         Assert.That((await Json(preferences)).GetProperty("code").GetString(), Is.EqualTo("application-state-unavailable"));
         using HttpResponseMessage investigations = await host.Http.GetAsync("/api/v1/saved-investigations");
@@ -1215,7 +1294,7 @@ public sealed class CompanionApiTests
         Assert.That(history.GetProperty("craftCount").GetInt64(), Is.EqualTo(1));
         JsonElement context = history.GetProperty("gameContexts").EnumerateArray().Single();
         JsonElement metadata = context.GetProperty("context");
-        Assert.That(metadata.GetProperty("id").GetString(), Is.EqualTo("1"));
+        Assert.That(metadata.GetProperty("canonicalId").GetString(), Is.EqualTo("1"));
         Assert.That(metadata.GetProperty("routeAlias").GetString(), Is.EqualTo("retail"));
         Assert.That(metadata.GetProperty("displayName").GetString(), Is.EqualTo("Retail"));
         Assert.That(metadata.GetProperty("project").GetInt32(), Is.EqualTo(1));
@@ -1654,6 +1733,17 @@ public sealed class CompanionApiTests
 
     private static async Task<JsonElement> Json(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
+
+    private static async Task AssertProblemAsync(
+        HttpResponseMessage response, HttpStatusCode expectedStatus, string expectedCode)
+    {
+        using (response)
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(expectedStatus));
+            Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("application/problem+json"));
+            Assert.That((await Json(response)).GetProperty("code").GetString(), Is.EqualTo(expectedCode));
+        }
+    }
 
     private static async Task<JsonElement> GraphQL(ApiHost host, string query, object? variables = null)
     {

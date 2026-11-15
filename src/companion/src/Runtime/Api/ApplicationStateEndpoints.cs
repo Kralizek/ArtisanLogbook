@@ -56,7 +56,7 @@ internal static class ApplicationStateApiMapping
 
     public static ApiGameContext Map(ResolvedGameContext context) => new()
     {
-        Id = context.CanonicalId,
+        CanonicalId = context.CanonicalId,
         RouteAlias = context.RouteAlias,
         DisplayName = context.DisplayName,
         Project = (int)context.Value.Project,

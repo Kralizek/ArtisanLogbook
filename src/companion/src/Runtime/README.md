@@ -179,11 +179,13 @@ without permanently changing that capability. There is no background health
 probe or automatic recovery subsystem.
 
 C11 derives public context metadata from the canonical `GameContext` through
-one codec and stateless route resolver. The canonical string ID and stable
-route alias do not replace structured context identity and do not depend on
-history observations or SQLite. Context-scoped endpoints resolve their explicit
-route locator at the API boundary, then pass the structured identity directly
-to C03 or the application-state store; no ambient active context is maintained.
+one codec and stateless route resolver. Friendly aliases are defined only for
+base Retail and Forever contexts; other contexts use the canonical string ID as
+their route alias. Neither representation replaces structured context identity
+or depends on history observations or SQLite. Context-scoped endpoints use
+`/api/v1/games/{context}`, resolve that explicit route locator at the API
+boundary, then pass the structured identity directly to C03 or the
+application-state store; no ambient active context is maintained.
 
 `CompanionApplicationStatus.Read()` returns the entry application's informational
 version, startup UTC time, lifecycle state, effective configuration, database

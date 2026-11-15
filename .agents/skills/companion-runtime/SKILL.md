@@ -33,6 +33,11 @@ shared coordination for the API, not a separate logical component.
   is authoritative while relational fields are management metadata. Use
   revision-checked explicit mutations, never global navigation state or
   cross-database transactions. Only the serving host initializes the store.
+- Context-scoped C11 resources use `/api/v1/games/{context}`. Only base Retail
+  and Forever contexts use friendly aliases; other valid contexts use their
+  canonical codec ID as the route alias. Route-literal matching is
+  case-insensitive, but context identity and progression-track values remain
+  exact and case-sensitive.
 - Map explicit public operational DTOs; preserve loopback security and avoid
   exposing private paths, raw data or internal configuration in HTTP responses.
 
