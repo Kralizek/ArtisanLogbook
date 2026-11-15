@@ -14,6 +14,8 @@ long-running local application through `serve`.
 
 ## Technical reference
 
+- [Component and capability catalog](components.md) — frozen C01–C15 and CAP-01–CAP-27 responsibilities; implementation terminology and boundaries.
+
 Implementation-facing contracts remain close to the source:
 
 - [Runtime services](../../src/companion/src/Runtime/README.md)
