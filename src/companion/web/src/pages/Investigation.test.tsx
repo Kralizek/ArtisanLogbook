@@ -10,7 +10,13 @@ import { MockLink } from "@apollo/client/testing";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useSearchParams,
+} from "react-router";
 import { expect, it, vi } from "vitest";
 import { createHistoryCache } from "../api/clients";
 import type { ActiveGame } from "../app/game";
@@ -42,6 +48,7 @@ vi.mock("../organization", () => ({
   }),
 }));
 vi.mock("../components/ScopeControls", () => ({
+  ItemFilter: ({ label }: { label: string }) => <div>{label}</div>,
   ScopeControls: ({ prefix }: { prefix?: string }) => (
     <div>{prefix ? "Population B filters" : "Population A filters"}</div>
   ),
@@ -265,10 +272,21 @@ it("freezes both relative recipe populations through unrelated renders and advan
     });
     function Journey() {
       const [, rerender] = useState(0);
+      const [search, setSearch] = useSearchParams();
       return (
         <>
+          <div data-testid="search">{search.toString()}</div>
           <button onClick={() => rerender((value) => value + 1)}>
             Unrelated render
+          </button>
+          <button
+            onClick={() => {
+              const next = new URLSearchParams(search);
+              next.set("characterOutcome", "production");
+              setSearch(next);
+            }}
+          >
+            Change displayed outcome
           </button>
           <Routes>
             <Route
@@ -284,7 +302,7 @@ it("freezes both relative recipe populations through unrelated renders and advan
         <ApolloProvider client={client}>
           <MemoryRouter
             initialEntries={[
-              "/retail/recipes/recipe-opaque?period=30&compare=1&bperiod=90",
+              "/retail/recipes/recipe-opaque?period=30&buff=123&compare=1&bperiod=90&characterOutcome=resourcefulness",
             ]}
           >
             <Journey />
@@ -293,6 +311,9 @@ it("freezes both relative recipe populations through unrelated renders and advan
       </MantineProvider>,
     );
     await screen.findByText("Population B characters");
+    expect(
+      screen.getByRole("combobox", { name: "Outcome to compare" }),
+    ).toHaveValue("Resourcefulness proc rate");
     const recipeCalls = () =>
       calls.filter((call) => call.name === "RecipeInvestigation");
     expect(recipeCalls()).toHaveLength(2);
@@ -311,9 +332,19 @@ it("freezes both relative recipe populations through unrelated renders and advan
       ),
     ).toEqual(original);
     await userEvent.click(
+      screen.getByRole("button", { name: "Change displayed outcome" }),
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Outcome to compare" }),
+    ).toHaveValue("Actual output per craft");
+    expect(recipeCalls()).toHaveLength(2);
+    await userEvent.click(
       screen.getByRole("button", { name: "Refresh investigation" }),
     );
     await waitFor(() => expect(recipeCalls()).toHaveLength(4));
+    expect(
+      screen.getByRole("combobox", { name: "Outcome to compare" }),
+    ).toHaveValue("Actual output per craft");
     expect(
       recipeCalls()
         .slice(2)
@@ -325,6 +356,15 @@ it("freezes both relative recipe populations through unrelated renders and advan
     expect(recipeCalls()[3].variables.filter).toMatchObject({
       recipeId: "recipe-opaque",
     });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove comparison" }),
+    );
+    const remaining = new URLSearchParams(
+      screen.getByTestId("search").textContent ?? "",
+    );
+    expect(remaining.get("buff")).toBe("123");
+    expect(remaining.has("bperiod")).toBe(false);
+    expect(remaining.has("characterOutcome")).toBe(false);
   } finally {
     vi.useRealTimers();
   }
@@ -393,6 +433,158 @@ it("compares independently filtered recorded populations and retains detail when
     expect.stringContaining("recipe=recipe-opaque"),
   );
   expect(itemLink.getAttribute("href")).not.toContain("compare=");
+});
+
+it.each([
+  ["absentFinishing=item-a&bfinishing=item-a", true],
+  ["absentFinishing=item-a&bfinishing=item-b", false],
+  ["absentFinishing=item-a&bfinishing=item-a&finishing=item-b", false],
+  ["absentFinishing=item-a&bfinishing=item-a&babsentFinishing=item-b", false],
+  ["absentInput=item-a&binput=item-a", true],
+  ["absentInput=item-a&binput=item-b", false],
+  ["absentInput=item-a&binput=item-a&babsentInput=item-b", false],
+  ["absentInput=item-a&binput=item-a&finishing=item-b", false],
+])(
+  "only offers per-unit comparison for matching absence and presence: %s",
+  async (filters, expected) => {
+    const client = new ApolloClient({
+      cache: createHistoryCache(),
+      dataMasking: false,
+      link: new ApolloLink(
+        (operation) =>
+          new Observable((observer) => {
+            const data =
+              operation.operationName === "RecipeInvestigation"
+                ? { recipe, analysis: analysis("2", "sig") }
+                : operation.operationName === "RecipeConfigurations"
+                  ? { analysis: configurationAnalysis("sig") }
+                  : operation.operationName === "InvestigationSignature"
+                    ? { analysisSignature: "sig" }
+                    : {
+                        contextCrafts: {
+                          nodes: [],
+                          pageInfo: { hasNextPage: false, endCursor: null },
+                        },
+                      };
+            observer.next({ data });
+            observer.complete();
+          }),
+      ),
+    });
+    render(
+      <MantineProvider>
+        <ApolloProvider client={client}>
+          <MemoryRouter
+            initialEntries={[
+              `/retail/recipes/recipe-opaque?period=all&compare=1&bperiod=all&${filters}`,
+            ]}
+          >
+            <Routes>
+              <Route
+                path="/retail/recipes/:id"
+                element={<Investigation game={game} kind="recipe" />}
+              />
+            </Routes>
+          </MemoryRouter>
+        </ApolloProvider>
+      </MantineProvider>,
+    );
+    await screen.findByText("Population B characters");
+    expect(!!screen.queryByText("Difference per allocated unit")).toBe(
+      expected,
+    );
+  },
+);
+
+it("keeps returned-material evidence scoped to the comparison and rejects stale snapshots", async () => {
+  const requests: { item: string; filter: Record<string, unknown> }[] = [];
+  const character = {
+    id: "char-match",
+    name: "Artisan",
+    measure: measure("2", null),
+    resourceAllocation: null,
+    metrics: {
+      production: measure("2", "2"),
+      ingenuity: outcome("2", "0"),
+      resourcefulness: outcome("2", "0"),
+      multicraft: outcome("2", "0"),
+    },
+  };
+  const client = new ApolloClient({
+    cache: createHistoryCache(),
+    dataMasking: false,
+    link: new ApolloLink(
+      (operation) =>
+        new Observable((observer) => {
+          let data;
+          if (operation.operationName === "RecipeInvestigation") {
+            const population = {
+              ...analysis("2", "sig"),
+              characters: { nodes: [character], truncated: false },
+            };
+            data = { recipe, analysis: population };
+          } else if (operation.operationName === "CharacterReturns") {
+            const filter = operation.variables.filter as Record<
+              string,
+              unknown
+            >;
+            requests.push({ item: operation.variables.item as string, filter });
+            data = {
+              analysis: {
+                signature: filter.characterId === "char-b" ? "changed" : "sig",
+                characters: {
+                  nodes: [
+                    { id: "char-match", returnedItem: measure("2", "1") },
+                  ],
+                  truncated: false,
+                },
+              },
+            };
+          } else if (operation.operationName === "RecipeConfigurations")
+            data = { analysis: configurationAnalysis("sig") };
+          else if (operation.operationName === "InvestigationSignature")
+            data = { analysisSignature: "sig" };
+          else
+            data = {
+              contextCrafts: {
+                nodes: [],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            };
+          observer.next({ data });
+          observer.complete();
+        }),
+    ),
+  });
+  render(
+    <MantineProvider>
+      <ApolloProvider client={client}>
+        <MemoryRouter
+          initialEntries={[
+            "/retail/recipes/recipe-opaque?period=all&character=char-a&compare=1&bperiod=all&bcharacter=char-b&characterOutcome=returns&returnItem=item-a",
+          ]}
+        >
+          <Routes>
+            <Route
+              path="/retail/recipes/:id"
+              element={<Investigation game={game} kind="recipe" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </ApolloProvider>
+    </MantineProvider>,
+  );
+  expect(
+    await screen.findByText("Returned material evidence changed"),
+  ).toBeInTheDocument();
+  expect(requests).toHaveLength(2);
+  expect(requests.map((request) => request.item)).toEqual(["item-a", "item-a"]);
+  expect(
+    requests.every((request) => !("returnedItemId" in request.filter)),
+  ).toBe(true);
+  expect(
+    screen.getByText("Insufficient observed evidence"),
+  ).toBeInTheDocument();
 });
 
 it("reports failed freshness checks and retries without losing displayed evidence", async () => {

@@ -11,7 +11,7 @@ describe("executable saved investigations", () => {
   it("round-trips an independently scoped comparison without resolving relative periods", () => {
     const definition = definitionFromLocation(
       "/retail/recipes/opaque%3Arecipe",
-      "?period=90&character=opaque-a&input=opaque-input&configuration=setup-a&granularity=week&compare=1&bperiod=fixed&bfrom=2025-01-01&bto=2025-01-31&bcharacter=opaque-b&binput=opaque-other&saved=" +
+      "?period=90&character=opaque-a&input=opaque-input&absentInput=opaque-resource&configuration=setup-a&granularity=week&characterOutcome=resourcefulness&compare=1&bperiod=fixed&bfrom=2025-01-01&bto=2025-01-31&bcharacter=opaque-b&binput=opaque-resource&saved=" +
         id +
         "&revision=4",
       "retail",
@@ -23,16 +23,18 @@ describe("executable saved investigations", () => {
         period: "90",
         character: "opaque-a",
         input: "opaque-input",
+        absentInput: "opaque-resource",
         configuration: "setup-a",
       },
       query: {
         granularity: "week",
+        characterOutcome: "resourcefulness",
         compare: {
           period: "fixed",
           from: "2025-01-01",
           to: "2025-01-31",
           character: "opaque-b",
-          input: "opaque-other",
+          input: "opaque-resource",
         },
       },
     });
@@ -76,6 +78,30 @@ describe("executable saved investigations", () => {
     ).toBe("123");
   });
 
+  it("round-trips the returned material as comparison configuration, not a population filter", () => {
+    const definition = definitionFromLocation(
+      "/retail/recipes/opaque-recipe",
+      "?period=all&compare=1&bperiod=all&characterOutcome=returns&returnItem=opaque%3Aitem",
+      "retail",
+    );
+    expect(definition.query).toMatchObject({
+      characterOutcome: "returns",
+      returnItem: "opaque:item",
+    });
+    expect(definition.scope).not.toHaveProperty("returned");
+    const url = new URL(definitionUrl(definition, "retail"), "http://local");
+    expect(definitionFromLocation(url.pathname, url.search, "retail")).toEqual(
+      definition,
+    );
+    expect(() =>
+      definitionFromLocation(
+        "/retail/recipes/opaque-recipe",
+        "?period=all&compare=1&bperiod=all&characterOutcome=production&returnItem=opaque-item",
+        "retail",
+      ),
+    ).toThrow();
+  });
+
   it.each([
     "?period=30&period=90",
     "?period=30&unrecognized=secret",
@@ -95,6 +121,8 @@ describe("executable saved investigations", () => {
     "?period=90&finishing=",
     "?period=90&babsentFinishing=opaque-item",
     "?period=90&compare=1&bperiod=30&babsentBuff=0",
+    "?characterOutcome=resourcefulness",
+    "?compare=1&bperiod=30&characterOutcome=unknown",
     "?saved=" + id,
     "?saved=" + id + "&revision=0",
   ])("rejects malformed or silently broadening URL %s", (search) => {

@@ -79,6 +79,48 @@ public sealed class CraftAnalysisTests
         });
     }
 
+    [Test]
+    public void CharacterReturnMeasureUsesTheWholePopulationAndPreservesUnknowns()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-02-01T12:00:00Z");
+        CraftObservation[] crafts =
+        [
+            Craft("positive", Retail, time) with { Reagents = [new(50, 2, 1.25m)],
+                ResourcefulnessComplete = true, HasResourcefulnessProc = true },
+            Craft("zero", Retail, time) with { Reagents = [new(50, 2, 0m)],
+                ResourcefulnessComplete = true, HasResourcefulnessProc = false },
+            Craft("absent", Retail, time) with { Reagents = [new(60, 2, 0m)],
+                ResourcefulnessComplete = true, HasResourcefulnessProc = false },
+            Craft("unknown", Retail, time) with { Reagents = [new(50, 2, null)],
+                ResourcefulnessComplete = true, HasResourcefulnessProc = false },
+            Craft("incomplete", Retail, time) with { Reagents = [new(50, 2, 0.5m)],
+                ResourcefulnessComplete = false, HasResourcefulnessProc = true },
+            Craft("unobserved", Retail, time) with { Reagents = null,
+                ResourcefulnessComplete = true, HasResourcefulnessProc = false },
+            Craft("other-context", Forever, time) with { Reagents = [new(50, 2, 9m)] }
+        ];
+        foreach (CraftObservation craft in crafts)
+            Assert.That(store.Write(craft).IsSuccessful, Is.True, craft.Identity.Observation);
+        CraftAnalysis analysis = store.Analyze(new(new(Game: Retail), ReturnItemId: 50));
+        Assert.That(analysis.Characters.Nodes.Single().ReturnedItem,
+            Is.EqualTo(new AnalysisMeasure("6", "3", "3", "1.2500000000000000000000000000")));
+        Assert.That(store.Analyze(new(new(Game: Retail), ReturnItemId: 99)).Characters.Nodes.Single().ReturnedItem,
+            Is.EqualTo(new AnalysisMeasure("6", "4", "2", "0.0000000000000000000000000000")));
+        Assert.That(() => store.Analyze(new(new(Game: Forever), ReturnItemId: 50)),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+        foreach (decimal value in new[] { 0.9999999999999999999999999999m, 0.0000000000000000000000000001m })
+            Assert.That(store.Write(Craft(value.ToString(), Retail, time) with
+            {
+                Character = new("precise"),
+                Reagents = [new(50, 2, value)],
+                ResourcefulnessComplete = true,
+                HasResourcefulnessProc = true
+            }).IsSuccessful, Is.True);
+        Assert.That(store.Analyze(new(new(Game: Retail, Character: new("precise")), ReturnItemId: 50))
+            .Characters.Nodes.Single().ReturnedItem!.Quantity, Is.EqualTo("1.0000000000000000000000000000"));
+    }
+
     [TestCase(GameProject.ClassicEra)]
     [TestCase((GameProject)999)]
     public void NonRetailProjectsPreserveScopedProductionWithoutReturnRankings(GameProject project)
@@ -361,6 +403,114 @@ public sealed class CraftAnalysisTests
                 AbsentFinishingItemId: 222))).Attempts.Attempts, Is.EqualTo("1"));
             Assert.That(store.QueryCrafts(new(Game: Retail, AbsentBuffSpellId: 432306))
                 .Crafts.Select(row => row.Facts.Identity.Observation), Is.EqualTo(new[] { "empty", "split-variants" }));
+        });
+    }
+
+    [Test]
+    public void FinishingAllocationsAreGroupedByCharacterAndPreserveIncompleteEvidence()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-04-01T00:00:00Z");
+        const string payload = """
+            CraftConfigurationEvidence = {conditions = {finishingReagents = {[1] = {itemID = 222, quantity = 2}}},
+                craftFields = {finishingCoverage = "submitted"}}
+            """;
+        CraftObservation Make(string id, string character, long? quantity, bool? complete, GameContext game) =>
+            Craft(id, game, time) with
+            {
+                Character = new(character),
+                Reagents = [new(222, quantity, null)],
+                InputsComplete = complete,
+                ConfigurationEvidence = [new("source", 1, payload)]
+            };
+        foreach (CraftObservation craft in new[]
+        {
+            Make("a1", "a", 2, true, Retail), Make("a2", "a", 3, true, Retail),
+            Make("b1", "b", null, null, Retail), Make("b2", "b", 4, false, Retail),
+            Make("other-context", "a", 100, true, Forever)
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+
+        CraftAnalysis result = store.Analyze(new(new(Game: Retail, FinishingItemId: 222)));
+        AnalysisMeasure a = result.Characters.Nodes.Single(row => row.Key == "a").FinishingAllocation!;
+        AnalysisMeasure b = result.Characters.Nodes.Single(row => row.Key == "b").FinishingAllocation!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(a, Is.EqualTo(new AnalysisMeasure("2", "2", "0", "5")));
+            Assert.That(b, Is.EqualTo(new AnalysisMeasure("2", "0", "2", "4")));
+            Assert.That(store.Analyze(new(new(Game: Retail))).Characters.Nodes
+                .All(row => row.FinishingAllocation is null), Is.True);
+        });
+    }
+
+    [Test]
+    public void AbsentFinishingAllocationRequiresCompleteInputEvidence()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-04-01T00:00:00Z");
+        const string payload = """
+            CraftConfigurationEvidence = {conditions = {finishingReagents = {}},
+                craftFields = {finishingCoverage = "submitted"}}
+            """;
+        CraftObservation Make(string id, string character, IReadOnlyList<CraftReagent>? reagents, bool? complete) =>
+            Craft(id, Retail, time) with
+            {
+                Character = new(character),
+                Reagents = reagents,
+                InputsComplete = complete,
+                ConfigurationEvidence = [new("source", 1, payload)]
+            };
+        foreach (CraftObservation craft in new[]
+        {
+            Make("absent", "a", [], true), Make("other-role", "b", [new(222, 3, null)], true),
+            Make("unknown", "c", null, null)
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+
+        CraftAnalysis result = store.Analyze(new(new(Game: Retail, AbsentFinishingItemId: 222)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Characters.Nodes.Single(row => row.Key == "a").FinishingAllocation,
+                Is.EqualTo(new AnalysisMeasure("1", "1", "0", "0")));
+            Assert.That(result.Characters.Nodes.Single(row => row.Key == "b").FinishingAllocation,
+                Is.EqualTo(new AnalysisMeasure("1", "1", "0", "3")));
+            Assert.That(result.Characters.Nodes.Single(row => row.Key == "c").FinishingAllocation,
+                Is.EqualTo(new AnalysisMeasure("1", "0", "1", null)));
+        });
+    }
+
+    [Test]
+    public void InputAbsenceAndResourceAllocationsRequireCompleteEvidence()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-04-01T00:00:00Z");
+        CraftObservation Make(string id, IReadOnlyList<CraftReagent>? reagents, bool? complete, GameContext game) =>
+            Craft(id, game, time) with { Reagents = reagents, InputsComplete = complete };
+        foreach (CraftObservation craft in new[]
+        {
+            Make("absent", [], true, Retail),
+            Make("zero", [new(222, 0, null)], true, Retail),
+            Make("unknown-item", [new(222, null, null)], false, Retail),
+            Make("incomplete", [], false, Retail),
+            Make("unobserved", null, null, Retail),
+            Make("present", [new(222, 3, null)], true, Retail),
+            Make("other-context", [], true, Forever)
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True, craft.Identity.Observation);
+
+        CraftQuery absent = new(Game: Retail, AbsentInputItemId: 222);
+        CraftAnalysis baseline = store.Analyze(new(absent));
+        CraftAnalysis allocated = store.Analyze(new(new(Game: Retail, InputItemId: 222)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.QueryCrafts(absent).Crafts.Select(row => row.Facts.Identity.Observation),
+                Is.EquivalentTo(new[] { "absent", "zero" }));
+            Assert.That(baseline.Attempts.Attempts, Is.EqualTo("2"));
+            Assert.That(baseline.Characters.Nodes.Single().ResourceAllocation,
+                Is.EqualTo(new AnalysisMeasure("2", "2", "0", "0")));
+            Assert.That(allocated.Characters.Nodes.Single().ResourceAllocation,
+                Is.EqualTo(new AnalysisMeasure("3", "2", "1", "3")));
+            Assert.That(baseline.Characters.Nodes.Single().FinishingAllocation, Is.Null);
         });
     }
 

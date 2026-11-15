@@ -8,6 +8,7 @@ type Query {
     context: String!
     filter: CraftFilterInput
     granularity: AnalysisGranularity! = DAY
+    returnItemId: ID
   ): Analysis! @cost(weight: "10")
   analysisSignature(context: String!, filter: CraftFilterInput): String!
     @cost(weight: "10")
@@ -134,6 +135,9 @@ type AnalysisContributionGraph {
   name: String
   quality: Int
   measure: AnalysisMeasure!
+  finishingAllocation: AnalysisMeasure
+  resourceAllocation: AnalysisMeasure
+  returnedItem: AnalysisMeasure
 }
 
 type AnalysisContributions {
@@ -544,6 +548,7 @@ input CraftFilterInput {
   finishingItemId: ID
   absentBuffSpellId: Int
   absentFinishingItemId: ID
+  absentInputItemId: ID
 }
 
 enum AnalysisGranularity {

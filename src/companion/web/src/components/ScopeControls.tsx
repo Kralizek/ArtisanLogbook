@@ -15,9 +15,10 @@ import type { ActiveGame } from "../app/game";
 import {
   WorkspaceFacetsDocument,
   WorkspaceFilterItemsDocument,
+  WorkspaceSelectedItemDocument,
 } from "../graphql/generated/graphql";
 
-function ItemFilter({
+export function ItemFilter({
   game,
   label,
   value,
@@ -35,20 +36,38 @@ function ItemFilter({
     skip: term.trim().length < 2,
     fetchPolicy: "no-cache",
   });
+  const { data: selectedData, error: selectedError } = useQuery(
+    WorkspaceSelectedItemDocument,
+    {
+      variables: { context: game.canonicalId, id: value ?? "" },
+      skip: !value,
+      fetchPolicy: "no-cache",
+    },
+  );
   const options =
     data?.game.items.nodes.map((item) => ({
       value: item.id,
       label: item.name ?? `Item ${item.blizzardId}`,
     })) ?? [];
-  if (value && !options.some((item) => item.value === value))
-    options.unshift({ value, label: "Selected item (search to change)" });
+  if (value && !options.some((item) => item.value === value)) {
+    const item = selectedData?.contextItem;
+    options.unshift({
+      value,
+      label:
+        item?.id === value
+          ? (item.name ?? `Item ${item.blizzardId}`)
+          : "Selected item (search to change)",
+    });
+  }
   return (
     <Select
       label={label}
       aria-label={label}
       placeholder="Search item name"
       error={
-        error ? "Items could not be loaded. Try searching again." : undefined
+        error || selectedError
+          ? "Items could not be loaded. Try searching again."
+          : undefined
       }
       searchable
       clearable
@@ -84,6 +103,7 @@ export function ScopeControls({
   const supportsRetailOptions = game.project === 1;
   const hasAdvancedFilters = [
     "input",
+    "absentInput",
     "output",
     "returned",
     "item",
@@ -227,6 +247,12 @@ export function ScopeControls({
                     />
                     <ItemFilter
                       game={game}
+                      label={`${prefix ? "Population B " : ""}Absent recorded input`}
+                      value={params.get(prefix + "absentInput")}
+                      onChange={(value) => set("absentInput", value)}
+                    />
+                    <ItemFilter
+                      game={game}
                       label={`${prefix ? "Population B " : ""}Output item`}
                       value={params.get(prefix + "output")}
                       onChange={(value) => set("output", value)}
@@ -246,6 +272,16 @@ export function ScopeControls({
                       onChange={(value) => set("item", value)}
                     />
                   </Group>
+                )}
+                {!hideRoleItems && (
+                  <Text size="xs" c="dimmed">
+                    Absent input requires a complete input record and a known
+                    zero or no{" "}
+                    {game.project === 18
+                      ? "attributed requirement"
+                      : "allocation"}{" "}
+                    for that item.
+                  </Text>
                 )}
                 {supportsRetailOptions && (
                   <>

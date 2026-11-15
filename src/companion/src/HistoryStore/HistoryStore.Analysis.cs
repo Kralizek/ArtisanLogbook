@@ -18,7 +18,8 @@ public sealed partial class HistoryStore
     {
         ArgumentNullException.ThrowIfNull(query);
         ValidateAnalysis(query.Crafts);
-        if (!Enum.IsDefined(query.Granularity))
+        if (!Enum.IsDefined(query.Granularity) || query.ReturnItemId is <= 0 ||
+            (query.ReturnItemId is not null && query.Crafts.Game!.Project != GameProject.Retail))
             throw new ArgumentOutOfRangeException(nameof(query));
         return ReadSnapshot((transaction, token) => Analyze(query, transaction, token), cancellationToken);
     }
@@ -36,7 +37,7 @@ public sealed partial class HistoryStore
             query.ProfessionId is <= 0 || query.InputItemId is <= 0 || query.OutputItemId is <= 0 ||
             query.ReturnedItemId is <= 0 || query.ItemId is <= 0 ||
             query.BuffSpellId is <= 0 || query.FinishingItemId is <= 0 ||
-            query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 ||
+            query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 || query.AbsentInputItemId is <= 0 ||
             (query.ProfessionExpansionKey is not null && string.IsNullOrWhiteSpace(query.ProfessionExpansionKey)) ||
             (query.ConfigurationSignature is not null && !IsSignature(query.ConfigurationSignature)) ||
             query.From > query.To)
@@ -61,6 +62,7 @@ public sealed partial class HistoryStore
         Add(query.ProfessionId, "c.ProfessionId", "ProfessionId");
         Add(query.ProfessionExpansionKey, "c.ProfessionExpansionKey", "ExpansionKey");
         Exists(query.InputItemId, "CraftReagent", "TRUE", "InputItemId");
+        AppendAbsentInputSelection(query, sql, parameters);
         Exists(query.OutputItemId, "CraftOutput", "o.ItemId IS NOT NULL", "OutputItemId");
         Exists(query.ReturnedItemId, "CraftReagent", "TRY_CAST(r.ReturnedQuantity AS DOUBLE) > 0", "ReturnedItemId");
         if (query.ItemId is int itemId)
@@ -108,6 +110,17 @@ public sealed partial class HistoryStore
             sql.Append($" AND EXISTS (SELECT 1 FROM {table} {alias} WHERE {alias}.CraftKey = c.CraftKey AND {alias}.ItemId = ${name} AND ({condition}))");
             parameters.Add(name, id);
         }
+    }
+
+    private static void AppendAbsentInputSelection(CraftQuery query, StringBuilder sql, DynamicParameters parameters)
+    {
+        if (query.AbsentInputItemId is not int itemId) return;
+        sql.Append("""
+             AND c.InputsComplete = TRUE
+             AND NOT EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey
+                 AND r.ItemId = $AbsentInputItemId AND (r.AllocatedQuantity IS NULL OR r.AllocatedQuantity <> 0))
+            """);
+        parameters.Add("AbsentInputItemId", itemId);
     }
 
     private static void AppendConfigurationSelection(CraftQuery query, StringBuilder sql, DynamicParameters parameters)
@@ -323,14 +336,54 @@ public sealed partial class HistoryStore
         AnalysisCollection<AnalysisContribution> returns = query.Crafts.Game!.Project == GameProject.Retail
             ? ReturnContributions()
             : new([], false);
+        int? finishingItemId = query.Crafts.FinishingItemId ?? query.Crafts.AbsentFinishingItemId;
+        int? resourceItemId = finishingItemId ?? query.Crafts.AbsentInputItemId ?? query.Crafts.InputItemId;
+        args.Add("AnalysisResourceItemId", resourceItemId);
+        args.Add("AnalysisReturnItemId", query.ReturnItemId);
+        string returnColumns = query.ReturnItemId is null ? """
+            '0' ReturnMeasured, '0' ReturnIncomplete, NULL ReturnWhole, NULL ReturnFraction,
+            """ : """
+            CAST(COUNT(*) FILTER (WHERE c.ResourcefulnessComplete = TRUE AND c.ReagentsObserved
+                AND (r.ItemId IS NULL OR r.ReturnedQuantity IS NOT NULL)) AS VARCHAR) ReturnMeasured,
+            CAST(COUNT(*) FILTER (WHERE c.ResourcefulnessComplete IS DISTINCT FROM TRUE OR NOT c.ReagentsObserved
+                OR (r.ItemId IS NOT NULL AND r.ReturnedQuantity IS NULL)) AS VARCHAR) ReturnIncomplete,
+            SUM(CASE WHEN c.ResourcefulnessComplete = TRUE AND c.ReagentsObserved
+                AND (r.ItemId IS NULL OR r.ReturnedQuantity IS NOT NULL)
+                THEN CAST(split_part(COALESCE(r.ReturnedQuantity, '0'), '.', 1) AS HUGEINT) END) ReturnWhole,
+            SUM(CASE WHEN c.ResourcefulnessComplete = TRUE AND c.ReagentsObserved
+                AND (r.ItemId IS NULL OR r.ReturnedQuantity IS NOT NULL)
+                THEN CAST(rpad(split_part(COALESCE(r.ReturnedQuantity, '0'), '.', 2), 28, '0') AS HUGEINT) END) ReturnFraction,
+            """;
+        string returnJoin = query.ReturnItemId is null ? "" :
+            "LEFT JOIN CraftReagent r ON r.CraftKey = c.CraftKey AND r.ItemId = $AnalysisReturnItemId";
         AnalysisCollection<AnalysisContribution> characters = Page<MetricsRow, AnalysisContribution>($"""
             {outputTotals}
+            , character_metrics AS (
             SELECT c.CharacterKey "Key", MAX(d.Name) "Name", CAST(COUNT(*) AS VARCHAR) Attempts,
+                CAST(COUNT(*) FILTER (WHERE c.InputsComplete = TRUE AND (f.ItemId IS NULL OR f.AllocatedQuantity IS NOT NULL)) AS VARCHAR) ResourceMeasured,
+                CAST(COUNT(*) FILTER (WHERE c.InputsComplete IS DISTINCT FROM TRUE OR (f.ItemId IS NOT NULL AND f.AllocatedQuantity IS NULL)) AS VARCHAR) ResourceIncomplete,
+                CAST(SUM(CASE WHEN f.ItemId IS NULL AND c.InputsComplete = TRUE THEN 0
+                    ELSE CAST(f.AllocatedQuantity AS HUGEINT) END) AS VARCHAR) ResourceQuantity,
+                {returnColumns}
                 {metricsColumns}
             FROM selected c LEFT JOIN output_totals t USING (CraftKey)
+            LEFT JOIN CraftReagent f ON f.CraftKey = c.CraftKey AND f.ItemId = $AnalysisResourceItemId
+            {returnJoin}
             LEFT JOIN Character d ON d.ContextKey = c.ContextKey AND d.IdentityKey = c.CharacterKey
-            GROUP BY c.CharacterKey ORDER BY COUNT(*) DESC, c.CharacterKey LIMIT $Limit
-            """, r => new(r.Key!, new(r.Attempts, r.Attempts, "0", null), r.Name, Metrics: r.Metrics()));
+            GROUP BY c.CharacterKey
+            )
+            SELECT *, CASE WHEN ReturnWhole IS NULL THEN NULL ELSE
+                CAST(ReturnWhole + ReturnFraction // 10000000000000000000000000000 AS VARCHAR) || '.' ||
+                lpad(CAST(ReturnFraction % 10000000000000000000000000000 AS VARCHAR), 28, '0')
+                END ReturnQuantity
+            FROM character_metrics ORDER BY CAST(Attempts AS HUGEINT) DESC, "Key" LIMIT $Limit
+            """, r => new(r.Key!, new(r.Attempts, r.Attempts, "0", null), r.Name, Metrics: r.Metrics(),
+                FinishingAllocation: finishingItemId is null ? null :
+                    new(r.Attempts, r.ResourceMeasured, r.ResourceIncomplete, r.ResourceQuantity),
+                ResourceAllocation: resourceItemId is null ? null :
+                    new(r.Attempts, r.ResourceMeasured, r.ResourceIncomplete, r.ResourceQuantity),
+                ReturnedItem: query.ReturnItemId is null ? null :
+                    new(r.Attempts, r.ReturnMeasured, r.ReturnIncomplete, r.ReturnQuantity)));
         AnalysisCollection<AnalysisContribution> qualities = Page<ContributionRow, AnalysisContribution>("""
             SELECT CAST(o.Quality AS VARCHAR) "Key", CAST(o.Quality AS INTEGER) Quality,
                 CAST(COUNT(DISTINCT c.CraftKey) AS VARCHAR) Attempts,
@@ -535,6 +588,12 @@ public sealed partial class HistoryStore
         public string RefundObserved { get; set; } = "0";
         public string RefundPositive { get; set; } = "0";
         public string? RefundTotal { get; set; }
+        public string ResourceMeasured { get; set; } = "0";
+        public string ResourceIncomplete { get; set; } = "0";
+        public string? ResourceQuantity { get; set; }
+        public string ReturnMeasured { get; set; } = "0";
+        public string ReturnIncomplete { get; set; } = "0";
+        public string? ReturnQuantity { get; set; }
 
         public AnalysisPopulationMetrics Metrics() => new(
             new(Attempts, ProductionMeasured, ProductionIncomplete, ProductionQuantity),

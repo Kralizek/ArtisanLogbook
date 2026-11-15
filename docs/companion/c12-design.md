@@ -47,11 +47,30 @@ configuration and input populations within the same recipe. Missing evidence is
 not an absent buff, identical equipment or a no-resource configuration. Show
 sample sizes, coverage, normalized outcomes and configuration differences.
 Observational differences are not causal conclusions or predictions.
-The comparison also matches character identities across both populations to
-show their observed Ingenuity rates and percentage-point differences. Users can
-choose confirmed resource absence in A and presence in B; unmatched or
-unobserved populations remain insufficient evidence. It does not calculate
-benefit per resource unit.
+The comparison matches character identities across both populations and lets
+players select observed proc/occurrence rates or actual output per measured
+craft. Retail comparisons can also select a particular returned material and
+compare its quantity per craft without filtering either population to crafts
+that returned it. The chosen outcome and material are part of the address and
+saved definition. Returned-item averages require complete return evidence and
+known item quantities; an explicitly complete return set with no item row
+records absence, while a row with an unknown quantity remains unknown.
+Separate returned-item queries are displayed only when their evidence signatures
+match the retained populations. Output
+counts units across recorded items; item investigations provide the individual
+material context. Users can choose confirmed resource absence in A and presence
+in B; unmatched or unobserved populations remain insufficient evidence. When
+those filters refer to the same finishing reagent, or to the confirmed absence
+and presence of the same input item, complete recorded allocations and complete
+outcome observations permit the observed difference to be normalized by the
+average allocated units per B craft, provided A has no allocation of that item
+and B's allocation is positive. Input absence requires complete input evidence
+and either a known zero or no row for that item. Absence as a finishing reagent
+alone does not establish that the item was not allocated in another role. This
+is not measured consumption or a causal effect; allocations can originate from
+a multi-craft request and be repeated across crafts. In Forever, the same
+normalization is labeled as attributed schematic requirements, not allocation
+or measured consumption.
 
 Configuration evidence is adapter-owned supplementary evidence, not a mutable
 recipe catalog. Only explicitly supported, recorded fields may become analytical

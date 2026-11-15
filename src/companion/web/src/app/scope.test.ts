@@ -14,6 +14,8 @@ it("inherits exploration without changing its originating scope or saved identit
   recipe.set("period", "30");
   recipe.set("saved", "original");
   recipe.set("after", "cursor");
+  recipe.set("characterOutcome", "returns");
+  recipe.set("returnItem", "another-item");
   expect(
     investigationLink(game, "items/opaque", recipe, { recipe: "recipe-id" }),
   ).toBe("/retail/items/opaque?period=30&character=opaque&recipe=recipe-id");

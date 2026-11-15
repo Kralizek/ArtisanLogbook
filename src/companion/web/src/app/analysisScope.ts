@@ -4,12 +4,29 @@ import type {
 } from "../graphql/generated/graphql";
 import { periodBounds } from "./scope";
 
+export const characterOutcomes = [
+  "production",
+  "ingenuity",
+  "resourcefulness",
+  "multicraft",
+  "returns",
+] as const;
+export type CharacterOutcome = (typeof characterOutcomes)[number];
+
+export function isCharacterOutcome(value: unknown): value is CharacterOutcome {
+  return (
+    typeof value === "string" &&
+    characterOutcomes.some((item) => item === value)
+  );
+}
+
 const ids = {
   character: "characterId",
   profession: "professionId",
   expansion: "expansionId",
   recipe: "recipeId",
   input: "inputItemId",
+  absentInput: "absentInputItemId",
   output: "outputItemId",
   returned: "returnedItemId",
   item: "itemId",

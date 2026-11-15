@@ -360,6 +360,134 @@ public sealed class CompanionApiTests
         });
     }
 
+    [Test]
+    public async Task CharacterFinishingAllocationIsScopedToTheSelectedPopulation()
+    {
+        await using ApiHost host = await Start();
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext retail = new(GameProject.Retail);
+        const string payload = """
+            CraftConfigurationEvidence = {conditions = {finishingReagents = {[1] = {itemID = 50, quantity = 2}}},
+                craftFields = {finishingCoverage = "submitted"}}
+            """;
+        CraftObservation craft = new(new("origin", "finishing"), retail,
+            DateTimeOffset.Parse("2026-03-01T00:00:00Z"), 42, new("character"),
+            Reagents: [new(50, 2, null)], InputsComplete: true,
+            ConfigurationEvidence: [new("source", 1, payload)]);
+        Assert.That(store.Write(craft).IsSuccessful, Is.True);
+        JsonElement result = await GraphQL(host, """
+            query($item: ID!) {
+              analysis(context: "1", filter: { finishingItemId: $item }) {
+                characters { nodes { finishingAllocation { attempts measuredAttempts incompleteAttempts quantity } } }
+              }
+            }
+            """, new { item = HistoryTokens.Dimension("item", retail, "50") });
+        Assert.That(result.TryGetProperty("errors", out _), Is.False, result.ToString());
+        JsonElement allocation = result.GetProperty("data").GetProperty("analysis")
+            .GetProperty("characters").GetProperty("nodes")[0].GetProperty("finishingAllocation");
+        Assert.Multiple(() =>
+        {
+            Assert.That(allocation.GetProperty("quantity").GetString(), Is.EqualTo("2"));
+            Assert.That(allocation.GetProperty("measuredAttempts").GetString(), Is.EqualTo("1"));
+            Assert.That(allocation.GetProperty("incompleteAttempts").GetString(), Is.EqualTo("0"));
+        });
+    }
+
+    [Test]
+    public async Task InputAbsenceScopesAnalysisAndCraftEvidence()
+    {
+        await using ApiHost host = await Start();
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext retail = new(GameProject.Retail);
+        DateTimeOffset instant = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+        foreach (CraftObservation craft in new[]
+        {
+            new CraftObservation(new("origin", "absent"), retail, instant, 42, new("character"),
+                Reagents: [], InputsComplete: true),
+            new CraftObservation(new("origin", "unknown"), retail, instant, 42, new("character"),
+                Reagents: [new(50, null, null)], InputsComplete: false),
+            new CraftObservation(new("origin", "present"), retail, instant, 42, new("character"),
+                Reagents: [new(50, 2, null)], InputsComplete: true)
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+        const string query = """
+            query($item: ID!) {
+              analysis(context: "1", filter: { absentInputItemId: $item }) {
+                attempts { attempts }
+                characters { nodes { resourceAllocation { measuredAttempts incompleteAttempts quantity } } }
+              }
+              contextCrafts(context: "1", filter: { absentInputItemId: $item }, first: 20) {
+                nodes { id }
+              }
+            }
+            """;
+        JsonElement result = await GraphQL(host, query, new { item = HistoryTokens.Dimension("item", retail, "50") });
+        Assert.That(result.TryGetProperty("errors", out _), Is.False, result.ToString());
+        JsonElement data = result.GetProperty("data");
+        JsonElement analysis = data.GetProperty("analysis");
+        JsonElement allocation = analysis.GetProperty("characters").GetProperty("nodes")[0].GetProperty("resourceAllocation");
+        Assert.Multiple(() =>
+        {
+            Assert.That(analysis.GetProperty("attempts").GetProperty("attempts").GetString(), Is.EqualTo("1"));
+            Assert.That(allocation.GetProperty("quantity").GetString(), Is.EqualTo("0"));
+            Assert.That(allocation.GetProperty("measuredAttempts").GetString(), Is.EqualTo("1"));
+            Assert.That(data.GetProperty("contextCrafts").GetProperty("nodes").GetArrayLength(), Is.EqualTo(1));
+        });
+        using HttpResponseMessage mismatch = await host.Post("/graphql", JsonSerializer.Serialize(new
+        {
+            query,
+            variables = new { item = HistoryTokens.Dimension("item", new(GameProject.Forever), "50") }
+        }));
+        JsonElement crossContext = await Json(mismatch);
+        Assert.That(crossContext.GetProperty("errors")[0].GetProperty("extensions").GetProperty("code").GetString(),
+            Is.EqualTo("INVALID_FILTER"));
+    }
+
+    [Test]
+    public async Task CharacterReturnItemIsContextScopedAndDoesNotFilterThePopulation()
+    {
+        await using ApiHost host = await Start();
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext retail = new(GameProject.Retail);
+        DateTimeOffset instant = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+        foreach (CraftObservation craft in new[]
+        {
+            new CraftObservation(new("origin", "returned"), retail, instant, 42, new("character"),
+                Reagents: [new(50, 2, 1.25m)], ResourcefulnessComplete: true, HasResourcefulnessProc: true),
+            new CraftObservation(new("origin", "absent"), retail, instant, 42, new("character"),
+                Reagents: [], ResourcefulnessComplete: true, HasResourcefulnessProc: false),
+            new CraftObservation(new("origin", "unknown"), retail, instant, 42, new("character"),
+                Reagents: [new(50, 2, null)], ResourcefulnessComplete: true, HasResourcefulnessProc: false)
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+        const string query = """
+            query($item: ID!) {
+              analysis(context: "1", returnItemId: $item) {
+                attempts { attempts }
+                characters { nodes { returnedItem { attempts measuredAttempts incompleteAttempts quantity } } }
+              }
+            }
+            """;
+        JsonElement result = await GraphQL(host, query, new { item = HistoryTokens.Dimension("item", retail, "50") });
+        JsonElement analysis = result.GetProperty("data").GetProperty("analysis");
+        JsonElement measure = analysis.GetProperty("characters").GetProperty("nodes")[0].GetProperty("returnedItem");
+        Assert.Multiple(() =>
+        {
+            Assert.That(analysis.GetProperty("attempts").GetProperty("attempts").GetString(), Is.EqualTo("3"));
+            Assert.That(measure.GetProperty("measuredAttempts").GetString(), Is.EqualTo("2"));
+            Assert.That(measure.GetProperty("incompleteAttempts").GetString(), Is.EqualTo("1"));
+            Assert.That(measure.GetProperty("quantity").GetString(), Does.StartWith("1.25"));
+        });
+        using HttpResponseMessage mismatch = await host.Post("/graphql", JsonSerializer.Serialize(new
+        {
+            query,
+            variables = new { item = HistoryTokens.Dimension("item", new(GameProject.Forever), "50") }
+        }));
+        JsonElement crossContext = await Json(mismatch);
+        Assert.That(crossContext.GetProperty("errors")[0].GetProperty("extensions").GetProperty("code").GetString(),
+            Is.EqualTo("INVALID_FILTER"));
+    }
+
     [TestCase(GameProject.ClassicEra)]
     [TestCase((GameProject)999)]
     public async Task AnalysisKeepsNonRetailContextsWithoutRetailOnlyOutcomes(GameProject project)

@@ -21,6 +21,7 @@ import type { ActiveGame } from "../app/game";
 import {
   analysisFilter,
   analysisGranularity,
+  isCharacterOutcome,
   itemRelationFilter,
   roleFilter,
   roleLinkParams,
@@ -40,9 +41,10 @@ import {
 } from "../components/analysisFormat";
 import { OutcomeComparison } from "../components/OutcomeComparison";
 import { RequestError } from "../components/RequestError";
-import { ScopeControls } from "../components/ScopeControls";
+import { ItemFilter, ScopeControls } from "../components/ScopeControls";
 import {
   ActivityInvestigationDocument,
+  CharacterReturnsDocument,
   InvestigationCraftDocument,
   InvestigationCraftsDocument,
   InvestigationSignatureDocument,
@@ -71,6 +73,7 @@ const comparisonFields = [
   "expansion",
   "recipe",
   "input",
+  "absentInput",
   "output",
   "returned",
   "item",
@@ -870,6 +873,12 @@ function Recipe({
   refreshBounds: () => void;
 }) {
   const compare = params.get("compare") === "1";
+  const returnItem = params.get("returnItem");
+  const compareReturns =
+    compare &&
+    game.project === 1 &&
+    params.get("characterOutcome") === "returns" &&
+    !!returnItem;
   const first = useQuery(RecipeInvestigationDocument, {
     variables: { context: game.canonicalId, id, filter },
     fetchPolicy: "no-cache",
@@ -896,6 +905,22 @@ function Recipe({
     errorPolicy: "all",
     notifyOnNetworkStatusChange: true,
   });
+  const returnsFirst = useQuery(CharacterReturnsDocument, {
+    variables: { context: game.canonicalId, filter, item: returnItem ?? "" },
+    skip: !compareReturns,
+    fetchPolicy: "no-cache",
+    errorPolicy: "all",
+  });
+  const returnsOther = useQuery(CharacterReturnsDocument, {
+    variables: {
+      context: game.canonicalId,
+      filter: second,
+      item: returnItem ?? "",
+    },
+    skip: !compareReturns,
+    fetchPolicy: "no-cache",
+    errorPolicy: "all",
+  });
   const left = first.data?.analysis;
   const right = compare ? other.data?.analysis : undefined;
   const leftConfigs =
@@ -914,6 +939,7 @@ function Recipe({
   const choices = [
     ...new Map(configurations.map((choice) => [choice.value, choice])).values(),
   ];
+  const selectedCharacterOutcome = params.get("characterOutcome");
   const refresh = refreshBounds;
   return (
     <Stack gap="lg">
@@ -949,8 +975,9 @@ function Recipe({
             const next = new URLSearchParams(search);
             if (compare) {
               next.delete("compare");
-              for (const key of [...next.keys()])
-                if (key.startsWith("b")) next.delete(key);
+              next.delete("characterOutcome");
+              next.delete("returnItem");
+              for (const field of comparisonFields) next.delete(`b${field}`);
             } else {
               next.set("compare", "1");
               next.set("bperiod", next.get("period") ?? "90");
@@ -1264,10 +1291,104 @@ function Recipe({
             </Table>
           </Table.ScrollContainer>
           <Truncated value={left.characters.truncated} />
-          {right && game.project === 1 && left.supportsReturns && (
+          {compareReturns && (returnsFirst.error || returnsOther.error) && (
+            <Alert
+              color="red"
+              title="Returned material evidence could not be loaded"
+            >
+              <Button
+                variant="light"
+                size="xs"
+                onClick={() => {
+                  void returnsFirst.refetch();
+                  void returnsOther.refetch();
+                }}
+              >
+                Retry
+              </Button>
+            </Alert>
+          )}
+          {compareReturns && (returnsFirst.loading || returnsOther.loading) && (
+            <Text size="sm">Loading returned material evidence…</Text>
+          )}
+          {compareReturns &&
+            right &&
+            !returnsFirst.loading &&
+            !returnsOther.loading &&
+            !returnsFirst.error &&
+            !returnsOther.error &&
+            ((returnsFirst.data &&
+              returnsFirst.data.analysis.signature !== left.signature) ||
+              (returnsOther.data &&
+                returnsOther.data.analysis.signature !== right.signature)) && (
+              <Alert color="yellow" title="Returned material evidence changed">
+                Refresh the investigation before comparing these results.
+                <Button variant="light" size="xs" onClick={refresh}>
+                  Refresh investigation
+                </Button>
+              </Alert>
+            )}
+          {right && (
             <CharacterComparison
               left={left.characters}
               right={right.characters}
+              attributedRequirements={game.project === 18}
+              includeRetailOutcomes={game.project === 1 && left.supportsReturns}
+              metric={
+                isCharacterOutcome(selectedCharacterOutcome)
+                  ? selectedCharacterOutcome
+                  : game.project === 1
+                    ? "ingenuity"
+                    : "production"
+              }
+              onMetricChange={(value) => {
+                const next = new URLSearchParams(search);
+                next.set("characterOutcome", value);
+                if (value !== "returns") next.delete("returnItem");
+                setSearch(next, { replace: true });
+              }}
+              returnItemControl={
+                <ItemFilter
+                  game={game}
+                  label="Returned material to compare"
+                  value={returnItem}
+                  onChange={(value) => {
+                    const next = new URLSearchParams(search);
+                    if (value) next.set("returnItem", value);
+                    else next.delete("returnItem");
+                    setSearch(next, { replace: true });
+                  }}
+                />
+              }
+              leftReturns={
+                !returnsFirst.loading &&
+                !returnsFirst.error &&
+                returnsFirst.data?.analysis.signature === left.signature
+                  ? returnsFirst.data.analysis.characters
+                  : undefined
+              }
+              rightReturns={
+                !returnsOther.loading &&
+                !returnsOther.error &&
+                returnsOther.data?.analysis.signature === right.signature
+                  ? returnsOther.data.analysis.characters
+                  : undefined
+              }
+              resourceComparison={
+                (!!params.get("absentFinishing") &&
+                  params.get("absentFinishing") === params.get("bfinishing") &&
+                  !params.has("finishing") &&
+                  !params.has("babsentFinishing")) ||
+                (!!params.get("absentInput") &&
+                  params.get("absentInput") === params.get("binput") &&
+                  !params.has("babsentInput") &&
+                  ![
+                    "finishing",
+                    "absentFinishing",
+                    "bfinishing",
+                    "babsentFinishing",
+                  ].some((key) => params.has(key)))
+              }
             />
           )}
           {right && (
@@ -2094,6 +2215,8 @@ export function Investigation({ game, kind }: Props) {
   const { id } = useParams();
   const [params] = useSearchParams();
   const entryParams = new URLSearchParams(params);
+  entryParams.delete("characterOutcome");
+  entryParams.delete("returnItem");
   for (const prefix of ["", "b"]) {
     if (
       params.get(`${prefix}period`) === "fixed" &&
@@ -2178,6 +2301,21 @@ function InvestigationEntry({
         "This comparison needs a recipe investigation and an explicit Population B period.",
       );
     if (
+      params.has("characterOutcome") &&
+      (!params.has("compare") ||
+        !isCharacterOutcome(params.get("characterOutcome")) ||
+        (game.project !== 1 && params.get("characterOutcome") !== "production"))
+    )
+      throw new Error(
+        "This character outcome is unsupported for this investigation.",
+      );
+    if (
+      params.has("returnItem") &&
+      (params.get("characterOutcome") !== "returns" ||
+        !params.get("returnItem")?.trim())
+    )
+      throw new Error("This investigation has an invalid returned material.");
+    if (
       !params.has("compare") &&
       [
         "bperiod",
@@ -2188,6 +2326,7 @@ function InvestigationEntry({
         "bexpansion",
         "brecipe",
         "binput",
+        "babsentInput",
         "boutput",
         "breturned",
         "bitem",

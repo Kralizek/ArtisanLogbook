@@ -3,13 +3,15 @@ namespace ArtisanLogbook.History;
 public enum AnalysisGranularity { Day, Week, Month }
 
 /// <summary>One selected context and independently selected craft population.</summary>
-public sealed record AnalysisQuery(CraftQuery Crafts, AnalysisGranularity Granularity = AnalysisGranularity.Day);
+public sealed record AnalysisQuery(CraftQuery Crafts, AnalysisGranularity Granularity = AnalysisGranularity.Day,
+    int? ReturnItemId = null);
 
 /// <summary>Exact decimal values are strings; null means that no measured quantity exists.</summary>
 public sealed record AnalysisMeasure(string Attempts, string MeasuredAttempts, string IncompleteAttempts, string? Quantity);
 
 public sealed record AnalysisContribution(string Key, AnalysisMeasure Measure, string? Name = null,
-    int? Quality = null, AnalysisPopulationMetrics? Metrics = null);
+    int? Quality = null, AnalysisPopulationMetrics? Metrics = null, AnalysisMeasure? FinishingAllocation = null,
+    AnalysisMeasure? ResourceAllocation = null, AnalysisMeasure? ReturnedItem = null);
 
 public sealed record AnalysisBucket(string Start, AnalysisMeasure Measure);
 

@@ -89,6 +89,12 @@ it("compares observed rates as exact rational differences, not all-attempt rates
   ).toBe("B − A observed rate: −33.3 percentage points");
   expect(
     observedRateDifference(
+      { observedAttempts: "10000", positiveAttempts: "1" },
+      { observedAttempts: "10000", positiveAttempts: "2" },
+    ),
+  ).toBe("B − A observed rate: +<0.1 percentage points");
+  expect(
+    observedRateDifference(
       { observedAttempts: "0", positiveAttempts: "0" },
       { observedAttempts: "2", positiveAttempts: "1" },
     ),
@@ -103,6 +109,13 @@ it("normalizes using only observed attempts, retaining unknown and unsupported o
       unknownAttempts: "50",
     }),
   ).toBe("25.0% of observed attempts");
+  expect(
+    rate({
+      observedAttempts: "10000",
+      positiveAttempts: "1",
+      unknownAttempts: "0",
+    }),
+  ).toBe("<0.1% of observed attempts");
   expect(
     rate({
       observedAttempts: "0",

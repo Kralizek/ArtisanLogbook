@@ -1,3 +1,8 @@
+import {
+  isCharacterOutcome,
+  type CharacterOutcome,
+} from "../app/analysisScope";
+
 export type Destination = "activity" | "recipe" | "item" | "crafts";
 export type Period = "30" | "90" | "all" | "fixed";
 export type Scope = {
@@ -9,6 +14,7 @@ export type Scope = {
   expansion?: string;
   recipe?: string;
   input?: string;
+  absentInput?: string;
   output?: string;
   returned?: string;
   item?: string;
@@ -22,7 +28,12 @@ export type SavedDefinition = {
   destination: Destination;
   entity?: string;
   scope: Scope;
-  query: { granularity?: "day" | "week" | "month"; compare?: Scope };
+  query: {
+    granularity?: "day" | "week" | "month";
+    compare?: Scope;
+    characterOutcome?: CharacterOutcome;
+    returnItem?: string;
+  };
 };
 
 const fields = [
@@ -34,6 +45,7 @@ const fields = [
   "expansion",
   "recipe",
   "input",
+  "absentInput",
   "output",
   "returned",
   "item",
@@ -128,13 +140,28 @@ export function parseDefinition(
   )
     throw new Error("This investigation has an invalid entity.");
   const query = object(record.query);
-  keys(query, ["granularity", "compare"]);
+  keys(query, ["granularity", "compare", "characterOutcome", "returnItem"]);
   if (
     query.granularity !== undefined &&
     (typeof query.granularity !== "string" ||
       !["day", "week", "month"].includes(query.granularity))
   )
     throw new Error("This investigation has unsupported granularity.");
+  if (
+    query.characterOutcome !== undefined &&
+    (!isCharacterOutcome(query.characterOutcome) ||
+      record.destination !== "recipe" ||
+      query.compare === undefined)
+  )
+    throw new Error("This investigation has an unsupported character outcome.");
+  if (
+    query.returnItem !== undefined &&
+    (query.characterOutcome !== "returns" ||
+      typeof query.returnItem !== "string" ||
+      !query.returnItem.trim() ||
+      query.returnItem.length > 512)
+  )
+    throw new Error("This investigation has an invalid returned material.");
   return {
     destination: record.destination as Destination,
     ...(hasEntity ? { entity: record.entity as string } : {}),
@@ -144,6 +171,12 @@ export function parseDefinition(
         ? { granularity: query.granularity as "day" | "week" | "month" }
         : {}),
       ...(query.compare === undefined ? {} : { compare: scope(query.compare) }),
+      ...(isCharacterOutcome(query.characterOutcome)
+        ? { characterOutcome: query.characterOutcome }
+        : {}),
+      ...(typeof query.returnItem === "string"
+        ? { returnItem: query.returnItem }
+        : {}),
     },
   };
 }
@@ -190,6 +223,8 @@ export function definitionFromLocation(
     ...fields,
     ...fields.map((field) => `b${field}`),
     "granularity",
+    "characterOutcome",
+    "returnItem",
     "compare",
     "saved",
     "revision",
@@ -220,6 +255,9 @@ export function definitionFromLocation(
     throw new Error("A comparison needs its own period.");
   if (!search.has("compare") && fields.some((field) => search.has(`b${field}`)))
     throw new Error("Comparison filters require an active comparison.");
+  const characterOutcome = search.get("characterOutcome");
+  if (search.has("characterOutcome") && !isCharacterOutcome(characterOutcome))
+    throw new Error("This investigation has an unsupported character outcome.");
   const definition: SavedDefinition = {
     destination,
     ...(entity ? { entity } : {}),
@@ -229,6 +267,10 @@ export function definitionFromLocation(
         ? { granularity: search.get("granularity") as "day" | "week" | "month" }
         : {}),
       ...(search.has("compare") ? { compare: fromSearch(search, "b") } : {}),
+      ...(isCharacterOutcome(characterOutcome) ? { characterOutcome } : {}),
+      ...(search.has("returnItem")
+        ? { returnItem: search.get("returnItem")! }
+        : {}),
     },
   };
   return parseDefinition(definition);
@@ -258,6 +300,10 @@ export function definitionUrl(
   append(parsed.scope, "");
   if (parsed.query.granularity)
     search.set("granularity", parsed.query.granularity);
+  if (parsed.query.characterOutcome)
+    search.set("characterOutcome", parsed.query.characterOutcome);
+  if (parsed.query.returnItem)
+    search.set("returnItem", parsed.query.returnItem);
   if (parsed.query.compare) {
     search.set("compare", "1");
     append(parsed.query.compare, "b");

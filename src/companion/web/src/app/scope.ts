@@ -6,6 +6,7 @@ export const dimensionKeys = [
   "expansion",
   "recipe",
   "input",
+  "absentInput",
   "output",
   "returned",
   "item",
@@ -60,6 +61,8 @@ export function investigationLink(
   next.delete("after");
   next.delete("saved");
   next.delete("revision");
+  next.delete("characterOutcome");
+  next.delete("returnItem");
   for (const [key, value] of Object.entries(changes)) {
     if (value === null) next.delete(key);
     else next.set(key, value);

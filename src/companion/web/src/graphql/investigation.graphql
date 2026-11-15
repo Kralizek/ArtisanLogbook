@@ -40,6 +40,12 @@ fragment InvestigationCharacterMetrics on AnalysisPopulationMetricsGraph {
   ingenuity {
     ...InvestigationOutcome
   }
+  resourcefulness {
+    ...InvestigationOutcome
+  }
+  multicraft {
+    ...InvestigationOutcome
+  }
 }
 
 fragment InvestigationItemContributions on AnalysisContributions {
@@ -207,6 +213,9 @@ query RecipeInvestigation(
         measure {
           ...InvestigationMeasure
         }
+        resourceAllocation {
+          ...InvestigationMeasure
+        }
         metrics {
           ...InvestigationCharacterMetrics
         }
@@ -262,6 +271,25 @@ query RecipeConfigurations($context: String!, $filter: CraftFilterInput) {
           equipmentTruncated
           buffsTruncated
           finishingReagentsTruncated
+        }
+      }
+      truncated
+    }
+  }
+}
+
+query CharacterReturns(
+  $context: String!
+  $filter: CraftFilterInput
+  $item: ID!
+) {
+  analysis(context: $context, filter: $filter, returnItemId: $item) {
+    signature
+    characters {
+      nodes {
+        id
+        returnedItem {
+          ...InvestigationMeasure
         }
       }
       truncated

@@ -28,13 +28,13 @@ public sealed partial class HistoryStore
             query.ReturnedItemId is not null || query.ItemId is not null ||
             query.ConfigurationSignature is not null || query.BuffSpellId is not null ||
             query.FinishingItemId is not null || query.AbsentBuffSpellId is not null ||
-            query.AbsentFinishingItemId is not null))
+            query.AbsentFinishingItemId is not null || query.AbsentInputItemId is not null))
             throw new ArgumentException("Dimension criteria require a game context.", nameof(query));
         if (query.RecipeId is <= 0 || query.ProfessionId is <= 0 ||
             query.InputItemId is <= 0 || query.OutputItemId is <= 0 ||
             query.ReturnedItemId is <= 0 || query.ItemId is <= 0 ||
             query.BuffSpellId is <= 0 || query.FinishingItemId is <= 0 ||
-            query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 ||
+            query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 || query.AbsentInputItemId is <= 0 ||
             (query.ConfigurationSignature is not null &&
                 (query.ConfigurationSignature.Length != 64 ||
                 query.ConfigurationSignature.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))) ||
@@ -81,6 +81,7 @@ public sealed partial class HistoryStore
         AddFilter(query.ProfessionId, " AND c.ProfessionId = $ProfessionId", "ProfessionId");
         AddFilter(query.ProfessionExpansionKey, " AND c.ProfessionExpansionKey = $ExpansionKey", "ExpansionKey");
         AddFilter(query.InputItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $InputItemId)", "InputItemId");
+        AppendAbsentInputSelection(query, sql, parameters);
         AddFilter(query.OutputItemId, " AND EXISTS (SELECT 1 FROM CraftOutput o WHERE o.CraftKey = c.CraftKey AND o.ItemId = $OutputItemId)", "OutputItemId");
         AddFilter(query.ReturnedItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $ReturnedItemId AND TRY_CAST(r.ReturnedQuantity AS DOUBLE) > 0)", "ReturnedItemId");
         if (query.ItemId is int itemId)

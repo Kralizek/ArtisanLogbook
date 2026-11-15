@@ -12,3 +12,11 @@ query WorkspaceFilterItems($context: String!, $search: String!) {
     }
   }
 }
+
+query WorkspaceSelectedItem($context: String!, $id: ID!) {
+  contextItem(context: $context, id: $id) {
+    id
+    name
+    blizzardId
+  }
+}

@@ -116,6 +116,10 @@ public sealed class AnalysisContributionGraph(GameContext game, string kind, Ana
     public string? Name => value.Name;
     public int? Quality => value.Quality;
     public AnalysisMeasure Measure => value.Measure;
+    public AnalysisMeasure? FinishingAllocation => kind == "character" ? value.FinishingAllocation : null;
+    public AnalysisMeasure? ResourceAllocation => kind == "character" ? value.ResourceAllocation : null;
+    public AnalysisMeasure? ReturnedItem => kind == "character" && game.Project == GameProject.Retail
+        ? value.ReturnedItem : null;
     public AnalysisPopulationMetricsGraph? GetMetrics() =>
         value.Metrics is null ? null : new(game, value.Metrics);
 }

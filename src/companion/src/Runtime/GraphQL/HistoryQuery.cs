@@ -23,7 +23,8 @@ public sealed record CraftFilter(
     int? BuffSpellId = null,
     [property: GraphQLType(typeof(IdType))] string? FinishingItemId = null,
     int? AbsentBuffSpellId = null,
-    [property: GraphQLType(typeof(IdType))] string? AbsentFinishingItemId = null);
+    [property: GraphQLType(typeof(IdType))] string? AbsentFinishingItemId = null,
+    [property: GraphQLType(typeof(IdType))] string? AbsentInputItemId = null);
 
 [GraphQLName("Query")]
 public sealed class HistoryQuery
@@ -37,10 +38,18 @@ public sealed class HistoryQuery
 
     public AnalysisGraph GetAnalysis(string context, IHistoryAnalysisRepository repository,
         CraftFilter? filter = null, AnalysisGranularity granularity = AnalysisGranularity.Day,
+        [GraphQLType(typeof(IdType))] string? returnItemId = null,
         CancellationToken token = default)
     {
         CraftQuery query = ScopedQuery(context, filter);
-        return new(query.Game!, repository.Analyze(new(query, granularity), token));
+        int? item = null;
+        if (returnItemId is not null)
+        {
+            DimensionIdentity<int> id = HistoryTokens.ParseIntegerDimension(returnItemId, "item");
+            if (id.Game != query.Game || query.Game!.Project != GameProject.Retail) throw InvalidFilter();
+            item = id.Key;
+        }
+        return new(query.Game!, repository.Analyze(new(query, granularity, item), token));
     }
 
     public string GetAnalysisSignature(string context, IHistoryAnalysisRepository repository,
@@ -182,6 +191,7 @@ public sealed class HistoryQuery
         int? item = null;
         int? finishing = null;
         int? absentFinishing = null;
+        int? absentInput = null;
         string? configuration = null;
         if (filter.CharacterId is not null)
         {
@@ -212,6 +222,12 @@ public sealed class HistoryQuery
             DimensionIdentity<int> id = HistoryTokens.ParseIntegerDimension(filter.InputItemId, "item");
             MergeContext(id.Game);
             input = id.Key;
+        }
+        if (filter.AbsentInputItemId is not null)
+        {
+            DimensionIdentity<int> id = HistoryTokens.ParseIntegerDimension(filter.AbsentInputItemId, "item");
+            MergeContext(id.Game);
+            absentInput = id.Key;
         }
         if (filter.OutputItemId is not null)
         {
@@ -257,7 +273,8 @@ public sealed class HistoryQuery
         return new(game, character, recipe, profession, expansion, filter.From, filter.To,
             input, output, ReturnedItemId: returned, ItemId: item, ConfigurationSignature: configuration,
             BuffSpellId: filter.BuffSpellId, FinishingItemId: finishing,
-            AbsentBuffSpellId: filter.AbsentBuffSpellId, AbsentFinishingItemId: absentFinishing);
+            AbsentBuffSpellId: filter.AbsentBuffSpellId, AbsentFinishingItemId: absentFinishing,
+            AbsentInputItemId: absentInput);
 
         void MergeContext(GameContext context)
         {

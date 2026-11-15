@@ -73,6 +73,8 @@ export function rate(outcome: Outcome): string | undefined {
   if (denominator === 0n) return undefined;
   const tenths =
     (BigInt(outcome.positiveAttempts) * 1000n + denominator / 2n) / denominator;
+  if (tenths === 0n && BigInt(outcome.positiveAttempts) > 0n)
+    return "<0.1% of observed attempts";
   return `${tenths / 10n}.${tenths % 10n}% of observed attempts`;
 }
 
@@ -91,6 +93,8 @@ export function observedRateDifference(
     ((numerator < 0n ? -numerator : numerator) * 1000n + denominator / 2n) /
     denominator;
   const sign = numerator < 0n ? "−" : numerator > 0n ? "+" : "";
+  if (tenths === 0n && numerator !== 0n)
+    return `B − A observed rate: ${sign}<0.1 percentage points`;
   return `B − A observed rate: ${sign}${tenths / 10n}.${tenths % 10n} percentage points`;
 }
 
