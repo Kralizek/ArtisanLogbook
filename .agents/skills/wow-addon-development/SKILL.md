@@ -17,10 +17,13 @@ the [addon index](../../../docs/addon/README.md) and
   boundary. Its UI has documented initial live acceptance, not full visual or
   compatibility certification. Never extrapolate Retail behavior or claim broad
   client support from a shared API name.
-- Inspect the vendored [WoW API reference submodule](../../../tools/wow-api/),
-  its source-pinned declaration catalogs, and the selected client/version,
-  TOCs and compatibility code. Initialize the submodule if needed. Separate
-  declarations, runtime availability and observed behavior.
+- Use the pinned [WoWAddonAPIAgents submodule](../../../tools/wow-api/) as an
+  active research assistant for WoW API, event, UI and compatibility work.
+  Start with its [API index](../../../tools/wow-api/skills/wow-api-index/SKILL.md),
+  then load only the relevant upstream skills/references for the selected
+  client/build. Follow the [API research workflow](references/capture-and-compatibility.md)
+  for initialization and evidence checks. Artisan Logbook's own contracts,
+  implementation and observed runtime evidence govern project decisions.
 - Requests, cast events, result callbacks and completed observations are not
   interchangeable. Admit only supported, evidenced operations and quarantine
   ambiguous correlation or duplicates rather than guessing. Preserve unknown
