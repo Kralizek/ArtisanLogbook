@@ -19,9 +19,11 @@ public static class CompanionHostingExtensions
 {
     /// <summary>Configure the embedded loopback host: the preferred port, or an OS-assigned loopback port when it is owned elsewhere.</summary>
     public static WebApplicationBuilder ConfigureCompanionHost(
-        this WebApplicationBuilder builder, CompanionRuntimeConfiguration configuration)
+        this WebApplicationBuilder builder, CompanionRuntimeConfiguration configuration, bool requirePreferredPort = false)
     {
         CompanionHttpEndpoint endpoint = CompanionHttpEndpoint.Select(configuration.EffectiveSettings.Http.PreferredPort);
+        if (requirePreferredPort && endpoint.FallbackUsed)
+            throw new IOException($"The required loopback port {endpoint.PreferredPort} is already in use.");
         builder.Services.AddSingleton(endpoint);
         builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = LocalApiSecurityMiddleware.MaxGraphQLBodyBytes)
             .UseUrls(endpoint.RequestedUrl);

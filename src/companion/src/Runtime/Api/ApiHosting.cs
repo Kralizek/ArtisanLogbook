@@ -94,11 +94,16 @@ internal static class CompanionApiHosting
                     _ => "http-error"
                 },
                 "The request could not be processed."));
+            app.UseEmbeddedFrontend();
             app.UseRouting();
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapMinimalOpenApiEndpoints();
-                endpoints.MapOpenApiSchemas();
+                // MinimalOpenAPI's schema publisher requires an external file; the distribution has only one executable.
+                endpoints.MapGet("/openapi/v1.yaml", () => Results.Stream(
+                    typeof(CompanionApiHosting).Assembly.GetManifestResourceStream("ArtisanLogbook.Companion.OpenApi") ??
+                        throw new InvalidOperationException("The embedded OpenAPI contract is missing."),
+                    "text/yaml"));
                 endpoints.MapGraphQLHttp("/graphql");
             });
             next(app);

@@ -20,6 +20,7 @@ if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
 }
 
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\src\companion\src\Cli\Cli.csproj'))
+$companionRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\src\companion'))
 $nugetConfig = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\src\companion\NuGet.Config'))
 if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
     throw "Companion project not found: $project"
@@ -27,7 +28,12 @@ if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $nugetConfig -PathType Leaf)) {
     throw "Companion NuGet configuration not found: $nugetConfig"
 }
-$dotnet = (Get-Command dotnet -ErrorAction Stop).Source
+foreach ($tool in @('dotnet', 'node', 'npm.cmd')) {
+    if (-not (Get-Command $tool -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw "Required host tool '$tool' not found. Install the .NET 10 SDK and Node.js 26.13.1 with npm 11, then open a new PowerShell terminal."
+    }
+}
+$dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop).Source
 $destination = [IO.Path]::GetFullPath($InstallDirectory)
 $parent = Split-Path -Parent $destination
 if (-not $parent) { throw 'InstallDirectory must have a parent directory.' }
@@ -49,10 +55,13 @@ try {
     $publishArguments = @(
         'publish', $project, '--configuration', $Configuration,
         '--runtime', 'win-x64', '--self-contained', 'true',
+        '-p:CompanionWebDevelopment=false',
         '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
         '-p:PublishTrimmed=false', "-p:RestoreConfigFile=$nugetConfig", '--output', $stage
     )
-    & $dotnet @publishArguments
+    Push-Location $companionRoot
+    try { & $dotnet @publishArguments }
+    finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet publish failed (exit $LASTEXITCODE). Existing installation is unchanged."
     }

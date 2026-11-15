@@ -1,0 +1,5 @@
+node_modules
+dist
+src/graphql/generated
+src/api/generated.ts
+package-lock.json

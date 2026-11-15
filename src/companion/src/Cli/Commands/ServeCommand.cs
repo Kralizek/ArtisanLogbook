@@ -27,6 +27,10 @@ public sealed class ServeSettings : DatabaseSettings
     [Description("Preferred loopback API port (1-65535; default 48721); an OS-assigned port is used if it is taken.")]
     public int? Port { get; init; }
 
+    [CommandOption("--require-port")]
+    [Description("Fail instead of choosing another port when the preferred port is occupied (for local orchestration).")]
+    public bool RequirePort { get; init; }
+
     [CommandOption("--verbose")]
     [Description("Show diagnostic log details and enable Debug by default (standard logging filters still apply).")]
     public bool Verbose { get; init; }
@@ -52,7 +56,7 @@ public sealed class ServeCommand(ApplicationPaths paths, CompanionSettingsStore 
             Args = [],
             ApplicationName = typeof(ServeCommand).Assembly.GetName().Name
         });
-        builder.ConfigureCompanionHost(configuration);
+        builder.ConfigureCompanionHost(configuration, settings.RequirePort);
         builder.Configuration.AddEnvironmentVariables();
         builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
         if (settings.Verbose) builder.Logging.SetMinimumLevel(LogLevel.Debug);

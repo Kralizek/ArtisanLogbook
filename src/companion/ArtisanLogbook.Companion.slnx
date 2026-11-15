@@ -6,6 +6,7 @@
     <Project Path="src/ImportService/ImportService.csproj" />
     <Project Path="src/Runtime/Runtime.csproj" />
     <Project Path="src/SavedVariables/SavedVariables.csproj" />
+    <Project Path="src/WebAssets/WebAssets.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Cli/Tests.Cli.csproj" />
@@ -13,5 +14,8 @@
     <Project Path="tests/HistoryStore/Tests.HistoryStore.csproj" />
     <Project Path="tests/ImportService/Tests.ImportService.csproj" />
     <Project Path="tests/SavedVariables/Tests.SavedVariables.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/AppHost/AppHost.csproj" />
   </Folder>
 </Solution>

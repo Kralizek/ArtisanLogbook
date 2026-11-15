@@ -15,19 +15,24 @@ public sealed class ApplicationPaths
     private readonly string _localApplicationData;
     private readonly string? _xdgDataHome;
     private readonly string _workingDirectory;
+    private readonly string? _dataDirectory;
 
     public ApplicationPaths(
         CompanionPlatform platform,
         string home,
         string localApplicationData,
         string? xdgDataHome,
-        string workingDirectory)
+        string workingDirectory,
+        string? dataDirectory = null)
     {
         _platform = platform;
         _home = home;
         _localApplicationData = localApplicationData;
         _xdgDataHome = xdgDataHome;
         _workingDirectory = workingDirectory;
+        if (dataDirectory is not null && !Path.IsPathFullyQualified(dataDirectory))
+            throw new ArgumentException("The application data directory override must be absolute.", nameof(dataDirectory));
+        _dataDirectory = dataDirectory;
     }
 
     public static ApplicationPaths ForCurrentUser() => new(
@@ -36,7 +41,8 @@ public sealed class ApplicationPaths
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
-        Directory.GetCurrentDirectory());
+        Directory.GetCurrentDirectory(),
+        Environment.GetEnvironmentVariable("ARTISAN_LOGBOOK_DATA_DIRECTORY"));
 
     public string ResolveDatabase(string? databasePath)
     {
@@ -52,6 +58,7 @@ public sealed class ApplicationPaths
     {
         get
         {
+            if (_dataDirectory is not null) return _dataDirectory;
             string dataDirectory = _platform switch
             {
                 CompanionPlatform.Windows => RequireBaseDirectory(_localApplicationData),

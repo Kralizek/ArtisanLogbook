@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <CompanionBuildPlatform Condition="'$(OS)' == 'Windows_NT'">windows</CompanionBuildPlatform>
+    <CompanionBuildPlatform Condition="'$(CompanionBuildPlatform)' == ''">unix</CompanionBuildPlatform>
+    <CompanionBuildMode Condition="'$(CompanionWebDevelopment)' == 'true'">development</CompanionBuildMode>
+    <CompanionBuildMode Condition="'$(CompanionBuildMode)' == ''">production</CompanionBuildMode>
+    <BaseIntermediateOutputPath>obj/$(CompanionBuildPlatform)/$(CompanionBuildMode)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin/$(CompanionBuildPlatform)/$(CompanionBuildMode)/</BaseOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

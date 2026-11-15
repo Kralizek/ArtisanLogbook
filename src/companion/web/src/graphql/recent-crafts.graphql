@@ -1,0 +1,27 @@
+query RecentCrafts($after: String) {
+  crafts(first: 20, after: $after) {
+    nodes {
+      id
+      recordedAt
+      concentrationSpent
+      character {
+        id
+        name
+      }
+      recipe {
+        id
+        name
+        blizzardId
+      }
+      profession {
+        id
+        name
+        blizzardId
+      }
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+    }
+  }
+}
