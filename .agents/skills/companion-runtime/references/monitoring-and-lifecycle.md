@@ -1,5 +1,9 @@
 # Monitoring and lifecycle
 
+See the [frozen component catalog](../../../../docs/companion/components.md).
+C11 is HTTP API; its import worker and receipts are shared coordination for
+API, monitoring and CLI callers, not a replacement for C07 ingestion.
+
 Read [Runtime monitoring ownership](../../../../src/companion/src/Runtime/README.md#monitoring-ownership),
 [C06 state and acknowledgement](../../../../docs/companion/rx-monitoring-architecture.md)
 and [C07 failure behavior](../../../../src/companion/src/ImportService/README.md#atomicity-and-failure-behavior).
