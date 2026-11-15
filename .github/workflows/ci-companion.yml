@@ -272,6 +272,19 @@ jobs:
             }
           } finally { $env:PATH = $originalPath }
           if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Missing prerequisites changed the installation' }
+          $nodeOnly = Join-Path '${{ runner.temp }}' 'node-only'
+          New-Item -ItemType Directory -Path $nodeOnly -Force | Out-Null
+          Copy-Item (Get-Command node -CommandType Application).Source (Join-Path $nodeOnly 'node.exe')
+          try {
+            $env:PATH = "$dotnetDirectory;$nodeOnly"
+            try {
+              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
+              throw 'Deployment unexpectedly succeeded without npm'
+            } catch {
+              if ($_.Exception.Message -notmatch "Required host tool 'npm.cmd'") { throw }
+            }
+          } finally { $env:PATH = $originalPath }
+          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Missing npm changed the installation' }
           $codegen = 'web/codegen.ts'
           $originalCodegen = [IO.File]::ReadAllText((Resolve-Path $codegen))
           try {
@@ -284,4 +297,21 @@ jobs:
             }
           } finally { [IO.File]::WriteAllText((Resolve-Path $codegen), $originalCodegen) }
           if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Failed frontend build changed the installation' }
+          Remove-Item 'web/node_modules/.companion-production-restore'
+          $oldCache = $env:npm_config_cache
+          $oldOffline = $env:npm_config_offline
+          try {
+            $env:npm_config_cache = Join-Path '${{ runner.temp }}' 'empty-npm-cache'
+            $env:npm_config_offline = 'true'
+            try {
+              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
+              throw 'Deployment unexpectedly succeeded with an empty offline npm cache'
+            } catch {
+              if ($_.Exception.Message -notmatch 'dotnet publish failed') { throw }
+            }
+          } finally {
+            $env:npm_config_cache = $oldCache
+            $env:npm_config_offline = $oldOffline
+          }
+          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Failed dependency install changed the installation' }
           exit 0
