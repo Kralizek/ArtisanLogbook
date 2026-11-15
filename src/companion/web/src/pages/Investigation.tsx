@@ -15,7 +15,7 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import type { ActiveGame } from "../app/game";
 import {
@@ -420,14 +420,19 @@ function Activity({
         hiddenItems.length > 100));
   const [search, setSearch] = useSearchParams();
   const granularity = analysisGranularity(params);
-  const { data, error, loading } = useQuery(ActivityInvestigationDocument, {
-    variables: { context: game.canonicalId, filter, granularity },
-    fetchPolicy: "network-only",
-    errorPolicy: "all",
-    pollInterval: 60000,
-    notifyOnNetworkStatusChange: true,
-  });
-  const result = data?.analysis;
+  const { data, previousData, error, loading } = useQuery(
+    ActivityInvestigationDocument,
+    {
+      variables: { context: game.canonicalId, filter, granularity },
+      fetchPolicy: "network-only",
+      errorPolicy: "all",
+      pollInterval: ["30", "90"].includes(params.get("period") ?? "90")
+        ? 0
+        : 60000,
+      notifyOnNetworkStatusChange: true,
+    },
+  );
+  const result = data?.analysis ?? previousData?.analysis;
   return (
     <Stack gap="lg">
       <header>
@@ -2246,7 +2251,13 @@ function InvestigationEntry({
 }: Props & { refreshBounds: () => void }) {
   const { id } = useParams();
   const [params, setSearch] = useSearchParams();
-  const [now] = useState(() => new Date());
+  const [now, setNow] = useState(() => new Date());
+  const period = params.get("period") ?? "90";
+  useEffect(() => {
+    if (kind !== "activity" || !["30", "90"].includes(period)) return;
+    const timer = window.setInterval(() => setNow(new Date()), 60000);
+    return () => window.clearInterval(timer);
+  }, [kind, period]);
   const unsupported =
     game.project !== 1
       ? ["", "b"].flatMap((prefix) =>

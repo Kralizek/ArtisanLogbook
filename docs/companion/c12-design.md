@@ -78,8 +78,9 @@ facets; ambiguous variants remain unknown. No historical setup is invented.
 
 Detailed results remain stable until explicit refresh. Polling a scope-specific
 change signature can indicate relevant new or enriched evidence without
-replacing displayed results. Summary refresh is automatic. Evidence drill-down
-must disclose changed history instead of implying a durable snapshot.
+replacing displayed results. Summary refresh is automatic, including advancing
+the bounds of rolling periods. Evidence drill-down must disclose changed history
+instead of implying a durable snapshot.
 
 ## Durable organization
 

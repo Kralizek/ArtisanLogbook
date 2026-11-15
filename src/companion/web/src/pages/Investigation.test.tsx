@@ -7,7 +7,7 @@ import {
 } from "@apollo/client";
 import { ApolloProvider } from "@apollo/client/react";
 import { MockLink } from "@apollo/client/testing";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import {
@@ -214,6 +214,78 @@ const mocks = [
   },
 ];
 
+it("advances rolling activity bounds automatically without changing the URL", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    vi.setSystemTime(new Date("2026-11-15T12:00:00Z"));
+    const calls: { from: string; to: string }[] = [];
+    let finishRefresh: (() => void) | undefined;
+    const client = new ApolloClient({
+      cache: new InMemoryCache(),
+      dataMasking: false,
+      link: new ApolloLink(
+        (operation) =>
+          new Observable((observer) => {
+            if (operation.operationName === "ActivityInvestigation") {
+              calls.push(
+                operation.variables.filter as { from: string; to: string },
+              );
+              const respond = () => {
+                observer.next({
+                  data: {
+                    analysis: {
+                      ...analysis(calls.length === 1 ? "2" : "3", "sig"),
+                      timeline: { nodes: [], truncated: false },
+                    },
+                  },
+                });
+                observer.complete();
+              };
+              if (calls.length === 1) respond();
+              else finishRefresh = respond;
+            } else {
+              observer.complete();
+            }
+          }),
+      ),
+    });
+    function Location() {
+      return <div data-testid="location">{useLocation().search}</div>;
+    }
+    render(
+      <MantineProvider>
+        <ApolloProvider client={client}>
+          <MemoryRouter initialEntries={["/retail/activity?period=30"]}>
+            <Location />
+            <Routes>
+              <Route
+                path="/retail/activity"
+                element={<Investigation game={game} kind="activity" />}
+              />
+            </Routes>
+          </MemoryRouter>
+        </ApolloProvider>
+      </MantineProvider>,
+    );
+    await screen.findByText("Activity & production");
+    await waitFor(() => expect(calls).toHaveLength(1));
+    const initial = calls[0];
+    act(() => vi.advanceTimersByTime(60000));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(Date.parse(calls[1].from) - Date.parse(initial.from)).toBe(60000);
+    expect(Date.parse(calls[1].to) - Date.parse(initial.to)).toBe(60000);
+    expect(screen.getByTestId("location")).toHaveTextContent("?period=30");
+    const attemptsCard =
+      screen.getAllByText("Completed attempts")[0].parentElement;
+    expect(attemptsCard).toHaveTextContent("2");
+    expect(screen.queryByLabelText("Loading activity")).not.toBeInTheDocument();
+    act(() => finishRefresh?.());
+    await waitFor(() => expect(attemptsCard).toHaveTextContent("3"));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("freezes both relative recipe populations through unrelated renders and advances them only on explicit refresh", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
@@ -396,6 +468,7 @@ it("compares independently filtered recorded populations and retains detail when
     </MantineProvider>,
   );
   expect(await screen.findByText("Population B filters")).toBeInTheDocument();
+  await screen.findByText("Population B characters");
   const outcomeTable = (await screen.findByText("Observed outcome")).closest(
     "table",
   );
