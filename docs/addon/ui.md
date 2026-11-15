@@ -30,7 +30,9 @@ The fixes below are ready for another live pass, **not a release or full visual
 compatibility certification**.
 The accepted design is the existing Retail parchment, dark sidebar, tabs, item
 cells and navigation; no separate Forever pages or third-party dependencies are added.
-Forever publishing stays disabled by `release: false` in `.flavors.yml`.
+Forever is currently release-eligible (`release: true` in [`.flavors.yml`](../../.flavors.yml));
+see [deployment](deployment.md#supported-flavors) for current publishing policy.
+Eligibility does not establish full runtime or visual certification.
 
 Target evidence: Forever **1.60.1.70862**, interface **16001**, project **18**;
 Gethe/wow-ui-source commit `9dc84f0d3bbae1768ac3405b3716000bd93eda06`.
