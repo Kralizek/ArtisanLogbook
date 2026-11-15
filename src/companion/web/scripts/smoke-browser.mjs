@@ -18,7 +18,9 @@ export async function smokeBrowser(base) {
     const history = page.waitForResponse(
       (response) => new URL(response.url()).pathname === "/graphql",
     );
-    const document = await page.goto(new URL("/history", base).href);
+    const document = await page.goto(
+      new URL("/retail/activity?period=all", base).href,
+    );
     assert.equal(document.status(), 200);
     assert.equal((await status).status(), 200);
     const graph = await history;
@@ -28,6 +30,17 @@ export async function smokeBrowser(base) {
     assert(result.data, "The browser must receive GraphQL data.");
     await page.waitForFunction(
       () => document.querySelector("#root")?.textContent?.trim().length > 0,
+    );
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Active game context"]')?.value ===
+        "Retail",
+    );
+    assert.equal(
+      await page
+        .getByRole("combobox", { name: "Active game context" })
+        .inputValue(),
+      "Retail",
     );
     assert.deepEqual(failures, [], `Browser errors: ${failures.join("\n")}`);
     console.log("Browser smoke passed: rendered app, REST and GraphQL.");

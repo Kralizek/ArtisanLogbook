@@ -3,6 +3,77 @@ body {
 }
 
 .content {
-  max-width: 1200px;
+  max-width: 1380px;
   margin: 0 auto;
+}
+
+.eyebrow {
+  color: var(--mantine-color-teal-7);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
+
+.shell-search {
+  position: relative;
+  flex: 1;
+  max-width: 480px;
+  min-width: 180px;
+}
+.search-results {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 250;
+  padding: 16px;
+  max-height: 65vh;
+  overflow: auto;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
+  background: var(--mantine-color-body);
+  box-shadow: var(--mantine-shadow-md);
+}
+.metric-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.7rem;
+  font-weight: 700;
+}
+.analysis-table td {
+  font-variant-numeric: tabular-nums;
+}
+.analysis-table a {
+  font-weight: 600;
+}
+.activity-bars {
+  display: flex;
+  align-items: end;
+  gap: 4px;
+  height: 150px;
+  padding: 8px 0;
+}
+.activity-bar {
+  min-width: 2px;
+  flex: 1;
+  background: var(--mantine-color-teal-6);
+  border-radius: 4px 4px 0 0;
+}
+.scope-controls {
+  padding: 16px;
+  border-radius: var(--mantine-radius-md);
+  background: var(--mantine-color-default-hover);
+}
+
+@media (max-width: 760px) {
+  .shell-brand {
+    display: none;
+  }
+  .shell-search {
+    max-width: none;
+  }
+  .content {
+    width: 100%;
+  }
 }

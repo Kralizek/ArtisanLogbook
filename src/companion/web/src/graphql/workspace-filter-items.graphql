@@ -1,0 +1,14 @@
+query WorkspaceFilterItems($context: String!, $search: String!) {
+  game(context: $context) {
+    items(first: 50, search: $search) {
+      nodes {
+        id
+        name
+        blizzardId
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+  }
+}

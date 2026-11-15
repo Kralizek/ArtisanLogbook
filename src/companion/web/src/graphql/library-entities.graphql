@@ -1,0 +1,20 @@
+query LibraryEntities(
+  $context: String!
+  $recipeIds: [Int!]!
+  $itemIds: [Int!]!
+) {
+  game(context: $context) {
+    id
+    canonicalId
+    recipesByBlizzardIds(ids: $recipeIds) {
+      id
+      blizzardId
+      name
+    }
+    itemsByBlizzardIds(ids: $itemIds) {
+      id
+      blizzardId
+      name
+    }
+  }
+}

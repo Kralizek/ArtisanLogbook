@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { isLocalRequest, localApiProxy } from "./dev-proxy";
+import { isBrowserRoute } from "./browser-routes";
 
 function request(headers: IncomingMessage["headers"]) {
   return { headers } as IncomingMessage;
@@ -60,6 +61,24 @@ describe("development proxy trust boundary", () => {
         false,
       );
     },
+  );
+  it.each([
+    "/retail/activity",
+    "/forever/items/opaque?period=90",
+    "/18-Hardcore/recipes/opaque",
+    "/companion",
+  ])("allows normal browser navigation to analytical route %s", (url) => {
+    expect(isLocalRequest({ ...navigation, url } as IncomingMessage)).toBe(
+      true,
+    );
+  });
+  it.each([
+    "/retail/items/missing.js",
+    "/api/v1/status",
+    "/assets/missing.js",
+    "/unknown-page",
+  ])("does not classify %s as a browser route", (url) =>
+    expect(isBrowserRoute(url)).toBe(false),
   );
   it("still rejects an untrusted origin on document navigation", () => {
     expect(

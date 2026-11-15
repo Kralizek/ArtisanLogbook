@@ -1,0 +1,507 @@
+fragment InvestigationMeasure on AnalysisMeasure {
+  attempts
+  measuredAttempts
+  incompleteAttempts
+  quantity
+}
+
+fragment InvestigationOutcome on AnalysisOutcome {
+  observedAttempts
+  positiveAttempts
+  unknownAttempts
+  total
+}
+
+fragment InvestigationMetrics on AnalysisPopulationMetricsGraph {
+  production {
+    ...InvestigationMeasure
+  }
+  ingenuity {
+    ...InvestigationOutcome
+  }
+  resourcefulness {
+    ...InvestigationOutcome
+  }
+  multicraft {
+    ...InvestigationOutcome
+  }
+  concentration {
+    ...InvestigationOutcome
+  }
+  refund {
+    ...InvestigationOutcome
+  }
+}
+
+fragment InvestigationCharacterMetrics on AnalysisPopulationMetricsGraph {
+  production {
+    ...InvestigationMeasure
+  }
+  ingenuity {
+    ...InvestigationOutcome
+  }
+}
+
+fragment InvestigationItemContributions on AnalysisContributions {
+  nodes {
+    id
+    name
+    measure {
+      ...InvestigationMeasure
+    }
+  }
+  truncated
+}
+
+query ActivityInvestigation(
+  $context: String!
+  $filter: CraftFilterInput
+  $granularity: AnalysisGranularity!
+) {
+  analysis(context: $context, filter: $filter, granularity: $granularity) {
+    signature
+    configurationCoverage {
+      recordedAttempts
+      emptyAttempts
+      unknownAttempts
+    }
+    inputMeasureLabel
+    supportsReturns
+    attempts {
+      ...InvestigationMeasure
+    }
+    timeline {
+      nodes {
+        start
+        measure {
+          ...InvestigationMeasure
+        }
+      }
+      truncated
+    }
+    recipes {
+      nodes {
+        id
+        name
+        outputs {
+          ...InvestigationMeasure
+        }
+        ingenuity {
+          ...InvestigationOutcome
+        }
+      }
+      truncated
+    }
+    outputs {
+      ...InvestigationItemContributions
+    }
+    inputs {
+      ...InvestigationItemContributions
+    }
+    returns {
+      ...InvestigationItemContributions
+    }
+    characters {
+      nodes {
+        id
+        name
+        measure {
+          ...InvestigationMeasure
+        }
+        metrics {
+          ...InvestigationCharacterMetrics
+        }
+      }
+      truncated
+    }
+    qualities {
+      nodes {
+        quality
+        measure {
+          ...InvestigationMeasure
+        }
+      }
+      truncated
+    }
+  }
+}
+
+query RecipeInvestigation(
+  $context: String!
+  $id: ID!
+  $filter: CraftFilterInput
+) {
+  recipe: contextRecipe(context: $context, id: $id) {
+    id
+    name
+    blizzardId
+    profession {
+      name
+    }
+    expansion {
+      name
+    }
+  }
+  analysis(context: $context, filter: $filter) {
+    signature
+    inputMeasureLabel
+    supportsReturns
+    attempts {
+      ...InvestigationMeasure
+    }
+    timeline {
+      nodes {
+        start
+        measure {
+          attempts
+        }
+      }
+      truncated
+    }
+    recipes {
+      nodes {
+        id
+        outputs {
+          ...InvestigationMeasure
+        }
+        ingenuity {
+          ...InvestigationOutcome
+        }
+        resourcefulness {
+          ...InvestigationOutcome
+        }
+        multicraft {
+          ...InvestigationOutcome
+        }
+        concentration {
+          ...InvestigationOutcome
+        }
+        refund {
+          ...InvestigationOutcome
+        }
+      }
+      truncated
+    }
+    outputs {
+      ...InvestigationItemContributions
+    }
+    inputs {
+      ...InvestigationItemContributions
+    }
+    returns {
+      ...InvestigationItemContributions
+    }
+    qualities {
+      nodes {
+        quality
+        measure {
+          ...InvestigationMeasure
+        }
+      }
+      truncated
+    }
+    characters {
+      nodes {
+        id
+        name
+        measure {
+          ...InvestigationMeasure
+        }
+        metrics {
+          ...InvestigationCharacterMetrics
+        }
+      }
+      truncated
+    }
+  }
+}
+
+query RecipeConfigurations($context: String!, $filter: CraftFilterInput) {
+  analysis(context: $context, filter: $filter) {
+    signature
+    supportsReturns
+    configurationCoverage {
+      recordedAttempts
+      emptyAttempts
+      unknownAttempts
+    }
+    configurations {
+      nodes {
+        id
+        measure {
+          ...InvestigationMeasure
+        }
+        metrics {
+          ...InvestigationMetrics
+        }
+        evidenceAvailable
+        evidence {
+          scope
+          statsCoverage
+          equipmentCoverage
+          buffsCoverage
+          finishingCoverage
+          useConcentration
+          statistics {
+            label
+            value
+          }
+          equipment {
+            slot
+            itemId
+            empty
+          }
+          buffs {
+            spellId
+            applications
+          }
+          finishingReagents {
+            itemId
+            quantity
+          }
+          equipmentTruncated
+          buffsTruncated
+          finishingReagentsTruncated
+        }
+      }
+      truncated
+    }
+  }
+}
+
+query ItemInvestigation(
+  $context: String!
+  $id: ID!
+  $relations: CraftFilterInput!
+  $output: CraftFilterInput!
+  $input: CraftFilterInput!
+  $returned: CraftFilterInput!
+  $retail: Boolean!
+) {
+  item: contextItem(context: $context, id: $id) {
+    id
+    name
+    blizzardId
+  }
+  relations: analysis(context: $context, filter: $relations) {
+    signature
+    itemRelations {
+      outputs {
+        nodes {
+          recipeId
+          recipeName
+          characterId
+          characterName
+          measure {
+            ...InvestigationMeasure
+          }
+        }
+        truncated
+      }
+      inputs {
+        nodes {
+          recipeId
+          recipeName
+          characterId
+          characterName
+          measure {
+            ...InvestigationMeasure
+          }
+        }
+        truncated
+      }
+      returns {
+        nodes {
+          recipeId
+          recipeName
+          characterId
+          characterName
+          measure {
+            ...InvestigationMeasure
+          }
+        }
+        truncated
+      }
+    }
+  }
+  produced: analysis(context: $context, filter: $output) {
+    signature
+    attempts {
+      ...InvestigationMeasure
+    }
+    outputs {
+      nodes {
+        id
+        measure {
+          ...InvestigationMeasure
+        }
+      }
+      truncated
+    }
+  }
+  committed: analysis(context: $context, filter: $input) {
+    signature
+    inputMeasureLabel
+    attempts {
+      ...InvestigationMeasure
+    }
+    inputs {
+      nodes {
+        id
+        measure {
+          ...InvestigationMeasure
+        }
+      }
+      truncated
+    }
+  }
+  returned: analysis(context: $context, filter: $returned)
+    @include(if: $retail) {
+    signature
+    supportsReturns
+    attempts {
+      ...InvestigationMeasure
+    }
+    returns {
+      nodes {
+        id
+        measure {
+          ...InvestigationMeasure
+        }
+      }
+      truncated
+    }
+  }
+}
+
+query InvestigationSignature($context: String!, $filter: CraftFilterInput) {
+  analysisSignature(context: $context, filter: $filter)
+}
+
+query InvestigationCrafts(
+  $context: String!
+  $filter: CraftFilterInput
+  $after: String
+) {
+  contextCrafts(context: $context, filter: $filter, first: 20, after: $after) {
+    nodes {
+      id
+      recordedAt
+      character {
+        id
+        name
+      }
+      recipe {
+        id
+        blizzardId
+        name
+      }
+      profession {
+        id
+        name
+      }
+      outputsComplete
+      inputsComplete
+      outputs {
+        item {
+          id
+          name
+          blizzardId
+        }
+        quality
+        quantityExact
+      }
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+    }
+  }
+}
+
+query InvestigationCraft($context: String!, $id: ID!) {
+  contextCraft(context: $context, id: $id) {
+    id
+    recordedAt
+    character {
+      id
+      name
+    }
+    recipe {
+      id
+      blizzardId
+      name
+    }
+    profession {
+      id
+      name
+    }
+    professionExpansion {
+      id
+      name
+    }
+    concentrationSpent
+    ingenuityRefund
+    concentrationCurrencyId
+    hasIngenuityProc
+    hasResourcefulnessProc
+    multicraftBonus
+    inputsComplete
+    resourcefulnessComplete
+    outputsComplete
+    reagents {
+      item {
+        id
+        name
+        blizzardId
+      }
+      allocatedQuantityExact
+      returnedQuantityExact
+    }
+    outputs {
+      item {
+        id
+        name
+        blizzardId
+      }
+      quality
+      quantityExact
+    }
+    recordedConfigurations {
+      observed
+      nodes {
+        id
+        evidenceAvailable
+        evidence {
+          scope
+          statsCoverage
+          equipmentCoverage
+          buffsCoverage
+          finishingCoverage
+          useConcentration
+          statistics {
+            label
+            value
+          }
+          equipment {
+            slot
+            itemId
+            empty
+          }
+          buffs {
+            spellId
+            applications
+          }
+          finishingReagents {
+            itemId
+            quantity
+          }
+          equipmentTruncated
+          buffsTruncated
+          finishingReagentsTruncated
+        }
+      }
+      truncated
+    }
+  }
+}

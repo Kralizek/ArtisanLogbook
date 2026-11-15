@@ -1,0 +1,61 @@
+query WorkspaceSearch($context: String!, $search: String!) {
+  game(context: $context) {
+    recipes(first: 20, search: $search) {
+      nodes {
+        id
+        blizzardId
+        name
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+    items(first: 20, search: $search) {
+      nodes {
+        id
+        blizzardId
+        name
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+  }
+}
+
+query WorkspaceFacets($context: String!) {
+  game(context: $context) {
+    id
+    characters(first: 100) {
+      nodes {
+        id
+        name
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+
+    professions(first: 100) {
+      nodes {
+        id
+        name
+        blizzardId
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+
+    expansions(first: 100) {
+      nodes {
+        id
+        key
+        name
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+  }
+}

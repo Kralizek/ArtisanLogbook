@@ -1,17 +1,16 @@
-# Browser application foundation
+# Companion browser application
 
-The Companion's browser application is a client-side React SPA, not the complete
-C12 dashboard. It provides an overview (operational REST status) and a bounded,
-forward-paginated recent-crafts table (canonical GraphQL history). Missing
-metadata has explicit identity/unknown fallbacks; unknown concentration is not
-zero. No analytics, charting, advanced table framework or global state framework
-is introduced.
+The Companion's client-side React application explores recorded crafting history
+within one active game context per browser tab. Activity, recipe and item
+investigations link to their contributing crafts. Search starts a new
+investigation across the active context; the library holds pins, visibility
+preferences and saved investigation definitions. Companion management is
+global and independent of the analytical context.
 
-The following screenshots use the generated SavedVariables fixture through the
-published executable, not mocked application data:
-
-![Companion overview](images/web-overview.png)
-![Recent canonical crafts](images/web-history.png)
+Analytics are calculated against canonical history in the backend. The browser
+does not download the full craft history to rank or compare populations. Unknown
+and incomplete measurements remain distinct from observed zero, and Forever's
+fixed schematic inputs are not presented as measured consumption.
 
 ## Daily development: VS Code Dev Containers
 
@@ -170,9 +169,11 @@ after a normal production build. The pinned .NET SDK also routes tool packing
 through publish targets; the publish guard distinguishes that SDK packing mode
 from an executable publish rather than breaking the existing package pipeline.
 
-Only GET/HEAD `/`, `/history` and `/history/` fall back to the document. The API,
-GraphQL, OpenAPI, unknown routes and missing assets do not fall back. Add known
-routes explicitly when adding browser pages. HTML and hashed assets currently
+Only GET/HEAD requests for the defined browser routes fall back to the document:
+`/`, `/history`, `/companion`, `/saved/:id`, and valid context-qualified
+activity, library, recipe, item and craft routes. The API, GraphQL, OpenAPI,
+unknown routes and missing assets do not fall back. Add known routes explicitly
+when adding browser pages. HTML and hashed assets currently
 retain the host's `Cache-Control: no-store`; we deliberately do not weaken API
 caching/security or add a caching subsystem. Content types and `nosniff` come
 from the existing host/static-file infrastructure.
@@ -184,32 +185,27 @@ a considered policy, not a blanket CSP that breaks components.
 
 ## C12 context-qualified browser routing
 
-The full C12 experience is not implemented by this foundation. Its analytical
-browser destinations should begin with the backend-provided stable route alias
-(for example `/retail/overview` or `/forever/recipes/441`). Resolve that
+Analytical destinations begin with the backend-provided stable route alias
+(for example `/retail/activity` or `/forever/recipes/<opaque-id>`). Resolve the
 explicit route through shared context metadata at `GET /api/v1/games/{context}`,
 and use the returned canonical string ID for analytical scope and cache
 identity. The only current friendly aliases are the base Retail and Forever
 contexts; other contexts use their canonical ID as the alias (for example
-`/18-Hardcore/overview`). Do not construct canonical IDs, decode opaque
+`/18-Hardcore/activity`). Do not construct canonical IDs, decode opaque
 GraphQL entity IDs, or derive aliases in frontend code.
 
-An eventual route hierarchy may use a context segment and a loader, but C12
-will choose its actual React Router/state implementation. An explicit route
-identity takes precedence over the browser-local remembered startup context;
-the latter is only a default when a destination contains no context. Keep each
-tab's context and filters in its own URL/state, with no server-side active
-context. Global management destinations, including the saved-investigation
-catalogue, stay outside the analytical context hierarchy.
+An explicit route identity takes precedence over the browser-local remembered
+startup context; the latter is only a default when a destination contains no
+context. Each tab owns its own context and URL-based investigation state, with
+no server-side active context. Companion management is global; the library is
+scoped to the current context. Saved definitions and their validation are
+described in [saved investigations](saved-investigations.md).
 
-The current production SPA fallback admits only `/`, `/history` and `/history/`.
-Add future C12 document routes explicitly; never make `/api`, `/graphql`,
-`/openapi`, missing assets, or arbitrary unknown paths fall back to HTML.
-Similarly, the Vite development proxy's cross-origin top-level navigation
-exception is narrow and presently covers only the foundation routes. When C12
-adds alias-based pages, extend it only for the intended browser document
-navigation paths; do not broaden API forwarding, Host/Origin checks or CORS.
-See the [C12 requirements](https://github.com/Kralizek/ArtisanLogbook/issues/81).
+The Vite development proxy and embedded host use narrow browser-route
+allowlists. Neither makes `/api`, `/graphql`, `/openapi`, missing assets or
+arbitrary unknown paths fall back to HTML. Browser routes do not relax API
+forwarding, Host/Origin checks or CORS. See the
+[C12 requirements](https://github.com/Kralizek/ArtisanLogbook/issues/81).
 
 ## Tooling and local development
 
@@ -258,7 +254,7 @@ Sec-Fetch-Site before proxying, then rewrites **only validated** API Origins to
 the upstream Companion origin. `changeOrigin` sets the upstream Host. Client
 headers and bodies remain intact. Untrusted origins are rejected, not stripped.
 CORS is disabled; backend security is never disabled.
-User-initiated top-level GET navigation to `/`, `/history` or `/history/` may
+User-initiated top-level GET navigation to a supported browser route may
 come from a dashboard on another origin. This exception serves only the SPA
 document, not API calls, assets or background fetches; Host and Origin checks
 still apply. Subsequent API requests must originate from the web application's
@@ -422,9 +418,11 @@ canonical craft identity. No decoder or parallel cache identity is introduced.
 Pagination uses `nodes`, `pageInfo.endCursor` and `hasNextPage` explicitly;
 connections are not assumed to be full Relay connections. A page is replaced
 when advancing, with a Newest action to reset; no generic pagination merger.
-Recent crafts uses `network-only` on visits and cursor changes. Its Refresh
-button reloads the current page; Newest returns to the first page. Missing
-character names render as "Unknown character", not an opaque cache identifier.
+Analytical operations carry the complete active context and current scope.
+Detailed investigations retain results until the user refreshes; relevant
+history changes are indicated rather than silently replacing the evidence.
+Missing character names render as "Unknown character", not an opaque cache
+identifier.
 
 Operational status and craft counts refresh 30 seconds after each completed
 request while the document is visible, and immediately when it becomes visible
@@ -434,15 +432,12 @@ recover on the next refresh, and unmount/retry cancels superseded requests.
 No subscriptions or general cache-invalidation mechanism is involved.
 
 **Numeric policy:** standard JSON parsing is used. Generated Long/Decimal scalars
-are `number`, matching runtime, but this is **not exact arbitrary-precision
-preservation**. Do not use these mappings for precision-sensitive calculations.
-The initial GraphQL operation only selects timestamps, strings and bounded Int
-concentration; it does not request Long/Decimal observations or calculate
-statistics. REST craft counts are shown only when `Number.isSafeInteger`, with
-an explicit precision warning otherwise. Lossless quantity parsing/arithmetic
-is deferred until a real C12 consumer needs it; the server scalar contract is
-unchanged. Network/unavailable, HTTP rejection, GraphQL validation and execution
-failures have redacted retry states; partial data can be shown with an error.
+are `number` and are **not exact arbitrary-precision representations**.
+Analytical aggregate quantities use decimal strings where exactness is required;
+do not perform precision-sensitive arithmetic on the ordinary numeric scalar
+mappings. REST counts outside the browser's safe integer range require an
+explicit precision warning. Network/unavailable, HTTP rejection, GraphQL
+validation and execution failures have redacted retry states.
 
 TypeScript stays on **5.9.3** because current openapi-typescript and
 typescript-eslint peer ranges do not support TypeScript 7. The lockfile's

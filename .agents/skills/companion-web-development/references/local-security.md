@@ -16,5 +16,8 @@ verification. The HTTP web endpoint does not need dashboard certificate trust.
 exact Origin and Fetch Metadata before rewriting validated API Origins.
 Preserve headers, bodies, disabled CORS and backend protections. Never strip
 untrusted Origins or allow wildcard hosts. The dashboard exception permits
-only user-initiated top-level GET document navigation to `/`, `/history` or
-`/history/`; it does not permit cross-origin API, assets or background fetches.
+only user-initiated top-level GET document navigation to the supported browser
+routes (`/`, `/history`, `/companion`, `/saved/:id`, and context-qualified
+activity, library, recipe, item and craft routes); it does not permit cross-origin
+API, assets or background fetches. Keep the development and embedded route
+allowlists aligned and do not rewrite unknown API or asset paths to HTML.
