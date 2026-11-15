@@ -1,0 +1,26 @@
+{
+  "skill": "companion-runtime",
+  "cases": [
+    {
+      "id": "runtime-changing-snapshot",
+      "prompt": "A monitored SavedVariables file changes while an import is being read. Make the flow reliable.",
+      "expected": "Use bounded stable byte snapshots and preserve retry ownership.",
+      "assertions": ["Require the existing two byte-identical reads and fingerprint the imported bytes.", "Report an unstable read rather than importing a guessed snapshot.", "Leave retry scheduling to C06 rather than looping indefinitely in C07."],
+      "references": ["references/monitoring-and-lifecycle.md", "../../../src/companion/src/ImportService/README.md"]
+    },
+    {
+      "id": "runtime-checkpoint-outcome",
+      "prompt": "Prevent monitoring from repeatedly importing an unchanged file after an import completes.",
+      "expected": "Advance successful checkpoint state only on the correct terminal outcome.",
+      "assertions": ["Use C11 terminal receipts and successful C07 outcomes.", "Do not mark failed, rejected or pending imports successful.", "Preserve durable acknowledgement and retry behavior."],
+      "references": ["references/monitoring-and-lifecycle.md", "../../../docs/companion/rx-monitoring-architecture.md"]
+    },
+    {
+      "id": "runtime-shutdown-ownership",
+      "prompt": "A host shutdown times out while history work is active. Improve reporting.",
+      "expected": "Report timeout without falsely claiming database ownership was released.",
+      "assertions": ["Close admission and respect worker and lease lifecycle.", "Keep native resources owned until active work unwinds.", "Propagate the failure even if later disposal succeeds."],
+      "references": ["references/monitoring-and-lifecycle.md", "../../../src/companion/src/Runtime/README.md"]
+    }
+  ]
+}

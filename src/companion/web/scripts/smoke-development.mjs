@@ -92,12 +92,17 @@ try {
         "X-Artisan-Logbook-Client": "web",
         Origin: base,
       },
-      body: JSON.stringify({ query: "{ __typename }" }),
+      body: JSON.stringify({
+        query: "{ crafts(first: 10) { nodes { id recordedAt } } }",
+      }),
     });
     assert.equal(query.status, 200);
     const graph = await query.json();
     assert.equal(graph.errors, undefined, JSON.stringify(graph.errors));
-    assert.equal(graph.data.__typename, "Query");
+    assert(graph.data.crafts.nodes.length > 0);
+    assert(
+      graph.data.crafts.nodes.every((craft) => craft.id && craft.recordedAt),
+    );
     console.log("Aspire, Vite, health, REST and GraphQL smoke passed.");
   } finally {
     if (child.exitCode === null) {

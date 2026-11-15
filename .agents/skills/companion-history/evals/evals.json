@@ -1,0 +1,26 @@
+{
+  "skill": "companion-history",
+  "cases": [
+    {
+      "id": "history-unknown-statistics",
+      "prompt": "Add a statistic for reagent returns across craft history.",
+      "expected": "Calculate only from supported observations while preserving coverage and unknowns.",
+      "assertions": ["Do not convert unknown returned quantities or incomplete sets to zero.", "Use the canonical craft-by-item grain and bounded queries.", "Preserve decimal precision and test mixed known/unknown observations."],
+      "references": ["SKILL.md", "../../../src/companion/src/Core/README.md"]
+    },
+    {
+      "id": "history-enrichment-conflicts",
+      "prompt": "Import a later snapshot with extra historical schematic evidence and a changed known output.",
+      "expected": "Distinguish compatible evidence enrichment from a contradictory canonical fact.",
+      "assertions": ["Union compatible source evidence idempotently.", "Reject the changed known canonical output rather than choosing a winner.", "Do not commit a partial conflicting batch."],
+      "references": ["references/persistence-and-queries.md", "../../../src/companion/src/ImportService/README.md"]
+    },
+    {
+      "id": "history-batched-cancellation",
+      "prompt": "Implement a bounded history query with child rows and cancellation.",
+      "expected": "Use the existing HistoryStore read ownership and batching model.",
+      "assertions": ["Use parameterized SQL and an explicit read transaction.", "Batch child materialization in the same read snapshot.", "Propagate cancellation and do not close a connection under active work."],
+      "references": ["references/persistence-and-queries.md", "../../../src/companion/src/HistoryStore/README.md"]
+    }
+  ]
+}
