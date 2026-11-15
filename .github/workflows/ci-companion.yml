@@ -74,12 +74,6 @@ jobs:
       - run: dotnet test tests/ImportService/Tests.ImportService.csproj -c Release --no-restore
       - run: dotnet test tests/SavedVariables/Tests.SavedVariables.csproj -c Release --no-restore
       - if: runner.os == 'Linux'
-        uses: actions/setup-node@v6
-        with:
-          node-version: "26.13.1"
-          cache: npm
-          cache-dependency-path: src/companion/web/package-lock.json
-      - if: runner.os == 'Linux'
         name: Verify CLI integration tests
         run: dotnet test tests/Cli/Tests.Cli.csproj -c Release --no-restore --logger "trx;LogFileName=cli-tests-linux.trx" --results-directory artifacts/test-results
       - uses: actions/upload-artifact@v6
