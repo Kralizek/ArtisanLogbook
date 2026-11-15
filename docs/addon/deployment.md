@@ -66,7 +66,7 @@ For manual installs, place the extracted Core and UI addon directories directly 
 
 Retail is the primary release target. Forever support is limited: ordinary personal crafts with deterministic output and fixed required reagents are supported, but Retail-only crafting mechanics and many advanced operations are not. Fixed reagent quantities inferred from schematics are **not** independently measured consumption or evidence of material savings.
 
-Forever is eligible for beta publishing, but remains subject to live compatibility testing. See [production UI](ui.md#forever-live-acceptance) and [Forever capture notes](capture.md#first-forever-crafting-adapter) for test coverage and limitations.
+Forever is configured as release-eligible (`release: true`), including beta publishing through the configured release workflow. Release eligibility is not evidence of full live compatibility or visual certification. See [production UI](ui.md#forever-live-acceptance) and [Forever capture notes](capture.md#first-forever-crafting-adapter) for test coverage and limitations.
 
 Flavor definitions live in [`.flavors.yml`](../../.flavors.yml). Flavors with `release: false` may be packaged for testing but are not published to GitHub releases or CurseForge.
 
