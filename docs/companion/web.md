@@ -216,8 +216,10 @@ See the [C12 requirements](https://github.com/Kralizek/ArtisanLogbook/issues/81)
 The declarative features provision .NET **10.0**, Node **26.13.1** with bundled
 npm **11** (no npm override), stable Aspire CLI, OS Python, PowerShell, GitHub CLI,
 Lua 5.1, LuaRocks, Ubuntu `lua-check`, PyYAML and jq. `postCreateCommand` only
-initializes certificate trust. No manual global npm/LuaRocks installation is
-required. The .NET SDK must satisfy `global.json` (**10.0.401**, allowing patch
+initializes volume ownership and certificate trust, installs frontend development
+dependencies, and provisions Playwright's Chromium headless shell and Linux
+dependencies. No manual global npm/LuaRocks installation is required. The .NET
+SDK must satisfy `global.json` (**10.0.401**, allowing patch
 roll-forward within that feature band).
 
 AppHost SDK and hosting integrations are pinned to **13.6.5**. The official
@@ -483,9 +485,10 @@ directory, removes Node/npm/Aspire from the child's PATH, uses isolated writable
 data, imports the fixture with the copied executable, retrieves HTML and every
 referenced JS/CSS bundle with content-type checks, and checks representative
 REST/OpenAPI/POST GraphQL responses. On Linux it also uses Chromium to check
-that the application renders and makes real REST and GraphQL requests. Install
-the browser and system dependencies with `npx playwright install --with-deps
---only-shell chromium` from `web`; Windows can use `--skip-browser`.
+that the application renders and makes real REST and GraphQL requests. The
+devcontainer provisions Chromium; on other Linux environments install the
+browser and system dependencies with `npx playwright install --with-deps
+--only-shell chromium` from `web`. Windows can use `--skip-browser`.
 Linux shutdown must exit successfully; Node's Windows process signal
 terminates the child rather than delivering console Ctrl+C, so this smoke does
 not claim a Windows graceful-shutdown test. Existing backend lifecycle tests
