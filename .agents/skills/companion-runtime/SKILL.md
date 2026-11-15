@@ -1,6 +1,6 @@
 ---
 name: companion-runtime
-description: Work on the Companion CLI, settings, discovery, monitoring, stable SavedVariables ingestion, operational API, hosting or application lifecycle. Use for C06 monitoring, C07 orchestration, C11 import ownership and shutdown.
+description: Work on the Companion CLI, settings, discovery, monitoring, stable SavedVariables ingestion, operational API, hosting or application lifecycle. Use for C06 monitoring, C07 orchestration, shared HTTP API import coordination and shutdown.
 ---
 
 # Companion runtime
@@ -9,6 +9,9 @@ Read [Runtime ownership](../../../src/companion/src/Runtime/README.md),
 [ImportService](../../../src/companion/src/ImportService/README.md), and the
 [CLI guide](../../../docs/companion/cli.md) for the affected surface.
 [CONTRIBUTING](../../../CONTRIBUTING.md) owns practical validation commands.
+Preserve the frozen [component catalog](../../../docs/companion/components.md):
+C10 is runtime, C11 HTTP API, C14 CLI. C11 import-worker terminology refers to
+shared coordination for the API, not a separate logical component.
 
 - The CLI is the entry point; only `serve` builds the host. Runtime composes
   workers and one singleton HistoryStore writer. Preserve settings precedence,
