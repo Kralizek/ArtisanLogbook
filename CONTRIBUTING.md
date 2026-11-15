@@ -17,6 +17,20 @@ builds or npm restores concurrently against the same checkout.
 
 ## Addon development
 
+The pinned [WoW API research assistant](tools/wow-api/) is a Git submodule
+containing WoWAddonAPIAgents skills and client-specific API references. Initialize
+it from the repository root before API, capture, UI or compatibility research:
+
+```sh
+git submodule update --init tools/wow-api
+```
+
+Use its [API index](tools/wow-api/skills/wow-api-index/SKILL.md) and the relevant
+client/domain references alongside the repository's addon contracts and observed
+runtime evidence. It is development assistance, not an addon runtime dependency;
+do not update its pinned revision incidentally. See the repository
+[addon skill](.agents/skills/wow-addon-development/SKILL.md) for agent guidance.
+
 Local packaging prerequisites are Lua 5.1, Python 3 with PyYAML, `jq`, `zip`, and `unzip`.
 
 ```sh
