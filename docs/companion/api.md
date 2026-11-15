@@ -40,6 +40,14 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 | GET | `/api/v1/imports?limit=N` | Recent import operations (1–100, default 20), newest first |
 | GET | `/api/v1/imports/{id}` | One operation, or 404 |
 | POST | `/api/v1/imports` | Start an import; returns 202 with `Location` |
+| GET | `/api/v1/entity-preferences?project=N[&progressionTrack=…]` | List recipe and item preferences for one context |
+| PUT | `/api/v1/entity-preferences/{Recipe|Item}/{id}/pin` | Set one entity's pinned state |
+| PUT | `/api/v1/entity-preferences/{Recipe|Item}/{id}/hidden` | Set one entity's hidden state |
+| GET, PUT | `/api/v1/preferences/last-selected-context` | Read or set the startup fallback context |
+| GET, POST | `/api/v1/saved-investigations` | List or create named JSON investigation definitions |
+| GET, DELETE | `/api/v1/saved-investigations/{id}` | Retrieve or revision-check and delete a saved investigation |
+| PUT | `/api/v1/saved-investigations/{id}/name` | Rename using the expected revision |
+| PUT | `/api/v1/saved-investigations/{id}/definition` | Replace the versioned JSON definition using the expected revision |
 | GET | `/openapi/v1.yaml` | OpenAPI 3.0 document |
 
 Enum values are serialized as written in the OpenAPI document (for example `Running`,
@@ -162,11 +170,60 @@ The API is a privileged local interface and defends against browser-driven acces
 
 - Only `Host` values `127.0.0.1`, `localhost` and `[::1]` are accepted (DNS-rebinding defense).
 - Requests with a cross-site `Sec-Fetch-Site` or a foreign `Origin` are rejected with 403. CORS is not enabled, so browsers cannot read responses cross-origin.
-- `POST` and `PUT` require the `X-Artisan-Logbook-Client` header (any non-empty value), which cross-site forms cannot send and which forces a CORS preflight that is denied, plus `Content-Type: application/json` and a `Content-Length`. The REST body limit is 4 KiB; `/graphql` has a 16 KiB limit. Other mutation methods return 405.
+- `POST` and `PUT` require the `X-Artisan-Logbook-Client` header (any non-empty value), which cross-site forms cannot send and which forces a CORS preflight that is denied, plus `Content-Type: application/json` and a `Content-Length`. The REST body limit is 4 KiB; `/graphql` has a 16 KiB limit. Only the protected bodyless `DELETE` operations are additionally enabled; other mutation methods return 405.
+- Saved-investigation `POST` and `PUT` bodies may be up to 300 KiB at the HTTP boundary; individual JSON definitions are additionally limited to 256 KiB and depth 32. Protected `DELETE` requires the client header and must be bodyless.
 - Clients cannot supply paths; unknown or malformed source ids are rejected.
 - Responses carry `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.
 
 Terminal tools and local scripts send the client header on `POST` and `PUT`.
+
+## Application state
+
+The mutable state API is a separate capability from canonical history queries.
+It is persisted by `application-state.sqlite3` in the per-user application data
+directory, independently of the selected DuckDB history path. Recipe and item
+preferences are qualified by the complete `(project, progressionTrack)` context
+and entity ID. Pin and hide are independent desired-state values; repeating a
+mutation is harmless, and changing one never overwrites the other. Preferences
+do not alter capture, canonical history, or analytical totals.
+
+The last-selected context is a nullable startup fallback: the GET returns
+`{"context":null}` until a preference is set. It is not shared server-side
+navigation state and does not scope GraphQL or REST history queries. Tabs can
+continue using independent explicit contexts.
+
+Saved investigations persist a named, versioned JSON object—not query results.
+The JSON document is authoritative for the analytical definition; its context,
+name, stable ID, timestamps and revision are relational management fields. The
+Companion preserves nested and unknown definition fields, but only checks that
+the document is an object, has no duplicate property names, stays within 256 KiB
+and depth 32, and has a positive document version. It does not claim that a
+definition is a valid or executable C12 investigation. Relative and fixed date
+periods remain unchanged JSON; storage does not resolve them.
+
+Create with `POST /api/v1/saved-investigations`, then retain the returned `id`
+and `revision`. Rename and definition replacement send the revision last read:
+
+```bash
+curl -s -X PUT "$BASE/api/v1/saved-investigations/<id>/definition" \
+  -H 'X-Artisan-Logbook-Client: curl' \
+  -H 'Content-Type: application/json' \
+  -d '{"definitionVersion":1,"definition":{"period":{"kind":"relative","days":90}},"revision":1}'
+```
+
+Successful updates increment the revision. A stale revision returns 409
+`investigation-revision-conflict`; a missing ID returns 404
+`unknown-investigation`. Deletion uses `?revision=N` and no request body.
+Application-state persistence failures return a redacted 503
+`application-state-unavailable`, not a database path or raw exception.
+
+The runtime uses `Microsoft.Data.Sqlite` and Dapper. The native SQLite library
+is part of the self-contained distribution, so users need no database service
+or SQLite installation. Schema version 1 is recorded in SQLite metadata;
+unrecognized application IDs, unsupported versions and invalid databases fail
+explicitly and are never silently replaced. See [Runtime ownership and
+lifecycle](../../src/companion/src/Runtime/README.md#host-composition-and-ownership)
+for the C10/C11 boundary and DuckDB independence.
 
 ## Operational behavior
 

@@ -19,6 +19,11 @@ migrate schemas, and does not create a missing file or directory. Unrecognized
 or unsupported schemas fail explicitly. Defaults never use the executable
 directory; an unavailable user data directory requires an explicit override.
 
+`application-state.sqlite3` lives in the same per-user data directory, including
+when `ARTISAN_LOGBOOK_DATA_DIRECTORY` overrides it. `--database` selects only the
+DuckDB history database and never relocates application state. Only `serve`
+initializes this SQLite file; unrelated CLI commands do not create it.
+
 ## Initialization and shared settings
 
 Run `artisanlogbook init` in an interactive terminal. The Spectre wizard explains

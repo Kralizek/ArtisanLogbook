@@ -54,6 +54,8 @@ public sealed class ApplicationPaths
 
     public string SettingsFile => Path.Combine(DataDirectory, "settings.json");
 
+    public string ApplicationStateDatabase => Path.Combine(DataDirectory, "application-state.sqlite3");
+
     public string DataDirectory
     {
         get

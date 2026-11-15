@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 
 using Microsoft.AspNetCore.Http;
 
@@ -14,6 +15,8 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
     public const string ClientHeader = "X-Artisan-Logbook-Client";
     public const int MaxRequestBodyBytes = 4096;
     public const int MaxGraphQLBodyBytes = 16384;
+    public const int MaxApplicationStateBodyBytes = 300 * 1024;
+    public const int MaxKestrelBodyBytes = MaxApplicationStateBodyBytes + 64 * 1024;
 
     private static readonly string[] LoopbackHosts = ["127.0.0.1", "localhost", "[::1]"];
 
@@ -48,7 +51,8 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
 
         if (!HttpMethods.IsGet(request.Method) && !HttpMethods.IsHead(request.Method))
         {
-            if (!HttpMethods.IsPost(request.Method) && !HttpMethods.IsPut(request.Method))
+            bool delete = HttpMethods.IsDelete(request.Method);
+            if (!HttpMethods.IsPost(request.Method) && !HttpMethods.IsPut(request.Method) && !delete)
             {
                 await Reject(context, StatusCodes.Status405MethodNotAllowed, "method-not-allowed",
                     "The method is not supported.");
@@ -60,13 +64,27 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
                     $"State-changing requests must include the {ClientHeader} header.");
                 return;
             }
+            if (delete)
+            {
+                if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding"))
+                {
+                    await Reject(context, StatusCodes.Status400BadRequest, "invalid-request",
+                        "DELETE requests must not include a request body.");
+                    return;
+                }
+                await next(context);
+                return;
+            }
             if (!IsJson(request.ContentType))
             {
                 await Reject(context, StatusCodes.Status415UnsupportedMediaType, "unsupported-content-type",
                     "The request Content-Type must be application/json.");
                 return;
             }
-            int maximumBodyBytes = request.Path == "/graphql" ? MaxGraphQLBodyBytes : MaxRequestBodyBytes;
+            int maximumBodyBytes = request.Path == "/graphql" ? MaxGraphQLBodyBytes :
+                request.Path.StartsWithSegments("/api/v1/saved-investigations")
+                    ? MaxApplicationStateBodyBytes
+                    : MaxRequestBodyBytes;
             if (request.ContentLength is null || request.ContentLength > maximumBodyBytes)
             {
                 await Reject(context,
@@ -76,6 +94,34 @@ internal sealed class LocalApiSecurityMiddleware(RequestDelegate next)
                         ? "A Content-Length header is required."
                         : $"The request body must not exceed {maximumBodyBytes} bytes.");
                 return;
+            }
+            if (request.Path.StartsWithSegments("/api/v1/saved-investigations"))
+            {
+                request.EnableBuffering();
+                try
+                {
+                    using JsonDocument body = await JsonDocument.ParseAsync(request.Body,
+                        new JsonDocumentOptions
+                        {
+                            MaxDepth = ApplicationStateStore.MaximumInvestigationDepth + 2
+                        }, request.HttpContext.RequestAborted);
+                    if (CompanionSettingsStore.HasDuplicateProperties(body.RootElement))
+                    {
+                        await Reject(context, StatusCodes.Status400BadRequest, "invalid-request",
+                            "Saved-investigation requests must not contain duplicate JSON property names.");
+                        return;
+                    }
+                }
+                catch (JsonException)
+                {
+                    await Reject(context, StatusCodes.Status400BadRequest, "invalid-request",
+                        "The request body must be valid JSON within the supported nesting limit.");
+                    return;
+                }
+                finally
+                {
+                    request.Body.Position = 0;
+                }
             }
         }
 

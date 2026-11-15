@@ -770,16 +770,146 @@ public sealed class CompanionApiTests
             .Select(match => match.Groups[1].Value).Order().ToArray();
         string[] mapped = host.App.Services.GetRequiredService<EndpointDataSource>().Endpoints
             .OfType<RouteEndpoint>().Select(endpoint => endpoint.RoutePattern.RawText!)
-            .Select(pattern => pattern.Replace("{id:guid}", "{id}")).Where(pattern => pattern.StartsWith("/api/v1/", StringComparison.Ordinal)).Distinct().Order().ToArray();
+            .Select(pattern => Regex.Replace(pattern, @"\{([^}:]+):[^}]+\}", "{$1}"))
+            .Where(pattern => pattern.StartsWith("/api/v1/", StringComparison.Ordinal)).Distinct().Order().ToArray();
         Assert.That(mapped, Is.EqualTo(documented));
         Assert.That(documented, Is.EqualTo(new[]
         {
-            "/api/v1/health", "/api/v1/imports", "/api/v1/imports/{id}", "/api/v1/monitoring",
-            "/api/v1/monitoring/reconcile", "/api/v1/sources", "/api/v1/status"
-        }));
+            "/api/v1/entity-preferences", "/api/v1/entity-preferences/{kind}/{id}/hidden",
+            "/api/v1/entity-preferences/{kind}/{id}/pin", "/api/v1/health", "/api/v1/imports",
+            "/api/v1/imports/{id}", "/api/v1/monitoring", "/api/v1/monitoring/reconcile",
+            "/api/v1/preferences/last-selected-context", "/api/v1/saved-investigations",
+            "/api/v1/saved-investigations/{id}", "/api/v1/saved-investigations/{id}/definition",
+            "/api/v1/saved-investigations/{id}/name", "/api/v1/sources", "/api/v1/status"
+        }.Order().ToArray()));
         foreach (string operation in new[] { "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport",
-            "getMonitoring", "updateMonitoring", "reconcileMonitoring" })
+            "getMonitoring", "updateMonitoring", "reconcileMonitoring", "getEntityPreferences", "setEntityPinned",
+            "setEntityHidden", "getLastSelectedContext", "setLastSelectedContext", "listSavedInvestigations",
+            "createSavedInvestigation", "getSavedInvestigation", "renameSavedInvestigation",
+            "replaceSavedInvestigationDefinition", "deleteSavedInvestigation" })
             Assert.That(document, Does.Contain($"operationId: {operation}"));
+    }
+
+    [Test]
+    public async Task ApplicationStateApiPersistsContextualPreferencesAndVersionedInvestigations()
+    {
+        await using ApiHost host = await Start();
+
+        using HttpResponseMessage absentResponse =
+            await host.Http.GetAsync("/api/v1/preferences/last-selected-context");
+        string absentText = await absentResponse.Content.ReadAsStringAsync();
+        Assert.That(absentResponse.StatusCode, Is.EqualTo(HttpStatusCode.OK), absentText);
+        JsonElement absent = JsonDocument.Parse(absentText).RootElement;
+        Assert.That(absent.TryGetProperty("context", out JsonElement absentContext), Is.True, absentText);
+        Assert.That(absentContext.ValueKind, Is.EqualTo(JsonValueKind.Null));
+        using (HttpResponseMessage remember = await host.Send(HttpMethod.Put,
+            "/api/v1/preferences/last-selected-context", """{"project":18,"progressionTrack":"Hardcore"}""", post: true))
+        {
+            Assert.That(remember.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        }
+        JsonElement remembered = await Json(await host.Http.GetAsync("/api/v1/preferences/last-selected-context"));
+        Assert.That(remembered.GetProperty("context").GetProperty("project").GetInt32(), Is.EqualTo(18));
+        Assert.That(remembered.GetProperty("context").GetProperty("progressionTrack").GetString(), Is.EqualTo("Hardcore"));
+
+        using (HttpRequestMessage missingHeader = new(HttpMethod.Put, "/api/v1/entity-preferences/Recipe/441/pin"))
+        {
+            missingHeader.Content = JsonContent.Create(new { project = 1, pinned = true });
+            using HttpResponseMessage forbidden = await host.Http.SendAsync(missingHeader);
+            Assert.That(forbidden.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
+            Assert.That((await Json(forbidden)).GetProperty("code").GetString(), Is.EqualTo("client-header-required"));
+        }
+        using (HttpResponseMessage invalidKind = await host.Send(HttpMethod.Put,
+            "/api/v1/entity-preferences/1/441/pin", """{"project":1,"pinned":true}""", post: true))
+            Assert.That(invalidKind.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        using (HttpResponseMessage pinned = await host.Send(HttpMethod.Put,
+            "/api/v1/entity-preferences/Recipe/441/pin", """{"project":1,"pinned":true}""", post: true))
+            Assert.That(pinned.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (HttpResponseMessage hidden = await host.Send(HttpMethod.Put,
+            "/api/v1/entity-preferences/Recipe/441/hidden", """{"project":1,"hidden":true}""", post: true))
+            Assert.That(hidden.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (HttpResponseMessage item = await host.Send(HttpMethod.Put,
+            "/api/v1/entity-preferences/Item/441/pin", """{"project":1,"pinned":true}""", post: true))
+            Assert.That(item.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (HttpResponseMessage forever = await host.Send(HttpMethod.Put,
+            "/api/v1/entity-preferences/Recipe/441/pin", """{"project":18,"pinned":true}""", post: true))
+            Assert.That(forever.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (HttpResponseMessage unpin = await host.Send(HttpMethod.Put,
+            "/api/v1/entity-preferences/Recipe/441/pin", """{"project":1,"pinned":false}""", post: true))
+        {
+            JsonElement current = await Json(unpin);
+            Assert.That(current.GetProperty("pinned").GetBoolean(), Is.False);
+            Assert.That(current.GetProperty("hidden").GetBoolean(), Is.True);
+        }
+        JsonElement retail = await Json(await host.Http.GetAsync("/api/v1/entity-preferences?project=1"));
+        Assert.That(retail.GetProperty("preferences").GetArrayLength(), Is.EqualTo(2));
+        Assert.That(retail.GetProperty("preferences").EnumerateArray()
+            .Single(preference => preference.GetProperty("kind").GetString() == "Recipe")
+            .GetProperty("hidden").GetBoolean(), Is.True);
+        JsonElement foreverPreferences = await Json(await host.Http.GetAsync("/api/v1/entity-preferences?project=18"));
+        Assert.That(foreverPreferences.GetProperty("preferences").GetArrayLength(), Is.EqualTo(1));
+
+        string definition = """
+            {
+              "filters": { "recipeId": 441, "future": { "keep": true } },
+              "periods": [
+                { "kind": "relative", "days": 90 },
+                { "kind": "fixed", "from": "2025-01-01", "to": "2025-02-01" }
+              ]
+            }
+            """;
+        using HttpResponseMessage created = await host.Post("/api/v1/saved-investigations",
+            $$"""{"name":"Alchemy review","project":1,"definitionVersion":3,"definition":{{definition}}}""");
+        Assert.That(created.StatusCode, Is.EqualTo(HttpStatusCode.Created), await created.Content.ReadAsStringAsync());
+        string location = created.Headers.Location!.ToString();
+        JsonElement saved = await Json(created);
+        string id = saved.GetProperty("id").GetString()!;
+        Assert.That(location, Does.Contain(id));
+        Assert.That(saved.GetProperty("revision").GetInt64(), Is.EqualTo(1));
+        Assert.That(saved.GetProperty("definition").GetProperty("filters").GetProperty("future")
+            .GetProperty("keep").GetBoolean(), Is.True);
+        Assert.That((await Json(await host.Http.GetAsync(location))).GetProperty("definitionVersion").GetInt32(), Is.EqualTo(3));
+        using (HttpResponseMessage duplicate = await host.Post("/api/v1/saved-investigations",
+            """{"name":"Duplicate","project":1,"definitionVersion":1,"definition":{"same":1,"same":2}}"""))
+        {
+            Assert.That(duplicate.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That((await Json(duplicate)).GetProperty("code").GetString(), Is.EqualTo("invalid-request"));
+        }
+        string oversizedValue = new('x', LocalApiSecurityMiddleware.MaxApplicationStateBodyBytes);
+        string oversizedBody =
+            "{\"name\":\"Oversized\",\"project\":1,\"definitionVersion\":1,\"definition\":{\"value\":\"" +
+            oversizedValue + "\"}}";
+        using (HttpResponseMessage oversized = await host.Post("/api/v1/saved-investigations", oversizedBody))
+        {
+            Assert.That(oversized.StatusCode, Is.EqualTo(HttpStatusCode.RequestEntityTooLarge));
+            Assert.That((await Json(oversized)).GetProperty("code").GetString(), Is.EqualTo("request-too-large"));
+        }
+
+        using HttpResponseMessage renamed = await host.Send(HttpMethod.Put, $"/api/v1/saved-investigations/{id}/name",
+            """{"name":"Renamed","revision":1}""", post: true);
+        Assert.That(renamed.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That((await Json(renamed)).GetProperty("revision").GetInt64(), Is.EqualTo(2));
+
+        using HttpResponseMessage stale = await host.Send(HttpMethod.Put,
+            $"/api/v1/saved-investigations/{id}/definition",
+            $$"""{"definitionVersion":4,"definition":{"new":true},"revision":1}""", post: true);
+        Assert.That(stale.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
+        Assert.That((await Json(stale)).GetProperty("code").GetString(), Is.EqualTo("investigation-revision-conflict"));
+
+        using (HttpResponseMessage invalid = await host.Send(HttpMethod.Put,
+            "/api/v1/preferences/last-selected-context", """{"project":0}""", post: true))
+            Assert.That(invalid.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        using HttpRequestMessage staleDelete = new(HttpMethod.Delete, $"/api/v1/saved-investigations/{id}?revision=1");
+        staleDelete.Headers.Add(LocalApiSecurityMiddleware.ClientHeader, "tests");
+        using (HttpResponseMessage conflict = await host.Http.SendAsync(staleDelete))
+            Assert.That(conflict.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
+        using HttpRequestMessage delete = new(HttpMethod.Delete, $"/api/v1/saved-investigations/{id}?revision=2");
+        delete.Headers.Add(LocalApiSecurityMiddleware.ClientHeader, "tests");
+        using (HttpResponseMessage deleted = await host.Http.SendAsync(delete))
+            Assert.That(deleted.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        using (HttpResponseMessage missing = await host.Http.GetAsync(location))
+            Assert.That(missing.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]

@@ -15,6 +15,7 @@ internal sealed class CompanionRuntimeLifecycle(
     ILogger<CompanionRuntimeLifecycle> logger) : IHostedLifecycleService, IDisposable
 {
     private Store? _store;
+    private ApplicationStateStore? _applicationStateStore;
     private CancellationTokenRegistration _stopping;
 
     public Task StartingAsync(CancellationToken cancellationToken)
@@ -25,7 +26,7 @@ internal sealed class CompanionRuntimeLifecycle(
         return Task.CompletedTask;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -33,10 +34,6 @@ internal sealed class CompanionRuntimeLifecycle(
             _store = services.GetRequiredService<Store>();
             _store.ReadStatus(cancellationToken);
             status.DatabaseOpened(_store);
-            LogInstallationFlavors();
-            admission.Open();
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
         }
         catch (OperationCanceledException)
         {
@@ -47,6 +44,27 @@ internal sealed class CompanionRuntimeLifecycle(
             status.Fail("database-startup-failed", "Cannot initialize the history database.", exception);
             throw;
         }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _applicationStateStore = services.GetRequiredService<ApplicationStateStore>();
+            await _applicationStateStore.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            status.Fail("application-state-startup-failed",
+                "Cannot initialize the application-state database.", exception);
+            throw;
+        }
+
+        LogInstallationFlavors();
+        admission.Open();
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private void ReportListeningUrl()
@@ -116,7 +134,8 @@ internal sealed class CompanionRuntimeLifecycle(
         try
         {
             Task disposal = _store?.DisposeAsync().AsTask() ?? Task.CompletedTask;
-            await Task.WhenAll(disposal, admission.DrainAsync(cancellationToken)).ConfigureAwait(false);
+            Task applicationStateDisposal = _applicationStateStore?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+            await Task.WhenAll(disposal, applicationStateDisposal, admission.DrainAsync(cancellationToken)).ConfigureAwait(false);
             status.DatabaseClosed();
             if (status.Transition(CompanionLifecycleState.Stopped))
                 logger.LogInformation(CompanionEvents.Stopped, "Artisan Logbook Companion stopped; database ownership released.");

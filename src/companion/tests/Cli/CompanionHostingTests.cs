@@ -529,7 +529,7 @@ public sealed class CompanionHostingTests
         CompanionApplicationStatus status = app.Services.GetRequiredService<CompanionApplicationStatus>();
         Assert.ThrowsAsync<IOException>(async () => await app.RunCompanionAsync());
         await app.DisposeAsync();
-        Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("database-startup-failed"));
+        Assert.That(status.Read().CriticalFailure!.Code, Is.EqualTo("host-failed"));
         Assert.That(_runtimeLogs, Has.None.Contains("database ownership released"));
         AssertDatabaseReleased();
     }

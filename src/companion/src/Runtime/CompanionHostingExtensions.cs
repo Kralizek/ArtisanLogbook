@@ -25,7 +25,7 @@ public static class CompanionHostingExtensions
         if (requirePreferredPort && endpoint.FallbackUsed)
             throw new IOException($"The required loopback port {endpoint.PreferredPort} is already in use.");
         builder.Services.AddSingleton(endpoint);
-        builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = LocalApiSecurityMiddleware.MaxGraphQLBodyBytes)
+        builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = LocalApiSecurityMiddleware.MaxKestrelBodyBytes)
             .UseUrls(endpoint.RequestedUrl);
         builder.Host.UseConsoleLifetime();
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
@@ -84,6 +84,7 @@ public static class CompanionHostingExtensions
         services.AddSingleton(paths);
         services.AddSingleton(configuration);
         services.AddSingleton<CompanionSettingsStore>();
+        services.AddSingleton(_ => new ApplicationStateStore(paths.ApplicationStateDatabase));
         services.AddSingleton<InstallationDiscovery>();
         services.TryAddSingleton<IScheduler>(TaskPoolScheduler.Default);
         services.AddSingleton<SavedVariablesSnapshotReader>();

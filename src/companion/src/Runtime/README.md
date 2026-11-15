@@ -5,7 +5,8 @@ Settings, paths, and discovery remain independent of host execution and Spectre.
 The existing CLI is the sole application entry point: only `serve` builds a host.
 
 - `ApplicationPaths`: one shared per-user data directory, default history path,
-  settings path, and working-directory-relative explicit path resolution.
+  settings path, application-state path, and working-directory-relative explicit
+  path resolution.
 - `CompanionSettings`: schema version 1, multiple absolute installation roots,
   optional monitoring preferences (enabled, 60 seconds), and HTTP preferences
   (port 48721). Older version-1 files load without migration or writes.
@@ -91,6 +92,38 @@ ApplicationStopping registration; it does not own a second database-disposal
 path or an async-disposal implementation.
 DI owns the store and provides fallback disposal after failed startup or host
 disposal without normal stopping.
+
+The same `serve` host owns a separate `ApplicationStateStore` backed by
+`application-state.sqlite3` in `ApplicationPaths.DataDirectory`. It uses
+`Microsoft.Data.Sqlite` with Dapper and initializes schema version 1 during host
+startup; unknown application IDs, schema versions, corrupt files and persistence
+failures fail explicitly without replacing the file. The SQLite schema is
+versioned with `PRAGMA user_version`; no speculative migration framework or
+automatic repair is present. The provider bundles the native SQLite dependency
+for supported self-contained distributions, with normal .NET single-file native
+library extraction enabled. Users need no SQLite installation or service.
+
+SQLite is C10 mutable application state; DuckDB remains C03's sole authoritative
+craft-history store. The SQLite path always follows the shared per-user data
+directory (including `ARTISAN_LOGBOOK_DATA_DIRECTORY`) and is not changed by
+`--database`. History imports, replacement, and rebuild do not access or clear
+application-state records. The databases have no cross-database foreign keys,
+transactions, or reconciliation. Settings and monitoring checkpoints remain in
+their existing stores. The application-state store is registered by the host,
+not by unrelated short-lived CLI commands, and its lifetime follows the host.
+
+The initial relational data is deliberately narrow: recipe/item preferences
+are keyed by complete game context and entity identity, with independent
+idempotent pin and hide mutations; the remembered context is a nullable startup
+fallback, never shared navigation or query scope. Saved investigations use a
+stable ID, context, version, timestamps and optimistic revision metadata around
+a bounded JSON document. The document is authoritative for the analytical
+definition; relational context and management fields are not duplicated
+editable document data. JSON is structurally checked (object root, bounded size
+and depth, no duplicate properties) but is not claimed to be an executable C12
+investigation. Updates require the revision read by the caller, so a stale tab
+gets a conflict rather than overwriting another save. See the [versioned REST
+contract](../../../../docs/companion/api.md#application-state).
 
 The same host also serves the embedded browser application. Runtime references
 the dedicated `WebAssets` assembly, not frontend source files or Aspire.

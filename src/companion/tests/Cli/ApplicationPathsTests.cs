@@ -21,8 +21,12 @@ public sealed class ApplicationPathsTests
             ApplicationPaths paths = Paths(platform);
             Assert.That(paths.SettingsFile, Is.EqualTo(Path.Combine(paths.DataDirectory, "settings.json")));
             Assert.That(paths.ResolveDatabase(null), Is.EqualTo(Path.Combine(paths.DataDirectory, "history.duckdb")));
+            Assert.That(paths.ApplicationStateDatabase,
+                Is.EqualTo(Path.Combine(paths.DataDirectory, "application-state.sqlite3")));
             _ = paths.ResolveDatabase("override.duckdb");
             Assert.That(paths.SettingsFile, Is.EqualTo(Path.Combine(paths.DataDirectory, "settings.json")));
+            Assert.That(paths.ApplicationStateDatabase,
+                Is.EqualTo(Path.Combine(paths.DataDirectory, "application-state.sqlite3")));
         }
     }
 

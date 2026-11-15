@@ -41,20 +41,23 @@ try {
   const port = listener.address().port;
   await new Promise((resolve) => listener.close(resolve));
   const base = `http://127.0.0.1:${port}`;
-  const child = spawn(
+  let child = spawn(
     binary,
     ["serve", "--monitoring", "false", "--require-port", "--port", `${port}`],
     { cwd: directory, env: environment, stdio: ["ignore", "pipe", "pipe"] },
   );
   let logs = "";
-  child.stdout.on("data", (data) => {
-    logs += data;
-  });
-  child.stderr.on("data", (data) => {
-    logs += data;
-  });
-  const exited = once(child, "exit");
-  try {
+  const captureLogs = (process) => {
+    process.stdout.on("data", (data) => {
+      logs += data;
+    });
+    process.stderr.on("data", (data) => {
+      logs += data;
+    });
+  };
+  captureLogs(child);
+  let exited = once(child, "exit");
+  const waitUntilHealthy = async () => {
     let healthy = false;
     for (let attempt = 0; attempt < 120; attempt++) {
       if (child.exitCode !== null)
@@ -64,10 +67,22 @@ try {
       } catch (error) {
         if (!(error instanceof TypeError)) throw error;
       }
-      if (healthy) break;
+      if (healthy) return;
       await delay(250);
     }
     assert(healthy, `Companion did not become healthy:\n${logs}`);
+  };
+  const stateRequest = (route, method, body) =>
+    fetch(`${base}${route}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Artisan-Logbook-Client": "publish-smoke",
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  try {
+    await waitUntilHealthy();
     const root = await fetch(base);
     assert.equal(root.status, 200);
     assert.match(root.headers.get("content-type"), /^text\/html/);
@@ -110,8 +125,112 @@ try {
     const graph = await query.json();
     assert.equal(graph.errors, undefined, JSON.stringify(graph.errors));
     assert(graph.data.crafts.nodes.length > 0);
+
+    const context = { project: 18, progressionTrack: "Hardcore" };
+    const remembered = await stateRequest(
+      "/api/v1/preferences/last-selected-context",
+      "PUT",
+      context,
+    );
+    assert.equal(remembered.status, 200);
+    const rememberedContext = await (
+      await fetch(`${base}/api/v1/preferences/last-selected-context`)
+    ).json();
+    assert.deepEqual(rememberedContext.context, context);
+
+    const preferenceRoute =
+      "/api/v1/entity-preferences/Item/987654321";
+    for (const [suffix, property] of [
+      ["/pin", "pinned"],
+      ["/hidden", "hidden"],
+    ]) {
+      const mutation = await stateRequest(
+        `${preferenceRoute}${suffix}`,
+        "PUT",
+        { ...context, [property]: true },
+      );
+      assert.equal(mutation.status, 200);
+      assert.equal((await mutation.json())[property], true);
+    }
+    const preferenceList = await (
+      await fetch(
+        `${base}/api/v1/entity-preferences?project=18&progressionTrack=Hardcore`,
+      )
+    ).json();
+    assert.equal(preferenceList.preferences.length, 1);
+    assert.equal(preferenceList.preferences[0].entityId, 987654321);
+    assert.equal(preferenceList.preferences[0].pinned, true);
+    assert.equal(preferenceList.preferences[0].hidden, true);
+
+    const investigationResponse = await stateRequest(
+      "/api/v1/saved-investigations",
+      "POST",
+      {
+        name: "Published smoke",
+        ...context,
+        definitionVersion: 1,
+        definition: {
+          futureField: { preserve: true },
+          periods: [
+            { kind: "relative", days: 90 },
+            { kind: "fixed", from: "2025-01-01", to: "2025-02-01" },
+          ],
+        },
+      },
+    );
+    assert.equal(investigationResponse.status, 201);
+    const investigation = await investigationResponse.json();
+    const investigationPath = `/api/v1/saved-investigations/${investigation.id}`;
+    const retrieved = await (await fetch(`${base}${investigationPath}`)).json();
+    assert.equal(retrieved.revision, 1);
+    assert.deepEqual(retrieved.definition.periods, [
+      { kind: "relative", days: 90 },
+      { kind: "fixed", from: "2025-01-01", to: "2025-02-01" },
+    ]);
+
     if (!options.includes("--skip-browser")) await smokeBrowser(base);
-    console.log("Single-executable smoke passed (fixture history).");
+    child.kill("SIGINT");
+    const [code, signal] = await exited;
+    if (process.platform !== "win32") {
+      assert.equal(code, 0, `Host did not stop gracefully (${signal}):\n${logs}`);
+    }
+
+    logs = "";
+    child = spawn(
+      binary,
+      ["serve", "--monitoring", "false", "--require-port", "--port", `${port}`],
+      { cwd: directory, env: environment, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    captureLogs(child);
+    exited = once(child, "exit");
+    await waitUntilHealthy();
+    const recoveredPreferences = await (
+      await fetch(
+        `${base}/api/v1/entity-preferences?project=18&progressionTrack=Hardcore`,
+      )
+    ).json();
+    assert.equal(recoveredPreferences.preferences[0].pinned, true);
+    assert.equal(recoveredPreferences.preferences[0].hidden, true);
+    assert.deepEqual(
+      (await (
+        await fetch(`${base}${investigationPath}`)
+      ).json()).definition,
+      retrieved.definition,
+    );
+    assert.deepEqual(
+      (await (
+        await fetch(`${base}/api/v1/preferences/last-selected-context`)
+      ).json()).context,
+      context,
+    );
+    assert(
+      (await readdir(path.join(directory, "data"))).includes(
+        "application-state.sqlite3",
+      ),
+    );
+    console.log(
+      "Single-executable smoke passed (fixture history and SQLite state).",
+    );
   } finally {
     if (child.exitCode === null) child.kill("SIGINT");
     const [code, signal] = await exited;

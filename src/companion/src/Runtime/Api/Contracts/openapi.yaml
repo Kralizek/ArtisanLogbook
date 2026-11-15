@@ -3,9 +3,9 @@ info:
   title: Artisan Logbook Companion local API
   version: 1.0.0
   description: >
-    Loopback-only management API of the Artisan Logbook Companion. State-changing requests must be
-    application/json and carry the X-Artisan-Logbook-Client header. Import operation identifiers are
-    process-local and are not durable across Companion restarts.
+    Loopback-only management API of the Artisan Logbook Companion. Requests with mutation bodies must
+    use application/json and carry the X-Artisan-Logbook-Client header; DELETE requests carry the
+    client header without a body. Import operation identifiers are process-local and are not durable.
 servers:
   - url: http://127.0.0.1:48721
     description: Preferred port; the actual port is printed by `artisanlogbook serve`.
@@ -479,8 +479,634 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /api/v1/entity-preferences:
+    get:
+      operationId: getEntityPreferences
+      summary: List recipe and item preferences for one game context
+      tags: [ApplicationState]
+      parameters:
+        - name: project
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+        - name: progressionTrack
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+      responses:
+        "200":
+          description: Preferences for the exact canonical game context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityPreferenceList"
+        "400": &BadRequestResponse
+          description: Invalid request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": &UnavailableResponse
+          description: Application-state persistence is unavailable or the application is stopping.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/entity-preferences/{kind}/{id}/pin:
+    put:
+      operationId: setEntityPinned
+      summary: Set the desired pinned state for one recipe or item
+      tags: [ApplicationState]
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Recipe, Item]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPinnedPreference"
+      responses:
+        "200":
+          description: The updated preference state for the entity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityPreference"
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+  /api/v1/entity-preferences/{kind}/{id}/hidden:
+    put:
+      operationId: setEntityHidden
+      summary: Set the desired hidden state for one recipe or item
+      tags: [ApplicationState]
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Recipe, Item]
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetHiddenPreference"
+      responses:
+        "200":
+          description: The updated preference state for the entity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityPreference"
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+  /api/v1/preferences/last-selected-context:
+    get:
+      operationId: getLastSelectedContext
+      summary: Read the remembered startup game-context preference
+      tags: [ApplicationState]
+      responses:
+        "200":
+          description: The context preference, or null when none has been recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LastSelectedContext"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+    put:
+      operationId: setLastSelectedContext
+      summary: Remember the last-selected game context for startup fallback
+      description: This preference is not server-side navigation state and does not scope analytical queries.
+      tags: [ApplicationState]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameContextPreference"
+      responses:
+        "200":
+          description: The remembered context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LastSelectedContext"
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+  /api/v1/saved-investigations:
+    get:
+      operationId: listSavedInvestigations
+      summary: List saved analytical investigation definitions
+      description: Definitions are returned as stored JSON; listing does not execute or update them.
+      tags: [SavedInvestigations]
+      parameters:
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+        - name: progressionTrack
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+      responses:
+        "200":
+          description: Investigations ordered by creation time and stable ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigationList"
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+    post:
+      operationId: createSavedInvestigation
+      summary: Save a named, versioned analytical definition
+      description: The JSON definition is bounded and structurally checked but is not validated as executable C12 analytics.
+      tags: [SavedInvestigations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSavedInvestigation"
+      responses:
+        "201":
+          description: Created. Location identifies the saved investigation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigation"
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+  /api/v1/saved-investigations/{id}:
+    get:
+      operationId: getSavedInvestigation
+      summary: Retrieve a saved investigation without changing it
+      tags: [SavedInvestigations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The saved investigation and its current revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigation"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404": &NotFoundResponse
+          description: The saved investigation does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+    delete:
+      operationId: deleteSavedInvestigation
+      summary: Delete a saved investigation using its expected revision
+      description: Requires X-Artisan-Logbook-Client and an empty request body.
+      tags: [SavedInvestigations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: revision
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "204":
+          description: Deleted.
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404": *NotFoundResponse
+        "409": &ConflictResponse
+          description: The supplied saved-investigation revision is stale.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+  /api/v1/saved-investigations/{id}/name:
+    put:
+      operationId: renameSavedInvestigation
+      summary: Rename a saved investigation with optimistic concurrency
+      tags: [SavedInvestigations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameSavedInvestigation"
+      responses:
+        "200":
+          description: Renamed saved investigation and incremented revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigation"
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404": *NotFoundResponse
+        "409": *ConflictResponse
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
+  /api/v1/saved-investigations/{id}/definition:
+    put:
+      operationId: replaceSavedInvestigationDefinition
+      summary: Replace a saved investigation's versioned JSON definition
+      description: Replaces the document explicitly and rejects stale revisions; it does not execute the definition.
+      tags: [SavedInvestigations]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceSavedInvestigationDefinition"
+      responses:
+        "200":
+          description: Updated saved investigation and incremented revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedInvestigation"
+        "400": *BadRequestResponse
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404": *NotFoundResponse
+        "409": *ConflictResponse
+        "411":
+          $ref: "#/components/responses/LengthRequired"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503": *UnavailableResponse
 components:
+  responses:
+    BadRequest: &BadRequest
+      description: Invalid request or canonical identity.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Host, Origin, Fetch-Metadata or client-header check failed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound: &NotFound
+      description: The saved investigation does not exist.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict: &Conflict
+      description: The supplied saved-investigation revision is stale.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    LengthRequired:
+      description: Content-Length is required for a mutation body.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    TooLarge:
+      description: Request body exceeds its endpoint-specific limit.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnsupportedMediaType:
+      description: Content-Type is not application/json.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalError:
+      description: Unexpected failure.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unavailable: &Unavailable
+      description: Application-state persistence is unavailable or the application is stopping.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
   schemas:
+    GameContext:
+      type: object
+      required: [project, progressionTrack]
+      properties:
+        project:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Blizzard WOW_PROJECT_ID, including positive future values.
+        progressionTrack:
+          type: string
+          nullable: true
+          maxLength: 256
+    GameContextPreference:
+      type: object
+      additionalProperties: false
+      required: [project]
+      properties:
+        project:
+          type: integer
+          format: int32
+          minimum: 1
+        progressionTrack:
+          type: string
+          nullable: true
+          maxLength: 256
+    LastSelectedContext:
+      type: object
+      required: [context]
+      properties:
+        context:
+          allOf:
+            - $ref: "#/components/schemas/GameContext"
+          nullable: true
+    EntityPreference:
+      type: object
+      required: [project, progressionTrack, kind, entityId, pinned, hidden]
+      properties:
+        project:
+          type: integer
+          format: int32
+        progressionTrack:
+          type: string
+          nullable: true
+        kind:
+          type: string
+          enum: [Recipe, Item]
+        entityId:
+          type: integer
+          format: int32
+        pinned:
+          type: boolean
+        hidden:
+          type: boolean
+    EntityPreferenceList:
+      type: object
+      required: [preferences]
+      properties:
+        preferences:
+          type: array
+          items:
+            $ref: "#/components/schemas/EntityPreference"
+    SetPinnedPreference:
+      type: object
+      additionalProperties: false
+      required: [project, pinned]
+      properties:
+        project:
+          type: integer
+          format: int32
+          minimum: 1
+        progressionTrack:
+          type: string
+          nullable: true
+          maxLength: 256
+        pinned:
+          type: boolean
+    SetHiddenPreference:
+      type: object
+      additionalProperties: false
+      required: [project, hidden]
+      properties:
+        project:
+          type: integer
+          format: int32
+          minimum: 1
+        progressionTrack:
+          type: string
+          nullable: true
+          maxLength: 256
+        hidden:
+          type: boolean
+    CreateSavedInvestigation:
+      type: object
+      additionalProperties: false
+      required: [name, project, definitionVersion, definition]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        project:
+          type: integer
+          format: int32
+          minimum: 1
+        progressionTrack:
+          type: string
+          nullable: true
+          maxLength: 256
+        definitionVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        definition:
+          type: object
+          description: Bounded versioned JSON document; analytical fields are owned by C12.
+          additionalProperties: true
+    RenameSavedInvestigation:
+      type: object
+      additionalProperties: false
+      required: [name, revision]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+    ReplaceSavedInvestigationDefinition:
+      type: object
+      additionalProperties: false
+      required: [definitionVersion, definition, revision]
+      properties:
+        definitionVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        definition:
+          type: object
+          description: Bounded versioned JSON document; analytical fields are owned by C12.
+          additionalProperties: true
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+    SavedInvestigation:
+      type: object
+      required: [id, name, project, progressionTrack, definitionVersion, definition, createdAt, updatedAt, revision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        project:
+          type: integer
+          format: int32
+        progressionTrack:
+          type: string
+          nullable: true
+        definitionVersion:
+          type: integer
+          format: int32
+        definition:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        revision:
+          type: integer
+          format: int64
+    SavedInvestigationList:
+      type: object
+      required: [investigations]
+      properties:
+        investigations:
+          type: array
+          items:
+            $ref: "#/components/schemas/SavedInvestigation"
     MonitoringPreferences:
       type: object
       description: Monitoring preferences shared deliberately by saved and effective projections.
