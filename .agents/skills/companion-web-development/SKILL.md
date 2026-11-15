@@ -228,21 +228,29 @@ for recovery and the supported separate-process alternative.
   -p:CompanionWebDevelopment=false`; do not reuse development assets via
   `--no-build`. Contract tests compare the committed SDL/OpenAPI with the host.
 - `npm run test:development` from `web` launches real Aspire with temporary
-  history, imports a fixture, checks proxy health/security, browser navigation,
-  pagination/refresh, React/CSS HMR and explicit contract regeneration. Browser
-  validation needs `npx playwright install --with-deps chromium`; downloading
-  Chromium alone is insufficient in minimal Linux containers. Report missing
-  OS libraries or unavailable privileged installation as unverified checks.
+  history, imports a fixture and checks health, Vite, REST and GraphQL. It uses
+  the normal development installer, not a stub. Run it for relevant tooling
+  changes; manually verify React/CSS HMR when needed. It is not ordinary CI.
 - After normal .NET restore, `node tools/smoke-incremental.mjs` checks production
-  output recovery and unchanged-build skipping. For publication changes, follow
+  output recovery and unchanged-build skipping; run it for build-target changes,
+  not every PR. For publication changes, follow
   the exact linux-x64/win-x64 publish commands in
   [executable-only validation](../../../docs/companion/web.md#publish-and-verify-one-executable)
   and run `node tools/smoke-publish.mjs .artifacts/publish/linux-x64/artisanlogbook
   ../addon/tests/fixtures/legacy/v1-outcome1.lua` (use the Windows executable path
   there on Windows). It copies only the executable to an empty directory,
-  removes Node/npm/Aspire from the child PATH, tests embedded assets/API/security
-  and empty/imported history with Chromium. A successful Vite build alone does
-  not validate a single-executable distribution.
+  removes Node/npm/Aspire from the child PATH, imports a fixture and tests
+  embedded assets and representative APIs. Linux CI additionally runs a minimal
+  Chromium smoke; Windows CI tests the deployment script and alias without a
+  browser. Browser validation needs `npx playwright install --with-deps
+  --only-shell chromium`. A successful Vite build alone does not validate
+  a single-executable distribution.
+- Normal CI runs the full .NET suite on both OSes and frontend lint, formatting
+  and unit tests on Linux. Existing backend tests cover security and contracts;
+  frontend component tests cover pagination, freshness, cancellation and errors.
+  For Windows deployment failure changes, run
+  `scripts/tests/Deploy-Companion.Tests.ps1` on Windows with no concurrent build:
+  it temporarily modifies codegen and invalidates the npm restore.
 
 ## Skill Discovery
 

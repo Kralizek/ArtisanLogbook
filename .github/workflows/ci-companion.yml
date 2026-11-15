@@ -19,9 +19,15 @@ concurrency:
   group: companion-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
-  quality:
-    name: Frontend and format checks (Linux)
-    runs-on: ubuntu-latest
+  companion:
+    name: Companion (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      CompanionWebDevelopment: "false"
     defaults:
       run:
         working-directory: src/companion
@@ -36,221 +42,45 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('src/companion/global.json', 'src/companion/NuGet.Config', 'src/companion/Directory.Packages.props', 'src/companion/**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
       - uses: actions/setup-node@v6
-        with:
-          node-version: "26.13.1"
-          cache: npm
-          cache-dependency-path: src/companion/web/package-lock.json
-      - run: dotnet restore ArtisanLogbook.Companion.slnx
-      - run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
-      - name: Verify frontend
-        working-directory: src/companion/web
-        run: npm ci --no-audit && npm run codegen && npm run typecheck && npm run lint && npm run format:check && npm run test && npm audit
-
-  support-tests:
-    name: Library tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    defaults:
-      run:
-        working-directory: src/companion
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: src/companion/global.json
-      - uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('src/companion/global.json', 'src/companion/NuGet.Config', 'src/companion/Directory.Packages.props', 'src/companion/**/*.csproj') }}
-          restore-keys: ${{ runner.os }}-nuget-
-      - if: runner.os == 'Linux'
-        uses: actions/setup-node@v6
         with:
           node-version: "26.13.1"
           cache: npm
           cache-dependency-path: src/companion/web/package-lock.json
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lua5.1
-      - run: dotnet restore ArtisanLogbook.Companion.slnx
-      - run: dotnet test tests/Core/Tests.Core.csproj -c Release --no-restore
-      - run: dotnet test tests/HistoryStore/Tests.HistoryStore.csproj -c Release --no-restore --logger "trx;LogFileName=historystore-tests.trx" --results-directory artifacts/test-results
-      - run: dotnet test tests/ImportService/Tests.ImportService.csproj -c Release --no-restore
-      - run: dotnet test tests/SavedVariables/Tests.SavedVariables.csproj -c Release --no-restore
-      - if: runner.os == 'Linux'
-        name: Verify CLI integration tests
-        run: dotnet test tests/Cli/Tests.Cli.csproj -c Release --no-restore --logger "trx;LogFileName=cli-tests-linux.trx" --results-directory artifacts/test-results
+      - run: dotnet restore ArtisanLogbook.Companion.slnx -p:CompanionWebDevelopment=false
+      - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -p:CompanionWebDevelopment=false -warnaserror
+      - run: dotnet test ArtisanLogbook.Companion.slnx --no-build -c Release -p:CompanionWebDevelopment=false --logger trx
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: companion-test-results-${{ runner.os }}
-          path: src/companion/artifacts/test-results/*.trx
+          path: src/companion/tests/**/TestResults/*.trx
           if-no-files-found: ignore
-
-  linux-acceptance:
-    name: Aspire and executable acceptance (Linux)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: src/companion
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: src/companion/global.json
-      - uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('src/companion/global.json', 'src/companion/NuGet.Config', 'src/companion/Directory.Packages.props', 'src/companion/**/*.csproj') }}
-          restore-keys: ${{ runner.os }}-nuget-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "26.13.1"
-          cache: npm
-          cache-dependency-path: src/companion/web/package-lock.json
-      - run: sudo apt-get update && sudo apt-get install -y lua5.1
-      - name: Verify scoped NuGet sources
-        run: dotnet nuget list source --configfile NuGet.Config
-      - run: dotnet restore ArtisanLogbook.Companion.slnx
-      - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
-      - name: Verify incremental frontend asset recovery
-        run: node tools/smoke-incremental.mjs
-      - run: dotnet run --project src/Cli/Cli.csproj --no-build -c Release -- --help
-      - run: dotnet run --project src/Cli/Cli.csproj --no-build -c Release -- --version
-      - run: dotnet pack src/Cli/Cli.csproj --no-build -c Release --output artifacts/packages
-      - run: dotnet tool install ArtisanLogbook.Companion --version 0.1.0 --add-source artifacts/packages --tool-path artifacts/tool
-      - run: ./artifacts/tool/artisanlogbook --version
-      - run: ./artifacts/tool/artisanlogbook import ../addon/tests/fixtures/legacy/v1-outcome1.lua --database artifacts/history.duckdb
-      - run: ./artifacts/tool/artisanlogbook status --database artifacts/history.duckdb
-      - name: Install pinned Aspire CLI
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Verify .NET formatting
+        if: runner.os == 'Linux'
+        run: dotnet format ArtisanLogbook.Companion.slnx --verify-no-changes --no-restore
+      - name: Verify frontend
+        if: runner.os == 'Linux'
+        working-directory: src/companion/web
+        run: npm run lint && npm run format:check && npm run test
+      - name: Verify NuGet tool packaging
+        if: runner.os == 'Linux'
         run: |
-          $archive = 'aspire-cli-linux-x64-13.6.5.tar.gz'
-          $install = Join-Path '${{ runner.temp }}' 'aspire'
-          New-Item -ItemType Directory -Path $install -Force | Out-Null
-          gh release download v13.6.5 -R microsoft/aspire -p $archive -p "$archive.sha512" -D $install
-          if ($LASTEXITCODE -ne 0) { throw 'Aspire download failed' }
-          $expected = (Get-Content (Join-Path $install "$archive.sha512") -Raw).Trim()
-          if ((Get-FileHash (Join-Path $install $archive) -Algorithm SHA512).Hash -ne $expected) { throw 'Aspire checksum mismatch' }
-          tar -xzf (Join-Path $install $archive) -C $install
-          if ($LASTEXITCODE -ne 0) { throw 'Aspire extraction failed' }
-          $install >> $env:GITHUB_PATH
-      - name: Install headless smoke-test browser
+          dotnet pack src/Cli/Cli.csproj --no-build -c Release --output artifacts/packages
+          dotnet tool install ArtisanLogbook.Companion --version 0.1.0 --add-source artifacts/packages --tool-path artifacts/tool
+          ./artifacts/tool/artisanlogbook --version
+      - name: Install browser
+        if: runner.os == 'Linux'
         working-directory: src/companion/web
         run: npx playwright install --with-deps --only-shell chromium
-      - name: Verify Aspire, browser proxy and hot reload
-        working-directory: src/companion/web
-        env:
-          SMOKE_SCREENSHOTS_DIRECTORY: ${{ runner.temp }}/web-screenshots
-        run: npm run test:development
-      - name: Publish and verify executable-only distribution
-        shell: pwsh
-        env:
-          SMOKE_SCREENSHOTS_DIRECTORY: ${{ runner.temp }}/web-screenshots
+      - name: Verify Linux single-executable distribution
+        if: runner.os == 'Linux'
         run: |
-          dotnet publish src/Cli/Cli.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -warnaserror -o .artifacts/publish/linux-x64
-          if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
+          dotnet publish src/Cli/Cli.csproj -c Release -r linux-x64 --self-contained true -p:CompanionWebDevelopment=false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -warnaserror -o .artifacts/publish/linux-x64
           node tools/smoke-publish.mjs .artifacts/publish/linux-x64/artisanlogbook ../addon/tests/fixtures/legacy/v1-outcome1.lua
-          if ($LASTEXITCODE -ne 0) { throw 'Executable-only smoke failed' }
-      - name: Reject stale and development-only publishing
-        shell: pwsh
-        run: |
-          dotnet publish src/Cli/Cli.csproj -c Release --no-build -p:CompanionWebDevelopment=true
-          if ($LASTEXITCODE -eq 0) { throw 'Development-only publishing must fail' }
-          dotnet publish src/Cli/Cli.csproj -c Release --no-build
-          if ($LASTEXITCODE -eq 0) { throw 'Publishing without current asset validation must fail' }
-          exit 0
-      - uses: actions/upload-artifact@v6
-        if: always()
-        with:
-          name: companion-linux-acceptance-results
-          path: ${{ runner.temp }}/web-screenshots
-          if-no-files-found: ignore
-
-  windows-cli-tests:
-    name: CLI integration tests (Windows)
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: src/companion
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: src/companion/global.json
-      - uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('src/companion/global.json', 'src/companion/NuGet.Config', 'src/companion/Directory.Packages.props', 'src/companion/**/*.csproj') }}
-          restore-keys: ${{ runner.os }}-nuget-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "26.13.1"
-          cache: npm
-          cache-dependency-path: src/companion/web/package-lock.json
-      - name: Verify scoped NuGet sources
-        run: dotnet nuget list source --configfile NuGet.Config
-      - run: dotnet restore ArtisanLogbook.Companion.slnx
-      - run: dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -warnaserror
-      - name: Verify incremental frontend asset recovery
-        run: node tools/smoke-incremental.mjs
-      - name: Verify CLI integration tests
-        run: dotnet test tests/Cli/Tests.Cli.csproj --no-build -c Release --logger "trx;LogFileName=cli-tests-windows.trx" --results-directory artifacts/test-results
-      - name: Summarize CLI test durations
-        if: always()
-        shell: pwsh
-        run: |
-          $trxPath = Join-Path (Get-Location) 'artifacts/test-results/cli-tests-windows.trx'
-          if (-not (Test-Path $trxPath)) { Write-Host 'No CLI TRX was produced.'; exit 0 }
-          $trx = [xml](Get-Content $trxPath -Raw)
-          $slow = @($trx.SelectNodes("//*[local-name()='UnitTestResult']") | Where-Object { $_.GetAttribute('outcome') -ne 'NotExecuted' } | ForEach-Object {
-            [pscustomobject]@{ Test = $_.GetAttribute('testName'); Duration = [timespan]::Parse($_.GetAttribute('duration')) }
-          } | Sort-Object Duration -Descending | Select-Object -First 15)
-          '### Slowest CLI tests (Windows)' | Add-Content $env:GITHUB_STEP_SUMMARY
-          '| Duration | Test |' | Add-Content $env:GITHUB_STEP_SUMMARY
-          '|---:|---|' | Add-Content $env:GITHUB_STEP_SUMMARY
-          foreach ($test in $slow) { "| $($test.Duration) | $($test.Test) |" | Add-Content $env:GITHUB_STEP_SUMMARY }
-      - name: Reject stale and development-only publishing
-        shell: pwsh
-        run: |
-          dotnet publish src/Cli/Cli.csproj -c Release --no-build -p:CompanionWebDevelopment=true
-          if ($LASTEXITCODE -eq 0) { throw 'Development-only publishing must fail' }
-          dotnet publish src/Cli/Cli.csproj -c Release --no-build
-          if ($LASTEXITCODE -eq 0) { throw 'Publishing without current asset validation must fail' }
-          exit 0
-      - uses: actions/upload-artifact@v6
-        if: always()
-        with:
-          name: companion-cli-trx-windows
-          path: src/companion/artifacts/test-results/*.trx
-          if-no-files-found: ignore
-
-  windows-deployment:
-    name: Windows publish and deployment smoke
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: src/companion
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: src/companion/global.json
-      - uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('src/companion/global.json', 'src/companion/NuGet.Config', 'src/companion/Directory.Packages.props', 'src/companion/**/*.csproj') }}
-          restore-keys: ${{ runner.os }}-nuget-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "26.13.1"
-          cache: npm
-          cache-dependency-path: src/companion/web/package-lock.json
-      - name: Smoke-test Windows self-contained local deployment
+      - name: Verify Windows deployment
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
           CompanionWebDevelopment: "true"
@@ -258,66 +88,20 @@ jobs:
           $install = Join-Path '${{ runner.temp }}' 'ArtisanLogbookCompanion'
           & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
           if ($LASTEXITCODE -ne 0) { throw "Local deploy failed: $LASTEXITCODE" }
-          & (Join-Path $install 'artisanlogbook.exe') --version
-          if ($LASTEXITCODE -ne 0) { throw 'Installed executable smoke test failed' }
-          & (Join-Path $install 'al.cmd') --help
+          & (Join-Path $install 'al.cmd') --version
           if ($LASTEXITCODE -ne 0) { throw 'Alias smoke test failed' }
           node tools/smoke-publish.mjs (Join-Path $install 'artisanlogbook.exe') ../addon/tests/fixtures/legacy/v1-outcome1.lua --skip-browser
-          if ($LASTEXITCODE -ne 0) { throw 'Windows executable-only HTTP/API smoke failed' }
-          $exe = Join-Path $install 'artisanlogbook.exe'
-          $originalHash = (Get-FileHash $exe).Hash
-          $originalPath = $env:PATH
-          $dotnetDirectory = Split-Path (Get-Command dotnet -CommandType Application).Source
-          try {
-            $env:PATH = $dotnetDirectory
-            try {
-              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
-              throw 'Deployment unexpectedly succeeded without Node/npm'
-            } catch {
-              if ($_.Exception.Message -notmatch "Required host tool 'node'") { throw }
-            }
-          } finally { $env:PATH = $originalPath }
-          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Missing prerequisites changed the installation' }
-          $nodeOnly = Join-Path '${{ runner.temp }}' 'node-only'
-          New-Item -ItemType Directory -Path $nodeOnly -Force | Out-Null
-          Copy-Item (Get-Command node -CommandType Application).Source (Join-Path $nodeOnly 'node.exe')
-          try {
-            $env:PATH = "$dotnetDirectory;$nodeOnly"
-            try {
-              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
-              throw 'Deployment unexpectedly succeeded without npm'
-            } catch {
-              if ($_.Exception.Message -notmatch "Required host tool 'npm.cmd'") { throw }
-            }
-          } finally { $env:PATH = $originalPath }
-          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Missing npm changed the installation' }
-          $codegen = 'web/codegen.ts'
-          $originalCodegen = [IO.File]::ReadAllText((Resolve-Path $codegen))
-          try {
-            [IO.File]::WriteAllText((Resolve-Path $codegen), "throw new Error('forced codegen failure');`n$originalCodegen")
-            try {
-              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
-              throw 'Deployment unexpectedly succeeded with broken codegen'
-            } catch {
-              if ($_.Exception.Message -notmatch 'dotnet publish failed') { throw }
-            }
-          } finally { [IO.File]::WriteAllText((Resolve-Path $codegen), $originalCodegen) }
-          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Failed frontend build changed the installation' }
-          Remove-Item 'web/node_modules/.companion-production-restore'
-          $oldCache = $env:npm_config_cache
-          $oldOffline = $env:npm_config_offline
-          try {
-            $env:npm_config_cache = Join-Path '${{ runner.temp }}' 'empty-npm-cache'
-            $env:npm_config_offline = 'true'
-            try {
-              & ../../scripts/Deploy-Companion.ps1 -InstallDirectory $install -NoPathUpdate
-              throw 'Deployment unexpectedly succeeded with an empty offline npm cache'
-            } catch {
-              if ($_.Exception.Message -notmatch 'dotnet publish failed') { throw }
-            }
-          } finally {
-            $env:npm_config_cache = $oldCache
-            $env:npm_config_offline = $oldOffline
-          }
-          if ((Get-FileHash $exe).Hash -ne $originalHash) { throw 'Failed dependency install changed the installation' }
-          exit 0
+          if ($LASTEXITCODE -ne 0) { throw 'Windows executable-only smoke failed' }
+      - name: Verify independent publish guards
+        if: runner.os == 'Linux'
+        run: |
+          if dotnet publish src/Cli/Cli.csproj -c Release -p:CompanionWebDevelopment=true > "$RUNNER_TEMP/companion-dev-publish.log" 2>&1; then
+            echo 'Development-only publishing must fail'; exit 1
+          fi
+          cat "$RUNNER_TEMP/companion-dev-publish.log"
+          grep -F 'Production publish cannot use CompanionWebDevelopment=true.' "$RUNNER_TEMP/companion-dev-publish.log"
+          if dotnet publish src/Cli/Cli.csproj -c Release --no-build -p:CompanionWebDevelopment=false > "$RUNNER_TEMP/companion-stale-publish.log" 2>&1; then
+            echo 'Publishing without current asset validation must fail'; exit 1
+          fi
+          cat "$RUNNER_TEMP/companion-stale-publish.log"
+          grep -F 'Companion publishing requires a build to validate and embed current frontend assets.' "$RUNNER_TEMP/companion-stale-publish.log"

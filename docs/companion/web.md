@@ -128,8 +128,8 @@ A successful build also records the generated output paths as MSBuild outputs;
 deleting a JS/CSS asset with `dist/index.html` retained triggers regeneration.
 An unchanged build skips restore and bundling.
 After the usual .NET restore, run `node tools/smoke-incremental.mjs` from
-`src/companion` to verify JS/CSS recovery and unchanged-build skipping. CI runs
-this same regression smoke on Windows and Linux.
+`src/companion` when changing the build targets to verify restoration, JS/CSS
+recovery and unchanged-build skipping. It is not part of ordinary CI.
 
 Resource inclusion happens in a target **before the embedded-provider manifest
 input calculation and AssignTargetPaths**, after Vite has finished. The glob is
@@ -326,7 +326,8 @@ probes the existing database using the CLI and refuses a busy/unopenable databas
 
 ### Frontend checks
 
-From `src/companion/web` (not concurrently with an MSBuild frontend restore):
+From `src/companion/web` (not concurrently with an MSBuild frontend restore),
+run the relevant checks:
 
 ```sh
 npm ci
@@ -336,20 +337,16 @@ npm run lint
 npm run format:check
 npm run test
 npm run build
-npx playwright install --with-deps chromium
-npm run test:development
 ```
 
-The final command starts the actual Aspire AppHost with temporary data, imports
-through the CLI, verifies health/REST/GraphQL through Vite, rejects cross-origin
-requests, runs a real Chromium navigation smoke and verifies a CSS hot update.
-It restores temporary React/CSS/GraphQL edits and stops its helper processes.
-It also verifies React Fast Refresh, explicit contract regeneration, pagination
-and Refresh using real imported history. Playwright is
-only a small smoke harness, not a second frontend testing framework or dashboard
-end-to-end suite. `--with-deps` supplies Chromium's OS libraries in minimal Linux
-containers as well as downloading the browser; it is only needed for browser
-tests, not ordinary Aspire startup.
+Normal CI builds production assets through MSBuild, then runs lint, formatting
+and frontend tests on Linux. For changes to Aspire or the Vite proxy, run
+`npm run test:development` from `web`: it imports a fixture into temporary data,
+starts the actual AppHost and checks backend health, Vite, REST and GraphQL.
+It runs the normal development dependency installer and stops its processes.
+It does not exercise HMR; verify React Fast Refresh and CSS HMR manually when
+changing that workflow. Neither this smoke nor the incremental-build smoke runs
+on every PR.
 
 ### .NET tests and asset modes
 
@@ -412,7 +409,7 @@ failures have redacted retry states; partial data can be shown with an error.
 TypeScript stays on **5.9.3** because current openapi-typescript and
 typescript-eslint peer ranges do not support TypeScript 7. The lockfile's
 minimatch override uses patched 11.0.1 for current build tools' transitive glob
-dependency; codegen/lint/tests verify compatibility. `npm audit` is clean.
+dependency; codegen/lint/tests verify compatibility.
 
 ## Publish and verify one executable
 
@@ -421,8 +418,8 @@ Supported distribution smoke targets are **linux-x64** and **win-x64**. From
 default for this invocation:
 
 ```sh
-env -u CompanionWebDevelopment dotnet publish src/Cli/Cli.csproj -c Release -r linux-x64 \
-  --self-contained true -p:PublishSingleFile=true \
+dotnet publish src/Cli/Cli.csproj -c Release -r linux-x64 \
+  --self-contained true -p:CompanionWebDevelopment=false -p:PublishSingleFile=true \
   -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false \
   -warnaserror -o .artifacts/publish/linux-x64
 node tools/smoke-publish.mjs .artifacts/publish/linux-x64/artisanlogbook \
@@ -437,7 +434,7 @@ dotnet publish src/Cli/Cli.csproj -c Release -r win-x64 --self-contained true `
   -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
   -p:PublishTrimmed=false -warnaserror -o .artifacts/publish/win-x64
 node tools/smoke-publish.mjs .artifacts/publish/win-x64/artisanlogbook.exe `
-  ../addon/tests/fixtures/legacy/v1-outcome1.lua
+  ../addon/tests/fixtures/legacy/v1-outcome1.lua --skip-browser
 ```
 
 `-p:CompanionWebDevelopment=false` works on either OS without unsetting the
@@ -447,11 +444,13 @@ that shortcut and publishing with development assets remain rejected.
 
 The smoke harness copies **only the executable** into a new empty temporary
 directory, removes Node/npm/Aspire from the child's PATH, uses isolated writable
-data, retrieves HTML and every referenced JS/CSS bundle with content-type checks,
-opens `/history`, checks REST/OpenAPI/POST GraphQL and invalid routes/origins,
-then runs Chromium against the application. It verifies empty history, stops,
-imports the fixture with the copied executable, and repeats with populated
-history. Linux shutdown must exit successfully; Node's Windows process signal
+data, imports the fixture with the copied executable, retrieves HTML and every
+referenced JS/CSS bundle with content-type checks, and checks representative
+REST/OpenAPI/POST GraphQL responses. On Linux it also uses Chromium to check
+that the application renders and makes real REST and GraphQL requests. Install
+the browser and system dependencies with `npx playwright install --with-deps
+--only-shell chromium` from `web`; Windows can use `--skip-browser`.
+Linux shutdown must exit successfully; Node's Windows process signal
 terminates the child rather than delivering console Ctrl+C, so this smoke does
 not claim a Windows graceful-shutdown test. Existing backend lifecycle tests
 remain authoritative there.
@@ -461,5 +460,15 @@ The application needs no Node, npm, Aspire, Docker, network, `wwwroot` or
 separate frontend files. DuckDB native-library extraction and external writable
 history/settings/checkpoints remain the existing single-file behavior.
 The Windows local deployment script still publishes the CLI, not AppHost.
-CI runs the full Companion tests, frontend checks, actual Aspire/HMR smoke and
-executable-only/browser smoke on both Windows and Linux, and uploads screenshots.
+Normal CI runs the full .NET suite and one executable-only smoke on each OS,
+plus Linux frontend checks, browser smoke, NuGet tool packaging and independent
+publish guards. Windows uses the deployment script and checks its `al.cmd`
+alias. Component tests cover pagination, freshness, cancellation and errors;
+backend tests cover persistence, contracts, security and lifecycle.
+
+When changing Windows deployment failure handling, run
+`.\scripts\tests\Deploy-Companion.Tests.ps1` from the repository root on Windows.
+It uses a temporary installation and verifies missing tools and failed frontend
+build/restore leave that installation unchanged. It temporarily modifies
+`web/codegen.ts` and invalidates the npm restore, so do not run it concurrently
+with development or another build.

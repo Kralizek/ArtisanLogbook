@@ -50,6 +50,10 @@ partitioned by platform and asset mode. Do not run host/container builds or
 a separate npm restore concurrently against the same checkout.
 See the [browser development guide](docs/companion/web.md) for Aspire startup,
 isolated fixtures, frontend checks and executable-only production verification.
+Normal CI runs the complete .NET suite and an executable smoke on Linux and
+Windows; frontend lint, formatting and unit tests run on Linux. Aspire and
+incremental-build smokes are targeted checks for changes to those tools, not
+part of every PR.
 
 On Windows, the repository-root `scripts/Deploy-Companion.ps1` creates a local development installation. See the [Companion guide](src/companion/README.md) for user-facing commands.
 
