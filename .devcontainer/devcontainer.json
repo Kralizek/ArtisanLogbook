@@ -49,7 +49,7 @@
       "requireLocalPort": true
     }
   },
-  "postCreateCommand": "sudo chown vscode:vscode src/companion/web/node_modules && aspire certs trust --non-interactive && cd src/companion/web && npm run install:development && npx playwright install --with-deps --only-shell chromium",
+  "postCreateCommand": "sudo chown vscode:vscode src/companion/web/node_modules && aspire certs trust --non-interactive && cd src/companion/web && npm run install:development && npx playwright install --with-deps chromium",
   "remoteUser": "vscode",
   "customizations": {
     "vscode": {
