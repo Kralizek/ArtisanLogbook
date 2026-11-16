@@ -17,9 +17,11 @@ public sealed record AnalysisBucket(string Start, AnalysisMeasure Measure);
 
 public sealed record AnalysisCollection<T>(IReadOnlyList<T> Nodes, bool Truncated);
 
+/// <summary>Ineligible attempts cannot produce the outcome (e.g. Ingenuity without Concentration);
+/// they are neither observed nor unknown.</summary>
 public sealed record AnalysisOutcome(
     string ObservedAttempts, string PositiveAttempts, string? Total,
-    string UnknownAttempts);
+    string UnknownAttempts, string IneligibleAttempts = "0");
 
 public sealed record AnalysisPopulationMetrics(AnalysisMeasure Production,
     AnalysisOutcome Ingenuity, AnalysisOutcome Resourcefulness, AnalysisOutcome Multicraft,

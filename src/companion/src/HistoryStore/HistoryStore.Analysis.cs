@@ -278,7 +278,10 @@ public sealed partial class HistoryStore
                 NOT c.OutputsObserved OR t.Measured IS DISTINCT FROM t.RowCount) AS VARCHAR) ProductionIncomplete,
             CAST(SUM(CASE WHEN c.OutputsComplete = TRUE AND c.OutputsObserved AND t.RowCount IS NULL
                 THEN 0 ELSE t.Quantity END) AS VARCHAR) ProductionQuantity,
-            CAST(COUNT(c.HasIngenuityProc) AS VARCHAR) IngenuityObserved,
+            CAST(COUNT(*) FILTER (WHERE c.HasIngenuityProc = TRUE OR
+                (c.HasIngenuityProc = FALSE AND c.ConcentrationSpent > 0)) AS VARCHAR) IngenuityObserved,
+            CAST(COUNT(*) FILTER (WHERE c.ConcentrationSpent = 0 AND
+                c.HasIngenuityProc IS DISTINCT FROM TRUE) AS VARCHAR) IngenuityIneligible,
             CAST(COUNT(*) FILTER (WHERE c.HasIngenuityProc) AS VARCHAR) IngenuityPositive,
             CAST(COUNT(c.HasResourcefulnessProc) AS VARCHAR) ResourcefulnessObserved,
             CAST(COUNT(*) FILTER (WHERE c.HasResourcefulnessProc) AS VARCHAR) ResourcefulnessPositive,
@@ -288,10 +291,10 @@ public sealed partial class HistoryStore
             CAST(COUNT(c.ConcentrationSpent) AS VARCHAR) ConcentrationObserved,
             CAST(COUNT(*) FILTER (WHERE c.ConcentrationSpent > 0) AS VARCHAR) ConcentrationPositive,
             CAST(SUM(CAST(c.ConcentrationSpent AS HUGEINT)) AS VARCHAR) ConcentrationTotal,
-            CAST(COUNT(*) FILTER (WHERE c.HasIngenuityProc = FALSE OR
+            CAST(COUNT(*) FILTER (WHERE (c.HasIngenuityProc = FALSE AND c.ConcentrationSpent > 0) OR
                 (c.HasIngenuityProc = TRUE AND c.IngenuityRefund IS NOT NULL)) AS VARCHAR) RefundObserved,
             CAST(COUNT(*) FILTER (WHERE c.HasIngenuityProc = TRUE AND c.IngenuityRefund > 0) AS VARCHAR) RefundPositive,
-            CAST(SUM(CASE WHEN c.HasIngenuityProc = FALSE THEN CAST(0 AS HUGEINT)
+            CAST(SUM(CASE WHEN c.HasIngenuityProc = FALSE AND c.ConcentrationSpent > 0 THEN CAST(0 AS HUGEINT)
                 WHEN c.HasIngenuityProc = TRUE THEN CAST(c.IngenuityRefund AS HUGEINT) END) AS VARCHAR) RefundTotal
             """;
         (string sql, DynamicParameters args) = Selection(query.Crafts);
@@ -545,10 +548,12 @@ public sealed partial class HistoryStore
             """, r => new(r.RecipeId, r.RecipeName, r.CharacterKey, r.CharacterName, r.Measure()));
     }
 
-    private static AnalysisOutcome Outcome(string observed, string positive, string? total, string attempts) =>
+    private static AnalysisOutcome Outcome(string observed, string positive, string? total, string attempts,
+        string ineligible = "0") =>
         new(observed, positive, total,
-            (long.Parse(attempts, CultureInfo.InvariantCulture) - long.Parse(observed, CultureInfo.InvariantCulture))
-                .ToString(CultureInfo.InvariantCulture));
+            (long.Parse(attempts, CultureInfo.InvariantCulture) - long.Parse(observed, CultureInfo.InvariantCulture) -
+                long.Parse(ineligible, CultureInfo.InvariantCulture)).ToString(CultureInfo.InvariantCulture),
+            ineligible);
 
     private class MeasureRow
     {
@@ -587,6 +592,7 @@ public sealed partial class HistoryStore
         public string? ProductionQuantity { get; set; }
         public string IngenuityObserved { get; set; } = "0";
         public string IngenuityPositive { get; set; } = "0";
+        public string IngenuityIneligible { get; set; } = "0";
         public string ResourcefulnessObserved { get; set; } = "0";
         public string ResourcefulnessPositive { get; set; } = "0";
         public string MulticraftObserved { get; set; } = "0";
@@ -607,11 +613,11 @@ public sealed partial class HistoryStore
 
         public AnalysisPopulationMetrics Metrics() => new(
             new(Attempts, ProductionMeasured, ProductionIncomplete, ProductionQuantity),
-            Outcome(IngenuityObserved, IngenuityPositive, null, Attempts),
+            Outcome(IngenuityObserved, IngenuityPositive, null, Attempts, IngenuityIneligible),
             Outcome(ResourcefulnessObserved, ResourcefulnessPositive, null, Attempts),
             Outcome(MulticraftObserved, MulticraftPositive, MulticraftTotal, Attempts),
             Outcome(ConcentrationObserved, ConcentrationPositive, ConcentrationTotal, Attempts),
-            Outcome(RefundObserved, RefundPositive, RefundTotal, Attempts));
+            Outcome(RefundObserved, RefundPositive, RefundTotal, Attempts, IngenuityIneligible));
     }
 
     private sealed class ConfigurationRow : MetricsRow

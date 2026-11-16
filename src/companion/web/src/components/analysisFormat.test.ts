@@ -133,18 +133,27 @@ it("normalizes using only observed attempts, retaining unknown and unsupported o
     ingenuity: {
       observedAttempts: "3",
       positiveAttempts: "1",
-      unknownAttempts: "6",
+      unknownAttempts: "4",
       total: "1",
     },
     resourcefulness: null,
     multicraft: null,
-    concentration: null,
+    concentration: {
+      observedAttempts: "9",
+      positiveAttempts: "4",
+      unknownAttempts: "0",
+      total: "520",
+    },
     refund: null,
   });
-  expect(rows).toHaveLength(2);
+  expect(rows).toHaveLength(3);
   expect(rows[0].value).toBe("Not measured");
   expect(rows[0].coverage).toContain("7 incomplete");
-  expect(rows[1].coverage).toContain("6 unknown");
+  expect(rows[1].value).toBe("1 proc");
+  expect(rows[1].coverage).toBe(
+    "3 observed of 9 attempts · 2 without Concentration · 4 unknown",
+  );
+  expect(rows[2].value).toBe("4 attempts used · 520 spent");
   expect(
     outcomeRows(
       "9",

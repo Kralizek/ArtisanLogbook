@@ -127,23 +127,42 @@ export function outcomeRows(
     },
   ];
   if (!includeRetailOutcomes) return rows;
-  for (const [label, outcome] of [
-    ["Ingenuity procs", metrics.ingenuity],
-    ["Resourcefulness procs", metrics.resourcefulness],
-    ["Multicraft bonus", metrics.multicraft],
-    ["Concentration spent", metrics.concentration],
-    ["Ingenuity refund", metrics.refund],
+  for (const [label, outcome, attemptsLabel, totalLabel] of [
+    ["Ingenuity procs", metrics.ingenuity, ["proc", "procs"], null],
+    ["Resourcefulness procs", metrics.resourcefulness, ["proc", "procs"], null],
+    ["Multicraft bonus", metrics.multicraft, ["proc", "procs"], "bonus items"],
+    [
+      "Concentration spent",
+      metrics.concentration,
+      ["attempt used", "attempts used"],
+      "spent",
+    ],
+    ["Ingenuity refund", metrics.refund, ["refund", "refunds"], "refunded"],
   ] as const) {
     if (!outcome) continue;
+    // Attempts that are neither observed nor unknown could not produce the outcome.
+    const ineligible =
+      BigInt(attempts) -
+      BigInt(outcome.observedAttempts) -
+      BigInt(outcome.unknownAttempts);
     rows.push({
       label,
-      value: `${exact(outcome.positiveAttempts)} positive · ${exact(outcome.total)} total`,
+      value:
+        `${exact(outcome.positiveAttempts)} ${attemptsLabel[outcome.positiveAttempts === "1" ? 0 : 1]}` +
+        (totalLabel && outcome.total != null
+          ? ` · ${exact(outcome.total)} ${totalLabel}`
+          : ""),
       normalized: rate(outcome),
       observed: {
         positiveAttempts: outcome.positiveAttempts,
         observedAttempts: outcome.observedAttempts,
       },
-      coverage: `${exact(outcome.observedAttempts)} observed of ${exact(attempts)} attempts · ${exact(outcome.unknownAttempts)} unknown`,
+      coverage: `${exact(outcome.observedAttempts)} observed of ${exact(attempts)} attempts${
+        ineligible > 0n &&
+        (outcome === metrics.ingenuity || outcome === metrics.refund)
+          ? ` · ${exact(String(ineligible))} without Concentration`
+          : ""
+      } · ${exact(outcome.unknownAttempts)} unknown`,
     });
   }
   return rows;

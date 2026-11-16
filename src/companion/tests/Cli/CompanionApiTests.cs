@@ -318,7 +318,7 @@ public sealed class CompanionApiTests
             }
             """;
         CraftObservation first = new(new("origin", "analysis-retail"), retail, instant, 42,
-            new("character"), ProfessionId: 7, HasIngenuityProc: false,
+            new("character"), ProfessionId: 7, HasIngenuityProc: false, ConcentrationSpent: 10,
             Reagents: [new(50, 9, 0.125m)], Outputs: [new(99, 2, 4), new(100, null, 2)],
             ConfigurationEvidence: [new("source", 1, payload)], OutputsComplete: true,
             InputsComplete: true);

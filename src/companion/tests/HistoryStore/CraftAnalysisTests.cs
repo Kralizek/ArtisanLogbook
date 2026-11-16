@@ -38,6 +38,7 @@ public sealed class CraftAnalysisTests
             ResourcefulnessComplete = true,
             HasResourcefulnessProc = true,
             HasIngenuityProc = false,
+            ConcentrationSpent = 10,
             MulticraftBonus = 2
         };
         CraftObservation incomplete = Craft("two", Retail, time.AddDays(-1)) with
@@ -601,16 +602,19 @@ public sealed class CraftAnalysisTests
         DateTimeOffset time = DateTimeOffset.Parse("2026-11-15T00:00:00Z");
         foreach (CraftObservation craft in new[]
         {
-            Craft("proc", Retail, time) with { HasIngenuityProc = true, IngenuityRefund = 147 },
-            Craft("no-proc", Retail, time) with { HasIngenuityProc = false, IngenuityRefund = 147 },
+            Craft("proc", Retail, time) with { HasIngenuityProc = true, IngenuityRefund = 147, ConcentrationSpent = 294 },
+            Craft("no-proc", Retail, time) with { HasIngenuityProc = false, IngenuityRefund = 147, ConcentrationSpent = 294 },
             Craft("unknown", Retail, time) with { IngenuityRefund = 147 },
-            Craft("proc-unknown-refund", Retail, time) with { HasIngenuityProc = true }
+            Craft("proc-unknown-refund", Retail, time) with { HasIngenuityProc = true },
+            Craft("no-concentration", Retail, time) with { HasIngenuityProc = false, IngenuityRefund = 66, ConcentrationSpent = 0 },
+            Craft("concentration-unknown", Retail, time) with { HasIngenuityProc = false, IngenuityRefund = 66 }
         })
             Assert.That(store.Write(craft).IsSuccessful, Is.True);
 
         IReadOnlyDictionary<string, CraftObservation> crafts = store.QueryCrafts(new(Game: Retail)).Crafts
             .Select(row => row.Facts).ToDictionary(craft => craft.Identity.Observation);
-        AnalysisOutcome refund = store.Analyze(new(new(Game: Retail))).Recipes.Nodes.Single().Refund;
+        RecipeAnalysis recipe = store.Analyze(new(new(Game: Retail))).Recipes.Nodes.Single();
+        AnalysisOutcome refund = recipe.Refund;
         Assert.Multiple(() =>
         {
             Assert.That(crafts["proc"].AppliedIngenuityRefund, Is.EqualTo(147));
@@ -618,7 +622,8 @@ public sealed class CraftAnalysisTests
             Assert.That(crafts["no-proc"].AppliedIngenuityRefund, Is.Zero);
             Assert.That(crafts["unknown"].AppliedIngenuityRefund, Is.Null);
             Assert.That(crafts["proc-unknown-refund"].AppliedIngenuityRefund, Is.Null);
-            Assert.That(refund, Is.EqualTo(new AnalysisOutcome("2", "1", "147", "2")));
+            Assert.That(refund, Is.EqualTo(new AnalysisOutcome("2", "1", "147", "3", "1")));
+            Assert.That(recipe.Ingenuity, Is.EqualTo(new AnalysisOutcome("3", "2", null, "2", "1")));
             Assert.That(store.Analyze(new(new(Game: Retail))).Metrics!.Refund, Is.EqualTo(refund));
         });
     }

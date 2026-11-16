@@ -172,6 +172,7 @@ type AnalysisOutcome {
   positiveAttempts: String!
   total: String
   unknownAttempts: String!
+  ineligibleAttempts: String!
 }
 
 type AnalysisPopulationMetricsGraph {
