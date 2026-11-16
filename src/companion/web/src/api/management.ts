@@ -7,7 +7,23 @@ export type Management = {
   monitoring: components["schemas"]["MonitoringStatus"];
   imports: components["schemas"]["ImportOperation"][];
   discovery: paths["/api/v1/sources"]["get"]["responses"][200]["content"]["application/json"];
+  installation: components["schemas"]["InstallationSelection"];
 };
+
+export function clientName(folder: string): string {
+  const known: Record<string, string> = {
+    _retail_: "Retail",
+    _forever_: "Forever",
+    _classic_: "Classic",
+    _classic_era_: "Classic Era",
+  };
+  return (
+    known[folder.toLowerCase()] ??
+    (/^[a-z0-9_-]{1,40}$/i.test(folder)
+      ? `Unknown client (${folder})`
+      : "Unrecognized client")
+  );
+}
 
 export function useManagement() {
   const [data, setData] = useState<Management>();
@@ -18,7 +34,7 @@ export function useManagement() {
     let timer: ReturnType<typeof setTimeout>;
     async function read() {
       try {
-        const [monitoring, imports, sources] = await Promise.all([
+        const [monitoring, imports, sources, installation] = await Promise.all([
           operationsClient.GET("/api/v1/monitoring", {
             signal: controller.signal,
           }),
@@ -27,6 +43,9 @@ export function useManagement() {
             signal: controller.signal,
           }),
           operationsClient.GET("/api/v1/sources", {
+            signal: controller.signal,
+          }),
+          operationsClient.GET("/api/v1/installations", {
             signal: controller.signal,
           }),
         ]);
@@ -40,12 +59,23 @@ export function useManagement() {
           throw new OperationalError(imports.response.status, imports.error);
         if (sources.error)
           throw new OperationalError(sources.response.status, sources.error);
-        if (!monitoring.data || !imports.data || !sources.data)
+        if (installation.error)
+          throw new OperationalError(
+            installation.response.status,
+            installation.error,
+          );
+        if (
+          !monitoring.data ||
+          !imports.data ||
+          !sources.data ||
+          !installation.data
+        )
           throw new Error("Management data was not returned.");
         setData({
           monitoring: monitoring.data,
           imports: imports.data.operations,
           discovery: sources.data,
+          installation: installation.data,
         });
         setError(undefined);
       } catch (failure) {

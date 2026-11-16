@@ -59,6 +59,12 @@ vi.mock("../pages/Companion", () => ({
 vi.mock("../components/ContextSearch", () => ({
   ContextSearch: () => <div>Search history</div>,
 }));
+vi.mock("../components/PinnedNavigation", () => ({
+  PinnedNavigation: () => null,
+}));
+vi.mock("../pages/Catalogue", () => ({
+  Catalogue: () => <div>Catalogue</div>,
+}));
 vi.mock("../pages/Investigation", () => ({
   Investigation: ({ game }: { game: { displayName: string } }) => (
     <div>Investigating {game.displayName} history</div>
@@ -101,10 +107,10 @@ beforeEach(() => {
   });
 });
 
-it("offers the context selector when no context has been remembered", async () => {
+it("opens the first recorded context when no context has been remembered", async () => {
   renderApp();
   expect(
-    await screen.findByText(/Choose a game from the selector/),
+    await screen.findByText("Investigating Retail history"),
   ).toBeInTheDocument();
   expect(
     screen.getByRole("combobox", { name: "Active game context" }),
@@ -124,6 +130,20 @@ it("prefers an explicitly qualified URL over a remembered context", async () => 
     expect(localStorage.getItem("artisan-logbook.last-context")).toBe("1"),
   );
 });
+
+it.each([
+  ["18", "Forever"],
+  ["unavailable-old-context", "Retail"],
+])(
+  "resolves remembered context %s without leaving the application blank",
+  async (remembered, expected) => {
+    localStorage.setItem("artisan-logbook.last-context", remembered);
+    renderApp();
+    expect(
+      await screen.findByText(`Investigating ${expected} history`),
+    ).toBeInTheDocument();
+  },
+);
 
 it("unmounts previous context data while the new context is resolving", async () => {
   const user = userEvent.setup();
@@ -168,7 +188,7 @@ it("changes context from management without leaving global collection", async ()
   expect(
     await screen.findByText("Investigating Retail history"),
   ).toBeInTheDocument();
-  await user.click(screen.getByRole("link", { name: "Companion" }));
+  await user.click(screen.getByRole("link", { name: "Settings" }));
   await user.click(
     screen.getByRole("combobox", { name: "Active game context" }),
   );

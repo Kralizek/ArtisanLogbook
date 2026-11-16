@@ -112,6 +112,9 @@ describe("saved investigation navigation and updates", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: /retry/i }),
     );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save / update investigation" }),
+    );
     expect(
       await screen.findByRole("textbox", { name: "Investigation name" }),
     ).toHaveValue("Original name");
@@ -156,6 +159,9 @@ describe("saved investigation navigation and updates", () => {
           </Routes>
         </MemoryRouter>
       </MantineProvider>,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save / update investigation" }),
     );
     const name = await screen.findByRole("textbox", {
       name: "Investigation name",

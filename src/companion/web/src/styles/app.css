@@ -2,13 +2,113 @@ body {
   margin: 0;
 }
 
+:root[data-mantine-color-scheme="light"] {
+  --mantine-color-body: #f6f1e7;
+  --mantine-color-text: #30291f;
+  --mantine-color-default: #fcf8f0;
+  --mantine-color-default-hover: #eee5d4;
+  --mantine-color-default-border: #d7cbb7;
+  --mantine-color-dimmed: #706452;
+}
+
+.mantine-AppShell-header {
+  background: var(--mantine-color-body);
+}
+.shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 14px 24px;
+}
+.shell-brand {
+  font-family: Georgia, "Times New Roman", serif;
+}
+.mantine-AppShell-navbar {
+  background: #27231f;
+  color: #ece3d1;
+  border-color: #514638;
+  --mantine-color-dimmed: #bfb19a;
+}
+.mantine-AppShell-navbar .mantine-NavLink-root {
+  color: #e4d7bf;
+  border-radius: 3px;
+}
+.mantine-AppShell-navbar .mantine-NavLink-root:hover {
+  background: #3a3228;
+}
+.mantine-AppShell-navbar .mantine-NavLink-root[data-active] {
+  color: #f1d78f;
+  background: #453b2a;
+  box-shadow: inset 3px 0 #bd9a49;
+}
+.mantine-AppShell-navbar .mantine-NavLink-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mantine-AppShell-navbar .mantine-NavLink-description,
+.mantine-AppShell-navbar [data-c="dimmed"] {
+  color: #bfb19a;
+}
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.nav-section {
+  color: #b9a884;
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  margin: 22px 12px 8px;
+}
+.nav-section:first-child {
+  margin-top: 6px;
+}
+h1 {
+  color: var(--mantine-color-gold-7);
+}
+[data-mantine-color-scheme="dark"] h1 {
+  color: var(--mantine-color-gold-3);
+}
+[data-mantine-color-scheme="dark"] .eyebrow {
+  color: var(--mantine-color-gold-3);
+}
+.mantine-Card-root {
+  background: var(--mantine-color-default);
+}
+.mantine-Input-input::placeholder {
+  color: var(--mantine-color-dimmed);
+  opacity: 1;
+}
+.mantine-Table-td,
+.mantine-Table-th {
+  padding: 9px 12px;
+}
+.mantine-Table-th {
+  font-size: 0.76rem;
+  color: var(--mantine-color-dimmed);
+}
+.mantine-Tabs-list {
+  margin-bottom: 20px;
+}
+.mantine-Tabs-tab {
+  font-weight: 600;
+}
+:focus-visible {
+  outline: 2px solid var(--mantine-color-gold-5);
+  outline-offset: 3px;
+}
+
 .content {
-  max-width: 1380px;
+  max-width: 1440px;
   margin: 0 auto;
 }
 
 .eyebrow {
-  color: var(--mantine-color-teal-7);
+  color: var(--mantine-color-gold-7);
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -47,23 +147,54 @@ body {
 .analysis-table a {
   font-weight: 600;
 }
+.analysis-table th:not(:first-child),
+.analysis-table td:not(:first-child) {
+  text-align: right;
+}
+.quantity-evidence {
+  font-size: 0.72rem;
+  color: var(--mantine-color-dimmed);
+  max-width: 24rem;
+}
+.quantity-evidence summary {
+  cursor: pointer;
+}
 .activity-bars {
-  display: flex;
-  align-items: end;
-  gap: 4px;
+  position: relative;
   height: 150px;
-  padding: 8px 0;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--mantine-color-default-border);
+  background: repeating-linear-gradient(
+    to top,
+    transparent 0,
+    transparent 49px,
+    var(--mantine-color-default-border) 50px
+  );
 }
 .activity-bar {
+  position: absolute;
+  bottom: 0;
   min-width: 2px;
-  flex: 1;
-  background: var(--mantine-color-teal-6);
-  border-radius: 4px 4px 0 0;
+  max-width: 36px;
+  background: #638369;
+  border-radius: 2px 2px 0 0;
+}
+.activity-bar:hover,
+.activity-bar:focus-visible {
+  background: #44674c;
 }
 .scope-controls {
-  padding: 16px;
+  padding: 12px;
   border-radius: var(--mantine-radius-md);
   background: var(--mantine-color-default-hover);
+}
+.scope-controls .mantine-Accordion-control {
+  padding: 6px 0;
+  min-height: unset;
+  font-size: 0.8rem;
+}
+.scope-controls .mantine-Accordion-item {
+  border: 0;
 }
 
 @media (max-width: 760px) {
@@ -72,6 +203,11 @@ body {
   }
   .shell-search {
     max-width: none;
+    flex-basis: 100%;
+  }
+  .shell-header {
+    padding: 10px 16px;
+    gap: 10px;
   }
   .content {
     width: 100%;

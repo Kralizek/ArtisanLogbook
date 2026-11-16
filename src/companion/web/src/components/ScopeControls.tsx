@@ -2,6 +2,7 @@ import { useQuery } from "@apollo/client/react";
 import {
   Accordion,
   Alert,
+  Button,
   Group,
   Select,
   Stack,
@@ -17,6 +18,59 @@ import {
   WorkspaceFilterItemsDocument,
   WorkspaceSelectedItemDocument,
 } from "../graphql/generated/graphql";
+
+function retainSelection(
+  choices: { value: string; label: string }[],
+  selected: string | null,
+  kind: string,
+) {
+  return selected && !choices.some((choice) => choice.value === selected)
+    ? [
+        { value: selected, label: `Selected ${kind} (outside listed choices)` },
+        ...choices,
+      ]
+    : choices;
+}
+
+function FixedDates({
+  from,
+  through,
+  prefix,
+  apply,
+}: {
+  from: string;
+  through: string;
+  prefix: string;
+  apply: (from: string, through: string) => void;
+}) {
+  const [start, setStart] = useState(from);
+  const [end, setEnd] = useState(through);
+  return (
+    <>
+      <TextInput
+        type="date"
+        label="From (UTC)"
+        aria-label={`${prefix ? "Population B " : ""}From`}
+        value={start}
+        onChange={(event) => setStart(event.currentTarget.value)}
+      />
+      <TextInput
+        type="date"
+        label="Through (UTC)"
+        aria-label={`${prefix ? "Population B " : ""}Through`}
+        value={end}
+        onChange={(event) => setEnd(event.currentTarget.value)}
+      />
+      <Button
+        variant="default"
+        disabled={!start || !end || start > end}
+        onClick={() => apply(start, end)}
+      >
+        Apply dates
+      </Button>
+    </>
+  );
+}
 
 export function ItemFilter({
   game,
@@ -47,7 +101,9 @@ export function ItemFilter({
   const options =
     data?.game.items.nodes.map((item) => ({
       value: item.id,
-      label: item.name ?? `Item ${item.blizzardId}`,
+      label: item.name
+        ? `${item.name} · #${item.blizzardId}`
+        : `Item ${item.blizzardId} · name unavailable`,
     })) ?? [];
   if (value && !options.some((item) => item.value === value)) {
     const item = selectedData?.contextItem;
@@ -55,7 +111,9 @@ export function ItemFilter({
       value,
       label:
         item?.id === value
-          ? (item.name ?? `Item ${item.blizzardId}`)
+          ? item.name
+            ? `${item.name} · #${item.blizzardId}`
+            : `Item ${item.blizzardId} · name unavailable`
           : "Selected item (search to change)",
     });
   }
@@ -71,6 +129,7 @@ export function ItemFilter({
       }
       searchable
       clearable
+      clearButtonProps={{ "aria-label": `Clear ${label}` }}
       searchValue={search}
       onSearchChange={setSearch}
       value={value}
@@ -89,11 +148,13 @@ export function ScopeControls({
   prefix = "",
   configurations,
   hideRoleItems = false,
+  focusedRecipe = false,
 }: {
   game: ActiveGame;
   prefix?: string;
   configurations?: { value: string; label: string }[];
   hideRoleItems?: boolean;
+  focusedRecipe?: boolean;
 }) {
   const [params, setParams] = useSearchParams();
   const { data, error } = useQuery(WorkspaceFacetsDocument, {
@@ -111,11 +172,18 @@ export function ScopeControls({
     "absentBuff",
     "finishing",
     "absentFinishing",
+    "configuration",
+    "expansion",
+    "gameExpansion",
   ].some((key) => params.has(prefix + key));
   function set(key: string, value: string | null) {
     const next = new URLSearchParams(params);
     if (value) next.set(prefix + key, value);
     else next.delete(prefix + key);
+    if (key === "period" && value !== "fixed") {
+      next.delete(prefix + "from");
+      next.delete(prefix + "to");
+    }
     next.delete("after");
     setParams(next, { replace: true });
   }
@@ -137,99 +205,76 @@ export function ScopeControls({
           w={160}
         />
         {params.get(prefix + "period") === "fixed" && (
-          <>
-            <TextInput
-              type="date"
-              label="From (UTC)"
-              aria-label={`${prefix}From`}
-              defaultValue={params.get(prefix + "from") ?? ""}
-              onBlur={(event) => set("from", event.currentTarget.value)}
-            />
-            <TextInput
-              type="date"
-              label="Through (UTC)"
-              aria-label={`${prefix}Through`}
-              defaultValue={params.get(prefix + "to") ?? ""}
-              onBlur={(event) => set("to", event.currentTarget.value)}
-            />
-          </>
+          <FixedDates
+            key={`${params.get(prefix + "from")}:${params.get(prefix + "to")}`}
+            prefix={prefix}
+            from={params.get(prefix + "from") ?? ""}
+            through={params.get(prefix + "to") ?? ""}
+            apply={(from, to) => {
+              const next = new URLSearchParams(params);
+              next.set(prefix + "from", from);
+              next.set(prefix + "to", to);
+              next.delete("after");
+              setParams(next);
+            }}
+          />
         )}
-        <Select
-          label="Character"
-          aria-label={`${prefix ? "Population B " : ""}Character`}
-          placeholder="All characters"
-          clearable
-          searchable
-          value={params.get(prefix + "character")}
-          onChange={(value) => set("character", value)}
-          data={
-            data?.game.characters.nodes.map((c) => ({
-              value: c.id,
-              label: c.name ?? "Unnamed character",
-            })) ?? []
-          }
-          w={200}
-        />
-        <>
+        {((data?.game.characters.nodes.length ?? 0) > 1 ||
+          params.has(prefix + "character")) && (
           <Select
-            label="Profession"
-            placeholder="All professions"
+            label="Character"
+            aria-label={`${prefix ? "Population B " : ""}Character`}
+            placeholder="All characters"
             clearable
+            clearButtonProps={{
+              "aria-label": `Clear ${prefix ? "Population B " : ""}Character`,
+            }}
             searchable
-            value={params.get(prefix + "profession")}
-            onChange={(value) => set("profession", value)}
-            data={
-              data?.game.professions.nodes.map((p) => ({
-                value: p.id,
-                label: p.name ?? `Profession ${p.blizzardId}`,
-              })) ?? []
-            }
-            w={180}
-          />
-          {!!data?.game.expansions.nodes.length && (
-            <Select
-              label="Profession expansion"
-              placeholder="All expansions"
-              clearable
-              value={params.get(prefix + "expansion")}
-              onChange={(value) => set("expansion", value)}
-              data={data.game.expansions.nodes.map((e) => ({
-                value: e.id,
-                label: e.name ?? e.key,
-              }))}
-              w={180}
-            />
-          )}
-        </>
-        {(!!configurations?.length ||
-          !!params.get(prefix + "configuration")) && (
-          <Select
-            label="Recorded configuration"
-            aria-label={`${prefix ? "Population B " : ""}Recorded configuration`}
-            placeholder="All recorded / unknown setups"
-            clearable
-            value={params.get(prefix + "configuration")}
-            onChange={(value) => set("configuration", value)}
-            data={
-              params.get(prefix + "configuration") &&
-              !configurations?.some(
-                (choice) =>
-                  choice.value === params.get(prefix + "configuration"),
-              )
-                ? [
-                    {
-                      value: params.get(prefix + "configuration")!,
-                      label: "Selected variant (not in current results)",
-                    },
-                    ...(configurations ?? []),
-                  ]
-                : (configurations ?? [])
-            }
-            w={250}
+            value={params.get(prefix + "character")}
+            onChange={(value) => set("character", value)}
+            data={retainSelection(
+              data?.game.characters.nodes.map((c) => ({
+                value: c.id,
+                label: c.name ?? "Unnamed character",
+              })) ?? [],
+              params.get(prefix + "character"),
+              "character",
+            )}
+            w={200}
           />
         )}
+        {(!focusedRecipe || params.has(prefix + "profession")) &&
+          ((data?.game.professions.nodes.length ?? 0) > 1 ||
+            params.has(prefix + "profession")) && (
+            <>
+              <Select
+                label="Profession"
+                aria-label={`${prefix ? "Population B " : ""}Profession`}
+                placeholder="All professions"
+                clearable
+                clearButtonProps={{
+                  "aria-label": `Clear ${prefix ? "Population B " : ""}Profession`,
+                }}
+                searchable
+                value={params.get(prefix + "profession")}
+                onChange={(value) => set("profession", value)}
+                data={retainSelection(
+                  data?.game.professions.nodes.map((p) => ({
+                    value: p.id,
+                    label: p.name ?? `Profession ${p.blizzardId}`,
+                  })) ?? [],
+                  params.get(prefix + "profession"),
+                  "profession",
+                )}
+                w={180}
+              />
+            </>
+          )}
       </Group>
-      {(!hideRoleItems || supportsRetailOptions) && (
+      {(!hideRoleItems ||
+        supportsRetailOptions ||
+        hasAdvancedFilters ||
+        !focusedRecipe) && (
         <Accordion defaultValue={hasAdvancedFilters ? "more-filters" : null}>
           <Accordion.Item value="more-filters">
             <Accordion.Control>
@@ -237,6 +282,90 @@ export function ScopeControls({
             </Accordion.Control>
             <Accordion.Panel>
               <Stack gap="xs">
+                <Group align="end" gap="sm">
+                  {(!focusedRecipe || params.has(prefix + "gameExpansion")) &&
+                    !!data?.game.expansionGroups.nodes.length && (
+                      <Select
+                        label="Game expansion"
+                        aria-label={`${prefix ? "Population B " : ""}Game expansion`}
+                        placeholder="All expansions"
+                        clearable
+                        clearButtonProps={{
+                          "aria-label": `Clear ${prefix ? "Population B " : ""}Game expansion`,
+                        }}
+                        value={params.get(prefix + "gameExpansion")}
+                        onChange={(value) => set("gameExpansion", value)}
+                        data={data.game.expansionGroups.nodes.map((e) => ({
+                          value: e.id,
+                          label: e.name ?? "Unknown expansion",
+                        }))}
+                        w={180}
+                      />
+                    )}
+                  {params.has(prefix + "expansion") && (
+                    <Select
+                      label="Legacy profession expansion"
+                      aria-label={`${prefix ? "Population B " : ""}Legacy profession expansion`}
+                      placeholder="All expansions"
+                      clearable
+                      clearButtonProps={{
+                        "aria-label": `Clear ${prefix ? "Population B " : ""}Legacy profession expansion`,
+                      }}
+                      value={params.get(prefix + "expansion")}
+                      onChange={(value) => set("expansion", value)}
+                      data={
+                        data?.game.expansions.nodes.map((e) => ({
+                          value: e.id,
+                          label: e.name ?? e.key,
+                        })) ?? [
+                          {
+                            value: params.get(prefix + "expansion")!,
+                            label: "Retained exact profession expansion",
+                          },
+                        ]
+                      }
+                      w={180}
+                    />
+                  )}
+                  {params.has(prefix + "expansion") && (
+                    <Text size="xs" c="dimmed">
+                      This older link retains one exact profession-expansion
+                      identity. Clear it to explore a whole game expansion.
+                    </Text>
+                  )}
+                  {(!!configurations?.length ||
+                    !!params.get(prefix + "configuration")) && (
+                    <Select
+                      label="Recorded configuration"
+                      aria-label={`${prefix ? "Population B " : ""}Recorded configuration`}
+                      placeholder="All recorded / unknown setups"
+                      clearable
+                      clearButtonProps={{
+                        "aria-label": `Clear ${prefix ? "Population B " : ""}Recorded configuration`,
+                      }}
+                      value={params.get(prefix + "configuration")}
+                      onChange={(value) => set("configuration", value)}
+                      data={
+                        params.get(prefix + "configuration") &&
+                        !configurations?.some(
+                          (choice) =>
+                            choice.value ===
+                            params.get(prefix + "configuration"),
+                        )
+                          ? [
+                              {
+                                value: params.get(prefix + "configuration")!,
+                                label:
+                                  "Selected variant (not in current results)",
+                              },
+                              ...(configurations ?? []),
+                            ]
+                          : (configurations ?? [])
+                      }
+                      w={250}
+                    />
+                  )}
+                </Group>
                 {!hideRoleItems && (
                   <Group align="end" gap="sm">
                     <ItemFilter
@@ -336,7 +465,8 @@ export function ScopeControls({
       )}
       {(data?.game.characters.pageInfo.hasNextPage ||
         data?.game.professions.pageInfo.hasNextPage ||
-        data?.game.expansions.pageInfo.hasNextPage) && (
+        data?.game.expansions.pageInfo.hasNextPage ||
+        data?.game.expansionGroups.truncated) && (
         <Text size="xs" c="dimmed">
           The first 100 choices are shown. Existing explicit filters still
           apply.

@@ -1,8 +1,50 @@
 # C12 investigation experience
 
+## Journal refinement (November 2026)
+
+The addon is the everyday mental model, with the analytical workbench one
+deliberate step deeper. Existing context-qualified routes and saved definitions
+remain valid. No external artwork or fonts are fetched.
+
+| Destination | Main question / initially visible | Default controls | Secondary content and drill-down |
+| --- | --- | --- | --- |
+| Overview | What have I crafted? Compact totals, elapsed-time activity, bounded recipe and material previews | Period; meaningful character/profession choices | Full catalogues; recipe, item and Logbook links; optional detailed reports |
+| Logbook | What happened in each attempt? Paged observations | Period, character, profession | Craft Result / Ingredients / Configuration |
+| Recipes | Which recorded recipe should I inspect? Searchable all-history catalogue | Name / ID search; inherited scope is retained for detail links | Recipe Overview / Statistics / Craft History / Reagents |
+| Reagents | Which materials are involved? Item catalogue, including outputs and returns | Name / ID search | Separate production, gross commitment and return relationships; inherited recipe chip |
+| Characters / Professions | Whose activity am I exploring? Recorded identity shortcuts | Name search | Scoped Overview and Logbook, not leaderboards |
+| Library | What did I organize? Pins, hidden entities, saved investigations | Collection controls | Explicit updates, restoration, forks and revision conflicts |
+| Settings | Is collection working? Installations, effective monitoring, manual imports | Browser-led discovered installation choice | Import receipts/warnings and diagnostics; explicit restart boundaries |
+
+Pinned recipes live in an independently scrolling sidebar section. Settings
+remains anchored outside it. The shell uses warm charcoal framing, parchment
+content, antique gold selection and muted green activity. Major headings use a
+local serif fallback; dense content retains the readable system sans-serif.
+No copyrighted game artwork is redistributed or inferred from absent metadata.
+
+Recipe comparison starts from a question: characters, finishing reagent,
+recorded buff, before/after, or custom. Guided choices write the same independent
+population filters as the custom workbench; they never reinterpret unknown
+evidence as absence. Full filters and configuration variants remain accessible,
+but do not dominate ordinary exploration. Saves are explicit, progressively
+disclosed actions. Changing a relative period removes inactive fixed bounds.
+
+Review F01–F17 is tracked in the PR with measured validation, not implied by
+moving components. Canonical expansion grouping and applied-refund semantics
+are corrected at the backend boundary; visual simplification does not change
+analytical populations.
+
+### Representative surfaces
+
+Synthetic recorded observations illustrate the [light Overview](images/web-overview.png),
+[warm dark theme](images/web-overview-dark.png), [narrow layout](images/web-overview-narrow.png),
+[recipe investigation](images/web-recipe.png) and [Logbook](images/web-history.png).
+Setup display codes remain stable across filtered populations and craft details;
+they are presentation labels, not invented equipment names or analytical identities.
+
 ## Product decisions
 
-The primary workspace is **Activity**: a scoped view of completed attempts over
+The primary workspace is **Overview** (the compatible `activity` route): a scoped view of completed attempts over
 time, recipes contributing to them, actual production and gross reagent
 commitment. Recipes and items open addressable investigations, not independent
 administration dashboards. A recipe investigation contains its outcomes,
@@ -12,12 +54,14 @@ Characters are filters and recipe comparison populations, not a leaderboard.
 
 The shell owns a prominent context selector and context-wide recipe/item search.
 **Library** contains pins, visibility preferences and saved investigations.
-**Companion** is global management, with passive monitoring reassurance in the
+**Settings** is global Companion management, with passive monitoring reassurance in the
 shell. Management navigation retains the analytical destination.
 
 Routes use backend-resolved aliases: `/:context/activity`,
 `/:context/recipes/:id`, `/:context/items/:id`, `/:context/crafts`,
-`/:context/crafts/:id`, and `/:context/library`. Global management is
+`/:context/crafts/:id`, and `/:context/library`. Bounded catalogues use
+`/:context/recipes`, `/:context/items`, `/:context/characters`, and
+`/:context/professions`. Global management is
 `/companion`; saved definitions reopen through `/saved/:id`.
 Entity IDs are opaque API identities. Query parameters carry each navigation
 entry's period and compatible filters. Editing filters replaces that entry;

@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router";
 import { expect, it } from "vitest";
 import { ActivityTrend } from "./ActivityTrend";
 
-it("shows recorded periods in chronological order without implying proportional spacing", () => {
+it("uses elapsed calendar spacing without inventing zero observations in gaps", () => {
   render(
     <MantineProvider>
       <MemoryRouter>
@@ -34,7 +34,9 @@ it("shows recorded periods in chronological order without implying proportional 
     "2026-05-15 – 2026-05-15: 1 completed crafts",
     "2026-11-07 – 2026-11-07: 2 completed crafts",
   ]);
-  expect(
-    screen.getByText(/spacing does not represent elapsed time/),
-  ).toBeInTheDocument();
+  const links = within(chart).getAllByRole("link");
+  expect(parseFloat(links[0].style.left)).toBe(0);
+  expect(parseFloat(links[1].style.left)).toBeGreaterThan(99);
+  expect(parseFloat(links[0].style.width)).toBeLessThan(1);
+  expect(screen.getByText(/not confirmed zero activity/)).toBeInTheDocument();
 });

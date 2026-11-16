@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useElementSize } from "@mantine/hooks";
 import {
   AppShell,
   Badge,
@@ -35,6 +36,8 @@ import {
   type ActiveGame,
 } from "./game";
 import { Investigation } from "../pages/Investigation";
+import { Catalogue } from "../pages/Catalogue";
+import { PinnedNavigation } from "../components/PinnedNavigation";
 import {
   EntityPreferencesProvider,
   Library,
@@ -43,6 +46,7 @@ import {
 
 export function App() {
   const [opened, setOpened] = useState(false);
+  const { ref: headerRef, height: headerHeight } = useElementSize();
   const { toggleColorScheme } = useMantineColorScheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -56,7 +60,19 @@ export function App() {
   const routeContext = location.pathname.split("/")[1];
   const analytical =
     routeContext && !["companion", "saved", "history"].includes(routeContext);
-  const locator = analytical ? routeContext : (lastLocator ?? startup);
+  const recordedGames = [
+    ...(state.status?.history?.gameContexts.map((g) => g.context) ?? []),
+  ].sort((a, b) => a.canonicalId.localeCompare(b.canonicalId));
+  const startupGame = [...recordedGames, ...baseGames].find(
+    (g) => g.canonicalId === startup || g.routeAlias === startup,
+  );
+  const locator = analytical
+    ? routeContext
+    : (lastLocator ??
+      startupGame?.canonicalId ??
+      (startup && !baseGames.length && !metadataError
+        ? undefined
+        : recordedGames[0]?.canonicalId));
   const context = useGame(locator);
   useEffect(() => {
     const controller = new AbortController();
@@ -97,14 +113,14 @@ export function App() {
   const latest = management.data?.imports.find(
     (operation) => operation.completedAt,
   );
-  return (
+  const shell = (
     <AppShell
-      header={{ height: 76 }}
-      navbar={{ width: 220, breakpoint: "sm", collapsed: { mobile: !opened } }}
-      padding="lg"
+      header={{ height: headerHeight || 96 }}
+      navbar={{ width: 238, breakpoint: "sm", collapsed: { mobile: !opened } }}
+      padding={{ base: "md", lg: "xl" }}
     >
       <AppShell.Header>
-        <Group h="100%" px="lg" justify="space-between">
+        <div ref={headerRef} className="shell-header">
           <Group>
             <Burger
               opened={opened}
@@ -146,7 +162,7 @@ export function App() {
             <ContextSearch key={context.game.canonicalId} game={context.game} />
           )}
           <Group gap="sm">
-            <Badge variant="light" color={state.error ? "red" : "teal"}>
+            <Badge variant="light" color={state.error ? "red" : "green"}>
               {state.loading
                 ? "Connecting"
                 : state.error
@@ -157,39 +173,66 @@ export function App() {
               Light / dark
             </Button>
           </Group>
-        </Group>
+        </div>
       </AppShell.Header>
       <AppShell.Navbar p="sm">
-        <Text size="xs" c="dimmed" px="sm" mb="xs">
-          INVESTIGATE
-        </Text>
-        <NavLink
-          component={Link}
-          to={
-            context.game
-              ? `/${context.game.routeAlias}/activity?period=90`
-              : "/"
-          }
-          label="Activity & production"
-          active={location.pathname.endsWith("/activity")}
-          onClick={() => setOpened(false)}
-        />
-        {context.game && (
-          <NavLink
-            component={Link}
-            to={`/${context.game.routeAlias}/library`}
-            label="Your library"
-            active={location.pathname.endsWith("/library")}
-            onClick={() => setOpened(false)}
-          />
-        )}
-        <Text size="xs" c="dimmed" px="sm" mt="xl" mb="xs">
-          COLLECTION
-        </Text>
+        <div className="sidebar-scroll">
+          <Text className="nav-section">Your logbook</Text>
+          {[
+            ["Overview", "activity"],
+            ["Logbook", "crafts"],
+            ["Recipes", "recipes"],
+            ["Reagents", "items"],
+          ].map(([label, path]) => (
+            <NavLink
+              key={path}
+              component={Link}
+              to={
+                context.game
+                  ? `/${context.game.routeAlias}/${path}?period=90`
+                  : "/"
+              }
+              label={label}
+              active={location.pathname.split("/")[2] === path}
+              onClick={() => setOpened(false)}
+            />
+          ))}
+          {context.game && (
+            <>
+              <PinnedNavigation
+                game={context.game}
+                close={() => setOpened(false)}
+              />
+              <Text className="nav-section">Browse by</Text>
+              {[
+                ["Characters", "characters"],
+                ["Professions", "professions"],
+              ].map(([label, path]) => (
+                <NavLink
+                  key={path}
+                  component={Link}
+                  to={`/${context.game!.routeAlias}/${path}`}
+                  label={label}
+                  active={location.pathname.endsWith(`/${path}`)}
+                  onClick={() => setOpened(false)}
+                />
+              ))}
+              <Text className="nav-section">Organize</Text>
+              <NavLink
+                component={Link}
+                to={`/${context.game.routeAlias}/library`}
+                label="Library"
+                description="Pinned items · saved investigations"
+                active={location.pathname.endsWith("/library")}
+                onClick={() => setOpened(false)}
+              />
+            </>
+          )}
+        </div>
         <NavLink
           component={Link}
           to="/companion"
-          label="Companion"
+          label="Settings"
           active={location.pathname === "/companion"}
           onClick={() => setOpened(false)}
         />
@@ -239,10 +282,15 @@ export function App() {
                   <Stack>
                     <Title>Explore your crafting history</Title>
                     <Text c="dimmed">
-                      Choose a game from the selector above to investigate
-                      production. Import and collection management are always
-                      available.
+                      No recorded game context is available yet. Set up a World
+                      of Warcraft installation, then import your logbook.
                     </Text>
+                    <Button component={Link} to="/companion">
+                      Set up collection
+                    </Button>
+                    {state.error && (
+                      <RequestError error={state.error} retry={state.retry} />
+                    )}
                     {context.loading && (
                       <Loader aria-label="Resolving remembered game" />
                     )}
@@ -276,10 +324,7 @@ export function App() {
                 ) : context.loading || !context.game ? (
                   <Loader aria-label="Resolving game context" />
                 ) : (
-                  <EntityPreferencesProvider
-                    key={context.game.canonicalId}
-                    game={context.game}
-                  >
+                  <>
                     {!state.status?.applicationState.available &&
                       state.status && (
                         <Alert color="yellow" mb="md">
@@ -289,6 +334,26 @@ export function App() {
                         </Alert>
                       )}
                     <Routes>
+                      {(
+                        [
+                          "recipes",
+                          "items",
+                          "characters",
+                          "professions",
+                        ] as const
+                      ).map((kind) => (
+                        <Route
+                          key={kind}
+                          path={kind}
+                          element={
+                            <Catalogue
+                              key={`${context.game!.canonicalId}:${kind}`}
+                              game={context.game!}
+                              kind={kind}
+                            />
+                          }
+                        />
+                      ))}
                       <Route
                         path="library"
                         element={<Library game={context.game} />}
@@ -328,7 +393,7 @@ export function App() {
                         element={<Title>Investigation not found</Title>}
                       />
                     </Routes>
-                  </EntityPreferencesProvider>
+                  </>
                 )
               }
             />
@@ -345,5 +410,15 @@ export function App() {
         </div>
       </AppShell.Main>
     </AppShell>
+  );
+  return context.game ? (
+    <EntityPreferencesProvider
+      key={context.game.canonicalId}
+      game={context.game}
+    >
+      {shell}
+    </EntityPreferencesProvider>
+  ) : (
+    shell
   );
 }

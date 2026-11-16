@@ -4,6 +4,7 @@ export const dimensionKeys = [
   "character",
   "profession",
   "expansion",
+  "gameExpansion",
   "recipe",
   "input",
   "absentInput",
@@ -13,6 +14,16 @@ export const dimensionKeys = [
   "configuration",
 ] as const;
 export type DimensionKey = (typeof dimensionKeys)[number];
+export const comparisonFields = [
+  "period",
+  "from",
+  "to",
+  ...dimensionKeys,
+  "buff",
+  "absentBuff",
+  "finishing",
+  "absentFinishing",
+] as const;
 
 export function periodBounds(
   params: URLSearchParams,

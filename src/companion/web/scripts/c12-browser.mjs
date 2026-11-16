@@ -184,6 +184,10 @@ async function preflight(base) {
 }
 
 function attachDiagnostics(page, base, diagnostics) {
+  let navigation = 0;
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) navigation++;
+  });
   page.on("pageerror", (error) => diagnostics.pageErrors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error")
@@ -208,6 +212,7 @@ function attachDiagnostics(page, base, diagnostics) {
     )
       diagnostics.networkErrors.push(`${response.status()} ${pathname}`);
     if (pathname === "/graphql") {
+      const observedNavigation = navigation;
       void response
         .json()
         .then((body) => {
@@ -216,9 +221,21 @@ function attachDiagnostics(page, base, diagnostics) {
               `GraphQL: ${JSON.stringify(body.errors)}`,
             );
         })
-        .catch((error) =>
-          diagnostics.networkErrors.push(`GraphQL response: ${error.message}`),
-        );
+        .catch((error) => {
+          if (
+            /No resource with given identifier found|Response body is not available/.test(
+              error.message,
+            ) &&
+            (page.isClosed() || navigation !== observedNavigation)
+          ) {
+            diagnostics.navigationAborts.push(
+              "A GraphQL response body was discarded by completed navigation.",
+            );
+          } else
+            diagnostics.networkErrors.push(
+              `GraphQL response: ${error.message}`,
+            );
+        });
     }
   });
 }
@@ -246,6 +263,7 @@ async function attempts(page, expected) {
 }
 
 async function select(page, name, option) {
+  await page.waitForLoadState("networkidle");
   await page.getByRole("combobox", { name, exact: true }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
@@ -291,6 +309,7 @@ async function run(base, output) {
   const ids = await preflight(base);
   await mkdir(output, { recursive: true });
   const diagnostics = {
+    navigationAborts: [],
     pageErrors: [],
     consoleErrors: [],
     networkErrors: [],
@@ -323,6 +342,91 @@ async function run(base, output) {
     );
     await route(page, "/retail/activity", { period: "all" });
     await attempts(page, "5");
+    mark("journal shell wraps without overlap in both themes");
+    for (const scheme of ["light", "dark"]) {
+      if (
+        (await page
+          .locator("html")
+          .getAttribute("data-mantine-color-scheme")) !== scheme
+      )
+        await page.getByRole("button", { name: "Light / dark" }).click();
+      const textContrast = await page.evaluate(() => {
+        function luminance(color) {
+          const channels = color
+            .match(/[\d.]+/g)
+            .slice(0, 3)
+            .map(Number)
+            .map((value) => {
+              const channel = value / 255;
+              return channel <= 0.04045
+                ? channel / 12.92
+                : ((channel + 0.055) / 1.055) ** 2.4;
+            });
+          return (
+            channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+          );
+        }
+        function ratio(foreground, background) {
+          const values = [luminance(foreground), luminance(background)].sort(
+            (a, b) => b - a,
+          );
+          return (values[0] + 0.05) / (values[1] + 0.05);
+        }
+        const eyebrow = document.querySelector(".eyebrow");
+        const navigation = document.querySelector(".mantine-AppShell-navbar");
+        const hint = [...navigation.querySelectorAll("p")].find((element) =>
+          element.textContent.includes("Pin recipes to keep"),
+        );
+        return {
+          eyebrow: ratio(
+            getComputedStyle(eyebrow).color,
+            getComputedStyle(document.body).backgroundColor,
+          ),
+          navigationHint: ratio(
+            getComputedStyle(hint).color,
+            getComputedStyle(navigation).backgroundColor,
+          ),
+        };
+      });
+      for (const [label, ratio] of Object.entries(textContrast))
+        assert(
+          ratio >= 4.5,
+          `${scheme} ${label} contrast must meet 4.5:1 (actual ${ratio})`,
+        );
+      for (const width of [390, 768, 1280, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.waitForTimeout(100);
+        const header = await page
+          .locator(".mantine-AppShell-header")
+          .boundingBox();
+        const heading = await page
+          .getByRole("heading", { name: "Overview", exact: true })
+          .boundingBox();
+        assert(
+          header && heading && heading.y >= header.y + header.height,
+          `${scheme} ${width}px header must not overlap Overview`,
+        );
+        assert(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+          ),
+          `${scheme} ${width}px must not overflow the viewport`,
+        );
+        if (width >= 1280)
+          assert(
+            await page.evaluate(
+              () => document.documentElement.scrollHeight < 2200,
+            ),
+            "Overview must be bounded, not a wall of reports",
+          );
+        await page.screenshot({
+          path: path.join(output, `journal-${scheme}-${width}.png`),
+          fullPage: true,
+        });
+      }
+    }
+    await page.getByRole("button", { name: "Light / dark" }).click();
     await capture(page, output, "activity", 1440);
     await capture(page, output, "activity", 760);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -360,6 +464,7 @@ async function run(base, output) {
     await route(page, `/retail/recipes/${encodeURIComponent(ids.archivedId)}`, {
       period: "all",
     });
+    await page.getByRole("tab", { name: "Statistics", exact: true }).click();
     await outcomeRow(page)
       .getByRole("cell")
       .nth(1)
@@ -408,11 +513,13 @@ async function run(base, output) {
       `/retail/recipes/${encodeURIComponent(ids.recipeId)}`,
       { period: "30" },
     );
+    await page.getByRole("tab", { name: "Statistics", exact: true }).click();
     await outcomeRow(page)
       .getByRole("cell")
       .nth(1)
       .getByText("3", { exact: true })
       .waitFor();
+    await page.getByRole("tab", { name: "Overview", exact: true }).click();
     await capture(page, output, "recipe", 1440);
     await capture(page, output, "recipe", 760);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -431,6 +538,7 @@ async function run(base, output) {
     await capture(page, output, "output-item", 1440);
     await page.goBack();
     await route(page, recipeUrl.pathname, { period: "30" });
+    await page.getByRole("tab", { name: "Reagents", exact: true }).click();
     await page
       .getByRole("main")
       .getByRole("link", { name: fixture.input, exact: true })
@@ -464,7 +572,7 @@ async function run(base, output) {
       period: "30",
       input: ids.inputId,
     });
-    await page.getByRole("heading", { name: "Crafts", exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Logbook", exact: true }).waitFor();
     await page
       .getByRole("link", { name: fixture.recipe, exact: true })
       .first()
@@ -472,7 +580,9 @@ async function run(base, output) {
     await capture(page, output, "crafts", 1440);
     await page.locator("main a:has(time)").first().click();
     await page.getByRole("heading", { name: "Completed craft" }).waitFor();
+    await page.getByRole("tab", { name: "Ingredients", exact: true }).click();
     await page.getByRole("heading", { name: "Reagents and returns" }).waitFor();
+    await page.getByRole("tab", { name: "Configuration", exact: true }).click();
     await page
       .getByRole("heading", { name: "Recorded setup evidence" })
       .waitFor();
@@ -511,19 +621,31 @@ async function run(base, output) {
       "independent comparison, character, period and recorded configuration",
     );
     await page
-      .getByRole("button", { name: "Compare independent population" })
+      .getByRole("tab", { name: "Compare setups", exact: true })
+      .click();
+    await select(page, "What would you like to compare?", "Custom populations");
+    await page
+      .getByRole("button", { name: "Compare setups", exact: true })
+      .click();
+    await page
+      .getByRole("button", {
+        name: "Advanced · independent population filters",
+      })
       .click();
     await select(page, "Population B Period", "Fixed dates");
     await page
-      .getByRole("textbox", { name: "bFrom" })
+      .getByLabel("Population B From", { exact: true })
       .fill(fixture.secondCharacterAt);
-    await page.getByRole("textbox", { name: "bFrom" }).blur();
-    await page.waitForURL((value) => value.searchParams.has("bfrom"));
     await page
-      .getByRole("textbox", { name: "bThrough" })
+      .getByLabel("Population B Through", { exact: true })
       .fill(fixture.secondCharacterAt);
-    await page.getByRole("textbox", { name: "bThrough" }).blur();
+    await page.getByRole("button", { name: "Apply dates" }).click();
     await page.waitForURL((value) => value.searchParams.has("bto"));
+    await page
+      .getByRole("button", {
+        name: "Advanced · independent population filters",
+      })
+      .click();
     await select(page, "Population B Character", "Torren");
     await route(page, recipeUrl.pathname, {
       period: "30",
@@ -534,15 +656,21 @@ async function run(base, output) {
     });
     await comparison(page, "3", "1");
     await page
+      .getByRole("button", { name: "Inspect recorded setup variants" })
+      .click();
+    await page
       .getByRole("heading", { name: "Recorded configurations" })
       .waitFor();
+    await page
+      .getByRole("button", { name: "More filters", exact: true })
+      .click();
     const variant = page.getByRole("combobox", {
       name: "Recorded configuration",
       exact: true,
     });
     await variant.click();
     await page
-      .getByRole("option", { name: /Recorded variant/ })
+      .getByRole("option", { name: /Recorded setup/ })
       .first()
       .click();
     assert(new URL(page.url()).searchParams.has("configuration"));
@@ -559,11 +687,14 @@ async function run(base, output) {
     const comparisonUrl = page.url();
     await page.goto(urlAt(base, "/retail/activity?period=30"));
     await attempts(page, "4");
-    await page
-      .getByRole("main")
-      .getByRole("link", { name: fixture.recipe, exact: true })
-      .first()
-      .waitFor();
+    assert.equal(
+      await page
+        .getByRole("main")
+        .locator('a[href*="/recipes/"]')
+        .filter({ hasText: fixture.recipe })
+        .count(),
+      0,
+    );
     await page.goto(urlAt(base, "/retail/library"));
     await page.getByRole("heading", { name: "Library", exact: true }).waitFor();
     await page.getByText(/Hidden · Pinned/).waitFor();
@@ -581,6 +712,9 @@ async function run(base, output) {
     );
     const name = `C12 browser ${Date.now()}`;
     const copyName = `${name} copy`;
+    await page
+      .getByRole("button", { name: "Save this investigation", exact: true })
+      .click();
     await page.getByRole("textbox", { name: "Investigation name" }).fill(name);
     await page.getByRole("button", { name: "Save investigation" }).click();
     await page.waitForURL(
@@ -627,6 +761,9 @@ async function run(base, output) {
     await independent.close();
 
     await page
+      .getByRole("button", { name: "Save / update investigation", exact: true })
+      .click();
+    await page
       .getByRole("textbox", { name: "Investigation name" })
       .fill(copyName);
     await page.getByRole("button", { name: "Save as copy" }).click();
@@ -656,6 +793,9 @@ async function run(base, output) {
       "Editing a scope must not implicitly save.",
     );
     assert.equal(beforeSave.definition.scope.period, "30");
+    await page
+      .getByRole("button", { name: "Save / update investigation", exact: true })
+      .click();
     await page.getByRole("button", { name: "Save changes" }).click();
     await page.waitForURL(
       (value) => value.searchParams.get("revision") === "2",
@@ -720,6 +860,7 @@ async function run(base, output) {
     await capture(page, output, "forever-recipe", 1440);
     await capture(page, output, "forever-recipe", 760);
     await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole("tab", { name: "Reagents", exact: true }).click();
     await page
       .getByRole("main")
       .getByRole("link", { name: fixture.input, exact: true })
@@ -729,7 +870,9 @@ async function run(base, output) {
       .getByRole("heading", { name: "Attributed schematic requirements" })
       .waitFor();
     await page
-      .getByText(/Recorded Resourcefulness returns are not supported/)
+      .getByText(
+        /Inputs are attributed schematic requirements, not measured consumption/,
+      )
       .waitFor();
     assert.equal(
       await page.getByRole("heading", { name: "Recorded returns" }).count(),

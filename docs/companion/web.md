@@ -1,11 +1,12 @@
 # Companion browser application
 
 The Companion's client-side React application explores recorded crafting history
-within one active game context per browser tab. Activity, recipe and item
-investigations link to their contributing crafts. Search starts a new
+within one active game context per browser tab. Overview, Logbook, Recipes and
+Reagents provide the everyday journal; recipe and item investigations reveal
+statistics, materials, contributing crafts and guided setup comparisons. Search starts a new
 investigation across the active context; the library holds pins, visibility
 preferences and saved investigation definitions. Companion management is
-global and independent of the analytical context.
+global and independent of the analytical context, under Settings.
 
 Analytics are calculated against canonical history in the backend. The browser
 does not download the full craft history to rank or compare populations. Unknown

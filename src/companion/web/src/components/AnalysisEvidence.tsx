@@ -1,4 +1,12 @@
-import { Alert, Badge, Group, Stack, Table, Text } from "@mantine/core";
+import {
+  Accordion,
+  Alert,
+  Badge,
+  Group,
+  Stack,
+  Table,
+  Text,
+} from "@mantine/core";
 export type ConfigurationEvidence = {
   scope?: string | null;
   statsCoverage?: string | null;
@@ -78,8 +86,18 @@ export function AnalysisEvidence({
             "finishingCoverage",
           ] as const
         ).map((field) => (
-          <Badge variant="light" key={field}>
-            {field.replace("Coverage", "")}: {evidence[field] ?? "unknown"}
+          <Badge variant="light" tt="none" key={field}>
+            {
+              {
+                scope: "Scope",
+                statsCoverage: "Stats",
+                equipmentCoverage: "Equipment",
+                buffsCoverage: "Buffs",
+                finishingCoverage: "Finishing reagents",
+              }[field]
+            }
+            :{" "}
+            {(evidence[field] ?? "unknown").replaceAll("_", " ").toLowerCase()}
           </Badge>
         ))}
       </Group>
@@ -99,33 +117,53 @@ export function AnalysisEvidence({
             {observations(
               "Skill and stats",
               evidence.statistics,
-              (row) => `${row.label}: ${row.value}`,
+              (row) =>
+                `${row.label.replaceAll("_", " ")}: ${row.value.replace(/-?\d+\.\d+/g, (value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 }))}`,
               false,
-            )}
-            {observations(
-              "Equipment",
-              evidence.equipment,
-              (row) =>
-                `Slot ${row.slot ?? "unknown"}: ${row.empty ? "recorded empty" : row.itemId == null ? "unknown item" : `item ${row.itemId}`}`,
-              evidence.equipmentTruncated,
-            )}
-            {observations(
-              "Supported buffs",
-              evidence.buffs,
-              (row) =>
-                `Spell ${row.spellId ?? "unknown"} (${row.applications ?? "unknown"} applications)`,
-              evidence.buffsTruncated,
-            )}
-            {observations(
-              "Submitted finishing reagents",
-              evidence.finishingReagents,
-              (row) =>
-                `Item ${row.itemId ?? "unknown"} × ${row.quantity ?? "unknown"}`,
-              evidence.finishingReagentsTruncated,
             )}
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
+      <Accordion>
+        <Accordion.Item value="recorded-identifiers">
+          <Accordion.Control>
+            Equipment, buffs & finishing evidence
+          </Accordion.Control>
+          <Accordion.Panel>
+            <Text size="xs" c="dimmed">
+              Recorded identifiers are retained where names were not captured.
+              They do not establish undocumented effects.
+            </Text>
+            <Table.ScrollContainer minWidth={440}>
+              <Table>
+                <Table.Tbody>
+                  {observations(
+                    "Equipment",
+                    evidence.equipment,
+                    (row) =>
+                      `Slot ${row.slot ?? "unknown"}: ${row.empty ? "recorded empty" : row.itemId == null ? "unknown item" : `item ${row.itemId}`}`,
+                    evidence.equipmentTruncated,
+                  )}
+                  {observations(
+                    "Supported buffs",
+                    evidence.buffs,
+                    (row) =>
+                      `Spell ${row.spellId ?? "unknown"} (${row.applications ?? "unknown"} applications)`,
+                    evidence.buffsTruncated,
+                  )}
+                  {observations(
+                    "Submitted finishing reagents",
+                    evidence.finishingReagents,
+                    (row) =>
+                      `Item ${row.itemId ?? "unknown"} × ${row.quantity ?? "unknown"}`,
+                    evidence.finishingReagentsTruncated,
+                  )}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
+          </Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>
     </Stack>
   );
 }

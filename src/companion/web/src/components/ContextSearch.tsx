@@ -78,7 +78,13 @@ export function ContextSearch({ game }: { game: ActiveGame }) {
                 <Badge size="xs" variant="light" color="blue" mr="xs">
                   Item
                 </Badge>
-                {item.name ?? `Item ${item.blizzardId}`}
+                {item.name ?? `Item ${item.blizzardId} · name unavailable`}
+                {item.name && (
+                  <Text component="span" size="xs" c="dimmed">
+                    {" "}
+                    · #{item.blizzardId}
+                  </Text>
+                )}
               </Anchor>
             ))}
             {(data?.game.recipes.pageInfo.hasNextPage ||

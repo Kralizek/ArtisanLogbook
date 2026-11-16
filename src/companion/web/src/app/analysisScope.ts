@@ -24,6 +24,7 @@ const ids = {
   character: "characterId",
   profession: "professionId",
   expansion: "expansionId",
+  gameExpansion: "gameExpansionId",
   recipe: "recipeId",
   input: "inputItemId",
   absentInput: "absentInputItemId",

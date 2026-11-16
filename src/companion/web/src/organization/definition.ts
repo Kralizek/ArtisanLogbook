@@ -12,6 +12,7 @@ export type Scope = {
   character?: string;
   profession?: string;
   expansion?: string;
+  gameExpansion?: string;
   recipe?: string;
   input?: string;
   absentInput?: string;
@@ -43,6 +44,7 @@ const fields = [
   "character",
   "profession",
   "expansion",
+  "gameExpansion",
   "recipe",
   "input",
   "absentInput",

@@ -28,6 +28,17 @@ export function ActivityTrend({
     (max, value) => (value > max ? value : max),
     0n,
   );
+  const starts = ordered.map((point) =>
+    Date.parse(`${point.date.slice(0, 10)}T00:00:00Z`),
+  );
+  function periodEnd(start: number) {
+    const end = new Date(start);
+    if (granularity === "month") end.setUTCMonth(end.getUTCMonth() + 1);
+    else end.setUTCDate(end.getUTCDate() + (granularity === "week" ? 7 : 1));
+    return end.getTime();
+  }
+  const first = starts[0] ?? 0;
+  const span = starts.length ? periodEnd(starts[starts.length - 1]) - first : 1;
   return (
     <Stack gap="xs">
       <Group justify="space-between">
@@ -50,7 +61,8 @@ export function ActivityTrend({
             </Text>
           </Group>
           <Text size="xs" c="dimmed">
-            Recorded periods only; spacing does not represent elapsed time.
+            Calendar spacing · gaps mean no recorded period, not confirmed zero
+            activity.
           </Text>
           <div
             className="activity-bars"
@@ -71,6 +83,8 @@ export function ActivityTrend({
                   className="activity-bar"
                   key={point.date}
                   style={{
+                    left: `${((starts[index] - first) / span) * 100}%`,
+                    width: `${((periodEnd(starts[index]) - starts[index]) / span) * 80}%`,
                     height: `${maximum ? Number((counts[index] * 1000n) / maximum) / 10 : 0}%`,
                     minHeight: counts[index] > 0 ? 3 : 1,
                   }}

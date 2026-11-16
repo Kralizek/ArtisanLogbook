@@ -12,6 +12,7 @@ import {
   SimpleGrid,
   Stack,
   Table,
+  Tabs,
   Text,
   Title,
 } from "@mantine/core";
@@ -27,9 +28,11 @@ import {
   roleLinkParams,
   type ItemRole,
 } from "../app/analysisScope";
-import { investigationLink, scopeLabel } from "../app/scope";
+import { comparisonFields, investigationLink, scopeLabel } from "../app/scope";
 import { ActivityTrend } from "../components/ActivityTrend";
 import { AnalysisEvidence } from "../components/AnalysisEvidence";
+import { configurationLabel } from "../components/analysisFormat";
+import { ComparisonGuide } from "../components/ComparisonGuide";
 import { CharacterComparison } from "../components/CharacterComparison";
 import {
   coverage,
@@ -49,6 +52,8 @@ import {
   InvestigationCraftsDocument,
   InvestigationSignatureDocument,
   ItemInvestigationDocument,
+  OverviewMetricsDocument,
+  InheritedRecipeDocument,
   LibraryEntitiesDocument,
   RecipeConfigurationsDocument,
   RecipeInvestigationDocument,
@@ -64,25 +69,6 @@ import {
 
 type InvestigationKind = "activity" | "recipe" | "item" | "crafts" | "craft";
 type Props = { game: ActiveGame; kind: InvestigationKind };
-const comparisonFields = [
-  "period",
-  "from",
-  "to",
-  "character",
-  "profession",
-  "expansion",
-  "recipe",
-  "input",
-  "absentInput",
-  "output",
-  "returned",
-  "item",
-  "configuration",
-  "buff",
-  "absentBuff",
-  "finishing",
-  "absentFinishing",
-];
 const retailOnlyFilters = [
   "returned",
   "buff",
@@ -156,9 +142,100 @@ function Quantity({
   return (
     <>
       <Text fw={600}>{exact(measure.quantity)}</Text>
-      <Text size="xs" c="dimmed">
-        {coverage(measure)}
-      </Text>
+      <details className="quantity-evidence">
+        <summary>
+          {BigInt(measure.incompleteAttempts) > 0n
+            ? "Partial evidence"
+            : "Measured evidence"}
+        </summary>
+        <Text size="xs" c="dimmed">
+          {coverage(measure)}. Known quantities are included even when the
+          collection is incomplete; incomplete averages remain unavailable.
+        </Text>
+      </details>
+    </>
+  );
+}
+
+function ActivityTotals({
+  game,
+  filter,
+  signature,
+  refresh,
+}: {
+  game: ActiveGame;
+  filter: CraftFilterInput;
+  signature: string;
+  refresh: () => void;
+}) {
+  const { data, error, loading } = useQuery(OverviewMetricsDocument, {
+    variables: { context: game.canonicalId, filter },
+    fetchPolicy: "no-cache",
+  });
+  if (error) return <RequestError error={error} retry={refresh} />;
+  if (loading) return <Text size="sm">Reading production totals…</Text>;
+  if (!data || data.analysis.signature !== signature)
+    return (
+      <Alert color="yellow">
+        History changed while reading totals.{" "}
+        <Button variant="subtle" onClick={refresh}>
+          Refresh activity
+        </Button>
+      </Alert>
+    );
+  const metrics = data.analysis.metrics;
+  return (
+    <>
+      <Card withBorder>
+        <Text size="sm">Actual output</Text>
+        <Text className="metric-value">
+          {exact(metrics.production.quantity)}
+        </Text>
+        <Text size="xs" c="dimmed">
+          Includes Multicraft bonus.{" "}
+          {BigInt(metrics.production.incompleteAttempts) > 0n
+            ? "Partial recorded quantity."
+            : "Complete output observations."}
+        </Text>
+      </Card>
+      {game.project === 1 && data.analysis.supportsReturns && (
+        <>
+          {metrics.concentration && (
+            <Card withBorder>
+              <Text size="sm">Concentration spent</Text>
+              <Text className="metric-value">
+                {exact(metrics.concentration.total)}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {exact(metrics.concentration.observedAttempts)} attempts
+                measured
+              </Text>
+            </Card>
+          )}
+          {metrics.multicraft && (
+            <Card withBorder>
+              <Text size="sm">Multicraft bonus output</Text>
+              <Text className="metric-value">
+                {exact(metrics.multicraft.total)}
+              </Text>
+              <Text size="xs" c="dimmed">
+                Already included in actual output
+              </Text>
+            </Card>
+          )}
+          {metrics.resourcefulness && (
+            <Card withBorder>
+              <Text size="sm">Resourcefulness outcomes</Text>
+              <Text className="metric-value">
+                {exact(metrics.resourcefulness.positiveAttempts)}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {rate(metrics.resourcefulness) ?? "Not measured"}
+              </Text>
+            </Card>
+          )}
+        </>
+      )}
     </>
   );
 }
@@ -182,6 +259,7 @@ function Ranking({
   destination,
   role,
   hiddenIds,
+  limit,
 }: {
   game: ActiveGame;
   params: URLSearchParams;
@@ -189,10 +267,12 @@ function Ranking({
   destination: "recipes" | "items";
   role?: "input" | "output" | "returned";
   hiddenIds?: ReadonlySet<string>;
+  limit?: number;
   entries: {
     nodes: readonly {
       id?: string | null;
       name?: string | null;
+      blizzardId?: number | null;
       measure: {
         quantity?: string | null;
         attempts: string;
@@ -226,7 +306,7 @@ function Ranking({
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {shown.map((row, i) => (
+              {shown.slice(0, limit).map((row, i) => (
                 <Table.Tr key={row.id ?? i}>
                   <Table.Td>
                     {row.id ? (
@@ -236,10 +316,17 @@ function Ranking({
                         params={params}
                       >
                         {row.name ??
-                          `Unnamed ${destination === "recipes" ? "recipe" : "item"}`}
+                          (row.blizzardId != null
+                            ? `Item ${row.blizzardId} · name unavailable`
+                            : `Unnamed ${destination === "recipes" ? "recipe" : "item"}`)}
                       </LinkTo>
                     ) : (
                       (row.name ?? "Unknown")
+                    )}
+                    {row.name && row.blizzardId != null && (
+                      <Text size="xs" c="dimmed">
+                        Item #{row.blizzardId}
+                      </Text>
                     )}
                   </Table.Td>
                   <Table.Td>
@@ -252,6 +339,14 @@ function Ranking({
         </Table.ScrollContainer>
       )}
       <Truncated value={entries.truncated} />
+      {limit && shown.length > limit && (
+        <Anchor
+          component={Link}
+          to={investigationLink(game, destination, params)}
+        >
+          View all {destination === "items" ? "items" : "recipes"}
+        </Anchor>
+      )}
       {role && (
         <Text size="xs" c="dimmed">
           Open an item for separate output, commitment and return roles.
@@ -371,6 +466,40 @@ function MeasuredBreakdown({
   );
 }
 
+function QualityEvidence({
+  game,
+  params,
+  left,
+  right,
+}: {
+  game: ActiveGame;
+  params: URLSearchParams;
+  left: RecipeInvestigationQuery["analysis"];
+  right?: RecipeInvestigationQuery["analysis"];
+}) {
+  function collection(result: RecipeInvestigationQuery["analysis"]) {
+    return {
+      nodes: result.qualities.nodes.map((row) => ({
+        key: row.quality == null ? "unknown" : String(row.quality),
+        label:
+          row.quality == null ? "Unknown quality" : `Quality ${row.quality}`,
+        measure: row.measure,
+      })),
+      truncated: result.qualities.truncated,
+    };
+  }
+  return (
+    <MeasuredBreakdown
+      game={game}
+      params={params}
+      title="Output quality evidence"
+      detail="Recorded output quality, not a prediction for a future attempt."
+      left={collection(left)}
+      right={right ? collection(right) : undefined}
+    />
+  );
+}
+
 function Activity({
   game,
   params,
@@ -436,8 +565,8 @@ function Activity({
   return (
     <Stack gap="lg">
       <header>
-        <Text className="eyebrow">{game.displayName} · investigation</Text>
-        <Title>Activity & production</Title>
+        <Text className="eyebrow">{game.displayName} · crafting journal</Text>
+        <Title>Overview</Title>
         <Text c="dimmed">
           Completed attempts, actual output and gross commitments are separate
           observations. {scopeLabel(params)}.
@@ -449,29 +578,29 @@ function Activity({
         <Button variant="default" disabled={loading} onClick={refreshBounds}>
           Refresh activity
         </Button>
+        <Select
+          label="Time grouping"
+          aria-label="Time grouping"
+          w={180}
+          value={granularity.toLowerCase()}
+          data={[
+            { value: "day", label: "Day" },
+            { value: "week", label: "Week" },
+            { value: "month", label: "Month" },
+          ]}
+          onChange={(value) => {
+            if (!value) return;
+            const next = new URLSearchParams(search);
+            next.set("granularity", value);
+            setSearch(next, { replace: true });
+          }}
+        />
       </Group>
-      <Select
-        label="Time grouping"
-        aria-label="Time grouping"
-        w={180}
-        value={granularity.toLowerCase()}
-        data={[
-          { value: "day", label: "Day" },
-          { value: "week", label: "Week" },
-          { value: "month", label: "Month" },
-        ]}
-        onChange={(value) => {
-          if (!value) return;
-          const next = new URLSearchParams(search);
-          next.set("granularity", value);
-          setSearch(next, { replace: true });
-        }}
-      />
       {error && <RequestError error={error} retry={refreshBounds} />}
       {loading && !result && <Loader aria-label="Loading activity" />}
       {result && (
         <>
-          <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }}>
+          <SimpleGrid cols={{ base: 2, md: 3, xl: 5 }}>
             <Card withBorder>
               <Text size="sm">Completed attempts</Text>
               <Text className="metric-value">
@@ -481,39 +610,13 @@ function Activity({
                 Inspect crafts
               </LinkTo>
             </Card>
-            <Card withBorder>
-              <Text size="sm">Recipes represented</Text>
-              <Text className="metric-value">
-                {result.recipes.nodes.length}
-                {result.recipes.truncated ? "+" : ""}
-              </Text>
-              <Text size="xs" c="dimmed">
-                Ranked recipe entries, not a catalog
-              </Text>
-            </Card>
-            <Card withBorder>
-              <Text size="sm">Input attribution</Text>
-              <Text fw={600}>{result.inputMeasureLabel}</Text>
-              <Text size="xs" c="dimmed">
-                Returns are shown separately when supported.
-              </Text>
-            </Card>
+            <ActivityTotals
+              game={game}
+              filter={filter}
+              signature={result.signature}
+              refresh={refreshBounds}
+            />
           </SimpleGrid>
-          {game.project !== 1 && (
-            <Alert color="blue">
-              Ingenuity, Concentration, Resourcefulness and Multicraft outcomes
-              are unsupported for{" "}
-              {game.project === 18 ? "Forever" : "this game project"}; their
-              absence is not a measured zero.
-            </Alert>
-          )}
-          <Text size="sm" c="dimmed">
-            Configuration evidence:{" "}
-            {exact(result.configurationCoverage.recordedAttempts)} attempts with
-            recorded variants ·{" "}
-            {exact(result.configurationCoverage.emptyAttempts)} explicitly empty
-            · {exact(result.configurationCoverage.unknownAttempts)} unknown.
-          </Text>
           <ActivityTrend
             game={game}
             params={params}
@@ -524,7 +627,15 @@ function Activity({
             }))}
           />
           <Truncated value={result.timeline.truncated} />
-          <Title order={2}>Recipe outcomes</Title>
+          <Group justify="space-between">
+            <Title order={2}>Most-crafted recipes</Title>
+            <Anchor
+              component={Link}
+              to={investigationLink(game, "recipes", params)}
+            >
+              View all recipes
+            </Anchor>
+          </Group>
           {!visibilityReady && (
             <Text size="sm">Loading library visibility preferences…</Text>
           )}
@@ -558,6 +669,7 @@ function Activity({
                   <Table.Tbody>
                     {result.recipes.nodes
                       .filter((row) => !hiddenRecipeIds.has(row.id))
+                      .slice(0, 8)
                       .map((row) => (
                         <Table.Tr key={row.id}>
                           <Table.Td>
@@ -625,6 +737,7 @@ function Activity({
                   destination="items"
                   role="output"
                   hiddenIds={hiddenItemIds}
+                  limit={8}
                 />
                 <Ranking
                   game={game}
@@ -634,96 +747,133 @@ function Activity({
                   destination="items"
                   role="input"
                   hiddenIds={hiddenItemIds}
+                  limit={8}
                 />
-                {game.project === 1 &&
-                  result.supportsReturns &&
-                  result.returns && (
-                    <Ranking
-                      game={game}
-                      params={params}
-                      heading="Returned materials"
-                      entries={result.returns}
-                      destination="items"
-                      role="returned"
-                      hiddenIds={hiddenItemIds}
-                    />
-                  )}
               </>
             )}
-            <Stack gap="xs">
-              <Title order={3}>Recorded output qualities</Title>
-              {result.qualities.nodes.length ? (
-                <Table>
-                  <Table.Tbody>
-                    {result.qualities.nodes.map((row, index) => (
-                      <Table.Tr key={index}>
-                        <Table.Td>Quality {row.quality ?? "unknown"}</Table.Td>
-                        <Table.Td>
-                          <Quantity measure={row.measure} />
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              ) : (
-                <Text c="dimmed">No recorded quality observations.</Text>
-              )}
-              <Truncated value={result.qualities.truncated} />
-            </Stack>
           </SimpleGrid>
-          <Stack gap="xs">
-            <Title order={2}>Characters in this population</Title>
-            <Text size="sm" c="dimmed">
-              Observed outcomes by recorded character, not a leaderboard.
-            </Text>
-            <Table.ScrollContainer minWidth={650}>
-              <Table striped withTableBorder>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Character</Table.Th>
-                    <Table.Th>Attempts</Table.Th>
-                    <Table.Th>Production coverage</Table.Th>
-                    {game.project === 1 && result.supportsReturns && (
-                      <Table.Th>Ingenuity observed rate</Table.Th>
+          <Accordion>
+            <Accordion.Item value="reports">
+              <Accordion.Control>
+                More production reports & evidence
+              </Accordion.Control>
+              <Accordion.Panel>
+                <Stack gap="lg">
+                  <SimpleGrid cols={{ base: 1, lg: 2 }}>
+                    {visibilityReady && (
+                      <>
+                        {game.project === 1 &&
+                          result.supportsReturns &&
+                          result.returns && (
+                            <Ranking
+                              game={game}
+                              params={params}
+                              heading="Returned materials"
+                              entries={result.returns}
+                              destination="items"
+                              role="returned"
+                              hiddenIds={hiddenItemIds}
+                            />
+                          )}
+                      </>
                     )}
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {result.characters.nodes.map((row, i) => (
-                    <Table.Tr key={row.id ?? i}>
-                      <Table.Td>
-                        {row.id ? (
-                          <LinkTo
-                            game={game}
-                            params={withFilters(params, { character: row.id })}
-                            destination="crafts"
-                          >
-                            {row.name ?? "Unnamed character"}
-                          </LinkTo>
+                    {game.project === 1 && (
+                      <Stack gap="xs">
+                        <Title order={3}>Recorded output qualities</Title>
+                        {result.qualities.nodes.length ? (
+                          <Table>
+                            <Table.Tbody>
+                              {result.qualities.nodes.map((row, index) => (
+                                <Table.Tr key={index}>
+                                  <Table.Td>
+                                    Quality {row.quality ?? "unknown"}
+                                  </Table.Td>
+                                  <Table.Td>
+                                    <Quantity measure={row.measure} />
+                                  </Table.Td>
+                                </Table.Tr>
+                              ))}
+                            </Table.Tbody>
+                          </Table>
                         ) : (
-                          (row.name ?? "Unknown")
+                          <Text c="dimmed">
+                            No recorded quality observations.
+                          </Text>
                         )}
-                      </Table.Td>
-                      <Table.Td>{exact(row.measure.attempts)}</Table.Td>
-                      <Table.Td>
-                        {row.metrics
-                          ? coverage(row.metrics.production)
-                          : "Unknown"}
-                      </Table.Td>
-                      {game.project === 1 && result.supportsReturns && (
-                        <Table.Td>
-                          {row.metrics?.ingenuity
-                            ? (rate(row.metrics.ingenuity) ?? "Not observed")
-                            : "Unknown"}
-                        </Table.Td>
-                      )}
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
-            <Truncated value={result.characters.truncated} />
-          </Stack>
+                        <Truncated value={result.qualities.truncated} />
+                      </Stack>
+                    )}
+                  </SimpleGrid>
+                  <Stack gap="xs">
+                    <Title order={2}>Characters in this population</Title>
+                    <Text size="sm" c="dimmed">
+                      Observed outcomes by recorded character, not a
+                      leaderboard.
+                    </Text>
+                    <Table.ScrollContainer minWidth={650}>
+                      <Table striped withTableBorder>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Character</Table.Th>
+                            <Table.Th>Attempts</Table.Th>
+                            <Table.Th>Production coverage</Table.Th>
+                            {game.project === 1 && result.supportsReturns && (
+                              <Table.Th>Ingenuity observed rate</Table.Th>
+                            )}
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {result.characters.nodes.map((row, i) => (
+                            <Table.Tr key={row.id ?? i}>
+                              <Table.Td>
+                                {row.id ? (
+                                  <LinkTo
+                                    game={game}
+                                    params={withFilters(params, {
+                                      character: row.id,
+                                    })}
+                                    destination="crafts"
+                                  >
+                                    {row.name ?? "Unnamed character"}
+                                  </LinkTo>
+                                ) : (
+                                  (row.name ?? "Unknown")
+                                )}
+                              </Table.Td>
+                              <Table.Td>{exact(row.measure.attempts)}</Table.Td>
+                              <Table.Td>
+                                {row.metrics
+                                  ? coverage(row.metrics.production)
+                                  : "Unknown"}
+                              </Table.Td>
+                              {game.project === 1 && result.supportsReturns && (
+                                <Table.Td>
+                                  {row.metrics?.ingenuity
+                                    ? (rate(row.metrics.ingenuity) ??
+                                      "Not observed")
+                                    : "Unknown"}
+                                </Table.Td>
+                              )}
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </Table.ScrollContainer>
+                    <Truncated value={result.characters.truncated} />
+                  </Stack>
+                  <Text size="sm" c="dimmed">
+                    Configuration evidence:{" "}
+                    {exact(result.configurationCoverage.recordedAttempts)}{" "}
+                    attempts with recorded variants ·{" "}
+                    {exact(result.configurationCoverage.emptyAttempts)}{" "}
+                    explicitly empty ·{" "}
+                    {exact(result.configurationCoverage.unknownAttempts)}{" "}
+                    unknown.
+                  </Text>
+                </Stack>
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
           {preferences.preferences?.some((item) => item.hidden) && (
             <Text size="xs" c="dimmed">
               Hidden library items remain included in all analytical totals and
@@ -778,10 +928,12 @@ function Configurations({
   game,
   params,
   result,
+  choices,
 }: {
   game: ActiveGame;
   params: URLSearchParams;
   result: RecipeConfigurationsQuery["analysis"];
+  choices: { value: string; label: string }[];
 }) {
   return (
     <Stack gap="xs">
@@ -803,10 +955,12 @@ function Configurations({
         </Text>
       )}
       <Accordion variant="separated">
-        {result.configurations.nodes.map((row, index) => (
+        {result.configurations.nodes.map((row) => (
           <Accordion.Item key={row.id} value={row.id}>
             <Accordion.Control>
-              Variant {index + 1} · {exact(row.measure.attempts)} attempts ·{" "}
+              {choices.find((choice) => choice.value === row.id)?.label ??
+                "Recorded setup"}{" "}
+              · {exact(row.measure.attempts)} attempts ·{" "}
               {coverage(row.metrics.production)}
             </Accordion.Control>
             <Accordion.Panel>
@@ -940,10 +1094,15 @@ function Recipe({
   const configurations = [
     ...(leftConfigs?.configurations.nodes ?? []),
     ...(rightConfigs?.configurations.nodes ?? []),
-  ].map((row, i) => ({ value: row.id, label: `Recorded variant ${i + 1}` }));
-  const choices = [
-    ...new Map(configurations.map((choice) => [choice.value, choice])).values(),
   ];
+  const choices = [
+    ...new Map(configurations.map((row) => [row.id, row])).values(),
+  ]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((row) => ({
+      value: row.id,
+      label: configurationLabel(row.id, row.evidence),
+    }));
   const selectedCharacterOutcome = params.get("characterOutcome");
   const refresh = refreshBounds;
   return (
@@ -957,9 +1116,15 @@ function Recipe({
             (first.loading ? "Investigating recipe…" : "Unnamed recipe")}
         </Title>
         <Text c="dimmed">
-          {first.data?.recipe?.profession?.name ?? "Profession unknown"} ·{" "}
-          {first.data?.recipe?.expansion?.name ?? "Expansion unknown"} ·{" "}
-          {scopeLabel(params)}
+          {[
+            ...new Set(
+              [
+                first.data?.recipe?.profession?.name ?? "Profession unknown",
+                first.data?.recipe?.expansion?.name,
+              ].filter(Boolean),
+            ),
+          ].join(" · ")}{" "}
+          · {scopeLabel(params)}
         </Text>
         {first.data?.recipe && (
           <EntityActions
@@ -969,29 +1134,8 @@ function Recipe({
           />
         )}
       </header>
-      <ScopeControls game={game} configurations={choices} />
-      {compare && (
-        <ScopeControls game={game} prefix="b" configurations={choices} />
-      )}
+      <ScopeControls game={game} focusedRecipe configurations={choices} />
       <Group>
-        <Button
-          variant="light"
-          onClick={() => {
-            const next = new URLSearchParams(search);
-            if (compare) {
-              next.delete("compare");
-              next.delete("characterOutcome");
-              next.delete("returnItem");
-              for (const field of comparisonFields) next.delete(`b${field}`);
-            } else {
-              next.set("compare", "1");
-              next.set("bperiod", next.get("period") ?? "90");
-            }
-            setSearch(next, { replace: true });
-          }}
-        >
-          {compare ? "Remove comparison" : "Compare independent population"}
-        </Button>
         <Button
           variant="default"
           disabled={
@@ -1058,407 +1202,502 @@ function Recipe({
               refresh={refresh}
             />
           )}
-          <Title order={2}>Outcome evidence</Title>
-          <RecipeOutcomes
-            id={id}
-            left={left}
-            right={right}
-            retail={game.project === 1}
-          />
-          <Title order={2}>Recipe activity over time</Title>
-          <SimpleGrid cols={{ base: 1, lg: right ? 2 : 1 }}>
-            <Stack gap="xs">
-              {right && <Title order={3}>Population A recipe activity</Title>}
-              <ActivityTrend
-                game={game}
-                params={withFilters(primaryScopeParams(params), {
-                  recipe: id,
-                })}
-                points={left.timeline.nodes.map((node) => ({
-                  date: node.start,
-                  craftCount: node.measure.attempts,
-                }))}
-              />
-              <Truncated value={left.timeline.truncated} />
-            </Stack>
-            {right && (
-              <Stack gap="xs">
-                <Title order={3}>Population B recipe activity</Title>
-                <ActivityTrend
-                  game={game}
-                  params={withFilters(populationParams(params, "b"), {
-                    recipe: id,
-                  })}
-                  points={right.timeline.nodes.map((node) => ({
-                    date: node.start,
-                    craftCount: node.measure.attempts,
-                  }))}
-                />
-                <Truncated value={right.timeline.truncated} />
-              </Stack>
-            )}
-          </SimpleGrid>
-          <SimpleGrid cols={{ base: 1, lg: 2 }}>
-            <Ranking
-              game={game}
-              params={withFilters(params, { recipe: id })}
-              heading="Actual output items"
-              entries={left.outputs}
-              destination="items"
-              role="output"
-            />
-            <Ranking
-              game={game}
-              params={withFilters(params, { recipe: id })}
-              heading={left.inputMeasureLabel}
-              entries={left.inputs}
-              destination="items"
-              role="input"
-            />
-            {game.project === 1 && left.supportsReturns && left.returns && (
-              <MeasuredBreakdown
-                game={game}
-                params={withFilters(params, { recipe: id })}
-                title="Returned material quantities"
-                detail="Each row covers attempts containing this reagent; returns remain separate from gross allocation."
-                left={{
-                  nodes: left.returns.nodes.map((row, i) => ({
-                    key: row.id ?? `unidentified-${i}`,
-                    label: row.name ?? "Unnamed item",
-                    itemId: row.id ?? undefined,
-                    measure: row.measure,
-                  })),
-                  truncated: left.returns.truncated,
-                }}
-                right={
-                  right?.returns
-                    ? {
-                        nodes: right.returns.nodes.map((row, i) => ({
-                          key: row.id ?? `unidentified-${i}`,
-                          label: row.name ?? "Unnamed item",
-                          itemId: row.id ?? undefined,
-                          measure: row.measure,
-                        })),
-                        truncated: right.returns.truncated,
-                      }
-                    : undefined
+          <SimpleGrid cols={{ base: 2, sm: 3 }}>
+            <Card withBorder>
+              <Text size="sm">Completed crafts</Text>
+              <Text className="metric-value">
+                {exact(left.attempts.attempts)}
+              </Text>
+            </Card>
+            <Card withBorder>
+              <Text size="sm">Actual output</Text>
+              <Quantity
+                measure={
+                  left.recipes.nodes.find((row) => row.id === id)?.outputs ?? {
+                    ...left.attempts,
+                    quantity: null,
+                  }
                 }
               />
-            )}
-            <MeasuredBreakdown
-              game={game}
-              params={params}
-              title="Output quality evidence"
-              detail="Quality is the recorded output quality, not a prediction of quality on a future attempt."
-              left={{
-                nodes: left.qualities.nodes.map((row) => ({
-                  key: row.quality == null ? "unknown" : String(row.quality),
-                  label:
-                    row.quality == null
-                      ? "Unknown quality"
-                      : `Quality ${row.quality}`,
-                  measure: row.measure,
-                })),
-                truncated: left.qualities.truncated,
-              }}
-              right={
-                right
-                  ? {
-                      nodes: right.qualities.nodes.map((row) => ({
-                        key:
-                          row.quality == null ? "unknown" : String(row.quality),
-                        label:
-                          row.quality == null
-                            ? "Unknown quality"
-                            : `Quality ${row.quality}`,
+            </Card>
+          </SimpleGrid>
+          <Tabs
+            defaultValue={compare ? "compare" : "overview"}
+            keepMounted={false}
+          >
+            <Tabs.List aria-label="Recipe sections">
+              <Tabs.Tab value="overview">Overview</Tabs.Tab>
+              <Tabs.Tab value="statistics">Statistics</Tabs.Tab>
+              <Tabs.Tab value="crafts">Craft History</Tabs.Tab>
+              <Tabs.Tab value="reagents">Reagents</Tabs.Tab>
+              <Tabs.Tab value="compare">Compare setups</Tabs.Tab>
+            </Tabs.List>
+            <Tabs.Panel value="statistics">
+              <Stack gap="md">
+                <Title order={2}>Outcome evidence</Title>
+                <RecipeOutcomes
+                  id={id}
+                  left={left}
+                  right={right}
+                  retail={game.project === 1}
+                />
+              </Stack>
+            </Tabs.Panel>
+            <Tabs.Panel value="overview">
+              <Stack gap="lg">
+                <Title order={2}>Recipe activity over time</Title>
+                <SimpleGrid cols={{ base: 1, lg: right ? 2 : 1 }}>
+                  <Stack gap="xs">
+                    {right && (
+                      <Title order={3}>Population A recipe activity</Title>
+                    )}
+                    <ActivityTrend
+                      game={game}
+                      params={withFilters(primaryScopeParams(params), {
+                        recipe: id,
+                      })}
+                      points={left.timeline.nodes.map((node) => ({
+                        date: node.start,
+                        craftCount: node.measure.attempts,
+                      }))}
+                    />
+                    <Truncated value={left.timeline.truncated} />
+                  </Stack>
+                  {right && (
+                    <Stack gap="xs">
+                      <Title order={3}>Population B recipe activity</Title>
+                      <ActivityTrend
+                        game={game}
+                        params={withFilters(populationParams(params, "b"), {
+                          recipe: id,
+                        })}
+                        points={right.timeline.nodes.map((node) => ({
+                          date: node.start,
+                          craftCount: node.measure.attempts,
+                        }))}
+                      />
+                      <Truncated value={right.timeline.truncated} />
+                    </Stack>
+                  )}
+                </SimpleGrid>
+                <Ranking
+                  game={game}
+                  params={withFilters(params, { recipe: id })}
+                  heading="Actual output items"
+                  entries={left.outputs}
+                  destination="items"
+                  role="output"
+                />
+                {game.project === 1 && (
+                  <QualityEvidence
+                    game={game}
+                    params={params}
+                    left={left}
+                    right={right}
+                  />
+                )}
+              </Stack>
+            </Tabs.Panel>
+            <Tabs.Panel value="reagents">
+              <SimpleGrid cols={{ base: 1, lg: 2 }}>
+                <Ranking
+                  game={game}
+                  params={withFilters(params, { recipe: id })}
+                  heading="Actual output items"
+                  entries={left.outputs}
+                  destination="items"
+                  role="output"
+                />
+                <Ranking
+                  game={game}
+                  params={withFilters(params, { recipe: id })}
+                  heading={left.inputMeasureLabel}
+                  entries={left.inputs}
+                  destination="items"
+                  role="input"
+                />
+                {game.project === 1 && left.supportsReturns && left.returns && (
+                  <MeasuredBreakdown
+                    game={game}
+                    params={withFilters(params, { recipe: id })}
+                    title="Returned material quantities"
+                    detail="Each row covers attempts containing this reagent; returns remain separate from gross allocation."
+                    left={{
+                      nodes: left.returns.nodes.map((row, i) => ({
+                        key: row.id ?? `unidentified-${i}`,
+                        label: row.name ?? "Unnamed item",
+                        itemId: row.id ?? undefined,
                         measure: row.measure,
                       })),
-                      truncated: right.qualities.truncated,
+                      truncated: left.returns.truncated,
+                    }}
+                    right={
+                      right?.returns
+                        ? {
+                            nodes: right.returns.nodes.map((row, i) => ({
+                              key: row.id ?? `unidentified-${i}`,
+                              label: row.name ?? "Unnamed item",
+                              itemId: row.id ?? undefined,
+                              measure: row.measure,
+                            })),
+                            truncated: right.returns.truncated,
+                          }
+                        : undefined
                     }
-                  : undefined
-              }
-            />
-          </SimpleGrid>
-          {!leftConfigs && configsFirst.loading && (
-            <Loader aria-label="Loading recorded configurations" />
-          )}
-          {leftConfigs && (
-            <Configurations
-              game={game}
-              params={withFilters(params, { recipe: id })}
-              result={leftConfigs}
-            />
-          )}
-          {right && rightConfigs && leftConfigs && (
-            <Stack gap="xs">
-              <Title order={2}>Recorded setup differences</Title>
-              <Text size="sm" c="dimmed">
-                Select one exact recorded configuration in each population to
-                inspect its supported setup side by side. Missing fields are
-                unknown, not absent; variants and sample sizes may differ for
-                unrelated reasons.
-              </Text>
-              <SimpleGrid cols={{ base: 1, lg: 2 }}>
-                {(["A", "B"] as const).map((population) => {
-                  const selected = params.get(
-                    population === "A" ? "configuration" : "bconfiguration",
-                  );
-                  const result =
-                    population === "A" ? leftConfigs : rightConfigs;
-                  const variant = result.configurations.nodes.find(
-                    (row) => row.id === selected,
-                  );
-                  return (
-                    <Card key={population} withBorder>
-                      <Stack gap="xs">
-                        <Title order={3}>Population {population} setup</Title>
-                        {!selected ? (
-                          <Text c="dimmed">
-                            No single recorded setup selected; the population
-                            can include recorded, empty and unknown
-                            configuration evidence.
-                          </Text>
-                        ) : !variant ? (
-                          <Text c="dimmed">
-                            The selected variant is not present in the first 100
-                            rows for this population.
-                          </Text>
-                        ) : (
-                          <>
-                            <Text>{coverage(variant.metrics.production)}</Text>
-                            <AnalysisEvidence
-                              evidence={variant.evidence}
-                              available={variant.evidenceAvailable}
-                            />
-                          </>
-                        )}
-                      </Stack>
-                    </Card>
-                  );
-                })}
+                  />
+                )}
               </SimpleGrid>
-            </Stack>
-          )}
-          <Title order={2}>Characters & decisions</Title>
-          <Text size="sm" c="dimmed">
-            Recorded character populations are observational. Contrast sample
-            sizes and measured coverage before drawing conclusions.
-          </Text>
-          <Table.ScrollContainer minWidth={700}>
-            <Table striped withTableBorder>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Character</Table.Th>
-                  <Table.Th>Attempts</Table.Th>
-                  <Table.Th>Actual production</Table.Th>
-                  {game.project === 1 && left.supportsReturns && (
-                    <Table.Th>Ingenuity rate</Table.Th>
-                  )}
-                  <Table.Th>Evidence</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {left.characters.nodes.map((row, i) => (
-                  <Table.Tr key={row.id ?? i}>
-                    <Table.Td>{row.name ?? "Unnamed character"}</Table.Td>
-                    <Table.Td>{exact(row.measure.attempts)}</Table.Td>
-                    <Table.Td>
-                      {row.metrics ? (
-                        <Quantity measure={row.metrics.production} />
-                      ) : (
-                        "Not measured"
-                      )}
-                    </Table.Td>
-                    {game.project === 1 && left.supportsReturns && (
-                      <Table.Td>
-                        {row.metrics?.ingenuity
-                          ? (rate(row.metrics.ingenuity) ?? "Not observed")
-                          : "Unknown"}
-                      </Table.Td>
-                    )}
-                    <Table.Td>
-                      {row.id && (
-                        <LinkTo
-                          game={game}
-                          destination="crafts"
-                          params={withFilters(params, {
-                            character: row.id,
-                            recipe: id,
-                          })}
-                        >
-                          Inspect crafts
-                        </LinkTo>
-                      )}
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </Table.ScrollContainer>
-          <Truncated value={left.characters.truncated} />
-          {compareReturns && (returnsFirst.error || returnsOther.error) && (
-            <Alert
-              color="red"
-              title="Returned material evidence could not be loaded"
-            >
-              <Button
-                variant="light"
-                size="xs"
-                onClick={() => {
-                  void returnsFirst.refetch();
-                  void returnsOther.refetch();
-                }}
-              >
-                Retry
-              </Button>
-            </Alert>
-          )}
-          {compareReturns && (returnsFirst.loading || returnsOther.loading) && (
-            <Text size="sm">Loading returned material evidence…</Text>
-          )}
-          {compareReturns &&
-            right &&
-            !returnsFirst.loading &&
-            !returnsOther.loading &&
-            !returnsFirst.error &&
-            !returnsOther.error &&
-            ((returnsFirst.data &&
-              returnsFirst.data.analysis.signature !== left.signature) ||
-              (returnsOther.data &&
-                returnsOther.data.analysis.signature !== right.signature)) && (
-              <Alert color="yellow" title="Returned material evidence changed">
-                Refresh the investigation before comparing these results.
-                <Button variant="light" size="xs" onClick={refresh}>
-                  Refresh investigation
-                </Button>
-              </Alert>
-            )}
-          {right && (
-            <CharacterComparison
-              left={left.characters}
-              right={right.characters}
-              attributedRequirements={game.project === 18}
-              includeRetailOutcomes={game.project === 1 && left.supportsReturns}
-              metric={
-                isCharacterOutcome(selectedCharacterOutcome)
-                  ? selectedCharacterOutcome
-                  : game.project === 1
-                    ? "ingenuity"
-                    : "production"
-              }
-              onMetricChange={(value) => {
-                const next = new URLSearchParams(search);
-                next.set("characterOutcome", value);
-                if (value !== "returns") next.delete("returnItem");
-                setSearch(next, { replace: true });
-              }}
-              returnItemControl={
-                <ItemFilter
+            </Tabs.Panel>
+            <Tabs.Panel value="compare">
+              <Stack gap="lg">
+                <ComparisonGuide
                   game={game}
-                  label="Returned material to compare"
-                  value={returnItem}
-                  onChange={(value) => {
-                    const next = new URLSearchParams(search);
-                    if (value) next.set("returnItem", value);
-                    else next.delete("returnItem");
-                    setSearch(next, { replace: true });
-                  }}
+                  configurations={choices}
+                  finishingIds={[
+                    ...new Set(
+                      configurations.flatMap(
+                        (row) =>
+                          row.evidence.finishingReagents?.flatMap((entry) =>
+                            entry.itemId == null ? [] : [entry.itemId],
+                          ) ?? [],
+                      ),
+                    ),
+                  ]}
+                  buffIds={[
+                    ...new Set(
+                      configurations.flatMap(
+                        (row) =>
+                          row.evidence.buffs?.flatMap((entry) =>
+                            entry.spellId == null ? [] : [entry.spellId],
+                          ) ?? [],
+                      ),
+                    ),
+                  ]}
                 />
-              }
-              leftReturns={
-                !returnsFirst.loading &&
-                !returnsFirst.error &&
-                returnsFirst.data?.analysis.signature === left.signature
-                  ? returnsFirst.data.analysis.characters
-                  : undefined
-              }
-              rightReturns={
-                !returnsOther.loading &&
-                !returnsOther.error &&
-                returnsOther.data?.analysis.signature === right.signature
-                  ? returnsOther.data.analysis.characters
-                  : undefined
-              }
-              resourceComparison={
-                (!!params.get("absentFinishing") &&
-                  params.get("absentFinishing") === params.get("bfinishing") &&
-                  !params.has("finishing") &&
-                  !params.has("babsentFinishing")) ||
-                (!!params.get("absentInput") &&
-                  params.get("absentInput") === params.get("binput") &&
-                  !params.has("babsentInput") &&
-                  ![
-                    "finishing",
-                    "absentFinishing",
-                    "bfinishing",
-                    "babsentFinishing",
-                  ].some((key) => params.has(key)))
-              }
-            />
-          )}
-          {right && (
-            <Stack gap="xs">
-              <Title order={3}>Population B characters</Title>
-              <Table.ScrollContainer minWidth={600}>
-                <Table striped withTableBorder>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Character</Table.Th>
-                      <Table.Th>Attempts</Table.Th>
-                      <Table.Th>Production coverage</Table.Th>
-                      {game.project === 1 && right.supportsReturns && (
-                        <Table.Th>Ingenuity observed rate</Table.Th>
+                {right && (
+                  <RecipeOutcomes
+                    id={id}
+                    left={left}
+                    right={right}
+                    retail={game.project === 1}
+                  />
+                )}
+                <Accordion>
+                  <Accordion.Item value="setups">
+                    <Accordion.Control>
+                      Inspect recorded setup variants
+                    </Accordion.Control>
+                    <Accordion.Panel>
+                      {!leftConfigs && configsFirst.loading && (
+                        <Loader aria-label="Loading recorded configurations" />
                       )}
-                      <Table.Th>Evidence</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {right.characters.nodes.map((row, i) => (
-                      <Table.Tr key={row.id ?? i}>
-                        <Table.Td>{row.name ?? "Unnamed character"}</Table.Td>
-                        <Table.Td>{exact(row.measure.attempts)}</Table.Td>
-                        <Table.Td>
-                          {row.metrics
-                            ? coverage(row.metrics.production)
-                            : "Unknown"}
-                        </Table.Td>
-                        {game.project === 1 && right.supportsReturns && (
-                          <Table.Td>
-                            {row.metrics?.ingenuity
-                              ? (rate(row.metrics.ingenuity) ?? "Not observed")
-                              : "Unknown"}
-                          </Table.Td>
-                        )}
-                        <Table.Td>
-                          {row.id && (
-                            <LinkTo
-                              game={game}
-                              destination="crafts"
-                              params={withFilters(
-                                populationParams(params, "b"),
-                                { character: row.id, recipe: id },
+                      {leftConfigs && (
+                        <Configurations
+                          game={game}
+                          params={withFilters(params, { recipe: id })}
+                          result={leftConfigs}
+                          choices={choices}
+                        />
+                      )}
+                    </Accordion.Panel>
+                  </Accordion.Item>
+                </Accordion>
+                {right && rightConfigs && leftConfigs && (
+                  <Stack gap="xs">
+                    <Title order={2}>Recorded setup differences</Title>
+                    <Text size="sm" c="dimmed">
+                      Select one exact recorded configuration in each population
+                      to inspect its supported setup side by side. Missing
+                      fields are unknown, not absent; variants and sample sizes
+                      may differ for unrelated reasons.
+                    </Text>
+                    <SimpleGrid cols={{ base: 1, lg: 2 }}>
+                      {(["A", "B"] as const).map((population) => {
+                        const selected = params.get(
+                          population === "A"
+                            ? "configuration"
+                            : "bconfiguration",
+                        );
+                        const result =
+                          population === "A" ? leftConfigs : rightConfigs;
+                        const variant = result.configurations.nodes.find(
+                          (row) => row.id === selected,
+                        );
+                        return (
+                          <Card key={population} withBorder>
+                            <Stack gap="xs">
+                              <Title order={3}>
+                                Population {population} setup
+                              </Title>
+                              {!selected ? (
+                                <Text c="dimmed">
+                                  No single recorded setup selected; the
+                                  population can include recorded, empty and
+                                  unknown configuration evidence.
+                                </Text>
+                              ) : !variant ? (
+                                <Text c="dimmed">
+                                  The selected variant is not present in the
+                                  first 100 rows for this population.
+                                </Text>
+                              ) : (
+                                <>
+                                  <Text>
+                                    {coverage(variant.metrics.production)}
+                                  </Text>
+                                  <AnalysisEvidence
+                                    evidence={variant.evidence}
+                                    available={variant.evidenceAvailable}
+                                  />
+                                </>
                               )}
-                            >
-                              Inspect B crafts
-                            </LinkTo>
-                          )}
-                        </Table.Td>
+                            </Stack>
+                          </Card>
+                        );
+                      })}
+                    </SimpleGrid>
+                  </Stack>
+                )}
+                <Title order={2}>Characters & decisions</Title>
+                <Text size="sm" c="dimmed">
+                  Recorded character populations are observational. Contrast
+                  sample sizes and measured coverage before drawing conclusions.
+                </Text>
+                <Table.ScrollContainer minWidth={700}>
+                  <Table striped withTableBorder>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Character</Table.Th>
+                        <Table.Th>Attempts</Table.Th>
+                        <Table.Th>Actual production</Table.Th>
+                        {game.project === 1 && left.supportsReturns && (
+                          <Table.Th>Ingenuity rate</Table.Th>
+                        )}
+                        <Table.Th>Evidence</Table.Th>
                       </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              </Table.ScrollContainer>
-              <Truncated value={right.characters.truncated} />
-            </Stack>
-          )}
-          <Title order={2}>Contributing crafts</Title>
-          <Crafts
-            game={game}
-            params={withFilters(params, { recipe: id })}
-            filter={filter}
-            refreshBounds={refreshBounds}
-            embedded
-          />
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {left.characters.nodes.map((row, i) => (
+                        <Table.Tr key={row.id ?? i}>
+                          <Table.Td>{row.name ?? "Unnamed character"}</Table.Td>
+                          <Table.Td>{exact(row.measure.attempts)}</Table.Td>
+                          <Table.Td>
+                            {row.metrics ? (
+                              <Quantity measure={row.metrics.production} />
+                            ) : (
+                              "Not measured"
+                            )}
+                          </Table.Td>
+                          {game.project === 1 && left.supportsReturns && (
+                            <Table.Td>
+                              {row.metrics?.ingenuity
+                                ? (rate(row.metrics.ingenuity) ??
+                                  "Not observed")
+                                : "Unknown"}
+                            </Table.Td>
+                          )}
+                          <Table.Td>
+                            {row.id && (
+                              <LinkTo
+                                game={game}
+                                destination="crafts"
+                                params={withFilters(params, {
+                                  character: row.id,
+                                  recipe: id,
+                                })}
+                              >
+                                Inspect crafts
+                              </LinkTo>
+                            )}
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </Table.ScrollContainer>
+                <Truncated value={left.characters.truncated} />
+                {compareReturns &&
+                  (returnsFirst.error || returnsOther.error) && (
+                    <Alert
+                      color="red"
+                      title="Returned material evidence could not be loaded"
+                    >
+                      <Button
+                        variant="light"
+                        size="xs"
+                        onClick={() => {
+                          void returnsFirst.refetch();
+                          void returnsOther.refetch();
+                        }}
+                      >
+                        Retry
+                      </Button>
+                    </Alert>
+                  )}
+                {compareReturns &&
+                  (returnsFirst.loading || returnsOther.loading) && (
+                    <Text size="sm">Loading returned material evidence…</Text>
+                  )}
+                {compareReturns &&
+                  right &&
+                  !returnsFirst.loading &&
+                  !returnsOther.loading &&
+                  !returnsFirst.error &&
+                  !returnsOther.error &&
+                  ((returnsFirst.data &&
+                    returnsFirst.data.analysis.signature !== left.signature) ||
+                    (returnsOther.data &&
+                      returnsOther.data.analysis.signature !==
+                        right.signature)) && (
+                    <Alert
+                      color="yellow"
+                      title="Returned material evidence changed"
+                    >
+                      Refresh the investigation before comparing these results.
+                      <Button variant="light" size="xs" onClick={refresh}>
+                        Refresh investigation
+                      </Button>
+                    </Alert>
+                  )}
+                {right && (
+                  <CharacterComparison
+                    left={left.characters}
+                    right={right.characters}
+                    attributedRequirements={game.project === 18}
+                    includeRetailOutcomes={
+                      game.project === 1 && left.supportsReturns
+                    }
+                    metric={
+                      isCharacterOutcome(selectedCharacterOutcome)
+                        ? selectedCharacterOutcome
+                        : game.project === 1
+                          ? "ingenuity"
+                          : "production"
+                    }
+                    onMetricChange={(value) => {
+                      const next = new URLSearchParams(search);
+                      next.set("characterOutcome", value);
+                      if (value !== "returns") next.delete("returnItem");
+                      setSearch(next, { replace: true });
+                    }}
+                    returnItemControl={
+                      <ItemFilter
+                        game={game}
+                        label="Returned material to compare"
+                        value={returnItem}
+                        onChange={(value) => {
+                          const next = new URLSearchParams(search);
+                          if (value) next.set("returnItem", value);
+                          else next.delete("returnItem");
+                          setSearch(next, { replace: true });
+                        }}
+                      />
+                    }
+                    leftReturns={
+                      !returnsFirst.loading &&
+                      !returnsFirst.error &&
+                      returnsFirst.data?.analysis.signature === left.signature
+                        ? returnsFirst.data.analysis.characters
+                        : undefined
+                    }
+                    rightReturns={
+                      !returnsOther.loading &&
+                      !returnsOther.error &&
+                      returnsOther.data?.analysis.signature === right.signature
+                        ? returnsOther.data.analysis.characters
+                        : undefined
+                    }
+                    resourceComparison={
+                      (!!params.get("absentFinishing") &&
+                        params.get("absentFinishing") ===
+                          params.get("bfinishing") &&
+                        !params.has("finishing") &&
+                        !params.has("babsentFinishing")) ||
+                      (!!params.get("absentInput") &&
+                        params.get("absentInput") === params.get("binput") &&
+                        !params.has("babsentInput") &&
+                        ![
+                          "finishing",
+                          "absentFinishing",
+                          "bfinishing",
+                          "babsentFinishing",
+                        ].some((key) => params.has(key)))
+                    }
+                  />
+                )}
+                {right && (
+                  <Stack gap="xs">
+                    <Title order={3}>Population B characters</Title>
+                    <Table.ScrollContainer minWidth={600}>
+                      <Table striped withTableBorder>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Character</Table.Th>
+                            <Table.Th>Attempts</Table.Th>
+                            <Table.Th>Production coverage</Table.Th>
+                            {game.project === 1 && right.supportsReturns && (
+                              <Table.Th>Ingenuity observed rate</Table.Th>
+                            )}
+                            <Table.Th>Evidence</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {right.characters.nodes.map((row, i) => (
+                            <Table.Tr key={row.id ?? i}>
+                              <Table.Td>
+                                {row.name ?? "Unnamed character"}
+                              </Table.Td>
+                              <Table.Td>{exact(row.measure.attempts)}</Table.Td>
+                              <Table.Td>
+                                {row.metrics
+                                  ? coverage(row.metrics.production)
+                                  : "Unknown"}
+                              </Table.Td>
+                              {game.project === 1 && right.supportsReturns && (
+                                <Table.Td>
+                                  {row.metrics?.ingenuity
+                                    ? (rate(row.metrics.ingenuity) ??
+                                      "Not observed")
+                                    : "Unknown"}
+                                </Table.Td>
+                              )}
+                              <Table.Td>
+                                {row.id && (
+                                  <LinkTo
+                                    game={game}
+                                    destination="crafts"
+                                    params={withFilters(
+                                      populationParams(params, "b"),
+                                      { character: row.id, recipe: id },
+                                    )}
+                                  >
+                                    Inspect B crafts
+                                  </LinkTo>
+                                )}
+                              </Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </Table.ScrollContainer>
+                    <Truncated value={right.characters.truncated} />
+                  </Stack>
+                )}
+              </Stack>
+            </Tabs.Panel>
+            <Tabs.Panel value="crafts">
+              <Stack gap="md">
+                <Title order={2}>Contributing crafts</Title>
+                <Crafts
+                  game={game}
+                  params={withFilters(params, { recipe: id })}
+                  filter={filter}
+                  refreshBounds={refreshBounds}
+                  embedded
+                />
+              </Stack>
+            </Tabs.Panel>
+          </Tabs>
         </>
       )}
     </Stack>
@@ -1544,6 +1783,11 @@ function Item({
     notifyOnNetworkStatusChange: true,
   });
   const item = data?.item;
+  const inherited = useQuery(InheritedRecipeDocument, {
+    variables: { context: game.canonicalId, id: params.get("recipe") ?? "" },
+    skip: !params.has("recipe"),
+    fetchPolicy: "no-cache",
+  });
   const roles: { role: ItemRole; title: string }[] = data
     ? [
         { role: "output", title: "Actual output" },
@@ -1558,8 +1802,18 @@ function Item({
       <header>
         <Text className="eyebrow">{game.displayName} · item investigation</Text>
         <Title>
-          {item?.name ?? (loading ? "Investigating item…" : "Unnamed item")}
+          {item?.name ??
+            (loading
+              ? "Investigating item…"
+              : item
+                ? `Item ${item.blizzardId} · name unavailable`
+                : "Item unavailable")}
         </Title>
+        {item && (
+          <Text size="sm" c="dimmed">
+            Item #{item.blizzardId}
+          </Text>
+        )}
         <Text c="dimmed">
           Distinct historical roles · {scopeLabel(params)}. No net inventory or
           provenance is inferred.
@@ -1568,6 +1822,26 @@ function Item({
           <EntityActions game={game} kind="Item" blizzardId={item.blizzardId} />
         )}
       </header>
+      {params.has("recipe") && (
+        <Alert
+          color="gold"
+          title={`From ${inherited.data?.contextRecipe?.name ?? (inherited.loading ? "selected recipe…" : inherited.error ? "selected recipe (name could not be loaded)" : "selected recipe")}`}
+        >
+          This item is restricted to the recipe you came from.
+          <Anchor
+            ml="sm"
+            component={Link}
+            to={investigationLink(
+              game,
+              `items/${encodeURIComponent(id)}`,
+              params,
+              { recipe: null },
+            )}
+          >
+            Explore across all recipes
+          </Anchor>
+        </Alert>
+      )}
       <ScopeControls game={game} hideRoleItems />
       {["item", "input", "output", "returned"].some((key) =>
         params.has(key),
@@ -1680,14 +1954,11 @@ function Item({
               );
             })}
           </SimpleGrid>
-          {(game.project !== 1 || !data.returned?.supportsReturns) && (
-            <Alert color="blue">
-              Recorded Resourcefulness returns are not supported for this game
-              context.
-              {game.project === 18
-                ? " Input quantities are attributed schematic requirements, not measured consumption."
-                : " Input quantities must not be interpreted as measured consumption without explicit provenance."}
-            </Alert>
+          {game.project === 18 && (
+            <Text size="sm" c="dimmed">
+              Inputs are attributed schematic requirements, not measured
+              consumption.
+            </Text>
           )}
           {data.relations.itemRelations && (
             <Stack gap="lg">
@@ -1697,84 +1968,101 @@ function Item({
                 are grouped observations, not inventory provenance. Open a row
                 to inspect its actual contributing crafts.
               </Text>
-              {roles.map(({ role, title }) => {
-                const rows =
-                  role === "output"
-                    ? data.relations.itemRelations!.outputs
-                    : role === "input"
-                      ? data.relations.itemRelations!.inputs
-                      : data.relations.itemRelations!.returns;
-                if (!rows) return null;
-                return (
-                  <Stack key={role} gap="xs">
-                    <Title order={3}>{title}</Title>
-                    {!rows.nodes.length && (
-                      <Text c="dimmed">
-                        No recorded relationships for this role.
-                      </Text>
-                    )}
-                    {!!rows.nodes.length && (
-                      <Table.ScrollContainer minWidth={620}>
-                        <Table striped highlightOnHover withTableBorder>
-                          <Table.Thead>
-                            <Table.Tr>
-                              <Table.Th>Recipe</Table.Th>
-                              <Table.Th>Character</Table.Th>
-                              <Table.Th>Role quantity and coverage</Table.Th>
-                              <Table.Th>Evidence</Table.Th>
-                            </Table.Tr>
-                          </Table.Thead>
-                          <Table.Tbody>
-                            {rows.nodes.map((row, i) => (
-                              <Table.Tr
-                                key={`${row.recipeId ?? "unknown"}:${row.characterId}:${i}`}
-                              >
-                                <Table.Td>
-                                  {row.recipeId ? (
-                                    <LinkTo
-                                      game={game}
-                                      destination={`recipes/${encodeURIComponent(row.recipeId)}`}
-                                      params={roleLinkParams(params, id, role)}
-                                    >
-                                      {row.recipeName ?? "Unnamed recipe"}
-                                    </LinkTo>
-                                  ) : (
-                                    "Recipe unknown"
-                                  )}
-                                </Table.Td>
-                                <Table.Td>
-                                  {row.characterName ?? "Unnamed character"}
-                                </Table.Td>
-                                <Table.Td>
-                                  <Quantity measure={row.measure} />
-                                </Table.Td>
-                                <Table.Td>
-                                  <LinkTo
-                                    game={game}
-                                    destination="crafts"
-                                    params={withFilters(
-                                      roleLinkParams(params, id, role),
-                                      {
-                                        character: row.characterId,
-                                        ...(row.recipeId
-                                          ? { recipe: row.recipeId }
-                                          : {}),
-                                      },
-                                    )}
+              <Tabs defaultValue="output" keepMounted={false}>
+                <Tabs.List aria-label="Item relationships">
+                  {roles.map(({ role, title }) => (
+                    <Tabs.Tab value={role} key={role}>
+                      {title}
+                    </Tabs.Tab>
+                  ))}
+                </Tabs.List>
+                {roles.map(({ role, title }) => {
+                  const rows =
+                    role === "output"
+                      ? data.relations.itemRelations!.outputs
+                      : role === "input"
+                        ? data.relations.itemRelations!.inputs
+                        : data.relations.itemRelations!.returns;
+                  if (!rows) return null;
+                  return (
+                    <Tabs.Panel key={role} value={role}>
+                      <Stack gap="xs">
+                        <Title order={3}>{title}</Title>
+                        {!rows.nodes.length && (
+                          <Text c="dimmed">
+                            No recorded relationships for this role.
+                          </Text>
+                        )}
+                        {!!rows.nodes.length && (
+                          <Table.ScrollContainer minWidth={620}>
+                            <Table striped highlightOnHover withTableBorder>
+                              <Table.Thead>
+                                <Table.Tr>
+                                  <Table.Th>Recipe</Table.Th>
+                                  <Table.Th>Character</Table.Th>
+                                  <Table.Th>
+                                    Role quantity and coverage
+                                  </Table.Th>
+                                  <Table.Th>Evidence</Table.Th>
+                                </Table.Tr>
+                              </Table.Thead>
+                              <Table.Tbody>
+                                {rows.nodes.map((row, i) => (
+                                  <Table.Tr
+                                    key={`${row.recipeId ?? "unknown"}:${row.characterId}:${i}`}
                                   >
-                                    Inspect crafts
-                                  </LinkTo>
-                                </Table.Td>
-                              </Table.Tr>
-                            ))}
-                          </Table.Tbody>
-                        </Table>
-                      </Table.ScrollContainer>
-                    )}
-                    <Truncated value={rows.truncated} />
-                  </Stack>
-                );
-              })}
+                                    <Table.Td>
+                                      {row.recipeId ? (
+                                        <LinkTo
+                                          game={game}
+                                          destination={`recipes/${encodeURIComponent(row.recipeId)}`}
+                                          params={roleLinkParams(
+                                            params,
+                                            id,
+                                            role,
+                                          )}
+                                        >
+                                          {row.recipeName ?? "Unnamed recipe"}
+                                        </LinkTo>
+                                      ) : (
+                                        "Recipe unknown"
+                                      )}
+                                    </Table.Td>
+                                    <Table.Td>
+                                      {row.characterName ?? "Unnamed character"}
+                                    </Table.Td>
+                                    <Table.Td>
+                                      <Quantity measure={row.measure} />
+                                    </Table.Td>
+                                    <Table.Td>
+                                      <LinkTo
+                                        game={game}
+                                        destination="crafts"
+                                        params={withFilters(
+                                          roleLinkParams(params, id, role),
+                                          {
+                                            character: row.characterId,
+                                            ...(row.recipeId
+                                              ? { recipe: row.recipeId }
+                                              : {}),
+                                          },
+                                        )}
+                                      >
+                                        Inspect crafts
+                                      </LinkTo>
+                                    </Table.Td>
+                                  </Table.Tr>
+                                ))}
+                              </Table.Tbody>
+                            </Table>
+                          </Table.ScrollContainer>
+                        )}
+                        <Truncated value={rows.truncated} />
+                      </Stack>
+                    </Tabs.Panel>
+                  );
+                })}
+              </Tabs>
             </Stack>
           )}
         </>
@@ -1819,7 +2107,7 @@ function Crafts({
             <Text className="eyebrow">
               {game.displayName} · contributing evidence
             </Text>
-            <Title>Crafts</Title>
+            <Title>Logbook</Title>
             <Text c="dimmed">
               {scopeLabel(params)} · newest first. An import can change pages;
               pagination is not a frozen snapshot.
@@ -2024,192 +2312,222 @@ function Craft({
               {craft.professionExpansion?.name ?? "Expansion unknown"}
             </Text>
           </Group>
-          {game.project !== 1 ? (
-            <Alert color="blue">
-              Ingenuity, Concentration, Resourcefulness and Multicraft outcomes
-              are not supported for{" "}
-              {game.project === 18 ? "Forever crafts" : "this game project"}.
-              Their absence is not a measured zero.
-            </Alert>
-          ) : (
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }}>
-              {[
-                ["Concentration spent", craft.concentrationSpent],
-                ["Ingenuity refund", craft.ingenuityRefund],
-                ["Concentration currency ID", craft.concentrationCurrencyId],
-                ["Multicraft bonus", craft.multicraftBonus],
-                [
-                  "Ingenuity proc",
-                  craft.hasIngenuityProc == null
-                    ? null
-                    : craft.hasIngenuityProc
-                      ? "Yes"
-                      : "No",
-                ],
-                [
-                  "Resourcefulness proc",
-                  craft.hasResourcefulnessProc == null
-                    ? null
-                    : craft.hasResourcefulnessProc
-                      ? "Yes"
-                      : "No",
-                ],
-              ].map(([label, value]) => (
-                <Card withBorder key={label}>
-                  <Text size="sm">{label}</Text>
-                  <Text fw={600}>
-                    {value == null ? "Unknown" : String(value)}
-                  </Text>
-                </Card>
-              ))}
-            </SimpleGrid>
-          )}
-          <Title order={2}>Actual output</Title>
-          <Text size="sm" c="dimmed">
-            Collection:{" "}
-            {craft.outputsComplete == null
-              ? "completeness unknown"
-              : craft.outputsComplete
-                ? "complete"
-                : "incomplete"}
-          </Text>
-          {craft.outputs == null ? (
-            <Text>Outputs not observed</Text>
-          ) : craft.outputs.length === 0 ? (
-            <Text>Observed empty output collection</Text>
-          ) : (
-            <Table.ScrollContainer minWidth={450}>
-              <Table striped withTableBorder>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Item</Table.Th>
-                    <Table.Th>Quality</Table.Th>
-                    <Table.Th>Quantity</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {craft.outputs.map((row, i) => (
-                    <Table.Tr key={i}>
-                      <Table.Td>
-                        <LinkTo
-                          game={game}
-                          destination={`items/${encodeURIComponent(row.item.id)}`}
-                          params={params}
-                        >
-                          {row.item.name ?? `Item ${row.item.blizzardId}`}
-                        </LinkTo>
-                      </Table.Td>
-                      <Table.Td>{row.quality ?? "Unknown"}</Table.Td>
-                      <Table.Td>{rawQuantity(row.quantityExact)}</Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
-          )}
-          <Title order={2}>
-            {game.project === 18
-              ? "Attributed schematic requirements"
-              : game.project === 1
-                ? "Reagents and returns"
-                : "Recorded inputs"}
-          </Title>
-          <Text size="sm" c="dimmed">
-            Input collection:{" "}
-            {craft.inputsComplete == null
-              ? "completeness unknown"
-              : craft.inputsComplete
-                ? "complete"
-                : "incomplete"}{" "}
-            {game.project === 18 ? (
-              ". These are attributed schematic requirements, not measured consumption."
-            ) : game.project === 1 ? (
-              <>
-                {" "}
-                · return collection:{" "}
-                {craft.resourcefulnessComplete == null
-                  ? "completeness unknown"
-                  : craft.resourcefulnessComplete
-                    ? "complete"
-                    : "incomplete"}
-                . Gross allocation and returns are distinct; an unknown is not
-                zero.
-              </>
-            ) : (
-              ". Their consumption semantics are not established for this game project."
+          <Tabs defaultValue="result" keepMounted={false}>
+            <Tabs.List aria-label="Craft sections">
+              <Tabs.Tab value="result">Result</Tabs.Tab>
+              <Tabs.Tab value="ingredients">Ingredients</Tabs.Tab>
+              {game.project === 1 && (
+                <Tabs.Tab value="configuration">Configuration</Tabs.Tab>
+              )}
+            </Tabs.List>
+            <Tabs.Panel value="result">
+              <Stack gap="md">
+                {game.project === 1 && (
+                  <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }}>
+                    {[
+                      ["Concentration spent", craft.concentrationSpent],
+                      ["Ingenuity refunded", craft.appliedIngenuityRefund],
+                      ["Multicraft bonus", craft.multicraftBonus],
+                      [
+                        "Ingenuity proc",
+                        craft.hasIngenuityProc == null
+                          ? null
+                          : craft.hasIngenuityProc
+                            ? "Yes"
+                            : "No",
+                      ],
+                      [
+                        "Resourcefulness proc",
+                        craft.hasResourcefulnessProc == null
+                          ? null
+                          : craft.hasResourcefulnessProc
+                            ? "Yes"
+                            : "No",
+                      ],
+                    ].map(([label, value]) => (
+                      <Card withBorder key={label}>
+                        <Text size="sm">{label}</Text>
+                        <Text fw={600}>
+                          {value == null ? "Unknown" : String(value)}
+                        </Text>
+                      </Card>
+                    ))}
+                  </SimpleGrid>
+                )}
+                <Title order={2}>Actual output</Title>
+                <Text size="sm" c="dimmed">
+                  Collection:{" "}
+                  {craft.outputsComplete == null
+                    ? "completeness unknown"
+                    : craft.outputsComplete
+                      ? "complete"
+                      : "incomplete"}
+                </Text>
+                {craft.outputs == null ? (
+                  <Text>Outputs not observed</Text>
+                ) : craft.outputs.length === 0 ? (
+                  <Text>Observed empty output collection</Text>
+                ) : (
+                  <Table.ScrollContainer minWidth={450}>
+                    <Table striped withTableBorder>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Item</Table.Th>
+                          {game.project === 1 && <Table.Th>Quality</Table.Th>}
+                          <Table.Th>Quantity</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {craft.outputs.map((row, i) => (
+                          <Table.Tr key={i}>
+                            <Table.Td>
+                              <LinkTo
+                                game={game}
+                                destination={`items/${encodeURIComponent(row.item.id)}`}
+                                params={params}
+                              >
+                                {row.item.name ?? `Item ${row.item.blizzardId}`}
+                              </LinkTo>
+                            </Table.Td>
+                            {game.project === 1 && (
+                              <Table.Td>{row.quality ?? "Unknown"}</Table.Td>
+                            )}
+                            <Table.Td>
+                              {rawQuantity(row.quantityExact)}
+                            </Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </Table.ScrollContainer>
+                )}
+              </Stack>
+            </Tabs.Panel>
+            <Tabs.Panel value="ingredients">
+              <Stack gap="md">
+                <Title order={2}>
+                  {game.project === 18
+                    ? "Attributed schematic requirements"
+                    : game.project === 1
+                      ? "Reagents and returns"
+                      : "Recorded inputs"}
+                </Title>
+                <Text size="sm" c="dimmed">
+                  Input collection:{" "}
+                  {craft.inputsComplete == null
+                    ? "completeness unknown"
+                    : craft.inputsComplete
+                      ? "complete"
+                      : "incomplete"}{" "}
+                  {game.project === 18 ? (
+                    ". These are attributed schematic requirements, not measured consumption."
+                  ) : game.project === 1 ? (
+                    <>
+                      {" "}
+                      · return collection:{" "}
+                      {craft.resourcefulnessComplete == null
+                        ? "completeness unknown"
+                        : craft.resourcefulnessComplete
+                          ? "complete"
+                          : "incomplete"}
+                      . Gross allocation and returns are distinct; an unknown is
+                      not zero.
+                    </>
+                  ) : (
+                    ". Their consumption semantics are not established for this game project."
+                  )}
+                </Text>
+                {craft.reagents == null ? (
+                  <Text>Reagents not observed</Text>
+                ) : craft.reagents.length === 0 ? (
+                  <Text>Observed empty reagent collection</Text>
+                ) : (
+                  <Table.ScrollContainer minWidth={550}>
+                    <Table striped withTableBorder>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Item</Table.Th>
+                          <Table.Th>
+                            {game.project === 18
+                              ? "Attributed requirement"
+                              : game.project === 1
+                                ? "Gross allocated"
+                                : "Recorded input"}
+                          </Table.Th>
+                          {game.project === 1 && <Table.Th>Returned</Table.Th>}
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {craft.reagents.map((row, i) => (
+                          <Table.Tr key={i}>
+                            <Table.Td>
+                              <LinkTo
+                                game={game}
+                                destination={`items/${encodeURIComponent(row.item.id)}`}
+                                params={params}
+                              >
+                                {row.item.name ?? `Item ${row.item.blizzardId}`}
+                              </LinkTo>
+                            </Table.Td>
+                            <Table.Td>
+                              {rawQuantity(row.allocatedQuantityExact)}
+                            </Table.Td>
+                            {game.project === 1 && (
+                              <Table.Td>
+                                {rawQuantity(row.returnedQuantityExact)}
+                              </Table.Td>
+                            )}
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </Table.ScrollContainer>
+                )}
+              </Stack>
+            </Tabs.Panel>
+            {game.project === 1 && (
+              <Tabs.Panel value="configuration">
+                <Stack gap="md">
+                  <Title order={2}>Recorded setup evidence</Title>
+                  {craft.ingenuityRefund != null && (
+                    <Text size="sm" c="dimmed">
+                      Recorded potential Ingenuity refund:{" "}
+                      {craft.ingenuityRefund}. This configured amount is not an
+                      applied refund unless Ingenuity triggered.
+                    </Text>
+                  )}
+                  {!craft.recordedConfigurations.observed && (
+                    <Text c="dimmed">
+                      Configuration evidence collection not observed; this is
+                      not an observed empty setup.
+                    </Text>
+                  )}
+                  {craft.recordedConfigurations.observed &&
+                    !craft.recordedConfigurations.nodes.length && (
+                      <Text c="dimmed">
+                        Recorded empty configuration collection.
+                      </Text>
+                    )}
+                  <Accordion variant="separated">
+                    {craft.recordedConfigurations.nodes.map((row) => (
+                      <Accordion.Item key={row.id} value={row.id}>
+                        <Accordion.Control>
+                          {configurationLabel(row.id, row.evidence)}
+                        </Accordion.Control>
+                        <Accordion.Panel>
+                          <AnalysisEvidence
+                            evidence={row.evidence}
+                            available={row.evidenceAvailable}
+                          />
+                        </Accordion.Panel>
+                      </Accordion.Item>
+                    ))}
+                  </Accordion>
+                  <Truncated value={craft.recordedConfigurations.truncated} />
+                </Stack>
+              </Tabs.Panel>
             )}
-          </Text>
-          {craft.reagents == null ? (
-            <Text>Reagents not observed</Text>
-          ) : craft.reagents.length === 0 ? (
-            <Text>Observed empty reagent collection</Text>
-          ) : (
-            <Table.ScrollContainer minWidth={550}>
-              <Table striped withTableBorder>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Item</Table.Th>
-                    <Table.Th>
-                      {game.project === 18
-                        ? "Attributed requirement"
-                        : game.project === 1
-                          ? "Gross allocated"
-                          : "Recorded input"}
-                    </Table.Th>
-                    {game.project === 1 && <Table.Th>Returned</Table.Th>}
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {craft.reagents.map((row, i) => (
-                    <Table.Tr key={i}>
-                      <Table.Td>
-                        <LinkTo
-                          game={game}
-                          destination={`items/${encodeURIComponent(row.item.id)}`}
-                          params={params}
-                        >
-                          {row.item.name ?? `Item ${row.item.blizzardId}`}
-                        </LinkTo>
-                      </Table.Td>
-                      <Table.Td>
-                        {rawQuantity(row.allocatedQuantityExact)}
-                      </Table.Td>
-                      {game.project === 1 && (
-                        <Table.Td>
-                          {rawQuantity(row.returnedQuantityExact)}
-                        </Table.Td>
-                      )}
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
-          )}
-          <Title order={2}>Recorded setup evidence</Title>
-          {!craft.recordedConfigurations.observed && (
-            <Text c="dimmed">
-              Configuration evidence collection not observed; this is not an
-              observed empty setup.
-            </Text>
-          )}
-          {craft.recordedConfigurations.observed &&
-            !craft.recordedConfigurations.nodes.length && (
-              <Text c="dimmed">Recorded empty configuration collection.</Text>
-            )}
-          <Accordion variant="separated">
-            {craft.recordedConfigurations.nodes.map((row, i) => (
-              <Accordion.Item key={row.id} value={row.id}>
-                <Accordion.Control>Recorded variant {i + 1}</Accordion.Control>
-                <Accordion.Panel>
-                  <AnalysisEvidence
-                    evidence={row.evidence}
-                    available={row.evidenceAvailable}
-                  />
-                </Accordion.Panel>
-              </Accordion.Item>
-            ))}
-          </Accordion>
-          <Truncated value={craft.recordedConfigurations.truncated} />
+          </Tabs>
         </>
       )}
     </Stack>
@@ -2335,6 +2653,7 @@ function InvestigationEntry({
         "bcharacter",
         "bprofession",
         "bexpansion",
+        "bgameExpansion",
         "brecipe",
         "binput",
         "babsentInput",

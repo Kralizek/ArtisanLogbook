@@ -52,6 +52,7 @@ fragment InvestigationItemContributions on AnalysisContributions {
   nodes {
     id
     name
+    blizzardId
     measure {
       ...InvestigationMeasure
     }
@@ -470,6 +471,7 @@ query InvestigationCraft($context: String!, $id: ID!) {
     }
     concentrationSpent
     ingenuityRefund
+    appliedIngenuityRefund
     concentrationCurrencyId
     hasIngenuityProc
     hasResourcefulnessProc

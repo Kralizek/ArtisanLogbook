@@ -267,7 +267,7 @@ it("advances rolling activity bounds automatically without changing the URL", as
         </ApolloProvider>
       </MantineProvider>,
     );
-    await screen.findByText("Activity & production");
+    await screen.findByText("Overview");
     await waitFor(() => expect(calls).toHaveLength(1));
     const initial = calls[0];
     act(() => vi.advanceTimersByTime(60000));
@@ -488,6 +488,7 @@ it("compares independently filtered recorded populations and retains detail when
   ).toEqual(["Completed attempts", "12", "3"]);
   expect(screen.getByText("Recorded setup differences")).toBeInTheDocument();
   expect(screen.getByText("Population B characters")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
   expect(screen.getByText("Recipe activity over time")).toBeInTheDocument();
   const firstBar = screen.getByRole("link", {
     name: "2026-11-07 – 2026-11-07: 12 completed crafts",
@@ -787,6 +788,7 @@ it("withholds configuration comparisons from a different history signature", asy
     await screen.findByText("Recorded setup evidence changed"),
   ).toBeInTheDocument();
   expect(screen.queryByText("Recorded configurations")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "Statistics" }));
   expect(screen.getByText("Outcome evidence")).toBeInTheDocument();
 });
 
@@ -1024,20 +1026,27 @@ it("compares measured production, return quantities and output quality without a
       </ApolloProvider>
     </MantineProvider>,
   );
+  await screen.findByRole("tab", { name: "Reagents" });
+  await userEvent.click(screen.getByRole("tab", { name: "Reagents" }));
   expect(
     await screen.findByText("Returned material quantities"),
   ).toBeInTheDocument();
-  expect(screen.getByText("Output quality evidence")).toBeInTheDocument();
-  expect(screen.getByText("Quality 1")).toBeInTheDocument();
-  expect(screen.getByText("Quality 2")).toBeInTheDocument();
-  expect(screen.getAllByText("1 per measured craft").length).toBeGreaterThan(0);
-  expect(screen.getAllByText("3 per measured craft").length).toBeGreaterThan(0);
   expect(screen.getByText("0.5 per measured craft")).toBeInTheDocument();
   expect(
     screen.getByText(
       "Per-craft average unavailable: incomplete observations contribute partial quantities",
     ),
   ).toBeInTheDocument();
+  expect(
+    screen.queryByText("B − A observed rate: −16.7 percentage points"),
+  ).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
+  expect(screen.getByText("Output quality evidence")).toBeInTheDocument();
+  expect(screen.getByText("Quality 1")).toBeInTheDocument();
+  expect(screen.getByText("Quality 2")).toBeInTheDocument();
+  expect(screen.getAllByText("1 per measured craft").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("3 per measured craft").length).toBeGreaterThan(0);
+  await userEvent.click(screen.getByRole("tab", { name: "Compare setups" }));
   expect(
     screen.getByText("B − A observed rate: −16.7 percentage points"),
   ).toBeInTheDocument();
@@ -1360,7 +1369,7 @@ it("keeps unknown-project item history without requesting unsupported return ana
   expect(screen.queryByText("Recorded returns")).not.toBeInTheDocument();
   expect(screen.queryByText("Attributed schematic requirements")).toBeNull();
   expect(
-    screen.getByText(/consumption without explicit provenance/),
+    screen.getByText(/No net inventory or provenance is inferred/),
   ).toBeInTheDocument();
 });
 
@@ -1499,6 +1508,7 @@ it("labels Forever craft inputs as attributed and omits unsupported Retail outco
       },
     ]),
   });
+
   render(
     <MantineProvider>
       <ApolloProvider client={client}>
@@ -1513,12 +1523,83 @@ it("labels Forever craft inputs as attributed and omits unsupported Retail outco
       </ApolloProvider>
     </MantineProvider>,
   );
-  expect(await screen.findByText("Attributed requirement")).toBeInTheDocument();
+  await screen.findByRole("tab", { name: "Ingredients" });
   expect(screen.getByText("9,007,199,254,740,993")).toBeInTheDocument();
-  expect(
-    screen.getByText(/not supported for Forever crafts/),
-  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "Ingredients" }));
+  expect(await screen.findByText("Attributed requirement")).toBeInTheDocument();
+  expect(screen.getByText(/not measured consumption/)).toBeInTheDocument();
   expect(screen.queryByText("Gross allocated")).not.toBeInTheDocument();
   expect(screen.queryByText("Returned")).not.toBeInTheDocument();
   expect(screen.queryByText("Concentration spent")).not.toBeInTheDocument();
 });
+
+it.each([
+  [true, 147, "147"],
+  [false, 0, "0"],
+  [null, null, "Unknown"],
+] as const)(
+  "shows applied rather than potential Ingenuity refund for proc=%s",
+  async (proc, applied, label) => {
+    const client = new ApolloClient({
+      cache: new InMemoryCache(),
+      dataMasking: false,
+      link: new MockLink([
+        {
+          request: {
+            query: InvestigationCraftDocument,
+            variables: { context: "1", id: "craft-refund" },
+          },
+          result: {
+            data: {
+              contextCraft: {
+                id: "craft-refund",
+                recordedAt: "2026-11-07T12:00:00Z",
+                character: { id: "char", name: "Crafter" },
+                recipe: null,
+                profession: null,
+                professionExpansion: null,
+                concentrationSpent: 294,
+                ingenuityRefund: 147,
+                appliedIngenuityRefund: applied,
+                concentrationCurrencyId: null,
+                hasIngenuityProc: proc,
+                hasResourcefulnessProc: null,
+                multicraftBonus: null,
+                inputsComplete: null,
+                resourcefulnessComplete: null,
+                outputsComplete: null,
+                reagents: null,
+                outputs: null,
+                recordedConfigurations: {
+                  observed: false,
+                  nodes: [],
+                  truncated: false,
+                },
+              },
+            },
+          },
+        },
+      ]),
+    });
+    render(
+      <MantineProvider>
+        <ApolloProvider client={client}>
+          <MemoryRouter
+            initialEntries={["/retail/crafts/craft-refund?period=all"]}
+          >
+            <Routes>
+              <Route
+                path="/retail/crafts/:id"
+                element={<Investigation game={game} kind="craft" />}
+              />
+            </Routes>
+          </MemoryRouter>
+        </ApolloProvider>
+      </MantineProvider>,
+    );
+    const heading = await screen.findByText("Ingenuity refunded");
+    expect(heading.parentElement).toHaveTextContent(label);
+    if (proc !== true)
+      expect(heading.parentElement).not.toHaveTextContent("147");
+  },
+);

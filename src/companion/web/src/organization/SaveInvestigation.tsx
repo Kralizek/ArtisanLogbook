@@ -1,4 +1,12 @@
-import { Alert, Button, Group, Loader, Stack, TextInput } from "@mantine/core";
+import {
+  Alert,
+  Button,
+  Collapse,
+  Group,
+  Loader,
+  Stack,
+  TextInput,
+} from "@mantine/core";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { RequestError } from "../components/RequestError";
@@ -25,6 +33,7 @@ export function SaveInvestigation({ game }: { game: OrganizationGame }) {
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<Error>();
   const [retry, setRetry] = useState(0);
+  const [opened, setOpened] = useState(false);
   const canUpdate =
     !!id &&
     original?.id === id &&
@@ -134,32 +143,46 @@ export function SaveInvestigation({ game }: { game: OrganizationGame }) {
         </Alert>
       )}
       {!invalid && (
-        <Group align="end">
-          <TextInput
-            label="Investigation name"
-            value={name}
-            maxLength={120}
-            onChange={(event) =>
-              setDraft({ origin: id, name: event.currentTarget.value })
-            }
-            placeholder="Name this investigation"
-          />
+        <>
           <Button
-            disabled={!name.trim() || loading || saving || (!!id && !canUpdate)}
-            onClick={() => void save(false)}
+            variant="subtle"
+            size="sm"
+            onClick={() => setOpened(!opened)}
+            aria-expanded={opened}
           >
-            {id ? "Save changes" : "Save investigation"}
+            {id ? "Save / update investigation" : "Save this investigation"}
           </Button>
-          {id && (
-            <Button
-              variant="light"
-              disabled={!name.trim() || saving || loading}
-              onClick={() => void save(true)}
-            >
-              Save as copy
-            </Button>
-          )}
-        </Group>
+          <Collapse expanded={opened || !!conflict}>
+            <Group align="end">
+              <TextInput
+                label="Investigation name"
+                value={name}
+                maxLength={120}
+                onChange={(event) =>
+                  setDraft({ origin: id, name: event.currentTarget.value })
+                }
+                placeholder="Name this investigation"
+              />
+              <Button
+                disabled={
+                  !name.trim() || loading || saving || (!!id && !canUpdate)
+                }
+                onClick={() => void save(false)}
+              >
+                {id ? "Save changes" : "Save investigation"}
+              </Button>
+              {id && (
+                <Button
+                  variant="light"
+                  disabled={!name.trim() || saving || loading}
+                  onClick={() => void save(true)}
+                >
+                  Save as copy
+                </Button>
+              )}
+            </Group>
+          </Collapse>
+        </>
       )}
     </Stack>
   );

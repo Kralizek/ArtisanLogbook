@@ -1,0 +1,45 @@
+query RecipeCatalogue($context: String!, $search: String, $after: String) {
+  game(context: $context) {
+    recipes(first: 50, search: $search, after: $after) {
+      nodes {
+        id
+        blizzardId
+        name
+        profession {
+          name
+        }
+        expansion {
+          name
+        }
+      }
+      pageInfo {
+        endCursor
+        hasNextPage
+      }
+    }
+  }
+}
+
+query ItemCatalogue($context: String!, $search: String, $after: String) {
+  game(context: $context) {
+    items(first: 50, search: $search, after: $after) {
+      nodes {
+        id
+        blizzardId
+        name
+      }
+      pageInfo {
+        endCursor
+        hasNextPage
+      }
+    }
+  }
+}
+
+query InheritedRecipe($context: String!, $id: ID!) {
+  contextRecipe(context: $context, id: $id) {
+    id
+    name
+    blizzardId
+  }
+}

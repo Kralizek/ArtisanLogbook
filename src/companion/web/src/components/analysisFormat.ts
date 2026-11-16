@@ -1,4 +1,19 @@
 import type { OutcomeRow } from "./OutcomeComparison";
+import type { ConfigurationEvidence } from "./AnalysisEvidence";
+
+export function configurationLabel(
+  id: string,
+  evidence: ConfigurationEvidence,
+) {
+  // A display-only code keeps the same setup recognizable across filtered populations.
+  let code = 2166136261;
+  for (const character of id)
+    code = Math.imul(code ^ character.charCodeAt(0), 16777619) >>> 0;
+  const skill = evidence.statistics?.find((stat) =>
+    /^base skill$/i.test(stat.label),
+  );
+  return `Recorded setup ${code.toString(36).toUpperCase()}${skill ? ` · skill ${skill.value}` : ""}`;
+}
 
 type Measure = {
   attempts: string;
@@ -40,7 +55,7 @@ export function rawQuantity(value: number | string | null | undefined): string {
 }
 
 export function coverage(measure: Measure): string {
-  return `${exact(measure.measuredAttempts)} of ${exact(measure.attempts)} attempts measured · ${exact(measure.incompleteAttempts)} incomplete`;
+  return `Amount measured on ${exact(measure.measuredAttempts)} of ${exact(measure.attempts)} attempts · ${exact(measure.incompleteAttempts)} with incomplete evidence (counts may overlap)`;
 }
 
 export function measuredCraftAverage(measure: Measure): string {
@@ -108,7 +123,7 @@ export function outcomeRows(
       label: "Actual production",
       value: exact(metrics.production.quantity),
       normalized: measuredCraftAverage(metrics.production),
-      coverage: coverage(metrics.production),
+      coverage: `${exact(metrics.production.measuredAttempts)} of ${exact(metrics.production.attempts)} complete output sets · ${exact(metrics.production.incompleteAttempts)} incomplete sets. Known partial quantities are included in the total.`,
     },
   ];
   if (!includeRetailOutcomes) return rows;

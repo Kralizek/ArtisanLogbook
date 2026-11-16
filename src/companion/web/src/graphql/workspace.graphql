@@ -57,5 +57,13 @@ query WorkspaceFacets($context: String!) {
         hasNextPage
       }
     }
+    expansionGroups {
+      nodes {
+        id
+        key
+        name
+      }
+      truncated
+    }
   }
 }

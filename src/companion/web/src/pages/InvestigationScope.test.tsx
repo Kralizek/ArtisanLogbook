@@ -43,6 +43,7 @@ it("keeps both fixed-date controls editable without querying an incomplete scope
                 characters: empty,
                 professions: empty,
                 expansions: empty,
+                expansionGroups: { nodes: [], truncated: false },
               },
             },
           });
@@ -71,11 +72,13 @@ it("keeps both fixed-date controls editable without querying an incomplete scope
   expect(
     screen.getByText(/Choose a valid start and end date/),
   ).toBeInTheDocument();
-  const from = screen.getByLabelText("bFrom");
-  expect(screen.getByLabelText("bThrough")).toBeInTheDocument();
+  const from = screen.getByLabelText("Population B From");
+  expect(screen.getByLabelText("Population B Through")).toBeInTheDocument();
   fireEvent.change(from, { target: { value: "2026-01-01" } });
   fireEvent.blur(from);
-  expect(screen.getByLabelText("bFrom")).toBe(from);
-  expect(await screen.findByLabelText("bThrough")).toBeInTheDocument();
+  expect(screen.getByLabelText("Population B From")).toBe(from);
+  expect(
+    await screen.findByLabelText("Population B Through"),
+  ).toBeInTheDocument();
   expect(requests.every((name) => name === "WorkspaceFacets")).toBe(true);
 });
