@@ -39,7 +39,7 @@ Core or persisted history.
 
 `GameExpansionGroups` provides a separate choice for cross-profession filtering. Its
 Retail membership lists exact, documented Blizzard child skill-line identities for
-Midnight, The War Within, Dragonflight and Shadowlands (see
+every expansion from Classic through Midnight (see
 [TradeSkillLineID](https://warcraft.wiki.gg/wiki/TradeSkillLineID)).
 Unmapped or non-Retail keys remain singleton choices; localized names and
 numeric ranges never determine membership. Group IDs include the full
