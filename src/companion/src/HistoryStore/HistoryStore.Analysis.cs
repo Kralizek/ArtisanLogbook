@@ -39,6 +39,8 @@ public sealed partial class HistoryStore
             query.BuffSpellId is <= 0 || query.FinishingItemId is <= 0 ||
             query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 || query.AbsentInputItemId is <= 0 ||
             (query.ProfessionExpansionKey is not null && string.IsNullOrWhiteSpace(query.ProfessionExpansionKey)) ||
+            (query.GameExpansionGroupKey is not null &&
+                GameExpansionGroups.MemberKeys(query.Game, query.GameExpansionGroupKey) is null) ||
             (query.ConfigurationSignature is not null && !IsSignature(query.ConfigurationSignature)) ||
             query.From > query.To)
             throw new ArgumentException("Analysis requires one game context and valid criteria.", nameof(query));
@@ -61,6 +63,7 @@ public sealed partial class HistoryStore
         Add(query.RecipeId, "c.RecipeId", "RecipeId");
         Add(query.ProfessionId, "c.ProfessionId", "ProfessionId");
         Add(query.ProfessionExpansionKey, "c.ProfessionExpansionKey", "ExpansionKey");
+        AppendGameExpansionGroupFilter(sql, parameters, query.Game!, query.GameExpansionGroupKey);
         Exists(query.InputItemId, "CraftReagent", "TRUE", "InputItemId");
         AppendAbsentInputSelection(query, sql, parameters);
         Exists(query.OutputItemId, "CraftOutput", "o.ItemId IS NOT NULL", "OutputItemId");
@@ -285,9 +288,11 @@ public sealed partial class HistoryStore
             CAST(COUNT(c.ConcentrationSpent) AS VARCHAR) ConcentrationObserved,
             CAST(COUNT(*) FILTER (WHERE c.ConcentrationSpent > 0) AS VARCHAR) ConcentrationPositive,
             CAST(SUM(CAST(c.ConcentrationSpent AS HUGEINT)) AS VARCHAR) ConcentrationTotal,
-            CAST(COUNT(c.IngenuityRefund) AS VARCHAR) RefundObserved,
-            CAST(COUNT(*) FILTER (WHERE c.IngenuityRefund > 0) AS VARCHAR) RefundPositive,
-            CAST(SUM(CAST(c.IngenuityRefund AS HUGEINT)) AS VARCHAR) RefundTotal
+            CAST(COUNT(*) FILTER (WHERE c.HasIngenuityProc = FALSE OR
+                (c.HasIngenuityProc = TRUE AND c.IngenuityRefund IS NOT NULL)) AS VARCHAR) RefundObserved,
+            CAST(COUNT(*) FILTER (WHERE c.HasIngenuityProc = TRUE AND c.IngenuityRefund > 0) AS VARCHAR) RefundPositive,
+            CAST(SUM(CASE WHEN c.HasIngenuityProc = FALSE THEN CAST(0 AS HUGEINT)
+                WHEN c.HasIngenuityProc = TRUE THEN CAST(c.IngenuityRefund AS HUGEINT) END) AS VARCHAR) RefundTotal
             """;
         (string sql, DynamicParameters args) = Selection(query.Crafts);
         (string Sql, DynamicParameters Parameters) selection = (sql, args);
@@ -296,6 +301,11 @@ public sealed partial class HistoryStore
         MeasureRow totals = One<MeasureRow>("""
             SELECT CAST(COUNT(*) AS VARCHAR) Attempts, CAST(COUNT(*) AS VARCHAR) MeasuredAttempts,
                 '0' IncompleteAttempts, NULL Quantity FROM selected
+            """);
+        MetricsRow population = One<MetricsRow>($"""
+            {outputTotals}
+            SELECT CAST(COUNT(*) AS VARCHAR) Attempts, {metricsColumns}
+            FROM selected c LEFT JOIN output_totals t USING (CraftKey)
             """);
         EvidenceCoverageRow coverage = One<EvidenceCoverageRow>("""
             SELECT
@@ -419,7 +429,7 @@ public sealed partial class HistoryStore
         }
         return new(signature, totals.Measure(), new(coverage.RecordedAttempts, coverage.EmptyAttempts,
             coverage.UnknownAttempts), timeline, recipes, outputs, inputs, returns,
-            characters, qualities, configurations, relations);
+            characters, qualities, configurations, relations, population.Metrics());
 
         T One<T>(string statement) => transaction.Connection!.QuerySingle<T>(sql + "\n" + statement, args, transaction);
         AnalysisCollection<TOut> Page<TRow, TOut>(string statement, Func<TRow, TOut> project)

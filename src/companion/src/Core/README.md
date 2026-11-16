@@ -37,6 +37,18 @@ Core or persisted history.
 
 `ProfessionExpansionKey` is a separate **optional** craft classification, for filtering Retail Midnight crafts separately from Dragonflight crafts recorded in the same Retail game. Unknown classification stays null; it must not be inferred from the craft timestamp or assumed to be the current expansion. It is not a requirement for Classic or Forever to expose Retail-style profession divisions.
 
+`GameExpansionGroups` provides a separate choice for cross-profession filtering. Its
+Retail membership lists exact, documented Blizzard child skill-line identities for
+Midnight, The War Within, Dragonflight and Shadowlands (see
+[TradeSkillLineID](https://warcraft.wiki.gg/wiki/TradeSkillLineID)).
+Unmapped or non-Retail keys remain singleton choices; localized names and
+numeric ranges never determine membership. Group IDs include the full
+`GameContext`, and the original profession-expansion key stays unchanged.
+`CraftObservation.IngenuityRefund` is the recorded potential refund, not proof
+that a refund occurred. `AppliedIngenuityRefund` is zero for a confirmed failed
+proc, recorded refund for a confirmed successful proc, and unknown when proc
+or the successful proc's refund is unknown.
+
 All character/item/recipe/profession/expansion **dimension keys are scoped by `GameContext`**, including numeric Blizzard IDs, so a recipe ID reused by Forever cannot be accidentally merged with the Retail recipe of the same number. Same craft identity with contradictory game contexts is a conflict, not an automatic move. Source adapters must establish the context before promoting imported crafts into canonical history; background imports may run for multiple contexts, but analytical queries must be restricted to **one selected context**, with optional profession expansion filtering.
 
 ## Identity and provenance

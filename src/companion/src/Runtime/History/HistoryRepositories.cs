@@ -25,6 +25,8 @@ public interface IHistoryAnalysisRepository
 
 public interface IHistoryDimensionRepository
 {
+    (IReadOnlyList<GameExpansionGroup> Groups, bool Truncated) ExpansionGroups(
+        GameContext game, CancellationToken cancellationToken);
     DimensionPage<CharacterDimension, CharacterIdentity> Characters(GameContext? game, int first,
         DimensionIdentity<CharacterIdentity>? after, CancellationToken cancellationToken);
     DimensionPage<RecipeDimension, int> Recipes(RecipeQuery query, int first,
@@ -70,6 +72,9 @@ internal sealed class HistoryAnalysisRepository(Store store) : IHistoryAnalysisR
 
 internal sealed class HistoryDimensionRepository(Store store) : IHistoryDimensionRepository
 {
+    public (IReadOnlyList<GameExpansionGroup> Groups, bool Truncated) ExpansionGroups(
+        GameContext game, CancellationToken cancellationToken) =>
+        store.QueryGameExpansionGroups(game, cancellationToken);
     public DimensionPage<CharacterDimension, CharacterIdentity> Characters(GameContext? game, int first,
         DimensionIdentity<CharacterIdentity>? after, CancellationToken token) => store.QueryCharacters(game, first, after, token);
     public DimensionPage<RecipeDimension, int> Recipes(RecipeQuery query, int first,

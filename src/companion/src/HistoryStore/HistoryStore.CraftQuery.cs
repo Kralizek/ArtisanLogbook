@@ -24,6 +24,7 @@ public sealed partial class HistoryStore
             throw new ArgumentOutOfRangeException(nameof(first));
         if (query.Game is null && (query.Character is not null || query.RecipeId is not null ||
             query.ProfessionId is not null || query.ProfessionExpansionKey is not null ||
+            query.GameExpansionGroupKey is not null ||
             query.InputItemId is not null || query.OutputItemId is not null ||
             query.ReturnedItemId is not null || query.ItemId is not null ||
             query.ConfigurationSignature is not null || query.BuffSpellId is not null ||
@@ -39,6 +40,8 @@ public sealed partial class HistoryStore
                 (query.ConfigurationSignature.Length != 64 ||
                 query.ConfigurationSignature.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))) ||
             (query.ProfessionExpansionKey is not null && string.IsNullOrWhiteSpace(query.ProfessionExpansionKey)) ||
+            (query.GameExpansionGroupKey is not null &&
+                GameExpansionGroups.MemberKeys(query.Game!, query.GameExpansionGroupKey) is null) ||
             query.From > query.To)
             throw new ArgumentException("Craft query criteria are invalid.", nameof(query));
         if (after is not null && after.Identity is null)
@@ -80,6 +83,7 @@ public sealed partial class HistoryStore
         AddFilter(query.RecipeId, " AND c.RecipeId = $RecipeId", "RecipeId");
         AddFilter(query.ProfessionId, " AND c.ProfessionId = $ProfessionId", "ProfessionId");
         AddFilter(query.ProfessionExpansionKey, " AND c.ProfessionExpansionKey = $ExpansionKey", "ExpansionKey");
+        AppendGameExpansionGroupFilter(sql, parameters, query.Game!, query.GameExpansionGroupKey);
         AddFilter(query.InputItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $InputItemId)", "InputItemId");
         AppendAbsentInputSelection(query, sql, parameters);
         AddFilter(query.OutputItemId, " AND EXISTS (SELECT 1 FROM CraftOutput o WHERE o.CraftKey = c.CraftKey AND o.ItemId = $OutputItemId)", "OutputItemId");

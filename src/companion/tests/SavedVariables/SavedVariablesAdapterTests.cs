@@ -343,6 +343,31 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
+    public void PotentialRefundAndProcAreIndependentAcrossSavedVariablesRoundTrip()
+    {
+        CraftHistory source = History(
+            MakeCraft("refund", "confirmed") with { HasIngenuityProc = true, IngenuityRefund = 147 },
+            MakeCraft("refund", "failed") with { HasIngenuityProc = false, IngenuityRefund = 147 },
+            MakeCraft("refund", "unknown") with { IngenuityRefund = 147 });
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(source,
+            options: new(Now, GameContext: Retail));
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        SavedVariablesImportResult imported = SavedVariablesReader.Parse(written.Content!);
+        Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
+        IReadOnlyDictionary<string, CraftObservation> crafts = imported.History!.Crafts
+            .ToDictionary(craft => craft.Identity.Observation);
+        Assert.Multiple(() =>
+        {
+            Assert.That(crafts["confirmed"].IngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["confirmed"].AppliedIngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["failed"].IngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["failed"].AppliedIngenuityRefund, Is.Zero);
+            Assert.That(crafts["unknown"].IngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["unknown"].AppliedIngenuityRefund, Is.Null);
+        });
+    }
+
+    [Test]
     public void CanonicalOnlyMultiOutputExportDoesNotClaimSyntheticCallbacksAsEvidence()
     {
         CraftObservation craft = MakeCraft("canonical", "multi", Retail, 123, 90) with

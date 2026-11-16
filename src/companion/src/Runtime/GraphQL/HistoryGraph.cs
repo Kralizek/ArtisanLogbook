@@ -20,6 +20,7 @@ public sealed class CraftGraph(CraftObservation value)
     public GameContextGraph Game => new(value.Game);
     public int? ConcentrationSpent => value.ConcentrationSpent;
     public int? IngenuityRefund => value.IngenuityRefund;
+    public int? AppliedIngenuityRefund => value.AppliedIngenuityRefund;
     public int? ConcentrationCurrencyId => value.ConcentrationCurrencyId;
     public bool? HasIngenuityProc => value.HasIngenuityProc;
     public bool? HasResourcefulnessProc => value.HasResourcefulnessProc;
@@ -176,6 +177,21 @@ public sealed class ExpansionGraph(ExpansionDimension value)
         HistoryConnections.Crafts(repository, new(Game: value.Game, ProfessionExpansionKey: value.Key), first, after, token);
 }
 
+[GraphQLName("GameExpansionGroup")]
+public sealed class GameExpansionGroupGraph(GameExpansionGroup value)
+{
+    [GraphQLType(typeof(NonNullType<IdType>))]
+    public string Id => HistoryTokens.Dimension("game-expansion", value.Game, value.Key);
+    public string Key => value.Key;
+    public string? Name => value.Name;
+    public GameContextGraph Game => new(value.Game);
+    public IReadOnlyList<string> ProfessionExpansionKeys => value.ProfessionExpansionKeys;
+}
+
+[GraphQLName("GameExpansionGroups")]
+public sealed record GameExpansionGroupsGraph(
+    [property: ListSize(AssumedSize = 100)] IReadOnlyList<GameExpansionGroupGraph> Nodes, bool Truncated);
+
 [GraphQLName("Item")]
 public sealed class ItemGraph(ItemDimension value)
 {
@@ -206,6 +222,12 @@ public sealed class GameContextGraph(GameContext value)
     public string DisplayName => GameContextRouteResolver.Describe(value).DisplayName;
     public int Project => (int)value.Project;
     public string? ProgressionTrack => value.ProgressionTrack;
+    [Cost(1_000)]
+    public GameExpansionGroupsGraph GetExpansionGroups(IHistoryDimensionRepository repository, CancellationToken token)
+    {
+        (IReadOnlyList<GameExpansionGroup> groups, bool truncated) = repository.ExpansionGroups(value, token);
+        return new(groups.Select(group => new GameExpansionGroupGraph(group)).ToArray(), truncated);
+    }
     [Cost(100)]
     [ListSize(AssumedSize = 100)]
     public IReadOnlyList<RecipeGraph> GetRecipesByBlizzardIds(

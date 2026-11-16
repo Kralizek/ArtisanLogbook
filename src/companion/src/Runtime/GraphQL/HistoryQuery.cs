@@ -24,7 +24,8 @@ public sealed record CraftFilter(
     [property: GraphQLType(typeof(IdType))] string? FinishingItemId = null,
     int? AbsentBuffSpellId = null,
     [property: GraphQLType(typeof(IdType))] string? AbsentFinishingItemId = null,
-    [property: GraphQLType(typeof(IdType))] string? AbsentInputItemId = null);
+    [property: GraphQLType(typeof(IdType))] string? AbsentInputItemId = null,
+    [property: GraphQLType(typeof(IdType))] string? GameExpansionId = null);
 
 [GraphQLName("Query")]
 public sealed class HistoryQuery
@@ -185,6 +186,7 @@ public sealed class HistoryQuery
         int? recipe = null;
         int? profession = null;
         string? expansion = null;
+        string? gameExpansion = null;
         int? input = null;
         int? output = null;
         int? returned = null;
@@ -216,6 +218,13 @@ public sealed class HistoryQuery
             (GameContext context, string key) = HistoryTokens.ParseDimension(filter.ExpansionId, "expansion");
             MergeContext(context);
             expansion = key;
+        }
+        if (filter.GameExpansionId is not null)
+        {
+            (GameContext context, string key) = HistoryTokens.ParseDimension(filter.GameExpansionId, "game-expansion");
+            MergeContext(context);
+            if (GameExpansionGroups.MemberKeys(context, key) is null) throw InvalidFilter();
+            gameExpansion = key;
         }
         if (filter.InputItemId is not null)
         {
@@ -274,7 +283,7 @@ public sealed class HistoryQuery
             input, output, ReturnedItemId: returned, ItemId: item, ConfigurationSignature: configuration,
             BuffSpellId: filter.BuffSpellId, FinishingItemId: finishing,
             AbsentBuffSpellId: filter.AbsentBuffSpellId, AbsentFinishingItemId: absentFinishing,
-            AbsentInputItemId: absentInput);
+            AbsentInputItemId: absentInput, GameExpansionGroupKey: gameExpansion);
 
         void MergeContext(GameContext context)
         {

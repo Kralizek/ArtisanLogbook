@@ -26,6 +26,7 @@ public sealed class AnalysisGraph(GameContext game, CraftAnalysis value)
     };
     public bool SupportsReturns => game.Project == GameProject.Retail;
     public AnalysisMeasure Attempts => value.Attempts;
+    public AnalysisPopulationMetricsGraph Metrics => new(game, value.Metrics!);
     [Cost(100)]
     public AnalysisTimeline GetTimeline() => new(value.Timeline);
     [Cost(100)]
@@ -114,6 +115,8 @@ public sealed class AnalysisContributionGraph(GameContext game, string kind, Ana
     [GraphQLType(typeof(IdType))]
     public string? Id => kind == "quality" ? null : HistoryTokens.Dimension(kind, game, value.Key);
     public string? Name => value.Name;
+    public int? BlizzardId => kind == "item" && int.TryParse(value.Key,
+        NumberStyles.None, CultureInfo.InvariantCulture, out int itemId) ? itemId : null;
     public int? Quality => value.Quality;
     public AnalysisMeasure Measure => value.Measure;
     public AnalysisMeasure? FinishingAllocation => kind == "character" ? value.FinishingAllocation : null;

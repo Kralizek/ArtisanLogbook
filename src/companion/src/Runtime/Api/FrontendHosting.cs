@@ -34,7 +34,8 @@ internal static class BrowserRoutes
         if (segments.Length is not (2 or 3) ||
             !GameContextRouteResolver.TryResolve(segments[0], out _)) return false;
         return segments.Length == 2
-            ? segments[1] is "activity" or "library" or "crafts"
+            ? segments[1] is "activity" or "library" or "crafts" or
+                "recipes" or "items" or "characters" or "professions"
             : segments[1] is "recipes" or "items" or "crafts" &&
                 segments[2].Length > 0 && segments[2].All(c =>
                     char.IsAsciiLetterOrDigit(c) || c is '-' or '_');

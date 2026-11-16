@@ -515,6 +515,115 @@ public sealed class CraftAnalysisTests
     }
 
     [Test]
+    public void GameExpansionGroupsIncludeEveryRecordedProfessionWithoutChangingLegacyKeyScope()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        GameContext otherTrack = new(GameProject.Retail, "progression");
+        DateTimeOffset time = DateTimeOffset.Parse("2026-11-15T00:00:00Z");
+        CraftDimensions dimensions = new([], [], [], [],
+            [new(Retail, "skillLine:2906", "Midnight"),
+             new(Retail, "skillLine:2907", "Midnight"),
+             new(Retail, "skillLine:2871", "The War Within"),
+             new(otherTrack, "skillLine:2906", "Other context")]);
+        Assert.That(store.WriteDimensions(dimensions).IsSuccessful, Is.True);
+        foreach (CraftObservation craft in new[]
+        {
+            Craft("alchemy", Retail, time) with { ProfessionId = 171, ProfessionExpansionKey = "skillLine:2906" },
+            Craft("blacksmith", Retail, time) with { ProfessionId = 164, ProfessionExpansionKey = "skillLine:2907" },
+            Craft("earlier", Retail, time) with { ProfessionId = 171, ProfessionExpansionKey = "skillLine:2871" },
+            Craft("unknown", Retail, time) with { ProfessionId = 171 },
+            Craft("other-track", otherTrack, time) with { ProfessionId = 171, ProfessionExpansionKey = "skillLine:2906" },
+            Craft("forever", Forever, time) with { ProfessionId = 164, ProfessionExpansionKey = "skillLine:2907" }
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+
+        foreach (int key in Enumerable.Range(2908, 7))
+            Assert.That(store.Write(Craft($"midnight-{key}", Retail, time) with
+            {
+                ProfessionId = 164,
+                ProfessionExpansionKey = $"skillLine:{key}"
+            }).IsSuccessful, Is.True);
+
+        (IReadOnlyList<GameExpansionGroup> groups, bool truncated) = store.QueryGameExpansionGroups(Retail);
+        GameExpansionGroup midnight = groups.Single(group => group.Key == "game:midnight");
+        Assert.Multiple(() =>
+        {
+            Assert.That(truncated, Is.False);
+            Assert.That(groups, Has.Count.EqualTo(2));
+            Assert.That(midnight.Name, Is.EqualTo("Midnight"));
+            Assert.That(midnight.ProfessionExpansionKeys,
+                Is.EquivalentTo(Enumerable.Range(2906, 9).Select(key => $"skillLine:{key}")));
+            Assert.That(store.Analyze(new(new(Game: Retail, GameExpansionGroupKey: midnight.Key))).Attempts.Attempts,
+                Is.EqualTo("9"));
+            Assert.That(store.Analyze(new(new(Game: Retail, ProfessionId: 171,
+                GameExpansionGroupKey: midnight.Key))).Attempts.Attempts, Is.EqualTo("1"));
+            Assert.That(store.Analyze(new(new(Game: Retail, ProfessionExpansionKey: "skillLine:2906")))
+                .Attempts.Attempts, Is.EqualTo("1"));
+            Assert.That(store.QueryCrafts(new(Game: Retail, GameExpansionGroupKey: midnight.Key))
+                .Crafts.Select(row => row.Facts.Identity.Observation),
+                Is.EquivalentTo(new[] { "alchemy", "blacksmith" }.Concat(
+                    Enumerable.Range(2908, 7).Select(key => $"midnight-{key}"))));
+            Assert.That(store.QueryGameExpansionGroups(otherTrack).Groups.Single().Game, Is.EqualTo(otherTrack));
+            Assert.That(store.QueryGameExpansionGroups(Forever).Groups.Single().Key, Is.EqualTo("skillLine:2907"));
+        });
+    }
+
+    [Test]
+    public void PopulationMetricsDoNotDependOnBoundedCharacterRows()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-11-15T00:00:00Z");
+        for (int i = 0; i < Store.MaximumAnalysisRows + 1; i++)
+            Assert.That(store.Write(Craft($"metric-{i}", Retail, time) with
+            {
+                Character = new($"character-{i}"),
+                Outputs = [new(50, null, 2)],
+                OutputsComplete = true,
+                ConcentrationSpent = 3,
+                MulticraftBonus = 1
+            }).IsSuccessful, Is.True);
+
+        CraftAnalysis analysis = store.Analyze(new(new(Game: Retail)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(analysis.Characters.Truncated, Is.True);
+            Assert.That(analysis.Metrics!.Production.Quantity, Is.EqualTo("202"));
+            Assert.That(analysis.Metrics.Production.MeasuredAttempts, Is.EqualTo("101"));
+            Assert.That(analysis.Metrics.Concentration.Total, Is.EqualTo("303"));
+            Assert.That(analysis.Metrics.Multicraft.Total, Is.EqualTo("101"));
+        });
+    }
+
+    [Test]
+    public void AppliedRefundRequiresKnownProcAndRetainsRawPotential()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-11-15T00:00:00Z");
+        foreach (CraftObservation craft in new[]
+        {
+            Craft("proc", Retail, time) with { HasIngenuityProc = true, IngenuityRefund = 147 },
+            Craft("no-proc", Retail, time) with { HasIngenuityProc = false, IngenuityRefund = 147 },
+            Craft("unknown", Retail, time) with { IngenuityRefund = 147 },
+            Craft("proc-unknown-refund", Retail, time) with { HasIngenuityProc = true }
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+
+        IReadOnlyDictionary<string, CraftObservation> crafts = store.QueryCrafts(new(Game: Retail)).Crafts
+            .Select(row => row.Facts).ToDictionary(craft => craft.Identity.Observation);
+        AnalysisOutcome refund = store.Analyze(new(new(Game: Retail))).Recipes.Nodes.Single().Refund;
+        Assert.Multiple(() =>
+        {
+            Assert.That(crafts["proc"].AppliedIngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["no-proc"].IngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["no-proc"].AppliedIngenuityRefund, Is.Zero);
+            Assert.That(crafts["unknown"].AppliedIngenuityRefund, Is.Null);
+            Assert.That(crafts["proc-unknown-refund"].AppliedIngenuityRefund, Is.Null);
+            Assert.That(refund, Is.EqualTo(new AnalysisOutcome("2", "1", "147", "2")));
+            Assert.That(store.Analyze(new(new(Game: Retail))).Metrics!.Refund, Is.EqualTo(refund));
+        });
+    }
+
+    [Test]
     public void AbsentSelectionRequiresEveryRecordedEntryToHaveAValidIdentity()
     {
         using Store store = new(Path.Combine(_directory, "history.duckdb"));

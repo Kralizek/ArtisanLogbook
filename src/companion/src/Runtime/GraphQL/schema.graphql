@@ -108,6 +108,7 @@ type Analysis {
   inputMeasureLabel: String!
   supportsReturns: Boolean!
   attempts: AnalysisMeasure!
+  metrics: AnalysisPopulationMetricsGraph!
 }
 
 type AnalysisBucket {
@@ -133,6 +134,7 @@ type AnalysisContributionGraph {
   metrics: AnalysisPopulationMetricsGraph
   id: ID
   name: String
+  blizzardId: Int
   quality: Int
   measure: AnalysisMeasure!
   finishingAllocation: AnalysisMeasure
@@ -237,6 +239,7 @@ type Craft {
   game: GameContext!
   concentrationSpent: Int
   ingenuityRefund: Int
+  appliedIngenuityRefund: Int
   concentrationCurrencyId: Int
   hasIngenuityProc: Boolean
   hasResourcefulnessProc: Boolean
@@ -297,6 +300,7 @@ type ExpansionConnection {
 }
 
 type GameContext {
+  expansionGroups: GameExpansionGroups! @cost(weight: "1000")
   recipesByBlizzardIds(ids: [Int!]!): [Recipe!]!
     @cost(weight: "100")
     @listSize(assumedSize: 100, requireOneSlicingArgument: false)
@@ -362,6 +366,20 @@ type GameContext {
 type GameContextConnection {
   nodes: [GameContext!]!
   pageInfo: HistoryPageInfo!
+}
+
+type GameExpansionGroup {
+  id: ID!
+  key: String!
+  name: String
+  game: GameContext!
+  professionExpansionKeys: [String!]!
+}
+
+type GameExpansionGroups {
+  nodes: [GameExpansionGroup!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
 }
 
 type HistoryPageInfo {
@@ -549,6 +567,7 @@ input CraftFilterInput {
   absentBuffSpellId: Int
   absentFinishingItemId: ID
   absentInputItemId: ID
+  gameExpansionId: ID
 }
 
 enum AnalysisGranularity {

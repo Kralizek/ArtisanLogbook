@@ -61,6 +61,17 @@ fractional precision as strings. Unknown quantity rows are counted separately
 from known zeroes. Configuration IDs hash recorded supplementary payload
 variants; they are not mutable recipe or character dimensions.
 
+`Analyze.Metrics` aggregates the entire selected population in the same snapshot,
+without summing bounded recipe/character rankings. Its production quantity sums
+known output quantities even when the output list is incomplete; the measured
+and incomplete counts disclose full-list coverage. Refund metrics count applied
+Ingenuity only: a confirmed failed proc contributes observed zero, a successful
+proc contributes its recorded refund if known, and an unknown proc or unknown
+successful refund stays unknown. Raw potential refunds remain stored unchanged.
+`QueryGameExpansionGroups` returns bounded, context-scoped choices with recorded
+craft membership and a truncation flag; grouping uses exact known skill-line
+identities rather than names. Existing single-key filters remain exact.
+
 Recipe and item dimension queries accept optional case-insensitive literal
 substring name searches. Empty searches are ignored; `%` and `_` are ordinary
 characters rather than SQL wildcards. Search criteria remain parameterized and

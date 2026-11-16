@@ -56,9 +56,10 @@ internal sealed class MonitoringTestHost : IAsyncDisposable
     public async Task StartAsync(
         bool enabled = false, int interval = 60, bool? enabledOverride = null, int? intervalOverride = null,
         MonitoringCheckpointTests.MemoryStore? checkpointStore = null, bool realWatchers = false,
-        ImportOperationLimits? limits = null, bool legacySettings = false)
+        ImportOperationLimits? limits = null, bool legacySettings = false, bool noRoots = false,
+        IReadOnlyList<string>? installationHints = null)
     {
-        Settings.Save(CompanionSettings.ForRoots(Root) with
+        Settings.Save(CompanionSettings.ForRoots(noRoots ? Array.Empty<string>() : [Root]) with
         {
             Monitoring = new() { Enabled = enabled, ReconciliationIntervalSeconds = interval }
         });
@@ -79,6 +80,8 @@ internal sealed class MonitoringTestHost : IAsyncDisposable
         builder.Logging.SetMinimumLevel(LogLevel.Debug).AddProvider(Logs);
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddArtisanLogbookCompanion(Paths, configuration);
+        if (installationHints is not null)
+            builder.Services.Replace(ServiceDescriptor.Singleton(new InstallationCandidateHints(() => installationHints!)));
         builder.Services.Replace(ServiceDescriptor.Singleton<SavedVariablesSnapshotReader>(Reader));
         builder.Services.Replace(ServiceDescriptor.Singleton<CompanionRuntimeImports>(provider =>
             new ControlledRuntimeImports(provider.GetRequiredService<CompanionWorkAdmission>(),

@@ -19,7 +19,8 @@ public sealed record CraftQuery(
     int? FinishingItemId = null,
     int? AbsentBuffSpellId = null,
     int? AbsentFinishingItemId = null,
-    int? AbsentInputItemId = null);
+    int? AbsentInputItemId = null,
+    string? GameExpansionGroupKey = null);
 
 /// <summary>A continuation position in descending recorded-time and ascending identity order.</summary>
 public sealed record CraftPagePosition(DateTimeOffset RecordedAt, CraftIdentity Identity);

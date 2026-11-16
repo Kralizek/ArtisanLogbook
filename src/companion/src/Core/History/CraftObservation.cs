@@ -25,6 +25,10 @@ public sealed record CraftObservation(
     IReadOnlyList<CraftConfigurationEvidence>? ConfigurationEvidence = null,
     IReadOnlyList<CraftRecipeSchematicEvidence>? RecipeSchematicEvidence = null)
 {
+    /// <summary>The reported refund is potential until a proc is confirmed; unknown proc is not zero.</summary>
+    public int? AppliedIngenuityRefund => HasIngenuityProc == true ? IngenuityRefund :
+        HasIngenuityProc == false ? 0 : null;
+
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
     public bool Equals(CraftObservation? other)

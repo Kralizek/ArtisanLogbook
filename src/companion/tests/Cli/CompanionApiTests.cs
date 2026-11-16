@@ -82,7 +82,8 @@ public sealed class CompanionApiTests
         using HttpResponseMessage route = await host.Http.GetAsync("/history");
         Assert.That(await route.Content.ReadAsStringAsync(), Is.EqualTo(html));
         foreach (string destination in new[] { "/retail/activity?period=90", "/forever/recipes/opaque",
-            "/18-Hardcore/items/opaque", "/retail/crafts/opaque", "/retail/library", "/companion" })
+            "/18-Hardcore/items/opaque", "/retail/crafts/opaque", "/retail/library", "/companion",
+            "/retail/recipes", "/retail/items", "/forever/characters", "/18-Hardcore/professions" })
         {
             using HttpResponseMessage analytical = await host.Http.GetAsync(destination);
             Assert.That(await analytical.Content.ReadAsStringAsync(), Is.EqualTo(html), destination);
@@ -90,8 +91,13 @@ public sealed class CompanionApiTests
         using HttpResponseMessage head = await host.Http.SendAsync(new(HttpMethod.Head, "/"));
         Assert.That(head.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(await head.Content.ReadAsByteArrayAsync(), Is.Empty);
+        using HttpResponseMessage catalogueHead = await host.Http.SendAsync(new(HttpMethod.Head, "/retail/recipes"));
+        Assert.That(catalogueHead.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(await catalogueHead.Content.ReadAsByteArrayAsync(), Is.Empty);
         using HttpResponseMessage post = await host.Post("/history", "{}");
         Assert.That(post.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        using HttpResponseMessage cataloguePost = await host.Post("/retail/recipes", "{}");
+        Assert.That(cataloguePost.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
     }
 
     [TestCase("/assets/missing.js")]
@@ -104,6 +110,8 @@ public sealed class CompanionApiTests
     [TestCase("/retail/assets/missing.js")]
     [TestCase("/retail/api/v1/status")]
     [TestCase("/retail/items/missing.js")]
+    [TestCase("/retail/characters/opaque")]
+    [TestCase("/retail/professions/missing.js")]
     public async Task SpaFallbackNeverMasksMissingServerPaths(string path)
     {
         await using ApiHost host = await Start();
@@ -219,6 +227,80 @@ public sealed class CompanionApiTests
             .GetProperty("nodes")[0].GetProperty("name").GetString(), Is.EqualTo("Potion"));
         Assert.That(scopedSearch.GetProperty("data").GetProperty("gameContext").GetProperty("items")
             .GetProperty("nodes")[0].GetProperty("name").GetString(), Is.EqualTo("Herb"));
+    }
+
+    [Test]
+    public async Task GameExpansionChoicesUseGroupIdsWithoutReinterpretingSingleKeyFilters()
+    {
+        await using ApiHost host = await Start();
+        Store store = host.App.Services.GetRequiredService<Store>();
+        GameContext retail = new(GameProject.Retail);
+        GameContext forever = new(GameProject.Forever);
+        Assert.That(store.WriteDimensions(new CraftDimensions([], [], [], [],
+            [new(retail, "skillLine:2906", "Midnight"), new(retail, "skillLine:2907", "Midnight"),
+             new(forever, "skillLine:2906", "Unrelated")])).IsSuccessful, Is.True);
+        DateTimeOffset time = DateTimeOffset.Parse("2026-11-15T12:00:00Z");
+        foreach (CraftObservation craft in new[]
+        {
+            new CraftObservation(new("group", "alchemy"), retail, time, 1, new("character"),
+                ProfessionId: 171, ProfessionExpansionKey: "skillLine:2906",
+                HasIngenuityProc: true, IngenuityRefund: 147),
+            new CraftObservation(new("group", "smith"), retail, time, 2, new("character"),
+                ProfessionId: 164, ProfessionExpansionKey: "skillLine:2907",
+                HasIngenuityProc: false, IngenuityRefund: 147),
+            new CraftObservation(new("group", "unknown"), retail, time, 3, new("character"),
+                IngenuityRefund: 147),
+            new CraftObservation(new("group", "forever"), forever, time, 4, new("character"),
+                ProfessionExpansionKey: "skillLine:2906")
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+        JsonElement facets = await GraphQL(host, """
+            { game(context: "1") {
+                expansionGroups { nodes { id key name professionExpansionKeys } truncated }
+              } }
+            """);
+        Assert.That(facets.TryGetProperty("errors", out _), Is.False, facets.ToString());
+        JsonElement choice = facets.GetProperty("data").GetProperty("game")
+            .GetProperty("expansionGroups").GetProperty("nodes")[0];
+        string id = choice.GetProperty("id").GetString()!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(choice.GetProperty("key").GetString(), Is.EqualTo("game:midnight"));
+            Assert.That(choice.GetProperty("professionExpansionKeys").GetArrayLength(), Is.EqualTo(2));
+        });
+        JsonElement grouped = await GraphQL(host, """
+            query($group: ID!, $profession: ID!, $single: ID!, $smith: ID!) {
+              all: analysis(context: "1", filter: {gameExpansionId: $group}) { attempts { attempts } }
+              alchemy: analysis(context: "1", filter: {gameExpansionId: $group, professionId: $profession}) {
+                attempts { attempts }
+              }
+              legacy: analysis(context: "1", filter: {expansionId: $single}) { attempts { attempts } }
+              smith: contextCrafts(context: "1", filter: {professionId: $smith}) {
+                nodes { ingenuityRefund appliedIngenuityRefund }
+              }
+              metrics: analysis(context: "1") {
+                metrics { refund { observedAttempts positiveAttempts total unknownAttempts } }
+              }
+            }
+            """, new
+        {
+            group = id,
+            profession = HistoryTokens.Dimension("profession", retail, "171"),
+            smith = HistoryTokens.Dimension("profession", retail, "164"),
+            single = HistoryTokens.Dimension("expansion", retail, "skillLine:2906")
+        });
+        Assert.That(grouped.TryGetProperty("errors", out _), Is.False, grouped.ToString());
+        JsonElement data = grouped.GetProperty("data");
+        Assert.Multiple(() =>
+        {
+            Assert.That(data.GetProperty("all").GetProperty("attempts").GetProperty("attempts").GetString(), Is.EqualTo("2"));
+            Assert.That(data.GetProperty("alchemy").GetProperty("attempts").GetProperty("attempts").GetString(), Is.EqualTo("1"));
+            Assert.That(data.GetProperty("legacy").GetProperty("attempts").GetProperty("attempts").GetString(), Is.EqualTo("1"));
+            Assert.That(data.GetProperty("smith").GetProperty("nodes")[0].GetProperty("ingenuityRefund").GetInt32(), Is.EqualTo(147));
+            Assert.That(data.GetProperty("smith").GetProperty("nodes")[0].GetProperty("appliedIngenuityRefund").GetInt32(), Is.Zero);
+            Assert.That(data.GetProperty("metrics").GetProperty("metrics").GetProperty("refund")
+                .GetProperty("total").GetString(), Is.EqualTo("147"));
+        });
     }
 
     [Test]
@@ -1333,10 +1415,11 @@ public sealed class CompanionApiTests
             "/api/v1/games/{context}/entity-preferences/{kind}/{id}/hidden",
             "/api/v1/games/{context}/entity-preferences/{kind}/{id}/pin",
             "/api/v1/games/{context}/saved-investigations",
-            "/api/v1/sources", "/api/v1/status"
+            "/api/v1/sources", "/api/v1/status", "/api/v1/installations"
         }.Order().ToArray()));
         foreach (string operation in new[] { "getHealth", "getStatus", "listSources", "listImports", "startImport", "getImport",
             "getMonitoring", "updateMonitoring", "reconcileMonitoring", "getGameContextMetadata",
+            "getInstallationOptions", "updateInstallationRoots",
             "getEntityPreferences", "setEntityPinned",
             "setEntityHidden", "listSavedInvestigations", "listContextSavedInvestigations",
             "createSavedInvestigation", "getSavedInvestigation",
@@ -2386,6 +2469,8 @@ public sealed class CompanionApiTests
 
     private sealed class CountingDimensionRepository(Store store) : IHistoryDimensionRepository
     {
+        public (IReadOnlyList<GameExpansionGroup> Groups, bool Truncated) ExpansionGroups(
+            GameContext game, CancellationToken token) => store.QueryGameExpansionGroups(game, token);
         public int ItemBatchCalls { get; private set; }
         public int ItemBatchKeys { get; private set; }
         public int RecipeBatchCalls { get; private set; }

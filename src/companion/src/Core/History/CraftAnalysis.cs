@@ -52,4 +52,5 @@ public sealed record CraftAnalysis(
     AnalysisCollection<AnalysisContribution> Characters,
     AnalysisCollection<AnalysisContribution> Qualities,
     AnalysisCollection<ConfigurationAnalysis> Configurations,
-    AnalysisItemRelations? ItemRelations);
+    AnalysisItemRelations? ItemRelations,
+    AnalysisPopulationMetrics? Metrics = null);

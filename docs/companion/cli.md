@@ -55,7 +55,7 @@ settings, or database overrides. For example on Linux:
   ],
   "monitoring": {
     "enabled": false,
-    "reconciliationIntervalSeconds": 60
+    "reconciliationIntervalSeconds": 3600
   },
   "http": {
     "preferredPort": 48721
@@ -84,7 +84,7 @@ than erased.
 
 The settings version remains **1**; there is no migration. Existing files with
 only `version` and `installationRoots` load unchanged. Omitted monitoring settings
-mean **enabled**, with a 60-second reconciliation interval; omitted HTTP
+mean **enabled**, with a 3600-second (one-hour) periodic reconciliation interval; omitted HTTP
 settings mean preferred port **48721**. An omitted property inside either object
 also uses its built-in default. Explicit `null` objects are invalid. Intervals
 must be integers from **1 through 86400 seconds**; ports must be integers from
@@ -93,6 +93,13 @@ Saving includes the additive preferences; merely loading or serving never saves.
 Existing files with an explicit `"enabled": false` remain disabled, including
 after unrelated preference updates. Use `serve --monitoring false` to disable
 monitoring for one invocation without saving a preference.
+
+The Companion browser can also select detected installations using opaque
+server-supplied candidates, without browsing the filesystem or entering an
+arbitrary path. The CLI wizard remains available for installations outside the
+standard detection hints and for headless use. A browser-saved installation
+selection takes effect **after restarting** `serve`; its saved and active counts
+are shown separately until then.
 
 ## Serve
 
@@ -133,6 +140,9 @@ Enabled monitoring immediately discovers sources, watches for changes, and
 periodically reconciles stable snapshots. Manual and automatic imports share
 the same bounded import coordinator and writer. Monitoring reads but never
 modifies SavedVariables; removed sources do not remove canonical history.
+Filesystem watchers still respond promptly to changes; the default one-hour
+periodic fallback only delays discovery when watcher events are missed or
+watchers are unavailable. Explicit saved or CLI intervals are not rewritten.
 
 ### Operational logging
 
@@ -145,15 +155,15 @@ an optional indented context line. For example:
 ```text
 ARTISAN LOGBOOK  /  COMPANION
 19:48:30  OK Monitoring active
-             Every 60s
+             Every 3600s
 19:48:30  OK Server ready
              http://127.0.0.1:48721
 19:48:31  -> Sources discovered
              2 sources · Retail · Forever · Up to date · 550ms
-19:49:31  -> Reconciliation complete
+20:48:31  -> Reconciliation complete
              2 sources · Up to date · 550ms
-19:49:45  -> Import queued · Retail
-19:49:46  OK Import completed · Retail
+20:49:45  -> Import queued · Retail
+20:49:46  OK Import completed · Retail
              +3 new observations · 2,739 existing
 ```
 

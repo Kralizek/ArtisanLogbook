@@ -112,6 +112,26 @@ inverted time range are rejected. Item filters match actual reagent/output
 rows. Other collections can be scoped through a game context, profession or
 expansion relationship.
 
+`game(context: ...).expansionGroups { nodes { id key name
+professionExpansionKeys } truncated }` lists context-scoped game-expansion
+choices with recorded crafts (up to 500 profession keys). Use a group's opaque
+`id` as `CraftFilterInput.gameExpansionId` for all matching profession-specific
+skill lines in that context; combine with `professionId` to intersect. A group's
+`name` is only display metadata. `expansionId` remains an **exact single
+profession-expansion identity** for old URLs, saves and relationships; do not
+reinterpret it as a group. Unknown keys remain separate singleton groups and
+crafts with unknown expansion never enter a group. Group IDs also encode the
+selected GameContext.
+
+`Craft.ingenuityRefund` exposes the recorded potential refund (including
+positive values on failed procs); `Craft.appliedIngenuityRefund` is zero on
+confirmed failed procs, the recorded value on confirmed successful procs, and
+null if proc status or the successful refund is unknown. All analysis `refund`
+outcomes use the applied definition. `analysis.metrics` aggregates the full
+selected population: production sums known output rows, while
+`production.measuredAttempts` denotes crafts with complete, fully measured
+output lists. Bounded recipe and character rows must not be summed for totals.
+
 Collections default to 20 items, with `first` from 1 to 100. Pass `endCursor`
 as `after` to continue. Cursors are opaque versioned base64url positions with
 a collection kind; invalid or wrong-kind cursors are rejected. Craft ordering

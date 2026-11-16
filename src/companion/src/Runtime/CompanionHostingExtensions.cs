@@ -84,6 +84,9 @@ public static class CompanionHostingExtensions
         services.AddSingleton(paths);
         services.AddSingleton(configuration);
         services.AddSingleton<CompanionSettingsStore>();
+        services.AddSingleton<CompanionSettingsMutationGate>();
+        services.AddSingleton(new InstallationCandidateHints(InstallationDiscovery.CurrentHints));
+        services.AddSingleton<InstallationOptions>();
         services.AddSingleton(_ => new ApplicationStateStore(paths.ApplicationStateDatabase));
         services.AddSingleton<InstallationDiscovery>();
         services.TryAddSingleton<IScheduler>(TaskPoolScheduler.Default);

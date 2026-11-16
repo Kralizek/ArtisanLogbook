@@ -87,7 +87,7 @@ public sealed class CompanionHostingTests
                 Assert.That(_runtimeLogs, Does.Contain(monitoring is not false
                     ? "SavedVariables monitoring: on"
                     : "SavedVariables monitoring: off"));
-                Assert.That(_runtimeLogs, Does.Contain("Reconciliation interval: 60 seconds."));
+                Assert.That(_runtimeLogs, Does.Contain("Reconciliation interval: 3600 seconds."));
                 Assert.That(_runtimeLogs, Has.Some.Matches<string>(line =>
                     line.StartsWith("HTTP API listening on http://127.0.0.1:", StringComparison.Ordinal) && line.EndsWith("(preferred port 48721).", StringComparison.Ordinal)));
                 Assert.That(_runtimeLogs, Does.Not.Contain("Artisan Logbook Companion started. Monitoring preference: False."));
@@ -730,7 +730,7 @@ public sealed class CompanionHostingTests
             }
             while (!startup.Contains("http://127.0.0.1:", StringComparison.Ordinal) ||
                 !startup.Contains("Monitoring active", StringComparison.Ordinal) ||
-                !startup.Contains("Every 60s", StringComparison.Ordinal))
+                !startup.Contains("Every 3600s", StringComparison.Ordinal))
             {
                 string? line = await server.StandardOutput.ReadLineAsync(timeout.Token);
                 if (line is null) Assert.Fail(startup + await errors);
@@ -738,7 +738,7 @@ public sealed class CompanionHostingTests
             }
             Assert.That(startup, Does.Contain("ARTISAN LOGBOOK")
                 .And.Contain("Monitoring active")
-                .And.Contain("Every 60s")
+                .And.Contain("Every 3600s")
                 .And.Contain("Server ready")
                 .And.Contain("http://127.0.0.1:")
                 .And.Not.Contain("category=")

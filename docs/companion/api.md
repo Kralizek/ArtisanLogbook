@@ -35,6 +35,8 @@ The server binds IPv4 loopback only and never a wildcard or LAN address.
 | GET | `/api/v1/status` | Version, lifecycle state, canonical-history availability and counts, independent application-state capability, safe failure info |
 | GET | `/api/v1/games/{context}` | Resolve one canonical context ID or supported-game alias to derived identity/display metadata; does not require history or SQLite |
 | GET | `/api/v1/sources` | Discovered SavedVariables sources with stable ids (`src_…`) and discovery diagnostics |
+| GET | `/api/v1/installations` | Server-discovered installation candidates, configured selection and startup-only active count; no filesystem paths |
+| PUT | `/api/v1/installations` | Revision-checked selection of opaque server-known candidate tokens; restart required for new roots to take effect |
 | GET | `/api/v1/monitoring` | Saved/effective preferences, override indicators, monitoring state and diagnostics |
 | PUT | `/api/v1/monitoring` | Persist monitoring preferences and apply their effective values |
 | POST | `/api/v1/monitoring/reconcile` | Request reconciliation while enabled; returns 202 with status `Location` |
@@ -133,7 +135,8 @@ labels never establish context identity.
 
 Monitoring is **enabled by default**. An explicit saved or invocation-level
 disable remains authoritative; omitted preferences in older version-1 settings
-use the new default without rewriting the file. The GET response reports `preferences`,
+use the one-hour (3600-second) periodic fallback default without rewriting the file.
+The GET response reports `preferences`,
 `effective`, and `overrides` separately. Invocation options retain precedence:
 for example, `serve --monitoring false` allows saving an enabled preference but
 does not enable the current host. Interval overrides are reported independently.
@@ -144,7 +147,7 @@ curl -s $BASE/api/v1/monitoring
 curl -si -X PUT $BASE/api/v1/monitoring \
   -H 'X-Artisan-Logbook-Client: curl' \
   -H 'Content-Type: application/json' \
-  -d '{"enabled":true,"reconciliationIntervalSeconds":60}'
+  -d '{"enabled":true,"reconciliationIntervalSeconds":3600}'
 
 curl -si -X POST $BASE/api/v1/monitoring/reconcile \
   -H 'X-Artisan-Logbook-Client: curl' \
@@ -166,6 +169,36 @@ coalesced for 250 ms, and the configured periodic interval recovers missed
 notifications and unavailable installations. Stable content is identified by its
 bytes, not just timestamps. Automatic and manual imports share C11's bounded
 single-worker queue, C10 admission, and C07 transactional ingestion.
+Watchers continue to respond promptly; the one-hour default is not an hourly
+debounce. If watchers fail or miss events, new content may be found as late as
+the next full periodic check. Explicit saved/CLI intervals keep their values.
+
+## Installation setup
+
+The browser's Companion management page discovers/selects candidate WoW
+installation roots without exposing private paths or accepting client-supplied
+paths. `GET /api/v1/installations` inspects bounded standard installation hints
+and includes previously saved roots (even when temporarily offline). The
+response contains `revision`, `candidates` (`token`, safe generic `label`,
+`configured`), `configuredRoots`, `activeRoots` and `restartRequired`.
+Tokens represent only currently server-known roots; they are not source IDs or
+GameContexts. Use the complete desired selection, not an incremental toggle:
+
+```bash
+curl -si -X PUT $BASE/api/v1/installations \
+  -H 'X-Artisan-Logbook-Client: curl' \
+  -H 'Content-Type: application/json' \
+  -d '{"revision":"<GET revision>","candidateTokens":["<GET token>"]}'
+```
+
+The revision guards concurrent settings changes. Unknown/duplicate tokens or
+arbitrary paths return 400; stale settings, invalid settings or a vanished new
+candidate return 409; a persistence failure returns 503. Monitoring and HTTP
+preferences are preserved. **Restart `serve` after changing installations**:
+source discovery, monitoring, and manual imports continue to use startup roots
+until then. Empty selections are allowed. The CLI `init` wizard supports manual
+paths outside the bounded hints; it uses the same validated settings file.
+Local Host, Origin and client-header security also applies to these endpoints.
 
 POST accepts an **invalidation**, not a new import operation. Repeated requests
 may become one pass. Its `Location` is `/api/v1/monitoring`; inspect `/api/v1/imports`
