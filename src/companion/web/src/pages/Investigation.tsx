@@ -141,7 +141,11 @@ function Quantity({
 }) {
   return (
     <>
-      <Text fw={600}>{exact(measure.quantity)}</Text>
+      {measure.quantity == null ? (
+        <Text c="dimmed">Quantity not recorded</Text>
+      ) : (
+        <Text fw={600}>{exact(measure.quantity)}</Text>
+      )}
       <details className="quantity-evidence">
         <summary>
           {BigInt(measure.incompleteAttempts) > 0n
@@ -338,7 +342,7 @@ function Ranking({
           </Table>
         </Table.ScrollContainer>
       )}
-      <Truncated value={entries.truncated} />
+      {!limit && <Truncated value={entries.truncated} />}
       {limit && shown.length > limit && (
         <Anchor
           component={Link}
@@ -366,6 +370,7 @@ type BreakdownEntry = {
   key: string;
   label: string;
   itemId?: string;
+  blizzardId?: number;
   measure: BreakdownMeasure;
 };
 
@@ -439,6 +444,11 @@ function MeasuredBreakdown({
                       </LinkTo>
                     ) : (
                       row.label
+                    )}
+                    {row.blizzardId != null && (
+                      <Text size="xs" c="dimmed">
+                        Item #{row.blizzardId}
+                      </Text>
                     )}
                   </Table.Td>
                   <Table.Td>
@@ -1325,8 +1335,15 @@ function Recipe({
                     left={{
                       nodes: left.returns.nodes.map((row, i) => ({
                         key: row.id ?? `unidentified-${i}`,
-                        label: row.name ?? "Unnamed item",
+                        label:
+                          row.name ??
+                          (row.blizzardId != null
+                            ? `Item ${row.blizzardId} · name unavailable`
+                            : "Item · name unavailable"),
                         itemId: row.id ?? undefined,
+                        blizzardId: row.name
+                          ? (row.blizzardId ?? undefined)
+                          : undefined,
                         measure: row.measure,
                       })),
                       truncated: left.returns.truncated,
@@ -1336,8 +1353,15 @@ function Recipe({
                         ? {
                             nodes: right.returns.nodes.map((row, i) => ({
                               key: row.id ?? `unidentified-${i}`,
-                              label: row.name ?? "Unnamed item",
+                              label:
+                                row.name ??
+                                (row.blizzardId != null
+                                  ? `Item ${row.blizzardId} · name unavailable`
+                                  : "Item · name unavailable"),
                               itemId: row.id ?? undefined,
+                              blizzardId: row.name
+                                ? (row.blizzardId ?? undefined)
+                                : undefined,
                               measure: row.measure,
                             })),
                             truncated: right.returns.truncated,

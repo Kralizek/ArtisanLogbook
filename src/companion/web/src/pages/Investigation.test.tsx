@@ -907,7 +907,18 @@ it("compares measured production, return quantities and output quality without a
         {
           id: "reagent-opaque",
           name: "Reagent",
+          blizzardId: 101,
           measure: measure("2", "1"),
+        },
+        {
+          id: "reagent-variant",
+          name: "Reagent",
+          blizzardId: 102,
+          measure: {
+            ...measure("1", null),
+            measuredAttempts: "0",
+            incompleteAttempts: "1",
+          },
         },
       ],
       truncated: false,
@@ -934,6 +945,7 @@ it("compares measured production, return quantities and output quality without a
         {
           id: "reagent-opaque",
           name: "Reagent",
+          blizzardId: 101,
           measure: {
             ...measure("3", "2.5"),
             measuredAttempts: "2",
@@ -1032,11 +1044,14 @@ it("compares measured production, return quantities and output quality without a
     await screen.findByText("Returned material quantities"),
   ).toBeInTheDocument();
   expect(screen.getByText("0.5 per measured craft")).toBeInTheDocument();
+  expect(screen.getByText("Item #101")).toBeInTheDocument();
+  expect(screen.getByText("Item #102")).toBeInTheDocument();
+  expect(screen.getByText("Quantity not recorded")).toBeInTheDocument();
   expect(
-    screen.getByText(
+    screen.getAllByText(
       "Per-craft average unavailable: incomplete observations contribute partial quantities",
     ),
-  ).toBeInTheDocument();
+  ).toHaveLength(2);
   expect(
     screen.queryByText("B − A observed rate: −16.7 percentage points"),
   ).not.toBeInTheDocument();
