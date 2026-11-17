@@ -456,5 +456,7 @@ public sealed class InitializationAndInstallationImportTests
             OnConfirm?.Invoke();
             return confirm;
         }
+
+        public bool ConfirmErase(string database) => throw new InvalidOperationException("Not an erase test.");
     }
 }

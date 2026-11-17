@@ -52,6 +52,9 @@ public sealed class ApplicationPaths
         return Path.Combine(DataDirectory, "history.duckdb");
     }
 
+    /// <summary>Source-monitoring checkpoints are stored beside the history database they describe.</summary>
+    public static string MonitoringCheckpointFile(string databasePath) => databasePath + ".monitoring.json";
+
     public string SettingsFile => Path.Combine(DataDirectory, "settings.json");
 
     public string ApplicationStateDatabase => Path.Combine(DataDirectory, "application-state.sqlite3");

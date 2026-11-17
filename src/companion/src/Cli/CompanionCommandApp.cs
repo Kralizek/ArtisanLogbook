@@ -48,6 +48,11 @@ public static class CompanionCommandApp
                 .WithDescription("Show read-only history counts across all game contexts.")
                 .WithExample(["status"])
                 .WithExample(["status", "--database", "history.duckdb"]);
+            config.AddCommand<EraseCommand>("erase")
+                .WithDescription("Permanently delete the history database so SavedVariables can be reimported.")
+                .WithExample(["erase"])
+                .WithExample(["erase", "--yes"])
+                .WithExample(["erase", "--database", "history.duckdb", "--yes"]);
             config.AddCommand<ServeCommand>("serve")
                 .WithDescription("Run the Companion host and local HTTP API until stopped (no automatic imports yet).")
                 .WithExample(["serve"])

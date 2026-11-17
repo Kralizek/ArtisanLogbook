@@ -13,8 +13,8 @@ This document covers the current Companion CLI in more detail. Start at the [Com
 Linux ignores empty or relative `XDG_DATA_HOME`, as required by XDG conventions.
 `--database` completely overrides the default. Import and serve create parent directories
 and initializes the complete schema v2 directly. Old C03 development databases
-are unsupported: use a new database path and reimport SavedVariables. No old
-database is migrated, deleted, or overwritten. Status uses DuckDB's read-only access mode, does not
+are unsupported: run `artisanlogbook erase` (or use a new database path) and
+reimport SavedVariables. No old database is migrated, and only `erase` deletes one. Status uses DuckDB's read-only access mode, does not
 migrate schemas, and does not create a missing file or directory. Unrecognized
 or unsupported schemas fail explicitly. Defaults never use the executable
 directory; an unavailable user data directory requires an explicit override.
@@ -472,12 +472,29 @@ For locks, close other Companion/DuckDB processes using this database and retry.
 Do not delete the database or its WAL. Commands do not coordinate with other
 processes. `status` never starts a host, watcher, server, or background service.
 
+## Erase
+
+`artisanlogbook erase [--database <path>] [--yes]` permanently deletes the
+history database, its DuckDB write-ahead log and its source-monitoring
+checkpoints (`<database>.monitoring.json`), so the next `import` or monitored
+`serve` rebuilds history from SavedVariables. It accepts any DuckDB file,
+including one whose schema is unsupported, and refuses a path that is not a
+DuckDB database. SavedVariables, `settings.json` and `application-state.sqlite3`
+(pins, hidden entries and saved investigations) are kept.
+
+Erase asks for confirmation (default **No**); canceling leaves everything
+unchanged. Noninteractive use requires `--yes` and otherwise returns a usage
+error. A missing database is reported as nothing to erase. Erase fails without
+deleting anything while another Companion/DuckDB process, such as `serve`, holds
+the database; stop that process and retry. There is no undo: back up the file
+first if you may need it.
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| 0 | Successful init/import/status/help/version, clean serve shutdown; also canceled init and missing-database status |
-| 1 | CLI parsing/settings-validation error, missing installation configuration, or noninteractive init |
+| 0 | Successful init/import/status/erase/help/version, clean serve shutdown; also canceled init/erase and missing-database status/erase |
+| 1 | CLI parsing/settings-validation error, missing installation configuration, noninteractive init, or noninteractive erase without `--yes` |
 | 2 | Import rejected: malformed/unsupported source, validation, or conflict |
 | 3 | Failed operation: source read, permissions, database/lock/schema/configuration failure, no ledgers, or incomplete discovery |
 
@@ -486,7 +503,8 @@ processes. `status` never starts a host, watcher, server, or background service.
 Only `serve` starts the local application host and can monitor source files.
 No command synchronizes automatically or recovers aggregate-only history that
 has already lost per-craft detail. Only one process should write to a DuckDB file at a time.
-Do not delete a database's write-ahead log to resolve a lock.
+Do not delete a database's write-ahead log to resolve a lock; use `erase` only
+to discard history intentionally.
 
 Source snapshots can contain private game account or character data. Back them up, and share only sanitized fixtures or redacted diagnostics.
 

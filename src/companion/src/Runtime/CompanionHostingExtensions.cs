@@ -91,7 +91,7 @@ public static class CompanionHostingExtensions
         services.AddSingleton<InstallationDiscovery>();
         services.TryAddSingleton<IScheduler>(TaskPoolScheduler.Default);
         services.AddSingleton<SavedVariablesSnapshotReader>();
-        services.AddSingleton(_ => new MonitoringCheckpointStore(configuration.DatabasePath + ".monitoring.json"));
+        services.AddSingleton(_ => new MonitoringCheckpointStore(ApplicationPaths.MonitoringCheckpointFile(configuration.DatabasePath)));
         services.AddSingleton<MonitoringCheckpoints>();
         services.AddSingleton<Store>(_ => new Store(configuration.DatabasePath));
         services.AddSingleton<ICraftHistoryRepository, CraftHistoryRepository>();

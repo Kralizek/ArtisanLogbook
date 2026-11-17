@@ -530,6 +530,10 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
     }
 
+    private const string IncompleteSchemaMessage =
+        "The existing DuckDB file does not contain the complete supported Artisan Logbook schema. " +
+        "Erase it (artisanlogbook erase) and reimport SavedVariables to rebuild history.";
+
     private static bool InspectExistingDatabase(string databasePath)
     {
         DbConnectionStringBuilder connectionString = new()
@@ -602,7 +606,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         if (RequiredColumns.Any(pair => !columns.TryGetValue(pair.Key, out HashSet<string>? names) ||
             pair.Value.Any(column => !names.Contains(column))))
             throw new InvalidOperationException(
-                "The existing DuckDB file does not contain the complete supported Artisan Logbook schema.");
+                IncompleteSchemaMessage);
 
         bool hasSequence;
         using (DbCommand command = connection.CreateCommand())
@@ -615,7 +619,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         }
         if (!hasSequence)
             throw new InvalidOperationException(
-                "The existing DuckDB file does not contain the complete supported Artisan Logbook schema.");
+                IncompleteSchemaMessage);
     }
 
     private void InitializeSchema(bool initializeIfEmpty)
