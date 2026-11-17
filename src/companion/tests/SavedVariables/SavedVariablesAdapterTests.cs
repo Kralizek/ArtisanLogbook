@@ -473,6 +473,37 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
+    public void ItemReagentQualityRoundTripsAndContradictoryReportsStayUnknown()
+    {
+        CraftObservation craft = MakeCraft("quality", "1") with { Reagents = [new(44, 2, null), new(45, 1, null)] };
+        CraftHistory history = History(craft);
+        history = history with
+        {
+            Dimensions = history.Dimensions with
+            {
+                Items = history.Dimensions.Items
+                    .Select(item => item.Id == 44 ? item with { Name = "Bloom", Quality = 2 } : item).ToArray()
+            }
+        };
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(history, options: new(Now));
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        AssertLoaderAccepts(written);
+        IReadOnlyList<ItemDimension> items = SavedVariablesReader.Parse(written.Content!).History!.Dimensions.Items;
+        Assert.That(items.Single(item => item.Id == 44).Quality, Is.EqualTo(2));
+        Assert.That(items.Single(item => item.Id == 45).Quality, Is.Null);
+
+        LuaDocument document = LuaDataParser.Parse(written.Content!);
+        LuaTable ledger = (LuaTable)document.Assignments["ArtisanLogbookDB"]!;
+        LuaTable reagent = ((LuaTable)ledger.Get("reagents")!).Values.OfType<LuaTable>()
+            .First(row => Equals(row.Get("itemId"), 44d));
+        reagent["quality"] = 1d;
+        SavedVariablesImportResult contradictory = SavedVariablesReader.Parse(LuaDataParser.Serialize(document));
+        Assert.That(contradictory.IsSuccessful, Is.True);
+        Assert.That(contradictory.History!.Dimensions.Items.Single(item => item.Id == 44).Quality, Is.Null);
+        Assert.That(contradictory.Diagnostics.Select(d => d.Code), Has.Member("conflicting-item-quality"));
+    }
+
+    [Test]
     public void MultiOutputDetailDoesNotHideAggregateOnlyCraftsInTheSameBucket()
     {
         CraftObservation craft = MakeCraft("coverage", "1") with

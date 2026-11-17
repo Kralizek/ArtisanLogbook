@@ -259,6 +259,9 @@ public static class SavedVariablesWriter
             .Select(i => (i.Id, i.Name, ProfessionId: (int?)null,
                 ExpansionKey: (string?)null, MaxQuality: (int?)null)),
             expansionIds);
+        foreach (ItemDimension item in history.Dimensions.Items.Where(i => i.Game == selectedGame))
+            if (item.Quality is int quality && items.Get(item.Id) is LuaTable row)
+                Put(row, "companionQuality", quality);
         EnsureUsedDimensions(crafts, recipes, professions, items, expansionIds);
         foreach (LuaTable recipe in recipes.Values.OfType<LuaTable>())
             if (Long(recipe.Get("professionId")) is long professionId &&

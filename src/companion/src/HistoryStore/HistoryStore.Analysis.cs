@@ -246,7 +246,7 @@ public sealed partial class HistoryStore
                         ProfessionExpansionKey AS ExpansionKey FROM selected
                         WHERE ProfessionExpansionKey IS NOT NULL) s USING (ContextKey, ExpansionKey)
                 UNION ALL
-                SELECT hash('item', d.ItemId, d.Name)
+                SELECT hash('item', d.ItemId, d.Name, d.Quality)
                     FROM Item d JOIN (SELECT DISTINCT ContextKey, ItemId FROM (
                         SELECT c.ContextKey, r.ItemId FROM CraftReagent r JOIN selected c USING (CraftKey)
                         UNION

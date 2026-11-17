@@ -14,6 +14,7 @@ import {
 import { Link } from "react-router";
 import { WorkspaceSearchDocument } from "../graphql/generated/graphql";
 import type { ActiveGame } from "../app/game";
+import { ItemTooltip, QualityBadge, RecipeTooltip } from "./EntityTooltip";
 
 export function ContextSearch({ game }: { game: ActiveGame }) {
   const [text, setText] = useState("");
@@ -56,36 +57,49 @@ export function ContextSearch({ game }: { game: ActiveGame }) {
                 <Text size="sm">No matching recorded recipes or items.</Text>
               )}
             {data?.game.recipes.nodes.map((recipe) => (
-              <Anchor
-                component={Link}
+              <RecipeTooltip
                 key={`recipe-${recipe.id}`}
-                to={`/${game.routeAlias}/recipes/${encodeURIComponent(recipe.id)}?period=all`}
-                onClick={() => setText("")}
+                game={game}
+                id={recipe.id}
+                position="right-start"
               >
-                <Badge size="xs" variant="light" mr="xs">
-                  Recipe
-                </Badge>
-                {recipe.name ?? `Recipe ${recipe.blizzardId}`}
-              </Anchor>
+                <Anchor
+                  component={Link}
+                  to={`/${game.routeAlias}/recipes/${encodeURIComponent(recipe.id)}?period=all`}
+                  onClick={() => setText("")}
+                >
+                  <Badge size="xs" variant="light" mr="xs">
+                    Recipe
+                  </Badge>
+                  {recipe.name ?? `Recipe ${recipe.blizzardId}`}
+                </Anchor>
+              </RecipeTooltip>
             ))}
             {data?.game.items.nodes.map((item) => (
-              <Anchor
-                component={Link}
+              <ItemTooltip
                 key={`item-${item.id}`}
-                to={`/${game.routeAlias}/items/${encodeURIComponent(item.id)}?period=all`}
-                onClick={() => setText("")}
+                game={game}
+                id={item.id}
+                position="right-start"
               >
-                <Badge size="xs" variant="light" color="blue" mr="xs">
-                  Item
-                </Badge>
-                {item.name ?? `Item ${item.blizzardId} · name unavailable`}
-                {item.name && (
-                  <Text component="span" size="xs" c="dimmed">
-                    {" "}
-                    · #{item.blizzardId}
-                  </Text>
-                )}
-              </Anchor>
+                <Anchor
+                  component={Link}
+                  to={`/${game.routeAlias}/items/${encodeURIComponent(item.id)}?period=all`}
+                  onClick={() => setText("")}
+                >
+                  <Badge size="xs" variant="light" color="blue" mr="xs">
+                    Item
+                  </Badge>
+                  {item.name ?? `Item ${item.blizzardId} · name unavailable`}
+                  <QualityBadge quality={item.quality} />
+                  {item.name && (
+                    <Text component="span" size="xs" c="dimmed">
+                      {" "}
+                      · #{item.blizzardId}
+                    </Text>
+                  )}
+                </Anchor>
+              </ItemTooltip>
             ))}
             {(data?.game.recipes.pageInfo.hasNextPage ||
               data?.game.items.pageInfo.hasNextPage) && (

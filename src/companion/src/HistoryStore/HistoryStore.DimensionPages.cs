@@ -84,9 +84,9 @@ public sealed partial class HistoryStore
             filters = new();
             filters.Add("Search", query.Search);
         }
-        return QueryDimensions(query.Game, first, after, "Item", "ItemId", "d.Name", conditions, filters, key => key,
-            row => int.Parse(row.Key, CultureInfo.InvariantCulture),
-            (row, context) => new ItemDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name),
+        return QueryDimensions(query.Game, first, after, "Item", "ItemId", "d.Name, d.Quality AS Number1", conditions, filters,
+            key => key, row => int.Parse(row.Key, CultureInfo.InvariantCulture),
+            (row, context) => new ItemDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name, row.Number1),
             cancellationToken);
     }
 

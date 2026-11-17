@@ -43,8 +43,8 @@ public static class CraftHistoryValidator
                 errors.Add(new(null, "RecipeDimension", "Known recipe and profession IDs must be positive."));
         }
         foreach (ItemDimension item in dimensions.Items)
-            if (item.Id <= 0)
-                errors.Add(new(null, "ItemDimension", "Item ID must be positive."));
+            if (item.Id <= 0 || item.Quality is <= 0)
+                errors.Add(new(null, "ItemDimension", "Item ID and known quality must be positive."));
         foreach (ProfessionDimension profession in dimensions.Professions)
             if (profession.Id <= 0 || profession.ParentId is <= 0)
                 errors.Add(new(null, "ProfessionDimension", "Known skill-line IDs must be positive."));

@@ -13,6 +13,7 @@ import { useDebouncedValue } from "@mantine/hooks";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import type { ActiveGame } from "../app/game";
+import { itemLabel } from "./analysisFormat";
 import {
   WorkspaceFacetsDocument,
   WorkspaceFilterItemsDocument,
@@ -101,9 +102,7 @@ export function ItemFilter({
   const options =
     data?.game.items.nodes.map((item) => ({
       value: item.id,
-      label: item.name
-        ? `${item.name} · #${item.blizzardId}`
-        : `Item ${item.blizzardId} · name unavailable`,
+      label: itemLabel(item),
     })) ?? [];
   if (value && !options.some((item) => item.value === value)) {
     const item = selectedData?.contextItem;
@@ -111,9 +110,7 @@ export function ItemFilter({
       value,
       label:
         item?.id === value
-          ? item.name
-            ? `${item.name} · #${item.blizzardId}`
-            : `Item ${item.blizzardId} · name unavailable`
+          ? itemLabel(item)
           : "Selected item (search to change)",
     });
   }

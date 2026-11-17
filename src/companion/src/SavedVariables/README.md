@@ -113,6 +113,8 @@ payloads through the same schematic validation path and verifies exact evidence
 retention. Pruned detailed crafts still have the existing explicit retention
 warning; full evidence remains in authoritative Companion history.
 
+Item quality is the client-reported crafting-reagent quality tier of an item ID (for example, two same-named reagents with tiers 1 and 2). The reader takes it from request allocation and reagent-row `quality` values or a Companion-written `companionQuality` item-row extension. A single consistent value becomes the item quality; contradictory values produce a `conflicting-item-quality` warning and leave it unknown. The writer emits known qualities as `companionQuality`. A crafted output's per-craft quality remains separate.
+
 Craft/request links must agree on session and recipe before request-only input fallback is permitted; orphan reagent references and malformed collection members fail explicitly. That fallback includes both allocation slots and fixed reagents without inventing returns. Recipe dimension enrichment remains independent of per-craft classification, and profession parents use `companionParent` because the actual loader rejects native `parentId`/`professionId` fields on profession rows.
 
 The current source supplies `projectId` on each session, but has no trusted progression-track field. The adapter reads a `companionProgressionTrack` session extension only when it was explicitly serialized by this adapter; it never infers a track from the build, version, date, or profession expansion. Existing ledgers without `projectId` cannot be safely classified.

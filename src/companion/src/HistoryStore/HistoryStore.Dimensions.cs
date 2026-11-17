@@ -35,9 +35,9 @@ public sealed partial class HistoryStore
 
     public IReadOnlyList<ItemDimension> ReadItems(
         IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken cancellationToken = default) =>
-        ReadDimensionBatch(identities, "Item", "ItemId", "d.Name",
+        ReadDimensionBatch(identities, "Item", "ItemId", "d.Name, d.Quality AS Number1",
             identity => identity.Key,
-            (row, game) => new ItemDimension(game, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name),
+            (row, game) => new ItemDimension(game, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name, row.Number1),
             cancellationToken);
 
     public IReadOnlyList<ExpansionDimension> ReadExpansions(

@@ -199,6 +199,7 @@ public sealed class ItemGraph(ItemDimension value)
     public string Id => HistoryTokens.Dimension("item", value.Game, value.Id.ToString(CultureInfo.InvariantCulture));
     public int BlizzardId => value.Id;
     public string? Name => value.Name;
+    public int? Quality => value.Quality;
     public GameContextGraph Game => new(value.Game);
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]

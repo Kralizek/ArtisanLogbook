@@ -12,6 +12,11 @@ import {
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { RequestError } from "../components/RequestError";
+import {
+  ItemTooltip,
+  QualityBadge,
+  RecipeTooltip,
+} from "../components/EntityTooltip";
 import { OperationalError } from "../api/status";
 import { LibraryEntitiesDocument } from "../graphql/generated/graphql";
 import {
@@ -34,7 +39,7 @@ function PreferenceRow({
 }: {
   game: OrganizationGame;
   preference: EntityPreference;
-  entity?: { id: string; name: string | null };
+  entity?: { id: string; name: string | null; quality?: number | null };
   setPreference: ReturnType<typeof useEntityPreferences>["setPreference"];
 }) {
   const [pending, setPending] = useState(false);
@@ -54,11 +59,26 @@ function PreferenceRow({
     <Stack gap="xs">
       <Group>
         {entity ? (
-          <Link
-            to={`/${encodeURIComponent(game.routeAlias)}/${preference.kind === "Recipe" ? "recipes" : "items"}/${encodeURIComponent(entity.id)}`}
-          >
-            {entity.name ?? `${preference.kind} ${preference.entityId}`}
-          </Link>
+          <Group gap={0}>
+            {preference.kind === "Recipe" ? (
+              <RecipeTooltip game={game} id={entity.id}>
+                <Link
+                  to={`/${encodeURIComponent(game.routeAlias)}/recipes/${encodeURIComponent(entity.id)}`}
+                >
+                  {entity.name ?? `Recipe ${preference.entityId}`}
+                </Link>
+              </RecipeTooltip>
+            ) : (
+              <ItemTooltip game={game} id={entity.id}>
+                <Link
+                  to={`/${encodeURIComponent(game.routeAlias)}/items/${encodeURIComponent(entity.id)}`}
+                >
+                  {entity.name ?? `Item ${preference.entityId}`}
+                </Link>
+              </ItemTooltip>
+            )}
+            <QualityBadge quality={entity.quality} />
+          </Group>
         ) : (
           <Text>
             {preference.kind} {preference.entityId} (link unavailable)
@@ -254,7 +274,10 @@ function useLibraryEntities(
   const [resolved, setResolved] = useState<{
     context: string;
     signature: string;
-    entities: Map<string, { id: string; name: string | null }>;
+    entities: Map<
+      string,
+      { id: string; name: string | null; quality?: number | null }
+    >;
   }>();
   const [error, setError] = useState<Error>();
   const [retry, setRetry] = useState(0);
@@ -298,7 +321,10 @@ function useLibraryEntities(
     ).then(
       (games) => {
         if (controller.signal.aborted) return;
-        const found = new Map<string, { id: string; name: string | null }>();
+        const found = new Map<
+          string,
+          { id: string; name: string | null; quality?: number | null }
+        >();
         for (const result of games) {
           for (const recipe of result.recipesByBlizzardIds)
             found.set(`Recipe:${recipe.blizzardId}`, {
@@ -309,6 +335,7 @@ function useLibraryEntities(
             found.set(`Item:${item.blizzardId}`, {
               id: item.id,
               name: item.name,
+              quality: item.quality,
             });
         }
         setResolved({ context: game.canonicalId, signature, entities: found });

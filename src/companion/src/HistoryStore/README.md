@@ -342,7 +342,7 @@ The initial schema persists every current `CraftDimensions` collection, canonica
 | `Character` | Context-scoped stable character key and optional display name/class metadata. Observation-only writes create the known identity without inventing names. |
 | `Recipe` | Context-scoped recipe ID and optional name, profession, expansion, and quality metadata. |
 | `Profession` | Context-scoped skill-line ID, optional name, and optional parent skill line. |
-| `Item` | Context-scoped item ID and optional name. |
+| `Item` | Context-scoped item ID, optional name and optional client-reported reagent quality tier. |
 | `Expansion` | Context-scoped expansion/skill-line key and optional name. |
 | `RecipeReagent` | A recipe schematic slot identified by context, recipe, data-slot type, and data-slot index. Slot type, UI slot index, reagent type, requiredness, quantity, and candidate item IDs retain unknown values independently. Candidate IDs are stored as a deterministic JSON array. |
 | `CraftIdentity` | Canonical `(IdentityOrigin, IdentityObservation)` identity and an internal immutable `CraftKey`. |

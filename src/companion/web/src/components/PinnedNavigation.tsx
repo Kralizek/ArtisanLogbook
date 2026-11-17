@@ -3,6 +3,7 @@ import { NavLink, Text } from "@mantine/core";
 import { Link } from "react-router";
 import type { ActiveGame } from "../app/game";
 import { LibraryEntitiesDocument } from "../graphql/generated/graphql";
+import { RecipeTooltip } from "./EntityTooltip";
 import { useEntityPreferences } from "../organization/preferences";
 
 export function PinnedNavigation({
@@ -37,14 +38,19 @@ export function PinnedNavigation({
         </Text>
       )}
       {data?.game.recipesByBlizzardIds.map((recipe) => (
-        <NavLink
+        <RecipeTooltip
           key={recipe.id}
-          component={Link}
-          to={`/${game.routeAlias}/recipes/${encodeURIComponent(recipe.id)}?period=90`}
-          label={recipe.name ?? `Recipe ${recipe.blizzardId}`}
-          title={recipe.name ?? `Recipe ${recipe.blizzardId}`}
-          onClick={close}
-        />
+          game={game}
+          id={recipe.id}
+          position="right-start"
+        >
+          <NavLink
+            component={Link}
+            to={`/${game.routeAlias}/recipes/${encodeURIComponent(recipe.id)}?period=90`}
+            label={recipe.name ?? `Recipe ${recipe.blizzardId}`}
+            onClick={close}
+          />
+        </RecipeTooltip>
       ))}
       {pins.length > 100 && (
         <NavLink

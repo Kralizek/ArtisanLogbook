@@ -311,6 +311,7 @@ query ItemInvestigation(
     id
     name
     blizzardId
+    quality
   }
   relations: analysis(context: $context, filter: $relations) {
     signature
@@ -484,6 +485,7 @@ query InvestigationCraft($context: String!, $id: ID!) {
         id
         name
         blizzardId
+        quality
       }
       allocatedQuantityExact
       returnedQuantityExact

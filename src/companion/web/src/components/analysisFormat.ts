@@ -167,3 +167,17 @@ export function outcomeRows(
   }
   return rows;
 }
+
+export type ItemReference = {
+  name?: string | null;
+  blizzardId: number;
+  quality?: number | null;
+};
+
+/** Plain-text item label that keeps same-named items of different reagent qualities distinct. */
+export function itemLabel(item: ItemReference): string {
+  const quality = item.quality == null ? "" : ` · Quality ${item.quality}`;
+  return item.name
+    ? `${item.name}${quality} · #${item.blizzardId}`
+    : `Item ${item.blizzardId}${quality} · name unavailable`;
+}

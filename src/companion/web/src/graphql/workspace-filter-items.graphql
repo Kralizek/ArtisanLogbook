@@ -5,6 +5,7 @@ query WorkspaceFilterItems($context: String!, $search: String!) {
         id
         name
         blizzardId
+        quality
       }
       pageInfo {
         hasNextPage
@@ -18,5 +19,6 @@ query WorkspaceSelectedItem($context: String!, $id: ID!) {
     id
     name
     blizzardId
+    quality
   }
 }

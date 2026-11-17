@@ -408,6 +408,7 @@ type Item {
   id: ID!
   blizzardId: Int!
   name: String
+  quality: Int
   game: GameContext!
 }
 

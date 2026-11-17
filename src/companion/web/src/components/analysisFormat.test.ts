@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   exact,
+  itemLabel,
   measuredCraftAverage,
   observedRateDifference,
   outcomeRows,
@@ -174,4 +175,14 @@ it("normalizes using only observed attempts, retaining unknown and unsupported o
       false,
     ),
   ).toHaveLength(1);
+});
+
+it("keeps same-named item quality variants distinguishable", () => {
+  const bloom = { name: "Tranquility Bloom", blizzardId: 236761 };
+  expect(itemLabel({ ...bloom, quality: 1 })).toBe(
+    "Tranquility Bloom · Quality 1 · #236761",
+  );
+  expect(itemLabel({ ...bloom, quality: null })).toBe(
+    "Tranquility Bloom · #236761",
+  );
 });

@@ -27,6 +27,7 @@ query ItemCatalogue($context: String!, $search: String, $after: String) {
         id
         blizzardId
         name
+        quality
       }
       pageInfo {
         endCursor

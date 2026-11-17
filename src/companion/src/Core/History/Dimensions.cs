@@ -1,7 +1,8 @@
 namespace ArtisanLogbook.History;
 
-/// <summary>Blizzard item ID, optionally enriched with localized display metadata.</summary>
-public sealed record ItemDimension(GameContext Game, int Id, string? Name = null);
+/// <summary>Blizzard item ID, optionally enriched with localized display metadata. Quality is the
+/// client-reported crafting-reagent quality tier of this item ID, not a crafted output's quality.</summary>
+public sealed record ItemDimension(GameContext Game, int Id, string? Name = null, int? Quality = null);
 
 /// <summary>Blizzard recipe ID, optionally enriched with localized display metadata.</summary>
 public sealed record RecipeDimension(GameContext Game, int Id, string? Name = null, int? ProfessionId = null, string? ProfessionExpansionKey = null, int? MaxQuality = null);

@@ -10,6 +10,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import type { ReactElement } from "react";
 import { Link, useSearchParams } from "react-router";
 import type { ActiveGame } from "../app/game";
 import { investigationLink } from "../app/scope";
@@ -21,11 +22,17 @@ import {
 import { EntityActions } from "../organization/EntityActions";
 import { useEntityPreferences } from "../organization/preferences";
 import { RequestError } from "../components/RequestError";
+import {
+  ItemTooltip,
+  QualityBadge,
+  RecipeTooltip,
+} from "../components/EntityTooltip";
 
 type CatalogueRow = {
   id: string;
   name: string | null;
   blizzardId?: number;
+  quality?: number | null;
   profession?: { name: string | null } | null;
   expansion?: { name: string | null } | null;
 };
@@ -174,20 +181,25 @@ export function Catalogue({
                   return (
                     <Table.Tr key={row.id}>
                       <Table.Td>
-                        <Anchor
-                          component={Link}
-                          to={investigationLink(
-                            game,
-                            destination,
-                            scope,
-                            changes,
-                          )}
-                        >
-                          {row.name ??
-                            ("blizzardId" in row
-                              ? `${entityKind} ${row.blizzardId} · name unavailable`
-                              : "Name unavailable")}
-                        </Anchor>
+                        <EntityLinkTooltip game={game} kind={kind} id={row.id}>
+                          <Anchor
+                            component={Link}
+                            to={investigationLink(
+                              game,
+                              destination,
+                              scope,
+                              changes,
+                            )}
+                          >
+                            {row.name ??
+                              ("blizzardId" in row
+                                ? `${entityKind} ${row.blizzardId} · name unavailable`
+                                : "Name unavailable")}
+                          </Anchor>
+                        </EntityLinkTooltip>
+                        {row.quality != null && (
+                          <QualityBadge quality={row.quality} />
+                        )}
                         {row.blizzardId != null && (
                           <Text size="xs" c="dimmed">
                             #{row.blizzardId}
@@ -278,4 +290,32 @@ export function Catalogue({
         )}
     </Stack>
   );
+}
+
+function EntityLinkTooltip({
+  game,
+  kind,
+  id,
+  children,
+}: {
+  game: ActiveGame;
+  kind: string;
+  id: string;
+  children: ReactElement;
+}) {
+  if (kind === "recipes") {
+    return (
+      <RecipeTooltip game={game} id={id}>
+        {children}
+      </RecipeTooltip>
+    );
+  }
+  if (kind === "items") {
+    return (
+      <ItemTooltip game={game} id={id}>
+        {children}
+      </ItemTooltip>
+    );
+  }
+  return children;
 }

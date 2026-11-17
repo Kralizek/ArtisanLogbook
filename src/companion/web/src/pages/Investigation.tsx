@@ -44,6 +44,11 @@ import {
 } from "../components/analysisFormat";
 import { OutcomeComparison } from "../components/OutcomeComparison";
 import { RequestError } from "../components/RequestError";
+import {
+  ItemTooltip,
+  QualityBadge,
+  RecipeTooltip,
+} from "../components/EntityTooltip";
 import { ItemFilter, ScopeControls } from "../components/ScopeControls";
 import {
   ActivityInvestigationDocument,
@@ -122,11 +127,30 @@ function LinkTo({
     );
   if (destination.startsWith("items/"))
     for (const key of ["item", "input", "output", "returned"]) next.delete(key);
-  return (
+  const link = (
     <Anchor component={Link} to={investigationLink(game, destination, next)}>
       {children}
     </Anchor>
   );
+  if (destination.startsWith("items/"))
+    return (
+      <ItemTooltip
+        game={game}
+        id={decodeURIComponent(destination.slice("items/".length))}
+      >
+        {link}
+      </ItemTooltip>
+    );
+  if (destination.startsWith("recipes/"))
+    return (
+      <RecipeTooltip
+        game={game}
+        id={decodeURIComponent(destination.slice("recipes/".length))}
+      >
+        {link}
+      </RecipeTooltip>
+    );
+  return link;
 }
 
 function Quantity({
@@ -1836,6 +1860,7 @@ function Item({
         {item && (
           <Text size="sm" c="dimmed">
             Item #{item.blizzardId}
+            <QualityBadge quality={item.quality} />
           </Text>
         )}
         <Text c="dimmed">
@@ -2492,6 +2517,7 @@ function Craft({
                               >
                                 {row.item.name ?? `Item ${row.item.blizzardId}`}
                               </LinkTo>
+                              <QualityBadge quality={row.item.quality} />
                             </Table.Td>
                             <Table.Td>
                               {rawQuantity(row.allocatedQuantityExact)}

@@ -93,7 +93,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             ["CraftReagent"] = ["CraftKey", "ItemId", "AllocatedQuantity", "ReturnedQuantity"],
             ["Expansion"] = ["ContextKey", "ExpansionKey", "Name"],
             ["GameContext"] = ["ContextKey", "ProjectId", "ProgressionTrack"],
-            ["Item"] = ["ContextKey", "ItemId", "Name"],
+            ["Item"] = ["ContextKey", "ItemId", "Name", "Quality"],
             ["Profession"] = ["ContextKey", "ProfessionId", "Name", "ParentId"],
             ["Recipe"] = ["ContextKey", "RecipeId", "Name", "ProfessionId", "ProfessionExpansionKey", "MaxQuality"],
             ["RecipeReagent"] =
@@ -708,6 +708,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 ContextKey VARCHAR NOT NULL,
                 ItemId INTEGER NOT NULL,
                 Name VARCHAR,
+                Quality INTEGER,
                 PRIMARY KEY (ContextKey, ItemId),
                 FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
             )
@@ -1116,13 +1117,13 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
         List<ItemDimension> items = [];
-        foreach ((string Context, int Id, string? Name) row in transaction.Connection!.Query<(string, int, string?)>("""
-            SELECT ContextKey, ItemId, Name FROM Item
+        foreach ((string Context, int Id, string? Name, int? Quality) row in transaction.Connection!.Query<(string, int, string?, int?)>("""
+            SELECT ContextKey, ItemId, Name, Quality FROM Item
             ORDER BY ContextKey, ItemId
             """, transaction: transaction, buffered: false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            items.Add(new(Game(row.Context), row.Id, row.Name));
+            items.Add(new(Game(row.Context), row.Id, row.Name, row.Quality));
             cancellationToken.ThrowIfCancellationRequested();
         }
 
@@ -1242,10 +1243,11 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
 
         foreach (ItemDimension item in dimensions.Items)
             transaction.Connection!.Execute("""
-                INSERT INTO Item (ContextKey, ItemId, Name) VALUES ($ContextKey, $ItemId, $Name)
+                INSERT INTO Item (ContextKey, ItemId, Name, Quality) VALUES ($ContextKey, $ItemId, $Name, $Quality)
                 ON CONFLICT (ContextKey, ItemId) DO UPDATE SET
-                    Name = COALESCE(excluded.Name, Item.Name)
-                """, new { ContextKey = ContextKey(item.Game), ItemId = item.Id, item.Name }, transaction);
+                    Name = COALESCE(excluded.Name, Item.Name),
+                    Quality = COALESCE(excluded.Quality, Item.Quality)
+                """, new { ContextKey = ContextKey(item.Game), ItemId = item.Id, item.Name, item.Quality }, transaction);
 
         foreach (ExpansionDimension expansion in dimensions.Expansions)
             transaction.Connection!.Execute("""

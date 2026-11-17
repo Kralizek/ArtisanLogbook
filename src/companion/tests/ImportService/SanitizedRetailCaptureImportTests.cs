@@ -49,6 +49,12 @@ public sealed class SanitizedRetailCaptureImportTests
                 Assert.That(allocated.Measure.Quantity, Is.Null);
             });
 
+            // Reagent quality is reported per item ID on allocations. 236767 is only ever returned in this
+            // sample, so its quality stays unknown instead of being inferred from its same-named variant.
+            Dictionary<int, int?> blooms = store.QueryItems(new(Retail, "Tranquility Bloom"))
+                .Items.ToDictionary(item => item.Id, item => item.Quality);
+            Assert.That(blooms, Is.EquivalentTo(new Dictionary<int, int?> { [236761] = 1, [236767] = null }));
+
             CraftAnalysis salvage = store.Analyze(new(new(Game: Retail, RecipeId: 1231127)));
             Assert.That(salvage.Outputs.Nodes.Select(x => x.Key), Is.EquivalentTo(new[] { "242606", "242788" }));
             Assert.That(store.ReadStatus().TotalCraftCount, Is.EqualTo(12));
