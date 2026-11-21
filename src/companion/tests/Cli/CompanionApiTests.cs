@@ -227,6 +227,57 @@ public sealed class CompanionApiTests
             .GetProperty("nodes")[0].GetProperty("name").GetString(), Is.EqualTo("Potion"));
         Assert.That(scopedSearch.GetProperty("data").GetProperty("gameContext").GetProperty("items")
             .GetProperty("nodes")[0].GetProperty("name").GetString(), Is.EqualTo("Herb"));
+
+        int activityCalls = dimensionsRepository.ActivityBatchCalls;
+        JsonElement activity = (await GraphQL(host, """
+            query($gameId: ID!) {
+              gameContext(id: $gameId) {
+                recipes { nodes { activity { craftCount lastRecordedAt } } }
+                characters { nodes { activity { craftCount } } }
+                professions { nodes { activity { craftCount } } }
+              }
+            }
+            """, new { gameId = HistoryTokens.Context(game) })).GetProperty("data").GetProperty("gameContext");
+        Assert.Multiple(() =>
+        {
+            JsonElement recipe = activity.GetProperty("recipes").GetProperty("nodes")[0].GetProperty("activity");
+            Assert.That(recipe.GetProperty("craftCount").GetString(), Is.EqualTo("2"));
+            Assert.That(recipe.GetProperty("lastRecordedAt").GetDateTimeOffset(),
+                Is.EqualTo(DateTimeOffset.Parse("2026-01-02T00:00:00Z")));
+            Assert.That(activity.GetProperty("characters").GetProperty("nodes")[0].GetProperty("activity")
+                .GetProperty("craftCount").GetString(), Is.EqualTo("2"));
+            Assert.That(activity.GetProperty("professions").GetProperty("nodes")[0].GetProperty("activity")
+                .GetProperty("craftCount").GetString(), Is.EqualTo("2"));
+            Assert.That(dimensionsRepository.ActivityBatchCalls - activityCalls, Is.EqualTo(3), "one batch per dimension kind");
+        });
+        string professionId = HistoryTokens.Dimension("profession", game, "34");
+        JsonElement filtered = await GraphQL(host, """
+            query($gameId: ID!, $profession: ID!, $other: ID!) {
+              gameContext(id: $gameId) {
+                crafted: recipes(profession: $profession, craftedOnly: true) { nodes { name } }
+                other: recipes(profession: $other) { nodes { name } }
+              }
+            }
+            """, new
+        {
+            gameId = HistoryTokens.Context(game),
+            profession = professionId,
+            other = HistoryTokens.Dimension("profession", game, "35")
+        });
+        Assert.That(filtered.GetProperty("data").GetProperty("gameContext").GetProperty("crafted")
+            .GetProperty("nodes")[0].GetProperty("name").GetString(), Is.EqualTo("Potion"));
+        Assert.That(filtered.GetProperty("data").GetProperty("gameContext").GetProperty("other")
+            .GetProperty("nodes").GetArrayLength(), Is.Zero);
+        using HttpResponseMessage mismatched = await host.Post("/graphql", JsonSerializer.Serialize(new
+        {
+            query = "query($gameId: ID!, $p: ID!) { gameContext(id: $gameId) { recipes(profession: $p) { nodes { name } } } }",
+            variables = new
+            {
+                gameId = HistoryTokens.Context(game),
+                p = HistoryTokens.Dimension("profession", new GameContext(GameProject.Forever), "34")
+            }
+        }));
+        Assert.That(await mismatched.Content.ReadAsStringAsync(), Does.Contain("INVALID_FILTER"));
     }
 
     [Test]
@@ -2524,6 +2575,23 @@ public sealed class CompanionApiTests
             store.ReadRecipeReagentSlots(keys, token);
         public IReadOnlyList<GameContext> GameContexts(IReadOnlyCollection<GameContext> games, CancellationToken token) =>
             store.ReadGameContexts(games, token);
+        public int ActivityBatchCalls { get; private set; }
+        public IReadOnlyList<DimensionActivity<int>> RecipeActivity(IReadOnlyCollection<DimensionIdentity<int>> keys, CancellationToken token)
+        {
+            ActivityBatchCalls++;
+            return store.ReadRecipeActivity(keys, token);
+        }
+        public IReadOnlyList<DimensionActivity<int>> ProfessionActivity(IReadOnlyCollection<DimensionIdentity<int>> keys, CancellationToken token)
+        {
+            ActivityBatchCalls++;
+            return store.ReadProfessionActivity(keys, token);
+        }
+        public IReadOnlyList<DimensionActivity<CharacterIdentity>> CharacterActivity(
+            IReadOnlyCollection<DimensionIdentity<CharacterIdentity>> keys, CancellationToken token)
+        {
+            ActivityBatchCalls++;
+            return store.ReadCharacterActivity(keys, token);
+        }
     }
 
     private sealed class GatedImports : CompanionRuntimeImports

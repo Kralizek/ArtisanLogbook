@@ -182,7 +182,7 @@ export function App() {
             ["Overview", "activity"],
             ["Logbook", "crafts"],
             ["Recipes", "recipes"],
-            ["Reagents", "items"],
+            ["Reagents & items", "items"],
           ].map(([label, path]) => (
             <NavLink
               key={path}

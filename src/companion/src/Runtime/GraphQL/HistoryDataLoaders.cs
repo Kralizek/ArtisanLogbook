@@ -72,3 +72,30 @@ public sealed class RecipeSlotLoader(IBatchScheduler scheduler, IHistoryDimensio
         return Task.FromResult<IReadOnlyDictionary<DimensionIdentity<int>, IReadOnlyList<RecipeReagentSlot>>>(result);
     }
 }
+
+public sealed class RecipeActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
+    : BatchDataLoader<DimensionIdentity<int>, DimensionActivity<int>>(scheduler, new() { MaxBatchSize = 500 })
+{
+    protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, DimensionActivity<int>>> LoadBatchAsync(
+        IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyDictionary<DimensionIdentity<int>, DimensionActivity<int>>>(
+            repository.RecipeActivity(keys, cancellationToken).ToDictionary(x => x.Identity));
+}
+
+public sealed class ProfessionActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
+    : BatchDataLoader<DimensionIdentity<int>, DimensionActivity<int>>(scheduler, new() { MaxBatchSize = 500 })
+{
+    protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, DimensionActivity<int>>> LoadBatchAsync(
+        IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyDictionary<DimensionIdentity<int>, DimensionActivity<int>>>(
+            repository.ProfessionActivity(keys, cancellationToken).ToDictionary(x => x.Identity));
+}
+
+public sealed class CharacterActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
+    : BatchDataLoader<DimensionIdentity<CharacterIdentity>, DimensionActivity<CharacterIdentity>>(scheduler, new() { MaxBatchSize = 500 })
+{
+    protected override Task<IReadOnlyDictionary<DimensionIdentity<CharacterIdentity>, DimensionActivity<CharacterIdentity>>> LoadBatchAsync(
+        IReadOnlyList<DimensionIdentity<CharacterIdentity>> keys, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyDictionary<DimensionIdentity<CharacterIdentity>, DimensionActivity<CharacterIdentity>>>(
+            repository.CharacterActivity(keys, cancellationToken).ToDictionary(x => x.Identity));
+}

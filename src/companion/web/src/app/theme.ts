@@ -47,6 +47,13 @@ export const theme = createTheme({
         highlightOnHoverColor: "var(--mantine-color-default-border)",
       },
     },
+    TableScrollContainer: {
+      // Keep the horizontal scrollbar visible whenever a wide table overflows
+      // (e.g. on phones); hover-only scrollbars gave no hint of hidden columns.
+      defaultProps: {
+        scrollAreaProps: { type: "auto", offsetScrollbars: "x" },
+      },
+    },
     Select: {
       defaultProps: { clearButtonProps: { "aria-label": "Clear selection" } },
     },

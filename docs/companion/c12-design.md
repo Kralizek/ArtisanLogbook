@@ -11,7 +11,7 @@ remain valid. No external artwork or fonts are fetched.
 | Overview | What have I crafted? Compact totals, elapsed-time activity, bounded recipe and material previews | Period; meaningful character/profession choices | Full catalogues; recipe, item and Logbook links; optional detailed reports |
 | Logbook | What happened in each attempt? Paged observations | Period, character, profession | Craft Result / Ingredients / Configuration |
 | Recipes | Which recorded recipe should I inspect? Searchable all-history catalogue | Name / ID search; inherited scope is retained for detail links | Recipe Overview / Statistics / Craft History / Reagents |
-| Reagents | Which materials are involved? Item catalogue, including outputs and returns | Name / ID search | Separate production, gross commitment and return relationships; inherited recipe chip |
+| Reagents & items | Which materials are involved? Item catalogue, including outputs and returns | Name / ID search | Separate production, gross commitment and return relationships; inherited recipe chip |
 | Characters / Professions | Whose activity am I exploring? Recorded identity shortcuts | Name search | Scoped Overview and Logbook, not leaderboards |
 | Library | What did I organize? Pins, hidden entities, saved investigations | Collection controls | Explicit updates, restoration, forks and revision conflicts |
 | Settings | Is collection working? Installations, effective monitoring, manual imports | Browser-led discovered installation choice | Import receipts/warnings and diagnostics; explicit restart boundaries |

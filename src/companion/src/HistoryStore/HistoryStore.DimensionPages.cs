@@ -11,6 +11,18 @@ public sealed partial class HistoryStore
 {
     public const int MaximumDimensionPageSize = 100;
 
+    // A literal, case-insensitive name substring; a whole number (optionally "#"-prefixed) also matches that ID.
+    private static string SearchCondition(string keyColumn, string search, DynamicParameters filters)
+    {
+        filters.Add("Search", search);
+        string number = search.Trim().TrimStart('#');
+        if (number.Length == 0 || !number.All(char.IsAsciiDigit) ||
+            !int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out int id))
+            return " AND contains(lower(d.Name), lower($Search))";
+        filters.Add("SearchId", id);
+        return $" AND (contains(lower(d.Name), lower($Search)) OR d.{keyColumn} = $SearchId)";
+    }
+
     public DimensionPage<CharacterDimension, CharacterIdentity> QueryCharacters(
         GameContext? game = null, int first = 20, DimensionIdentity<CharacterIdentity>? after = null,
         CancellationToken cancellationToken = default) =>
@@ -40,10 +52,9 @@ public sealed partial class HistoryStore
             filters.Add("ExpansionKey", expansion);
         }
         if (!string.IsNullOrEmpty(query.Search))
-        {
-            conditions.Append(" AND contains(lower(d.Name), lower($Search))");
-            filters.Add("Search", query.Search);
-        }
+            conditions.Append(SearchCondition("RecipeId", query.Search, filters));
+        if (query.CraftedOnly)
+            conditions.Append(" AND EXISTS (SELECT 1 FROM Craft c WHERE c.ContextKey = d.ContextKey AND c.RecipeId = d.RecipeId)");
         return QueryDimensions(query.Game, first, after, "Recipe", "RecipeId",
             "d.Name, d.ProfessionId AS Number1, d.ProfessionExpansionKey AS Text1, d.MaxQuality AS Number2",
             conditions.ToString(), filters, key => key, row => int.Parse(row.Key, CultureInfo.InvariantCulture),
@@ -80,9 +91,8 @@ public sealed partial class HistoryStore
         string? conditions = null;
         if (!string.IsNullOrEmpty(query.Search))
         {
-            conditions = " AND contains(lower(d.Name), lower($Search))";
             filters = new();
-            filters.Add("Search", query.Search);
+            conditions = SearchCondition("ItemId", query.Search, filters);
         }
         return QueryDimensions(query.Game, first, after, "Item", "ItemId", "d.Name, d.Quality AS Number1", conditions, filters,
             key => key, row => int.Parse(row.Key, CultureInfo.InvariantCulture),

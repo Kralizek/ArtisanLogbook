@@ -104,3 +104,30 @@ describe("entity actions", () => {
     expect(screen.queryByText("sensitive failure")).not.toBeInTheDocument();
   });
 });
+
+describe("compact entity actions", () => {
+  it("names repeated row controls after their entity", async () => {
+    vi.mocked(operationsClient.GET).mockResolvedValue({
+      data: { preferences: [{ ...preference, hidden: false, pinned: true }] },
+      response,
+    } as never);
+    render(
+      <MantineProvider>
+        <EntityActions
+          game={game}
+          kind="Recipe"
+          blizzardId={441}
+          compact
+          label="Light's Potential"
+        />
+      </MantineProvider>,
+    );
+    expect(
+      await screen.findByRole("button", { name: "Unpin Light's Potential" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Hide Light's Potential" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loading preferences…")).not.toBeInTheDocument();
+  });
+});

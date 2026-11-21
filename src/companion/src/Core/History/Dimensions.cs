@@ -10,6 +10,10 @@ public sealed record RecipeDimension(GameContext Game, int Id, string? Name = nu
 /// <summary>Blizzard skill line ID, including expansion-specific child skill lines.</summary>
 public sealed record ProfessionDimension(GameContext Game, int Id, string? Name = null, int? ParentId = null);
 
+/// <summary>All-history recorded craft activity for one recipe, character or profession.</summary>
+public sealed record DimensionActivity<TKey>(DimensionIdentity<TKey> Identity, long CraftCount, DateTimeOffset LastRecordedAt)
+    where TKey : notnull;
+
 /// <summary>Blizzard expansion identifier; never inferred from the crafting timestamp.</summary>
 public sealed record ExpansionDimension(GameContext Game, string Key, string? Name = null);
 

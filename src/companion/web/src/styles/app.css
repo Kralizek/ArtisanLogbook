@@ -220,3 +220,14 @@ h1 {
   color: var(--mantine-color-dimmed);
   cursor: help;
 }
+/* Wide tables keep their columns and scroll sideways on phones; say so up front,
+   since the scrollbar sits below the table. */
+@media (max-width: 36em) {
+  .mantine-TableScrollContainer-scrollContainer::before {
+    content: "Swipe sideways for more columns →";
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.75rem;
+    color: var(--mantine-color-dimmed);
+  }
+}

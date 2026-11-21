@@ -25,6 +25,42 @@ public sealed class CraftAnalysisTests
     public void TearDown() => Directory.Delete(_directory, recursive: true);
 
     [Test]
+    public void DimensionActivityCountsAllHistoryAndOmitsDimensionsWithoutCrafts()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-02-01T12:00:00Z");
+        foreach (CraftObservation craft in new[]
+        {
+            Craft("old", Retail, time.AddDays(-30)) with { ProfessionId = 171 },
+            Craft("new", Retail, time) with { ProfessionId = 171 },
+            Craft("other", Retail, time.AddDays(-1)) with { RecipeId = 11, Character = new("alt") },
+            Craft("forever", Forever, time.AddDays(1))
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.ReadRecipeActivity([new(Retail, 10), new(Retail, 11), new(Retail, 99)]), Is.EqualTo(new[]
+            {
+                new DimensionActivity<int>(new(Retail, 10), 2, time),
+                new DimensionActivity<int>(new(Retail, 11), 1, time.AddDays(-1))
+            }));
+            Assert.That(store.ReadProfessionActivity([new(Retail, 171)]),
+                Is.EqualTo(new[] { new DimensionActivity<int>(new(Retail, 171), 2, time) }));
+            Assert.That(store.ReadCharacterActivity([new(Retail, new("character")), new(Forever, new("character"))]),
+                Is.EquivalentTo(new[]
+                {
+                    new DimensionActivity<CharacterIdentity>(new(Forever, new("character")), 1, time.AddDays(1)),
+                    new DimensionActivity<CharacterIdentity>(new(Retail, new("character")), 2, time)
+                }));
+            Assert.That(store.ReadRecipeActivity([]), Is.Empty);
+        });
+        Assert.That(store.WriteDimensions(new([], [new(Retail, 10), new(Retail, 11), new(Retail, 12)], [], [], []))
+            .IsSuccessful, Is.True);
+        Assert.That(store.QueryRecipes(new(Retail, CraftedOnly: true)).Items.Select(x => x.Id), Is.EqualTo(new[] { 10, 11 }));
+    }
+
+    [Test]
     public void OutputContributionQualityRequiresEveryContributingRowToAgree()
     {
         using Store store = new(Path.Combine(_directory, "history.duckdb"));

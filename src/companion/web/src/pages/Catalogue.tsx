@@ -2,8 +2,10 @@ import { useQuery } from "@apollo/client/react";
 import {
   Anchor,
   Button,
+  Checkbox,
   Group,
   Loader,
+  Select,
   Stack,
   Table,
   Text,
@@ -15,6 +17,7 @@ import { Link, useSearchParams } from "react-router";
 import type { ActiveGame } from "../app/game";
 import { investigationLink } from "../app/scope";
 import {
+  IdentityCatalogueDocument,
   ItemCatalogueDocument,
   RecipeCatalogueDocument,
   WorkspaceFacetsDocument,
@@ -33,9 +36,13 @@ type CatalogueRow = {
   name: string | null;
   blizzardId?: number;
   quality?: number | null;
+  classFile?: string | null;
   profession?: { name: string | null } | null;
   expansion?: { name: string | null } | null;
+  activity?: { craftCount: string; lastRecordedAt: string } | null;
 };
+
+const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
 export function Catalogue({
   game,
@@ -51,7 +58,12 @@ export function Catalogue({
     after: params.get("after"),
   };
   const recipes = useQuery(RecipeCatalogueDocument, {
-    variables,
+    variables: {
+      ...variables,
+      profession: params.get("profession"),
+      // Recipes seen without any recorded craft are listed only on request.
+      craftedOnly: !params.has("uncrafted"),
+    },
     skip: kind !== "recipes",
     fetchPolicy: "no-cache",
   });
@@ -62,20 +74,25 @@ export function Catalogue({
   });
   const facets = useQuery(WorkspaceFacetsDocument, {
     variables,
+    skip: kind !== "recipes",
+    fetchPolicy: "no-cache",
+  });
+  const identities = useQuery(IdentityCatalogueDocument, {
+    variables: { context: game.canonicalId },
     skip: kind !== "characters" && kind !== "professions",
     fetchPolicy: "no-cache",
   });
   const preferences = useEntityPreferences(game);
   const result =
-    kind === "recipes" ? recipes : kind === "items" ? items : facets;
+    kind === "recipes" ? recipes : kind === "items" ? items : identities;
   const collection =
     kind === "recipes"
       ? recipes.data?.game.recipes
       : kind === "items"
         ? items.data?.game.items
         : kind === "characters"
-          ? facets.data?.game.characters
-          : facets.data?.game.professions;
+          ? identities.data?.game.characters
+          : identities.data?.game.professions;
   const title = {
     recipes: "Recipes",
     items: "Reagents & items",
@@ -94,9 +111,20 @@ export function Catalogue({
       : kind === "items"
         ? items.data?.game.items.nodes
         : kind === "characters"
-          ? facets.data?.game.characters.nodes
-          : facets.data?.game.professions.nodes;
-  const rows = nodes
+          ? identities.data?.game.characters.nodes
+          : identities.data?.game.professions.nodes;
+  const tracksActivity = kind !== "items";
+  // Identity shortcuts are ordered by recency, not ranked by volume.
+  const ordered =
+    kind === "characters" || kind === "professions"
+      ? nodes &&
+        [...nodes].sort(
+          (a, b) =>
+            (b.activity ? Date.parse(b.activity.lastRecordedAt) : -Infinity) -
+            (a.activity ? Date.parse(a.activity.lastRecordedAt) : -Infinity),
+        )
+      : nodes;
+  const rows = ordered
     ?.filter(
       (row) =>
         ["recipes", "items"].includes(kind) ||
@@ -121,6 +149,7 @@ export function Catalogue({
   }
   const scope = new URLSearchParams(params);
   scope.delete("search");
+  scope.delete("uncrafted");
   return (
     <Stack gap="md">
       <header>
@@ -135,12 +164,43 @@ export function Catalogue({
       {
         <TextInput
           label={`Search ${kind === "items" ? "items" : kind}`}
-          placeholder="Name or item / recipe number"
+          placeholder={
+            {
+              recipes: "Name or recipe number",
+              items: "Name or item number",
+              characters: "Character name",
+              professions: "Name or profession number",
+            }[kind]
+          }
           value={params.get("search") ?? ""}
           onChange={(event) => change("search", event.currentTarget.value)}
           maw={480}
         />
       }
+      {kind === "recipes" && (
+        <Group align="end">
+          <Select
+            label="Profession"
+            placeholder="All professions"
+            clearable
+            data={(facets.data?.game.professions.nodes ?? []).map((row) => ({
+              value: row.id,
+              label: row.name ?? `Profession ${row.blizzardId}`,
+            }))}
+            value={params.get("profession")}
+            onChange={(value) => change("profession", value)}
+            maw={260}
+          />
+          <Checkbox
+            label="Include recipes never crafted"
+            checked={params.has("uncrafted")}
+            onChange={(event) =>
+              change("uncrafted", event.currentTarget.checked ? "1" : null)
+            }
+            mb={8}
+          />
+        </Group>
+      )}
       {result.error && (
         <RequestError
           error={result.error}
@@ -163,6 +223,13 @@ export function Catalogue({
                   <Table.Th>Name</Table.Th>
                   {kind === "recipes" && (
                     <Table.Th>Profession · expansion</Table.Th>
+                  )}
+                  {kind === "characters" && <Table.Th>Class</Table.Th>}
+                  {tracksActivity && (
+                    <>
+                      <Table.Th>Crafts</Table.Th>
+                      <Table.Th>Last crafted</Table.Th>
+                    </>
                   )}
                   <Table.Th>Explore</Table.Th>
                 </Table.Tr>
@@ -200,7 +267,7 @@ export function Catalogue({
                         {row.quality != null && (
                           <QualityBadge quality={row.quality} />
                         )}
-                        {row.blizzardId != null && (
+                        {row.blizzardId != null && kind !== "professions" && (
                           <Text size="xs" c="dimmed">
                             #{row.blizzardId}
                           </Text>
@@ -218,6 +285,10 @@ export function Catalogue({
                           ].join(" · ")}
                         </Table.Td>
                       )}
+                      {kind === "characters" && (
+                        <Table.Td>{className(row.classFile)}</Table.Td>
+                      )}
+                      {tracksActivity && <ActivityCells row={row} />}
                       <Table.Td>
                         {row.blizzardId != null &&
                         ["recipes", "items"].includes(kind) ? (
@@ -225,6 +296,10 @@ export function Catalogue({
                             game={game}
                             kind={entityKind}
                             blizzardId={row.blizzardId}
+                            compact
+                            label={
+                              row.name ?? `${entityKind} ${row.blizzardId}`
+                            }
                           />
                         ) : (
                           <Anchor
@@ -318,4 +393,36 @@ function EntityLinkTooltip({
     );
   }
   return children;
+}
+
+function ActivityCells({ row }: { row: CatalogueRow }) {
+  return row.activity ? (
+    <>
+      <Table.Td>{BigInt(row.activity.craftCount).toLocaleString()}</Table.Td>
+      <Table.Td>
+        {dateFormat.format(new Date(row.activity.lastRecordedAt))}
+      </Table.Td>
+    </>
+  ) : (
+    <>
+      <Table.Td>
+        <Text c="dimmed" size="sm">
+          Not crafted
+        </Text>
+      </Table.Td>
+      <Table.Td />
+    </>
+  );
+}
+
+/** Readable class label from the client's class file token (e.g. DEATHKNIGHT). */
+function className(classFile?: string | null) {
+  if (!classFile) return "";
+  const known: Record<string, string> = {
+    DEATHKNIGHT: "Death Knight",
+    DEMONHUNTER: "Demon Hunter",
+  };
+  return (
+    known[classFile] ?? classFile.charAt(0) + classFile.slice(1).toLowerCase()
+  );
 }

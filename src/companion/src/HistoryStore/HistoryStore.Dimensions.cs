@@ -81,6 +81,61 @@ public sealed partial class HistoryStore
         }, cancellationToken);
     }
 
+    public IReadOnlyList<DimensionActivity<int>> ReadRecipeActivity(
+        IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken cancellationToken = default) =>
+        ReadActivity(identities, "RecipeId", identity => identity.Key,
+            key => int.Parse(key, CultureInfo.InvariantCulture), cancellationToken);
+
+    public IReadOnlyList<DimensionActivity<int>> ReadProfessionActivity(
+        IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken cancellationToken = default) =>
+        ReadActivity(identities, "ProfessionId", identity => identity.Key,
+            key => int.Parse(key, CultureInfo.InvariantCulture), cancellationToken);
+
+    public IReadOnlyList<DimensionActivity<CharacterIdentity>> ReadCharacterActivity(
+        IReadOnlyCollection<DimensionIdentity<CharacterIdentity>> identities, CancellationToken cancellationToken = default) =>
+        ReadActivity(identities, "CharacterKey", identity => identity.Key.Key,
+            key => new CharacterIdentity(key), cancellationToken);
+
+    // Dimensions without recorded crafts are absent from the result.
+    private IReadOnlyList<DimensionActivity<TKey>> ReadActivity<TKey, TSqlKey>(
+        IReadOnlyCollection<DimensionIdentity<TKey>> identities, string craftColumn,
+        Func<DimensionIdentity<TKey>, TSqlKey> sqlKey, Func<string, TKey> key,
+        CancellationToken cancellationToken) where TKey : notnull
+    {
+        ValidateDimensionIdentities(identities);
+        return ReadSnapshot((transaction, token) =>
+        {
+            if (identities.Count == 0) return [];
+            (string values, DynamicParameters parameters, Dictionary<string, GameContext> games) =
+                DimensionValues(identities, sqlKey);
+            List<DimensionActivity<TKey>> result = [];
+            foreach (ActivityRow row in transaction.Connection!.Query<ActivityRow>($"""
+                SELECT c.ContextKey, CAST(c.{craftColumn} AS VARCHAR) AS Key, COUNT(*) AS CraftCount,
+                    arg_max(c.RecordedAt, CAST(c.RecordedAt AS TIMESTAMPTZ)) AS LastRecordedAt
+                FROM Craft c
+                JOIN (VALUES {values}) AS requested(ContextKey, EntityKey)
+                  ON c.ContextKey = requested.ContextKey AND c.{craftColumn} = requested.EntityKey
+                GROUP BY c.ContextKey, c.{craftColumn}
+                ORDER BY c.ContextKey, c.{craftColumn}
+                """, parameters, transaction, buffered: false))
+            {
+                token.ThrowIfCancellationRequested();
+                result.Add(new(new(games[row.ContextKey], key(row.Key)), row.CraftCount,
+                    DateTimeOffset.ParseExact(row.LastRecordedAt, "O", CultureInfo.InvariantCulture, DateTimeStyles.None)));
+            }
+            token.ThrowIfCancellationRequested();
+            return (IReadOnlyList<DimensionActivity<TKey>>)result;
+        }, cancellationToken);
+    }
+
+    private sealed class ActivityRow
+    {
+        public string ContextKey { get; set; } = null!;
+        public string Key { get; set; } = null!;
+        public long CraftCount { get; set; }
+        public string LastRecordedAt { get; set; } = null!;
+    }
+
     private IReadOnlyList<TResult> ReadDimensionBatch<TKey, TSqlKey, TResult>(
         IReadOnlyCollection<DimensionIdentity<TKey>> identities, string table, string keyColumn, string columns,
         Func<DimensionIdentity<TKey>, TSqlKey> sqlKey, Func<DimensionRow, GameContext, TResult> materialize,

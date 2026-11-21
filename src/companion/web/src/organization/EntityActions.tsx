@@ -9,10 +9,16 @@ export function EntityActions({
   game,
   kind,
   blizzardId,
+  compact = false,
+  label,
 }: {
   game: OrganizationGame;
   kind: "Recipe" | "Item";
   blizzardId: number;
+  /** Quiet inline controls for dense lists such as catalogue rows. */
+  compact?: boolean;
+  /** Entity name for accessible control names when many rows repeat them. */
+  label?: string;
 }) {
   const state = useEntityPreferences(game);
   const [pending, setPending] = useState<"pinned" | "hidden">();
@@ -39,10 +45,16 @@ export function EntityActions({
           Could not save this preference. Your previous choice is unchanged.
         </Alert>
       )}
-      {state.loading && <Text size="sm">Loading preferences…</Text>}
-      <Group>
+      {state.loading && !compact && <Text size="sm">Loading preferences…</Text>}
+      <Group gap={compact ? 4 : undefined} wrap="nowrap">
         <Button
-          variant="light"
+          variant={compact ? "subtle" : "light"}
+          size={compact ? "compact-xs" : undefined}
+          aria-label={
+            label && pending !== "pinned"
+              ? `${preference?.pinned ? "Unpin" : "Pin"} ${label}`
+              : undefined
+          }
           disabled={
             !state.preferences ||
             !!pending ||
@@ -58,7 +70,13 @@ export function EntityActions({
               : "Pin"}
         </Button>
         <Button
-          variant="light"
+          variant={compact ? "subtle" : "light"}
+          size={compact ? "compact-xs" : undefined}
+          aria-label={
+            label && pending !== "hidden"
+              ? `${preference?.hidden ? "Reveal" : "Hide"} ${label}`
+              : undefined
+          }
           disabled={
             !state.preferences ||
             !!pending ||

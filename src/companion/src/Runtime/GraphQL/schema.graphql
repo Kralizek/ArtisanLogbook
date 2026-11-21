@@ -211,6 +211,7 @@ type AnalysisTimeline {
 }
 
 type Character {
+  activity: DimensionActivity
   crafts(first: Int! = 20, after: String): CraftConnection!
     @listSize(
       slicingArguments: ["first"]
@@ -272,6 +273,11 @@ type CraftReagent {
   returnedQuantityExact: String
 }
 
+type DimensionActivity {
+  craftCount: String!
+  lastRecordedAt: DateTime!
+}
+
 type Expansion {
   recipes(first: Int! = 20, after: String, search: String): RecipeConnection!
     @cost(weight: "1000")
@@ -324,7 +330,13 @@ type GameContext {
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-  recipes(first: Int! = 20, after: String, search: String): RecipeConnection!
+  recipes(
+    first: Int! = 20
+    after: String
+    search: String
+    profession: ID
+    craftedOnly: Boolean! = false
+  ): RecipeConnection!
     @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
@@ -418,6 +430,7 @@ type ItemConnection {
 }
 
 type Profession {
+  activity: DimensionActivity
   parent: Profession
   children(first: Int! = 20, after: String): ProfessionConnection!
     @cost(weight: "1000")
@@ -455,6 +468,7 @@ type ProfessionConnection {
 }
 
 type Recipe {
+  activity: DimensionActivity
   profession: Profession
   expansion: Expansion
   reagentSlots: [RecipeReagentSlot!]!

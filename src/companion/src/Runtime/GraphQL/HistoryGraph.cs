@@ -75,6 +75,11 @@ public sealed class CharacterGraph(CharacterDimension value)
     public string? Name => value.Name;
     public string? ClassFile => value.ClassFile;
     public GameContextGraph Game => new(value.Game);
+
+    /// <summary>All-history recorded activity; null when no craft is recorded.</summary>
+    [Cost(1)]
+    public async Task<DimensionActivityGraph?> GetActivityAsync(CharacterActivityLoader loader, CancellationToken token) =>
+        DimensionActivityGraph.From(await loader.LoadAsync(new DimensionIdentity<CharacterIdentity>(value.Game, value.Identity), token));
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     [Cost(1)]
     public async Task<CraftConnection> GetCraftsAsync(CharacterCraftPageLoader loader, int first = 20, string? after = null,
@@ -98,6 +103,11 @@ public sealed class RecipeGraph(RecipeDimension value)
     public string? Name => value.Name;
     public int? MaxQuality => value.MaxQuality;
     public GameContextGraph Game => new(value.Game);
+
+    /// <summary>All-history recorded activity; null when no craft is recorded.</summary>
+    [Cost(1)]
+    public async Task<DimensionActivityGraph?> GetActivityAsync(RecipeActivityLoader loader, CancellationToken token) =>
+        DimensionActivityGraph.From(await loader.LoadAsync(new DimensionIdentity<int>(value.Game, value.Id), token));
 
     [Cost(1)]
     public async Task<ProfessionGraph?> GetProfessionAsync(ProfessionLoader loader, CancellationToken token)
@@ -133,6 +143,11 @@ public sealed class ProfessionGraph(ProfessionDimension value)
     public string? Name => value.Name;
     public GameContextGraph Game => new(value.Game);
 
+    /// <summary>All-history recorded activity; null when no craft is recorded.</summary>
+    [Cost(1)]
+    public async Task<DimensionActivityGraph?> GetActivityAsync(ProfessionActivityLoader loader, CancellationToken token) =>
+        DimensionActivityGraph.From(await loader.LoadAsync(new DimensionIdentity<int>(value.Game, value.Id), token));
+
     [Cost(1)]
     public async Task<ProfessionGraph?> GetParentAsync(ProfessionLoader loader, CancellationToken token)
     {
@@ -155,6 +170,17 @@ public sealed class ProfessionGraph(ProfessionDimension value)
     public CraftConnection GetCrafts(ICraftHistoryRepository repository, int first = 20, string? after = null,
         CancellationToken token = default) =>
         HistoryConnections.Crafts(repository, new(Game: value.Game, ProfessionId: value.Id), first, after, token);
+}
+
+[GraphQLName("DimensionActivity")]
+public sealed class DimensionActivityGraph(long craftCount, DateTimeOffset lastRecordedAt)
+{
+    /// <summary>Exact count of recorded completed attempts across all history.</summary>
+    public string CraftCount => craftCount.ToString(CultureInfo.InvariantCulture);
+    public DateTimeOffset LastRecordedAt => lastRecordedAt;
+
+    internal static DimensionActivityGraph? From<TKey>(DimensionActivity<TKey>? activity) where TKey : notnull =>
+        activity is null ? null : new(activity.CraftCount, activity.LastRecordedAt);
 }
 
 [GraphQLName("Expansion")]
@@ -272,8 +298,21 @@ public sealed class GameContextGraph(GameContext value)
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public RecipeConnection GetRecipes(IHistoryDimensionRepository repository, int first = 20, string? after = null,
-        string? search = null, CancellationToken token = default) =>
-        HistoryConnections.Recipes(repository, new(value, Search: search), first, after, token);
+        string? search = null, [GraphQLType(typeof(IdType))] string? profession = null, bool craftedOnly = false,
+        CancellationToken token = default)
+    {
+        int? professionId = null;
+        if (profession is not null)
+        {
+            DimensionIdentity<int> parsed = HistoryTokens.ParseIntegerDimension(profession, "profession");
+            if (parsed.Game != value)
+                throw new GraphQLException(ErrorBuilder.New()
+                    .SetMessage("The profession belongs to a different game context.").SetCode("INVALID_FILTER").Build());
+            professionId = parsed.Key;
+        }
+        return HistoryConnections.Recipes(repository,
+            new(value, professionId, Search: search, CraftedOnly: craftedOnly), first, after, token);
+    }
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public ExpansionConnection GetExpansions(IHistoryDimensionRepository repository, int first = 20, string? after = null,
