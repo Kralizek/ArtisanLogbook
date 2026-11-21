@@ -66,7 +66,7 @@ public sealed class LuaSyntaxException(string message, int line, int column)
 public static class LuaDataParser
 {
     private const int MaximumCharacters = 16 * 1024 * 1024;
-    private const int MaximumEntries = 500_000;
+    private const int MaximumEntries = 5_000_000;
     private const int MaximumDepth = 128;
     private static readonly HashSet<string> Keywords =
     [

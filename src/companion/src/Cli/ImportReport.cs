@@ -59,6 +59,7 @@ internal static class ImportReport
                     "legacy-outcome-coverage-corrected" => "historical outcome coverage correction",
                     "historical-recipe-schematic-variation" => "historical schematic variation",
                     "recipe-recovered" => "recovered recipe identity",
+                    "character-identity-recovered" => "recovered session-scoped character identity",
                     "partial-output" => "incomplete output evidence",
                     "recipe-reagent-slot-without-recipe" => "schematic evidence without recipe identity",
                     "unknown-recipe-reagent-slot" => "incomplete schematic slot evidence",
@@ -92,7 +93,7 @@ internal static class ImportReport
 
     private static bool KnownCode(string code) => code is
         "unknown-recipe" or "legacy-identity-lineage" or "legacy-outcome-coverage-corrected" or
-        "historical-recipe-schematic-variation" or "recipe-recovered" or "partial-output" or
+        "historical-recipe-schematic-variation" or "recipe-recovered" or "character-identity-recovered" or "partial-output" or
         "recipe-reagent-slot-without-recipe" or "unknown-recipe-reagent-slot" or "aggregate-only-history" or "missing-rollups";
 
     private static string Count(long count) => count.ToString("N0", CultureInfo.InvariantCulture);

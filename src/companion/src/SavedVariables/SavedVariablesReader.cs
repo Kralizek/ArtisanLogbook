@@ -191,6 +191,7 @@ public static class SavedVariablesReader
         Dictionary<long, LuaTable> expansions = Index(expansionRows, "dimensions.expansions", diagnostics);
         Dictionary<long, LuaTable> requests = Index(requestRows, "requests", diagnostics);
         Dictionary<long, List<LuaTable>> reagentsByCraft = Group(reagentRows, "craftId");
+        Dictionary<(int ProjectId, long CharacterId), (string? Key, long? CandidateId, string? Failure)> lineageCache = [];
         HashSet<long> invalidRequestCrafts = [];
         foreach (LuaTable craft in craftRows)
         {
@@ -342,11 +343,33 @@ public static class SavedVariablesReader
                 characterKey = !string.IsNullOrWhiteSpace(guid)
                     ? CharacterKey(projectId.Value, realm, guid)
                     : null;
+            string? lineageFailure = null;
+            if (!HasStableCharacterKey(characterKey, projectId.Value) && character is not null &&
+                !string.IsNullOrWhiteSpace(guid))
+            {
+                if (!lineageCache.TryGetValue((projectId.Value, characterId!.Value), out var lineage))
+                {
+                    lineage = ResolveSessionCharacterLineage(projectId.Value, character, guid, realm, characters, realms);
+                    lineageCache.Add((projectId.Value, characterId.Value), lineage);
+                    if (lineage.Key is not null)
+                        diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Information, "character-identity-recovered",
+                            $"ArtisanLogbookDB.dimensions.characters[id={characterId.Value}]",
+                            $"Session-scoped character dimension {characterId.Value} (realm " +
+                            $"{realm?.Get("key") as string ?? "?"}, session {sessionId.Value}) was reconciled with " +
+                            $"stable character dimension {lineage.CandidateId} by exact GUID within the same project and region."));
+                }
+                characterKey = lineage.Key ?? characterKey;
+                lineageFailure = lineage.Failure;
+            }
             if (!HasStableCharacterKey(characterKey, projectId.Value))
             {
+                string reference = $"Session {sessionId.Value}, character dimension " +
+                    $"{characterId?.ToString(CultureInfo.InvariantCulture) ?? "?"}, realm " +
+                    $"{realm?.Get("key") as string ?? "?"}";
                 diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Error, "unknown-character-identity",
                     location + ".session.characterDimensionId",
-                    "A stable character key or GUID plus project/region/realm identity is required."));
+                    "A stable character key or GUID plus project/region/realm identity is required. " +
+                    reference + (lineageFailure is null ? "." : $": {lineageFailure}.")));
                 continue;
             }
 
@@ -1135,6 +1158,67 @@ public static class SavedVariablesReader
         int? gameRealmId = Integer(realm?.Get("gameRealmId"));
         if (regionId is null or <= 0 || gameRealmId is null or <= 0) return null;
         return $"project:{projectId}:region:{regionId}:realm:{gameRealmId}:guid:{guid}";
+    }
+
+    // A session-scoped fallback character (realm resolution failed when the session began) is
+    // reconciled only with one provably compatible stable identity recorded in the same ledger:
+    // exact GUID, same project and region, and no contradicting class or realm-name evidence.
+    // The GUID is never parsed and no realm is synthesized; anything else stays unresolved.
+    private static (string? Key, long? CandidateId, string? Failure) ResolveSessionCharacterLineage(
+        int projectId, LuaTable character, string guid, LuaTable? realm,
+        IReadOnlyDictionary<long, LuaTable> characters, IReadOnlyDictionary<long, LuaTable> realms)
+    {
+        if (realm is null)
+            return (null, null, "the session has no realm dimension");
+        if (!(realm.Get("identityScope") is "session" ||
+              realm.Get("key") is string realmKey && realmKey.StartsWith("unresolved:session:", StringComparison.Ordinal)))
+            return (null, null, "the realm dimension is not a session-scoped fallback");
+        if (Integer(realm.Get("projectId")) is int realmProject && realmProject != projectId)
+            return (null, null, "the realm dimension belongs to a different project");
+        if (Integer(realm.Get("regionId")) is not (int regionId and > 0))
+            return (null, null, "the session-scoped realm has no region, so no stable identity can be proven");
+
+        Dictionary<string, List<long>> stableClaims = new(StringComparer.Ordinal);
+        foreach ((long id, LuaTable candidate) in characters)
+        {
+            if (ReferenceEquals(candidate, character) ||
+                !string.Equals(candidate.Get("guid") as string, guid, StringComparison.Ordinal))
+                continue;
+            LuaTable? candidateRealm = Long(candidate.Get("realmDimensionId")) is long candidateRealmId &&
+                realms.TryGetValue(candidateRealmId, out LuaTable? foundRealm) ? foundRealm : null;
+            string? key = candidate.Get("key") as string;
+            if (!HasStableCharacterKey(key, projectId))
+                key = Integer(candidateRealm?.Get("projectId")) == projectId
+                    ? CharacterKey(projectId, candidateRealm, guid)
+                    : null;
+            if (!HasStableCharacterKey(key, projectId)) continue;
+            if (!stableClaims.TryGetValue(key!, out List<long>? ids))
+                stableClaims.Add(key!, ids = []);
+            ids.Add(id);
+        }
+        if (stableClaims.Count == 0)
+            return (null, null, "no stable character with the same GUID exists in this ledger");
+        if (stableClaims.Count > 1)
+            return (null, null, "several stable identities claim the same GUID");
+
+        (string stableKey, List<long> claimIds) = stableClaims.Single();
+        string regionPrefix = $"project:{projectId}:region:{regionId.ToString(CultureInfo.InvariantCulture)}:";
+        if (!stableKey.StartsWith(regionPrefix, StringComparison.Ordinal))
+            return (null, null, "the stable character with the same GUID belongs to a different region");
+        foreach (long claimId in claimIds)
+        {
+            LuaTable claim = characters[claimId];
+            if (claim.Get("classFile") is string claimClass && character.Get("classFile") is string sessionClass &&
+                !string.Equals(claimClass, sessionClass, StringComparison.Ordinal))
+                return (null, null, "the stable character with the same GUID has a different class");
+            LuaTable? claimRealm = Long(claim.Get("realmDimensionId")) is long claimRealmId &&
+                realms.TryGetValue(claimRealmId, out LuaTable? foundClaimRealm) ? foundClaimRealm : null;
+            if (claimRealm?.Get("name") is string claimRealmName && !string.IsNullOrEmpty(claimRealmName) &&
+                realm.Get("name") is string sessionRealmName && !string.IsNullOrEmpty(sessionRealmName) &&
+                !string.Equals(claimRealmName, sessionRealmName, StringComparison.Ordinal))
+                return (null, null, "the stable character with the same GUID has a different realm name");
+        }
+        return (stableKey, claimIds.Min(), null);
     }
 
     internal static bool HasStableCharacterKey(string? key, int projectId)

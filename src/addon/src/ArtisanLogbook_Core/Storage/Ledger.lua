@@ -1909,6 +1909,36 @@ function Ledger:AddDimension(kind, key, attributes)
   return id
 end
 
+-- When the realm API is temporarily unavailable, reuse the previously verified runtime realm
+-- of the same GUID only if exactly one exists in the same project and region and no known
+-- display name or class contradicts it. The GUID is never parsed; otherwise stay unresolved.
+local function verifiedRealmForCharacter(self, metadata)
+  if type(metadata.characterGUID) ~= "string" or metadata.characterGUID == "" or
+      not (isGameId(metadata.projectId) and metadata.projectId > 0) or
+      not (isGameId(metadata.regionId) and metadata.regionId > 0) then
+    return nil
+  end
+  local match
+  for _, character in pairs(self.dimensionRows.character) do
+    local realm = character.guid == metadata.characterGUID and
+      self.dimensionRows.realm[character.realmDimensionId]
+    if realm and realm.identityScope == "runtime" and realm.projectId == metadata.projectId and
+        realm.regionId == metadata.regionId and isGameId(realm.gameRealmId) and realm.gameRealmId > 0 then
+      if match and match ~= realm then return nil end
+      if type(metadata.realmName) == "string" and metadata.realmName ~= "" and realm.name ~= nil and
+          realm.name ~= metadata.realmName then
+        return nil
+      end
+      if metadata.characterClassFile ~= nil and character.classFile ~= nil and
+          character.classFile ~= metadata.characterClassFile then
+        return nil
+      end
+      match = realm
+    end
+  end
+  return match
+end
+
 local function createSession(self, metadata)
   metadata = metadata or {}
   if type(metadata) ~= "table" then return nil, "session metadata must be a table" end
@@ -1925,13 +1955,21 @@ local function createSession(self, metadata)
       metadata.projectId, metadata.regionId, metadata.gameRealmId)
     identityScope = "runtime"
   end
+  local realmAttributes = {
+    name = metadata.realmName, gameRealmId = metadata.gameRealmId,
+    regionId = metadata.regionId, projectId = metadata.projectId, identityScope = identityScope,
+  }
+  if identityScope == "session" then
+    local verified = verifiedRealmForCharacter(self, metadata)
+    if verified then
+      realmKey = verified.key
+      realmAttributes = {}
+    end
+  end
   local realmId
   local reason
-  if metadata.realmName ~= nil or metadata.gameRealmId ~= nil then
-    realmId, reason = stageDimension(staged, "realm", realmKey, {
-      name = metadata.realmName, gameRealmId = metadata.gameRealmId,
-      regionId = metadata.regionId, projectId = metadata.projectId, identityScope = identityScope,
-    })
+  if metadata.realmName ~= nil or metadata.gameRealmId ~= nil or realmKey ~= "unresolved:session:" .. sessionKey then
+    realmId, reason = stageDimension(staged, "realm", realmKey, realmAttributes)
     if not realmId then return nil, reason end
   end
   local characterId
