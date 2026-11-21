@@ -1528,6 +1528,36 @@ test("realm identities are scoped by runtime IDs, never inferred from names", fu
   assert(Ledger.New(ledger.database))
 end)
 
+test("temporarily unresolved realms reuse only one verified identity for the same GUID", function()
+  local ledger = newLedger()
+  local resolved = { projectId = 18, regionId = 3, gameRealmId = 6941, realmName = "Realm",
+    characterGUID = "Player-6941-A", characterName = "Crafter", characterClassFile = "DRUID" }
+  local first = ledger.dimensionRows.session[assert(ledger:CreateSession(resolved))]
+  local function fallback(overrides)
+    local metadata = { projectId = 18, regionId = 3, realmName = "", characterGUID = "Player-6941-A",
+      characterName = "Crafter", characterClassFile = "DRUID" }
+    for field, value in pairs(overrides or {}) do metadata[field] = value end
+    return ledger.dimensionRows.session[assert(ledger:CreateSession(metadata))]
+  end
+  local reused = fallback()
+  assert(reused.realmDimensionId == first.realmDimensionId)
+  assert(reused.characterDimensionId == first.characterDimensionId)
+  assert(ledger.dimensionRows.realm[first.realmDimensionId].name == "Realm")
+  local function unresolved(session)
+    local realm = ledger.dimensionRows.realm[session.realmDimensionId]
+    assert(realm.identityScope == "session" and session.characterDimensionId ~= first.characterDimensionId)
+  end
+  unresolved(fallback({ regionId = 1 }))
+  unresolved(fallback({ projectId = 1 }))
+  unresolved(fallback({ characterGUID = "Player-6941-B" }))
+  unresolved(fallback({ realmName = "Another Realm" }))
+  unresolved(fallback({ characterClassFile = "MAGE" }))
+  assert(ledger:CreateSession({ projectId = 18, regionId = 3, gameRealmId = 7000, realmName = "Other",
+    characterGUID = "Player-6941-A", characterName = "Crafter", characterClassFile = "DRUID" }))
+  unresolved(fallback())
+  assert(Ledger.New(ledger.database))
+end)
+
 test("invalid result snapshots cannot partially persist a craft", function()
   local ledger = newLedger()
   local result = { operationID = 51, itemID = 100, resourcesReturned = {} }

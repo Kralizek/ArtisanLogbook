@@ -710,6 +710,12 @@ deduplication rather than merge same-name realms. Character keys use this realm
 scope plus GUID (or name when the GUID is absent). No GUID parsing, locale-to-
 region mapping, connected-realm inference, or external catalog is used.
 
+One exception narrows that fallback: when the game realm ID is unavailable but
+the project, region and GUID are known, a new session reuses the previously
+verified runtime realm and character of the same GUID, provided exactly one
+such realm exists in that project and region and no known realm name or class
+contradicts it. Otherwise the session-scoped fallback is kept.
+
 Earlier PR #10 name-only realm rows and their references remain unchanged when
 loaded; new scoped identities are not merged with them. Region/environment
 history cannot be reconstructed from a name. Cross-client
