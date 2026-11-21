@@ -228,6 +228,19 @@ public sealed class CompanionApiTests
         Assert.That(scopedSearch.GetProperty("data").GetProperty("gameContext").GetProperty("items")
             .GetProperty("nodes")[0].GetProperty("name").GetString(), Is.EqualTo("Herb"));
 
+        // A dimension needed at two query depths is dispatched twice; the request's DataLoader cache must
+        // still fetch it once (a missing cache made batch counts depend on executor timing).
+        int recipeCalls = dimensionsRepository.RecipeBatchCalls, recipeKeys = dimensionsRepository.RecipeBatchKeys;
+        JsonElement nested = await GraphQL(host, """
+            { characters(first: 10) { nodes { crafts(first: 1) { nodes {
+                recipe { name }
+                character { crafts(first: 1) { nodes { recipe { name } } } }
+            } } } } }
+            """);
+        Assert.That(nested.TryGetProperty("errors", out _), Is.False, nested.ToString());
+        Assert.That(dimensionsRepository.RecipeBatchKeys - recipeKeys, Is.EqualTo(1),
+            $"recipe fetched in {dimensionsRepository.RecipeBatchCalls - recipeCalls} batch(es)");
+
         int activityCalls = dimensionsRepository.ActivityBatchCalls;
         JsonElement activity = (await GraphQL(host, """
             query($gameId: ID!) {

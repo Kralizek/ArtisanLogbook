@@ -5,16 +5,28 @@ using GreenDonut;
 
 namespace ArtisanLogbook.Runtime.GraphQL;
 
-public sealed class CharacterCraftPageLoader(IBatchScheduler scheduler, ICraftHistoryRepository repository)
-    : BatchDataLoader<CharacterCraftPageRequest, CraftPage>(scheduler, new() { MaxBatchSize = 50 })
+internal static class DataLoaderBatching
+{
+    // Keep the request's injected options, including its shared promise cache, and only bound the batch size;
+    // fresh options gave each loader no request cache, so dimensions needed at several depths were refetched.
+    public static DataLoaderOptions Limit(DataLoaderOptions options, int maxBatchSize)
+    {
+        DataLoaderOptions limited = options.Copy();
+        limited.MaxBatchSize = maxBatchSize;
+        return limited;
+    }
+}
+
+public sealed class CharacterCraftPageLoader(IBatchScheduler scheduler, ICraftHistoryRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<CharacterCraftPageRequest, CraftPage>(scheduler, DataLoaderBatching.Limit(options, 50))
 {
     protected override Task<IReadOnlyDictionary<CharacterCraftPageRequest, CraftPage>> LoadBatchAsync(
         IReadOnlyList<CharacterCraftPageRequest> keys, CancellationToken cancellationToken) =>
         Task.FromResult(repository.CharacterPages(keys, cancellationToken));
 }
 
-public sealed class CharacterLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<CharacterIdentity>, CharacterDimension>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class CharacterLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<CharacterIdentity>, CharacterDimension>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<CharacterIdentity>, CharacterDimension>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<CharacterIdentity>> keys, CancellationToken cancellationToken) =>
@@ -22,8 +34,8 @@ public sealed class CharacterLoader(IBatchScheduler scheduler, IHistoryDimension
             repository.Characters(keys, cancellationToken).ToDictionary(x => new DimensionIdentity<CharacterIdentity>(x.Game, x.Identity)));
 }
 
-public sealed class RecipeLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<int>, RecipeDimension>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class RecipeLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<int>, RecipeDimension>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, RecipeDimension>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken) =>
@@ -31,8 +43,8 @@ public sealed class RecipeLoader(IBatchScheduler scheduler, IHistoryDimensionRep
             repository.Recipes(keys, cancellationToken).ToDictionary(x => new DimensionIdentity<int>(x.Game, x.Id)));
 }
 
-public sealed class ProfessionLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<int>, ProfessionDimension>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class ProfessionLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<int>, ProfessionDimension>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, ProfessionDimension>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken) =>
@@ -40,8 +52,8 @@ public sealed class ProfessionLoader(IBatchScheduler scheduler, IHistoryDimensio
             repository.Professions(keys, cancellationToken).ToDictionary(x => new DimensionIdentity<int>(x.Game, x.Id)));
 }
 
-public sealed class ItemLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<int>, ItemDimension>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class ItemLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<int>, ItemDimension>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, ItemDimension>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken) =>
@@ -49,8 +61,8 @@ public sealed class ItemLoader(IBatchScheduler scheduler, IHistoryDimensionRepos
             repository.Items(keys, cancellationToken).ToDictionary(x => new DimensionIdentity<int>(x.Game, x.Id)));
 }
 
-public sealed class ExpansionLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<string>, ExpansionDimension>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class ExpansionLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<string>, ExpansionDimension>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<string>, ExpansionDimension>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<string>> keys, CancellationToken cancellationToken) =>
@@ -58,8 +70,8 @@ public sealed class ExpansionLoader(IBatchScheduler scheduler, IHistoryDimension
             repository.Expansions(keys, cancellationToken).ToDictionary(x => new DimensionIdentity<string>(x.Game, x.Key)));
 }
 
-public sealed class RecipeSlotLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<int>, IReadOnlyList<RecipeReagentSlot>>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class RecipeSlotLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<int>, IReadOnlyList<RecipeReagentSlot>>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, IReadOnlyList<RecipeReagentSlot>>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken)
@@ -73,8 +85,8 @@ public sealed class RecipeSlotLoader(IBatchScheduler scheduler, IHistoryDimensio
     }
 }
 
-public sealed class RecipeActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<int>, DimensionActivity<int>>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class RecipeActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<int>, DimensionActivity<int>>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, DimensionActivity<int>>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken) =>
@@ -82,8 +94,8 @@ public sealed class RecipeActivityLoader(IBatchScheduler scheduler, IHistoryDime
             repository.RecipeActivity(keys, cancellationToken).ToDictionary(x => x.Identity));
 }
 
-public sealed class ProfessionActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<int>, DimensionActivity<int>>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class ProfessionActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<int>, DimensionActivity<int>>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<int>, DimensionActivity<int>>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<int>> keys, CancellationToken cancellationToken) =>
@@ -91,8 +103,8 @@ public sealed class ProfessionActivityLoader(IBatchScheduler scheduler, IHistory
             repository.ProfessionActivity(keys, cancellationToken).ToDictionary(x => x.Identity));
 }
 
-public sealed class CharacterActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository)
-    : BatchDataLoader<DimensionIdentity<CharacterIdentity>, DimensionActivity<CharacterIdentity>>(scheduler, new() { MaxBatchSize = 500 })
+public sealed class CharacterActivityLoader(IBatchScheduler scheduler, IHistoryDimensionRepository repository, DataLoaderOptions options)
+    : BatchDataLoader<DimensionIdentity<CharacterIdentity>, DimensionActivity<CharacterIdentity>>(scheduler, DataLoaderBatching.Limit(options, 500))
 {
     protected override Task<IReadOnlyDictionary<DimensionIdentity<CharacterIdentity>, DimensionActivity<CharacterIdentity>>> LoadBatchAsync(
         IReadOnlyList<DimensionIdentity<CharacterIdentity>> keys, CancellationToken cancellationToken) =>
