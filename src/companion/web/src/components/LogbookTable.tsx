@@ -1,5 +1,5 @@
 import { Badge, Group, Table, Text, Tooltip } from "@mantine/core";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { rawQuantity } from "./analysisFormat";
 import { CharacterName } from "./CharacterName";
 import { QualityBadge } from "./EntityTooltip";
@@ -26,12 +26,17 @@ function outputTotal(craft: LogbookCraft) {
   return { total, missing };
 }
 
+type ItemTooltipRenderer = (
+  itemId: string,
+  children: ReactElement,
+) => ReactNode;
+
 function Result({
   craft,
-  linkTo,
+  itemTooltip,
 }: {
   craft: LogbookCraft;
-  linkTo: (destination: string, children: ReactNode) => ReactNode;
+  itemTooltip: ItemTooltipRenderer;
 }) {
   if (craft.outputs == null)
     return (
@@ -53,9 +58,12 @@ function Result({
           key={`${output.item.id}-${output.quality ?? ""}-${index}`}
           className="logbook-output"
         >
-          {linkTo(
-            `items/${encodeURIComponent(output.item.id)}`,
-            output.item.name ?? `Item ${output.item.blizzardId}`,
+          {/* Not a link: as in the addon, clicking the result opens the craft. */}
+          {itemTooltip(
+            output.item.id,
+            <span className="logbook-item">
+              {output.item.name ?? `Item ${output.item.blizzardId}`}
+            </span>,
           )}
           <QualityBadge quality={output.quality} />
           {several && (
@@ -80,12 +88,15 @@ export function LogbookTable({
   showRecipe = true,
   highlights,
   linkTo,
+  itemTooltip = (_itemId, children) => children,
   onOpen,
 }: {
   crafts: LogbookCraft[];
   showRecipe?: boolean;
   highlights: boolean;
   linkTo: (destination: string, children: ReactNode) => ReactNode;
+  /** Wraps an output item name with its hover details. */
+  itemTooltip?: ItemTooltipRenderer;
   /** Opens a craft when its row is clicked outside a link, as in the addon. */
   onOpen?: (craft: LogbookCraft) => void;
 }) {
@@ -138,7 +149,7 @@ export function LogbookTable({
                   </Table.Td>
                 )}
                 <Table.Td>
-                  <Result craft={craft} linkTo={linkTo} />
+                  <Result craft={craft} itemTooltip={itemTooltip} />
                 </Table.Td>
                 <Table.Td>
                   <CharacterName
@@ -186,18 +197,33 @@ export function LogbookTable({
                 {highlights && (
                   <Table.Td>
                     <Group gap={4} wrap="wrap">
-                      {craftHighlights(craft).map((highlight) => (
-                        <Badge
-                          key={highlight.kind}
-                          size="sm"
-                          variant="outline"
-                          className="craft-highlight"
-                          data-kind={highlight.kind}
-                          title={highlight.detail}
-                        >
-                          {highlight.label}
-                        </Badge>
-                      ))}
+                      {craftHighlights(craft).map((highlight) =>
+                        // Concentration is a cost the player chose, not a
+                        // proc, so it reads as plain text beside proc chips.
+                        highlight.kind === "concentration" ? (
+                          <Text
+                            key={highlight.kind}
+                            span
+                            size="xs"
+                            c="dimmed"
+                            className="craft-concentration"
+                            title={highlight.detail}
+                          >
+                            {highlight.label}
+                          </Text>
+                        ) : (
+                          <Badge
+                            key={highlight.kind}
+                            size="sm"
+                            variant="outline"
+                            className="craft-highlight"
+                            data-kind={highlight.kind}
+                            title={highlight.detail}
+                          >
+                            {highlight.label}
+                          </Badge>
+                        ),
+                      )}
                     </Group>
                   </Table.Td>
                 )}

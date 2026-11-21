@@ -15,7 +15,7 @@ export function craftHighlights(craft: LogbookCraft): Highlight[] {
   if (craft.concentrationSpent && craft.concentrationSpent > 0)
     highlights.push({
       kind: "concentration",
-      label: `Concentration ${craft.concentrationSpent.toLocaleString()}`,
+      label: `${craft.concentrationSpent.toLocaleString()} Concentration used`,
       detail: `${craft.concentrationSpent.toLocaleString()} Concentration spent`,
     });
   if (craft.multicraftBonus && craft.multicraftBonus > 0)

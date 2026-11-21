@@ -521,6 +521,7 @@ h1 {
 }
 .logbook-table a {
   color: inherit;
+  font-size: inherit;
   font-weight: 400;
 }
 .logbook-table a:hover,
@@ -532,6 +533,9 @@ h1 {
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+.logbook-item {
+  cursor: pointer;
 }
 .logbook-output,
 .logbook-recipe {
@@ -550,8 +554,9 @@ h1 {
   letter-spacing: 0;
   background: color-mix(in srgb, var(--highlight) 14%, transparent);
 }
-.craft-highlight[data-kind="concentration"] {
-  --highlight: #4f8fd6;
+.craft-concentration {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .craft-highlight[data-kind="multicraft"] {
   --highlight: #d08a2e;

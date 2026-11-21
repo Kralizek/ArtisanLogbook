@@ -101,7 +101,7 @@ it("highlights only recorded positive outcomes", () => {
       }),
     ).map((highlight) => highlight.label),
   ).toEqual([
-    "Concentration 40",
+    "40 Concentration used",
     "Multicraft +3",
     "Ingenuity +20",
     "Resourcefulness 3",
@@ -138,6 +138,8 @@ it("totals outputs and marks a partial or unrecorded quantity", () => {
     ),
   ).toBeInTheDocument();
   expect(within(several).getByText("Item 2")).toBeInTheDocument();
+  // Output items are not links: clicking one opens the craft via its row.
+  expect(within(several).queryByRole("link", { name: "Alpha" })).toBeNull();
   expect(within(several).getByText("× 3")).toBeInTheDocument();
   expect(within(unrecorded).getByText("Not recorded")).toBeInTheDocument();
   expect(

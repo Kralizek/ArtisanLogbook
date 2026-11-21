@@ -2396,6 +2396,11 @@ function Crafts({
               crafts={page.nodes}
               showRecipe={!embedded}
               highlights={game.project === 1}
+              itemTooltip={(itemId, children) => (
+                <ItemTooltip game={game} id={itemId}>
+                  {children}
+                </ItemTooltip>
+              )}
               onOpen={(craft) =>
                 navigate(
                   investigationLink(
