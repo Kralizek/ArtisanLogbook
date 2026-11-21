@@ -504,6 +504,23 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
+    public void AddonItemRowReagentQualityIdentifiesAnUnallocatedTier()
+    {
+        CraftObservation craft = MakeCraft("tier", "1") with { Reagents = [new(44, 2, null), new(45, 1, null)] };
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(History(craft), options: new(Now));
+        Assert.That(written.IsSuccessful, Is.True);
+        LuaDocument document = LuaDataParser.Parse(written.Content!);
+        LuaTable items = (LuaTable)((LuaTable)((LuaTable)document.Assignments["ArtisanLogbookDB"]!)
+            .Get("dimensions")!).Get("items")!;
+        LuaTable item = items.Values.OfType<LuaTable>().First(row => Equals(row.Get("id"), 45d));
+        item["reagentQuality"] = 2d;
+
+        SavedVariablesImportResult parsed = SavedVariablesReader.Parse(LuaDataParser.Serialize(document));
+        Assert.That(parsed.IsSuccessful, Is.True, string.Join(Environment.NewLine, parsed.Diagnostics));
+        Assert.That(parsed.History!.Dimensions.Items.Single(row => row.Id == 45).Quality, Is.EqualTo(2));
+    }
+
+    [Test]
     public void MultiOutputDetailDoesNotHideAggregateOnlyCraftsInTheSameBucket()
     {
         CraftObservation craft = MakeCraft("coverage", "1") with

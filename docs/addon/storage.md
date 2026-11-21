@@ -664,10 +664,22 @@ known names but missing quality scales or unknown expansions. Core intersects
 `TRADE_SKILL_SHOW`; it does not query every historical recipe at login or
 create dimensions for unobserved recipes from that list.
 
-Item names come from `GetItemInfo(itemID)` for output, selected, and returned
-reagent IDs after their facts or requests commit. Uncached items remain
-identity-only until a matching successful `GET_ITEM_INFO_RECEIVED` event or
-trade-skill refresh retries them; unrelated events are ignored. Unavailable or
+Item names come from the first cached name among `C_Item.GetItemInfo`,
+`C_Item.GetItemNameByID` and the global `GetItemInfo` for output, selected, and
+returned reagent IDs after their facts or requests commit; clients differ in
+which of these they expose. An uncached item is requested with
+`C_Item.RequestLoadItemDataByID` where available and remains identity-only
+until a matching successful `GET_ITEM_INFO_RECEIVED` event or trade-skill
+refresh retries it; unrelated events are ignored. At login Core retries up to
+200 item rows that still have no name.
+
+Item rows may also carry `reagentQuality`: the crafting-reagent quality tier the
+client reports through `C_TradeSkillUI.GetItemReagentQualityByItemInfo`. Core
+records it for allocated items and for every schematic candidate of a submitted
+request, so a reagent tier that was never allocated keeps its quality. At login
+it fills the field for item rows that lack it and creates item rows for
+historical requirement candidates; no craft or request is rewritten. Clients
+without the API leave the field absent. Unavailable or
 failed metadata queries never reject a valid craft. Enrichment preserves
 identities and rebuilds affected detailed
 craft filter indexes; durable series and character profession choices resolve

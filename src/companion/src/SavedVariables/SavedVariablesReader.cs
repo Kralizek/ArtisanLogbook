@@ -923,8 +923,8 @@ public static class SavedVariablesReader
                 qualities.TryGetValue(itemId, out int quality) ? quality : null));
     }
 
-    // The client reports reagent quality per item ID on every allocation; a restored ledger carries it on
-    // the item row. Contradictory reports leave the quality unknown rather than choosing one.
+    // The client reports reagent quality per item ID on allocations and on addon item rows; a restored ledger
+    // carries it on the item row. Contradictory reports leave the quality unknown rather than choosing one.
     private static IReadOnlyDictionary<int, int> ReadItemQualities(
         IReadOnlyList<LuaTable> items,
         IReadOnlyList<LuaTable> requests,
@@ -938,7 +938,13 @@ public static class SavedVariablesReader
             if (!reported.TryGetValue(id, out HashSet<int>? values)) reported.Add(id, values = []);
             values.Add(value);
         }
-        foreach (LuaTable item in items) Report(item.Get("id"), item.Get("companionQuality"));
+        foreach (LuaTable item in items)
+        {
+            // The addon records the client-reported tier on item rows, including schematic candidates that
+            // were never allocated; a Companion-written ledger carries it as companionQuality.
+            Report(item.Get("id"), item.Get("reagentQuality"));
+            Report(item.Get("id"), item.Get("companionQuality"));
+        }
         foreach (LuaTable request in requests)
             foreach (LuaTable allocation in Rows(request.Get("allocations")))
                 Report(allocation.Get("itemId"), allocation.Get("quality"));
