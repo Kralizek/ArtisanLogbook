@@ -47,6 +47,13 @@ public sealed class SanitizedRetailCaptureImportTests
                 AnalysisContribution allocated = potion.Inputs.Nodes.Single(x => x.Key == "236767");
                 Assert.That(allocated.Measure.MeasuredAttempts, Is.EqualTo("0"));
                 Assert.That(allocated.Measure.Quantity, Is.Null);
+
+                // Roles come from each craft's own evidence: schematic candidates are basic reagents and
+                // submitted finishing selections are finishing reagents.
+                // Crafts without role evidence do not contradict one that has it (236767 in craft 1031).
+                Assert.That(allocated.Role, Is.EqualTo(RecipeReagentType.Basic));
+                Assert.That(potion.Inputs.Nodes.Single(x => x.Key == "236949").Role, Is.EqualTo(RecipeReagentType.Basic));
+                Assert.That(potion.Inputs.Nodes.Single(x => x.Key == "247788").Role, Is.EqualTo(RecipeReagentType.Finishing));
             });
 
             // Reagent quality is reported per item ID on allocations. 236767 is only ever returned in this

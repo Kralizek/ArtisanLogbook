@@ -637,6 +637,8 @@ public static class SavedVariablesWriter
             }
             if (reagent.ReturnedQuantity is decimal returned)
                 Put(row, "returnedQuantity", returned);
+            if (reagent.Role is RecipeReagentType role)
+                Put(row, "companionRole", CraftReagentRoles.Name(role));
             yield return row;
         }
     }

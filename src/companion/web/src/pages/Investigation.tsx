@@ -65,6 +65,7 @@ import {
   RecipeConfigurationsDocument,
   RecipeInvestigationDocument,
   type CraftFilterInput,
+  type RecipeReagentType,
   type RecipeConfigurationsQuery,
   type RecipeInvestigationQuery,
 } from "../graphql/generated/graphql";
@@ -411,6 +412,63 @@ type BreakdownEntry = {
   quality?: number | null;
   measure: BreakdownMeasure;
 };
+
+const reagentRoles: [RecipeReagentType | null, string][] = [
+  ["BASIC", "Reagents"],
+  ["MODIFYING", "Optional reagents"],
+  ["FINISHING", "Finishing reagents"],
+  ["AUTOMATIC", "Automatic reagents"],
+  [null, "Role not recorded"],
+];
+
+/** Groups input contributions by the recipe slot role the contributing crafts identify. */
+function InputRankings({
+  game,
+  params,
+  heading,
+  entries,
+}: {
+  game: ActiveGame;
+  params: URLSearchParams;
+  heading: string;
+  entries: RecipeInvestigationQuery["analysis"]["inputs"];
+}) {
+  const groups = reagentRoles
+    .map(([role, label]) => ({
+      label,
+      nodes: entries.nodes.filter((row) => (row.role ?? null) === role),
+    }))
+    .filter((group) => group.nodes.length);
+  if (groups.length < 2)
+    return (
+      <Ranking
+        game={game}
+        params={params}
+        heading={heading}
+        entries={entries}
+        destination="items"
+        role="input"
+      />
+    );
+  return (
+    <Stack gap="lg">
+      {groups.map((group, i) => (
+        <Ranking
+          key={group.label}
+          game={game}
+          params={params}
+          heading={`${heading} · ${group.label}`}
+          entries={{
+            nodes: group.nodes,
+            truncated: i === groups.length - 1 && entries.truncated,
+          }}
+          destination="items"
+          role="input"
+        />
+      ))}
+    </Stack>
+  );
+}
 
 function MeasuredBreakdown({
   game,
@@ -1323,7 +1381,7 @@ function Recipe({
           )}
           <RecipeMetrics
             attempts={left.attempts}
-            recipe={left.recipes.nodes.find((row) => row.id === id)}
+            recipe={left.recipes.nodes[0]}
             retail={game.project === 1 && left.returns != null}
           />
           <Tabs
@@ -1341,7 +1399,6 @@ function Recipe({
               <Stack gap="md">
                 <Title order={2}>Outcome evidence</Title>
                 <RecipeOutcomes
-                  id={id}
                   left={left}
                   right={right}
                   retail={game.project === 1}
@@ -1413,13 +1470,11 @@ function Recipe({
                   destination="items"
                   role="output"
                 />
-                <Ranking
+                <InputRankings
                   game={game}
                   params={withFilters(params, { recipe: id })}
                   heading={left.inputMeasureLabel}
                   entries={left.inputs}
-                  destination="items"
-                  role="input"
                 />
                 {game.project === 1 && left.returns && (
                   <MeasuredBreakdown
@@ -1498,7 +1553,6 @@ function Recipe({
                 />
                 {right && (
                   <RecipeOutcomes
-                    id={id}
                     left={left}
                     right={right}
                     retail={game.project === 1}
@@ -1903,18 +1957,17 @@ function RecipeMetrics({
 }
 
 function RecipeOutcomes({
-  id,
   left,
   right,
   retail,
 }: {
-  id: string;
   left: RecipeInvestigationQuery["analysis"];
   right?: RecipeInvestigationQuery["analysis"];
   retail: boolean;
 }) {
   function rows(result: typeof left) {
-    const recipe = result.recipes.nodes.find((row) => row.id === id);
+    // The analysis is filtered to this recipe.
+    const recipe = result.recipes.nodes[0];
     return [
       { label: "Completed attempts", value: exact(result.attempts.attempts) },
       ...(recipe

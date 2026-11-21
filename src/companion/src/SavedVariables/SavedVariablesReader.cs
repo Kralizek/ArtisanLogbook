@@ -456,19 +456,40 @@ public static class SavedVariablesReader
                 (observedOutputs?.Any(output => output.Quantity is null) == true ? false : null);
 
             Dictionary<int, (long? Allocated, decimal? Returned, bool AllocatedSeen, bool ReturnedSeen)> reagentFacts = [];
+            // Explicitly recorded slot roles; contradictory reports for one item leave it unknown.
+            Dictionary<int, RecipeReagentType?> recordedRoles = [];
+            void RecordRole(LuaTable source, string field)
+            {
+                if (Integer(source.Get("itemId")) is not int itemId ||
+                    CraftReagentRoles.Parse(source.Get(field)) is not RecipeReagentType role)
+                    return;
+                recordedRoles[itemId] = recordedRoles.TryGetValue(itemId, out RecipeReagentType? existing) &&
+                    existing != role ? null : role;
+            }
             foreach (LuaTable groupCraft in group)
             {
                 long? sourceCraftId = Long(groupCraft.Get("id"));
                 if (sourceCraftId is not null && reagentsByCraft.TryGetValue(sourceCraftId.Value, out List<LuaTable>? sourceReagents))
                 {
                     foreach (LuaTable reagent in sourceReagents)
+                    {
                         AddReagent(reagentFacts, reagent, "allocatedQuantity", "returnedQuantity", diagnostics, location);
+                        RecordRole(reagent, "companionRole");
+                    }
+                    // The submitted request's allocations record which slot role each item filled.
+                    if (Long(groupCraft.Get("requestId")) is long roleRequestId &&
+                        requests.TryGetValue(roleRequestId, out LuaTable? roleRequest))
+                        foreach (LuaTable allocation in Rows(roleRequest.Get("allocations")))
+                            RecordRole(allocation, "reagentType");
                 }
                 else if (Long(groupCraft.Get("requestId")) is long linkedRequestId &&
                     requests.TryGetValue(linkedRequestId, out LuaTable? linkedRequest))
                 {
                     foreach (LuaTable allocation in Rows(linkedRequest.Get("allocations")))
+                    {
                         AddReagent(reagentFacts, allocation, "allocatedQuantity", "returnedQuantity", diagnostics, location);
+                        RecordRole(allocation, "reagentType");
+                    }
                     foreach (LuaTable fixedReagent in Rows(linkedRequest.Get("fixedReagents")))
                         AddReagent(reagentFacts, fixedReagent, "requiredQuantity", "returnedQuantity", diagnostics, location);
                 }
@@ -747,7 +768,7 @@ public static class SavedVariablesReader
                 ? null
                 : new CraftProvenance(sourceId, provenanceCraftId, operationId, requestId, sourceSessionId,
                     resourcefulnessEvidence);
-            crafts.Add(new CraftObservation(
+            crafts.Add(CraftReagentRoles.Assign(new CraftObservation(
                 craftIdentity,
                 game,
                 recordedAt,
@@ -769,7 +790,7 @@ public static class SavedVariablesReader
                 outputsComplete,
                 outputEvidence is null ? null : [outputEvidence],
                 configurationEvidence is null ? null : [configurationEvidence],
-                schematicEvidence));
+                schematicEvidence), recordedRoles));
             // Attribute only after the complete grouped observation has a canonical identity.
             for (int index = diagnosticStart; index < diagnostics.Count; index++)
                 if (diagnostics[index].Scope == SavedVariablesDiagnosticScope.Unattributed)

@@ -1093,6 +1093,70 @@ it("compares measured production, return quantities and output quality without a
   ).toBeInTheDocument();
 });
 
+it("groups recipe inputs by their recorded reagent slot role", async () => {
+  organization.preferences = [];
+  const input = (id: string, name: string, role: string | null) => ({
+    __typename: "AnalysisContributionGraph",
+    id,
+    name,
+    blizzardId: 1,
+    quality: null,
+    role,
+    measure: measure("12", "3"),
+  });
+  const summary = {
+    ...analysis("12", "sig-a"),
+    inputs: {
+      __typename: "AnalysisContributions",
+      nodes: [
+        input("basic", "Tranquility Bloom", "BASIC"),
+        input("finishing", "Multicraft Matrix", "FINISHING"),
+        input("unknown", "Mystery input", null),
+      ],
+      truncated: false,
+    },
+  };
+  const client = new ApolloClient({
+    cache: new InMemoryCache(),
+    dataMasking: false,
+    link: new MockLink([
+      mocks[0],
+      {
+        request: { query: RecipeInvestigationDocument, variables: a },
+        result: { data: { recipe, analysis: summary } },
+      },
+      mocks[4],
+    ]),
+  });
+  render(
+    <MantineProvider>
+      <ApolloProvider client={client}>
+        <MemoryRouter
+          initialEntries={["/retail/recipes/recipe-opaque?period=all"]}
+        >
+          <Routes>
+            <Route
+              path="/retail/recipes/:id"
+              element={<Investigation game={game} kind="recipe" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </ApolloProvider>
+    </MantineProvider>,
+  );
+  await userEvent.click(await screen.findByRole("tab", { name: "Reagents" }));
+  for (const [heading, item] of [
+    ["Gross allocated inputs · Reagents", "Tranquility Bloom"],
+    ["Gross allocated inputs · Finishing reagents", "Multicraft Matrix"],
+    ["Gross allocated inputs · Role not recorded", "Mystery input"],
+  ])
+    expect(
+      within(
+        (await screen.findByRole("heading", { name: heading })).parentElement!,
+      ).getByRole("link", { name: item }),
+    ).toBeInTheDocument();
+});
+
 it("keeps hidden recipe contributions in totals without displaying their discovery row", async () => {
   organization.preferences = [{ hidden: true, kind: "Recipe", entityId: 100 }];
   const summary = {

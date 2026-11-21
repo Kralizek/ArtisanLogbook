@@ -145,7 +145,9 @@ The supported schema contains:
   `useConcentration`. Optional quote fields are `concentrationCost`, `baseSkill`,
   `baseDifficulty`, and `craftingQuality`. Optional `allocations` contain
   positive-quantity quote selections: `dataSlotIndex`, item reference,
-  `allocatedQuantity` (including explicit zero selections), and observed `quality` when available. An absent
+  `allocatedQuantity` (including explicit zero selections), observed `quality` when available, and
+  `reagentType` (`basic`, `modifying`, `finishing` or `automatic`) when the
+  recipe schematic identifies the selection's slot role. An absent
   allocations list means no supported quote selection was captured. Schema 2
   adds optional `fixedReagents` (`dataSlotIndex`, item reference,
   `requiredQuantity`) read from the recipe schematic at submission, and

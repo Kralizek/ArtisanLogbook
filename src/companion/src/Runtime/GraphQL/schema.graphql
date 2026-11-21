@@ -136,6 +136,7 @@ type AnalysisContributionGraph {
   name: String
   blizzardId: Int
   quality: Int
+  role: RecipeReagentType
   measure: AnalysisMeasure!
   finishingAllocation: AnalysisMeasure
   resourceAllocation: AnalysisMeasure

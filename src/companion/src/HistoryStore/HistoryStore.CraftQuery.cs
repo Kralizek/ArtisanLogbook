@@ -160,9 +160,9 @@ public sealed partial class HistoryStore
         if (rows.Count == 0) return [];
         long[] keys = rows.Select(row => row.CraftKey).Distinct().ToArray();
         Dictionary<long, List<CraftReagent>> reagents = [];
-        foreach ((long CraftKey, int ItemId, long? Allocated, string? Returned) row in
-            transaction.Connection!.Query<(long, int, long?, string?)>("""
-                SELECT CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity FROM CraftReagent
+        foreach ((long CraftKey, int ItemId, long? Allocated, string? Returned, short? Role) row in
+            transaction.Connection!.Query<(long, int, long?, string?, short?)>("""
+                SELECT CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity, Role FROM CraftReagent
                 WHERE CraftKey IN $keys ORDER BY CraftKey, ItemId
                 """, new { keys }, transaction, buffered: false))
         {
@@ -170,7 +170,8 @@ public sealed partial class HistoryStore
             if (!reagents.TryGetValue(row.CraftKey, out List<CraftReagent>? items))
                 reagents.Add(row.CraftKey, items = []);
             items.Add(new(row.ItemId, row.Allocated, row.Returned is null
-                ? null : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture)));
+                ? null : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture),
+                row.Role is short role ? EnumValue<RecipeReagentType>(role, nameof(RecipeReagentType)) : null));
         }
         Dictionary<long, List<CraftOutput>> outputs = [];
         foreach ((long CraftKey, int ItemId, int? Quality, long? Quantity) row in

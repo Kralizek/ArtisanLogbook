@@ -14,6 +14,28 @@ public sealed partial class HistoryStore
 {
     public const int MaximumAnalysisRows = 100;
 
+    // Craft reagents of the selected crafts with their slot role: the role stored at import, otherwise derived from
+    // the same craft's retained evidence (crafts stored before roles were recorded). Submitted finishing
+    // selections are finishing (2); schematic candidate lists and fixed reagents are basic (1); an item identified
+    // as both stays unknown.
+    private const string RoledReagents = """
+        (SELECT r.*, COALESCE(r.Role, CASE
+                WHEN derived.Finishing AND NOT derived.Basic THEN 2
+                WHEN derived.Basic AND NOT derived.Finishing THEN 1 END) ResolvedRole
+            FROM CraftReagent r JOIN selected s ON s.CraftKey = r.CraftKey,
+            LATERAL (SELECT
+                r.Role IS NULL AND EXISTS (SELECT 1 FROM json_each(s.ConfigurationEvidenceJson) e
+                    WHERE regexp_matches(regexp_extract(json_extract_string(e.value, '$.payload'),
+                        '(?:\["finishingReagents"\]|finishingReagents)\s*=\s*\{(?:\s*\[\d+\]\s*=\s*\{[^{}]*\}\s*,?)*\}', 0),
+                        '(?:\["itemID"\]|itemID)\s*=\s*' || r.ItemId || '(?:[^0-9]|$)')) Finishing,
+                r.Role IS NULL AND EXISTS (SELECT 1 FROM json_each(s.RecipeSchematicEvidenceJson) e
+                    WHERE regexp_matches(json_extract_string(e.value, '$.payload'),
+                            '(?:\["candidateItemIDs"\]|candidateItemIDs)\s*=\s*\{[^{}]*[={,]\s*' || r.ItemId || '\s*[,}]')
+                        OR regexp_matches(json_extract_string(e.value, '$.payload'),
+                            '(?:\["itemId"\]|itemId)\s*=\s*' || r.ItemId || '(?:[^0-9]|$)')) Basic
+            ) derived)
+        """;
+
     // Recorded output quality, only when every contributing output row reports the same one.
     private const string OutputQuality = """
         , CASE WHEN COUNT(o.Quality) = COUNT(*) AND COUNT(DISTINCT o.Quality) = 1
@@ -462,12 +484,16 @@ public sealed partial class HistoryStore
                 CAST(COUNT(DISTINCT c.CraftKey) FILTER (WHERE {quantity} IS NULL OR
                     c.{(production ? "OutputsComplete" : "InputsComplete")} IS DISTINCT FROM TRUE) AS VARCHAR) IncompleteAttempts,
                 CAST(SUM(CAST({quantity} AS HUGEINT)) AS VARCHAR) Quantity
-                {(production ? OutputQuality : ", MAX(d.Quality) Quality")}
-            FROM selected c JOIN {table} o USING (CraftKey)
+                {(production ? OutputQuality : """
+                    , MAX(d.Quality) Quality,
+                    CASE WHEN COUNT(DISTINCT o.ResolvedRole) = 1 THEN MIN(o.ResolvedRole) END "Role"
+                    """)}
+            FROM selected c JOIN {(production ? table : RoledReagents)} o USING (CraftKey)
             LEFT JOIN Item d ON d.ContextKey = c.ContextKey AND d.ItemId = o.ItemId
             GROUP BY o.ItemId ORDER BY SUM(CAST({quantity} AS HUGEINT)) DESC NULLS LAST, o.ItemId
             LIMIT $Limit
-            """, r => new(r.Key!, r.Measure(), r.Name, r.Quality));
+            """, r => new(r.Key!, r.Measure(), r.Name, r.Quality,
+                Role: r.Role is short role ? EnumValue<RecipeReagentType>(role, nameof(RecipeReagentType)) : null));
 
         AnalysisCollection<AnalysisContribution> ReturnContributions() =>
             Page<ContributionRow, AnalysisContribution>("""
@@ -582,6 +608,7 @@ public sealed partial class HistoryStore
         public string? Key { get; set; }
         public string? Name { get; set; }
         public int? Quality { get; set; }
+        public short? Role { get; set; }
     }
     private sealed class RelationRow : MeasureRow
     {

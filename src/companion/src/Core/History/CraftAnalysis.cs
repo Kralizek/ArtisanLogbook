@@ -9,9 +9,11 @@ public sealed record AnalysisQuery(CraftQuery Crafts, AnalysisGranularity Granul
 /// <summary>Exact decimal values are strings; null means that no measured quantity exists.</summary>
 public sealed record AnalysisMeasure(string Attempts, string MeasuredAttempts, string IncompleteAttempts, string? Quantity);
 
+/// <summary>Role is the input item's recipe slot role when the contributing crafts that identify one agree;
+/// crafts without role evidence do not contradict it.</summary>
 public sealed record AnalysisContribution(string Key, AnalysisMeasure Measure, string? Name = null,
     int? Quality = null, AnalysisPopulationMetrics? Metrics = null, AnalysisMeasure? FinishingAllocation = null,
-    AnalysisMeasure? ResourceAllocation = null, AnalysisMeasure? ReturnedItem = null);
+    AnalysisMeasure? ResourceAllocation = null, AnalysisMeasure? ReturnedItem = null, RecipeReagentType? Role = null);
 
 public sealed record AnalysisBucket(string Start, AnalysisMeasure Measure);
 

@@ -90,7 +90,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             ],
             ["CraftIdentity"] = ["IdentityOrigin", "IdentityObservation", "CraftKey"],
             ["CraftOutput"] = ["CraftKey", "ItemId", "QualityKey", "Quality", "Quantity"],
-            ["CraftReagent"] = ["CraftKey", "ItemId", "AllocatedQuantity", "ReturnedQuantity"],
+            ["CraftReagent"] = ["CraftKey", "ItemId", "AllocatedQuantity", "ReturnedQuantity", "Role"],
             ["Expansion"] = ["ContextKey", "ExpansionKey", "Name"],
             ["GameContext"] = ["ContextKey", "ProjectId", "ProgressionTrack"],
             ["Item"] = ["ContextKey", "ItemId", "Name", "Quality"],
@@ -103,6 +103,13 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             ],
             ["__HistoryStoreMigration"] = ["Version", "AppliedAt"]
         };
+
+    // Nullable columns added within the current schema version. A writer adds missing ones in place, so existing
+    // history is kept; their rows read as not recorded.
+    private static readonly (string Table, string Column, string Type)[] AdditiveColumns =
+    [
+        ("CraftReagent", "Role", "SMALLINT")
+    ];
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -604,7 +611,8 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             }
         }
         if (RequiredColumns.Any(pair => !columns.TryGetValue(pair.Key, out HashSet<string>? names) ||
-            pair.Value.Any(column => !names.Contains(column))))
+            pair.Value.Any(column => !names.Contains(column) &&
+                !AdditiveColumns.Any(additive => additive.Table == pair.Key && additive.Column == column))))
             throw new InvalidOperationException(
                 IncompleteSchemaMessage);
 
@@ -643,6 +651,20 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         }
 
         ValidateInitializedSchema(_writerConnection);
+        AddMissingAdditiveColumns(_writerConnection);
+    }
+
+    private static void AddMissingAdditiveColumns(DuckDBConnection connection)
+    {
+        foreach ((string table, string column, string type) in AdditiveColumns)
+        {
+            bool present = connection.ExecuteScalar<long>("""
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_schema = 'main' AND table_name = $table AND column_name = $column
+                """, new { table, column }) > 0;
+            if (!present)
+                connection.Execute($"ALTER TABLE {table} ADD COLUMN {column} {type}");
+        }
     }
 
     private static long UserObjectCount(DbConnection connection)
@@ -785,6 +807,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 ItemId INTEGER NOT NULL,
                 AllocatedQuantity BIGINT,
                 ReturnedQuantity VARCHAR,
+                Role SMALLINT,
                 PRIMARY KEY (CraftKey, ItemId),
                 FOREIGN KEY (CraftKey) REFERENCES CraftIdentity(CraftKey)
             )
@@ -932,8 +955,9 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
     {
         List<CraftReagent> reagents = [];
         cancellationToken.ThrowIfCancellationRequested();
-        foreach ((int ItemId, long? Allocated, string? Returned) row in transaction.Connection!.Query<(int, long?, string?)>("""
-            SELECT ItemId, AllocatedQuantity, ReturnedQuantity
+        foreach ((int ItemId, long? Allocated, string? Returned, short? Role) row in
+            transaction.Connection!.Query<(int, long?, string?, short?)>("""
+            SELECT ItemId, AllocatedQuantity, ReturnedQuantity, Role
             FROM CraftReagent
             WHERE CraftKey = $craftKey
             ORDER BY ItemId
@@ -945,7 +969,8 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 row.Allocated,
                 row.Returned is null
                     ? null
-                    : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture)));
+                    : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture),
+                row.Role is short role ? EnumValue<RecipeReagentType>(role, nameof(RecipeReagentType)) : null));
             cancellationToken.ThrowIfCancellationRequested();
         }
         cancellationToken.ThrowIfCancellationRequested();
@@ -1035,14 +1060,15 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         foreach (CraftReagent reagent in observation.Reagents ?? [])
             transaction.Connection!.Execute("""
                 INSERT INTO CraftReagent (
-                    CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity
-                ) VALUES ($craftKey, $ItemId, $AllocatedQuantity, $ReturnedQuantity)
+                    CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity, Role
+                ) VALUES ($craftKey, $ItemId, $AllocatedQuantity, $ReturnedQuantity, $Role)
                 """, new
             {
                 craftKey,
                 reagent.ItemId,
                 reagent.AllocatedQuantity,
-                ReturnedQuantity = reagent.ReturnedQuantity?.ToString(CultureInfo.InvariantCulture)
+                ReturnedQuantity = reagent.ReturnedQuantity?.ToString(CultureInfo.InvariantCulture),
+                Role = reagent.Role is null ? (short?)null : (short)reagent.Role.Value
             }, transaction);
 
         foreach (CraftOutput output in observation.Outputs ?? [])

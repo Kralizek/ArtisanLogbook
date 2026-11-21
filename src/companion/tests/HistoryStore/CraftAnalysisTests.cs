@@ -1,6 +1,8 @@
 using ArtisanLogbook.History;
 using ArtisanLogbook.HistoryStore;
 
+using DuckDB.NET.Data;
+
 using NUnit.Framework;
 
 using Store = ArtisanLogbook.HistoryStore.HistoryStore;
@@ -58,6 +60,63 @@ public sealed class CraftAnalysisTests
         Assert.That(store.WriteDimensions(new([], [new(Retail, 10), new(Retail, 11), new(Retail, 12)], [], [], []))
             .IsSuccessful, Is.True);
         Assert.That(store.QueryRecipes(new(Retail, CraftedOnly: true)).Items.Select(x => x.Id), Is.EqualTo(new[] { 10, 11 }));
+    }
+
+    [Test]
+    public void InputRolesPreferStoredRolesAndDeriveOlderOnesFromRetainedEvidence()
+    {
+        string databasePath = Path.Combine(_directory, "history.duckdb");
+        const string schematic = """CraftRecipeSchematicEvidence = {["craft"]={["reagentRequirements"]={[1]={["candidateItemIDs"]={[1]=60,[2]=61},["source"]="schematic"}}}}""";
+        const string configuration = """CraftConfigurationEvidence = {["conditions"]={["finishingReagents"]={[1]={["itemID"]=70,["quantity"]=1}}}}""";
+        using (Store store = new(databasePath))
+        {
+            CraftObservation older = Craft("older", Retail, DateTimeOffset.Parse("2026-02-01T12:00:00Z")) with
+            {
+                Reagents = [new(60, 1, null), new(61, 2, null), new(70, 1, null), new(90, 1, null)],
+                RecipeSchematicEvidence = [new("source", schematic)],
+                ConfigurationEvidence = [new("source", null, configuration)]
+            };
+            CraftObservation newer = Craft("newer", Retail, DateTimeOffset.Parse("2026-02-02T12:00:00Z")) with
+            {
+                Reagents = [new(61, 1, null), new(70, 1, null, RecipeReagentType.Basic), new(80, 1, null, RecipeReagentType.Finishing)]
+            };
+            Assert.That(store.Write(older).IsSuccessful && store.Write(newer).IsSuccessful, Is.True);
+        }
+
+        // A database written before roles were recorded has no Role column; opening it adds the column in place.
+        using (DuckDBConnection connection = new($"Data Source={databasePath}"))
+        {
+            connection.Open();
+            using DuckDBCommand drop = connection.CreateCommand();
+            drop.CommandText = "ALTER TABLE CraftReagent DROP COLUMN Role";
+            drop.ExecuteNonQuery();
+        }
+        using Store reopened = new(databasePath);
+        Assert.That(reopened.ReadStatus().TotalCraftCount, Is.EqualTo(2));
+        Dictionary<string, RecipeReagentType?> roles = reopened.Analyze(new(new(Game: Retail))).Inputs.Nodes
+            .ToDictionary(x => x.Key, x => x.Role);
+        Assert.That(roles, Is.EquivalentTo(new Dictionary<string, RecipeReagentType?>
+        {
+            ["60"] = RecipeReagentType.Basic,
+            ["61"] = RecipeReagentType.Basic,
+            ["70"] = RecipeReagentType.Finishing,
+            ["80"] = null,
+            ["90"] = null
+        }), "Older crafts derive roles from retained evidence; rows without evidence do not contradict them");
+
+        CraftObservation stored = Craft("stored", Retail, DateTimeOffset.Parse("2026-02-03T12:00:00Z")) with
+        {
+            Reagents = [new(80, 1, null, RecipeReagentType.Finishing)]
+        };
+        CraftObservation contradicting = Craft("contradicting", Retail, DateTimeOffset.Parse("2026-02-04T12:00:00Z")) with
+        {
+            Reagents = [new(60, 1, null, RecipeReagentType.Finishing)]
+        };
+        Assert.That(reopened.Write(stored).IsSuccessful && reopened.Write(contradicting).IsSuccessful, Is.True);
+        Assert.That(reopened.Read(stored.Identity)!.Reagents!.Single().Role, Is.EqualTo(RecipeReagentType.Finishing));
+        roles = reopened.Analyze(new(new(Game: Retail))).Inputs.Nodes.ToDictionary(x => x.Key, x => x.Role);
+        Assert.That(roles["80"], Is.EqualTo(RecipeReagentType.Finishing), "stored role");
+        Assert.That(roles["60"], Is.Null, "contradicting roles leave the item unknown");
     }
 
     [Test]

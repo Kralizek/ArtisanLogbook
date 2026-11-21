@@ -54,6 +54,7 @@ fragment InvestigationItemContributions on AnalysisContributions {
     name
     blizzardId
     quality
+    role
     measure {
       ...InvestigationMeasure
     }
@@ -134,8 +135,9 @@ query ActivityInvestigation(
   }
 }
 
-# Returns are null exactly when the game does not support them; this request
-# stays within the API field limit by not repeating that as supportsReturns.
+# This request stays within the API field limit: returns are null exactly when the
+# game does not support them (no supportsReturns), and the recipe-filtered
+# analysis has at most this recipe's node (no recipe node id).
 query RecipeInvestigation(
   $context: String!
   $id: ID!
@@ -169,7 +171,6 @@ query RecipeInvestigation(
     }
     recipes {
       nodes {
-        id
         outputs {
           ...InvestigationMeasure
         }

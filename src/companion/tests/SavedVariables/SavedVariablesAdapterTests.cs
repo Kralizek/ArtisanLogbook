@@ -926,7 +926,37 @@ public class SavedVariablesAdapterTests
             }
             """);
         Assert.That(imported.IsSuccessful, Is.True);
-        Assert.That(imported.History!.Crafts.Single().Reagents, Is.EqualTo(new[] { new CraftReagent(44, 3, null) }));
+        Assert.That(imported.History!.Crafts.Single().Reagents, Is.EqualTo(new[] { new CraftReagent(44, 3, null, RecipeReagentType.Basic) }));
+    }
+
+    [Test]
+    public void AllocationReagentTypesSetCraftReagentRolesAlongsideReagentRows()
+    {
+        SavedVariablesImportResult imported = SavedVariablesReader.Parse("""
+            return { schemaVersion = 4, schemaIdentity = "ArtisanLogbookLedger",
+              crafts = { { id = 1, sessionId = 1, requestId = 7, recipeId = 123, timestamp = 1800000000 } },
+              reagents = {
+                { craftId = 1, itemId = 44, allocatedQuantity = 3 },
+                { craftId = 1, itemId = 45, allocatedQuantity = 1 },
+                { craftId = 1, itemId = 46, allocatedQuantity = 1 }
+              },
+              requests = { { id = 7, sessionId = 1, recipeId = 123, allocations = {
+                { dataSlotIndex = 1, itemId = 44, allocatedQuantity = 3, reagentType = "basic" },
+                { dataSlotIndex = 2, itemId = 45, allocatedQuantity = 1, reagentType = "finishing" },
+                { dataSlotIndex = 3, itemId = 46, allocatedQuantity = 1, reagentType = "unrecognized" }
+              } } },
+              dimensions = {
+                characters = { { id = 1, key = "project:1:region:3:realm:1309:guid:Player-A" } },
+                sessions = { { id = 1, key = "session", projectId = 1, characterDimensionId = 1 } }
+              }
+            }
+            """);
+        Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
+        Assert.That(imported.History!.Crafts.Single().Reagents!.Select(reagent => (reagent.ItemId, reagent.Role)),
+            Is.EqualTo(new (int, RecipeReagentType?)[]
+            {
+                (44, RecipeReagentType.Basic), (45, RecipeReagentType.Finishing), (46, null)
+            }));
     }
 
     [Test]

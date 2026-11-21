@@ -118,6 +118,8 @@ public sealed class AnalysisContributionGraph(GameContext game, string kind, Ana
     public int? BlizzardId => kind == "item" && int.TryParse(value.Key,
         NumberStyles.None, CultureInfo.InvariantCulture, out int itemId) ? itemId : null;
     public int? Quality => value.Quality;
+    /// <summary>Recipe slot role of an input item when the contributing crafts that identify one agree.</summary>
+    public RecipeReagentType? Role => value.Role;
     public AnalysisMeasure Measure => value.Measure;
     public AnalysisMeasure? FinishingAllocation => kind == "character" ? value.FinishingAllocation : null;
     public AnalysisMeasure? ResourceAllocation => kind == "character" ? value.ResourceAllocation : null;

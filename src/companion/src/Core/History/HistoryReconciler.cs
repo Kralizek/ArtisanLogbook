@@ -115,7 +115,8 @@ public static class HistoryReconciler
                     AllocatedQuantity = Optional($"Reagents[{reagent.ItemId}].AllocatedQuantity",
                         existing.AllocatedQuantity, reagent.AllocatedQuantity),
                     ReturnedQuantity = Optional($"Reagents[{reagent.ItemId}].ReturnedQuantity",
-                        existing.ReturnedQuantity, reagent.ReturnedQuantity)
+                        existing.ReturnedQuantity, reagent.ReturnedQuantity),
+                    Role = Optional($"Reagents[{reagent.ItemId}].Role", existing.Role, reagent.Role)
                 };
             }
             if (byItem.Count != b.Reagents.Select(x => x.ItemId).Distinct().Count())

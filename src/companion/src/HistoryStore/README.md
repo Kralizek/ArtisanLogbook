@@ -347,7 +347,7 @@ The initial schema persists every current `CraftDimensions` collection, canonica
 | `RecipeReagent` | A recipe schematic slot identified by context, recipe, data-slot type, and data-slot index. Slot type, UI slot index, reagent type, requiredness, quantity, and candidate item IDs retain unknown values independently. Candidate IDs are stored as a deterministic JSON array. |
 | `CraftIdentity` | Canonical `(IdentityOrigin, IdentityObservation)` identity and an internal immutable `CraftKey`. |
 | `Craft` | Mutable craft attributes, context, character/recipe IDs, recorded timestamp, tri-state outcomes/completeness, and versioned provenance/evidence JSON. |
-| `CraftReagent` | Craft × item allocations and returned quantities. Returned decimals are invariant text to preserve .NET decimal precision and scale. |
+| `CraftReagent` | Craft × item allocations, returned quantities and the nullable slot `Role` (C01 `RecipeReagentType`) identified by that craft's own evidence. Returned decimals are invariant text to preserve .NET decimal precision and scale. |
 | `CraftOutput` | Craft × item × quality output facts, including nullable quality and quantity. |
 
 `CraftIdentity` keeps C01/C02 identity separate from the database surrogate. `Craft` holds the mutable payload and references the immutable identity key; reagent and output rows have physical foreign keys to that key. This avoids DuckDB's limitation that a referenced parent row cannot be updated: the store can transactionally replace child facts and enrich `Craft` without changing the referenced identity. Insert and enrichment failures roll back the parent, dimensions, and all child facts. Tests verify FK rejection of orphan children and rollback after child insertion failures.
@@ -383,7 +383,12 @@ Status supports only the current schema; no old-schema read fallback is provided
 `new HistoryStore(path, readOnly: true)` opens only an existing file, requesting
 DuckDB's `READ_ONLY` access mode (subject to the first-opener behavior above).
 It creates no parent directories or schema
-objects and runs no migrations. `ReadStatus()` returns schema version, canonical
+objects and runs no migrations. A writer adds nullable columns introduced
+within the current schema version in place (currently `CraftReagent.Role`), so
+existing history is kept; its rows read as not recorded. Analysis derives the
+role of such older rows from the same craft's retained schematic and
+configuration evidence, and an input item reports a role only when the
+contributing crafts that identify one agree. `ReadStatus()` returns schema version, canonical
 craft count, oldest/newest timestamps, and craft counts by project/progression
 track through aggregate SQL, without loading observation payloads or counting
 rollups. Timestamps are compared as instants, not lexicographically as stored

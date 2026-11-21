@@ -25,7 +25,7 @@ The adapter was grounded in the addon's actual storage implementation:
 | recipe `expansionDimensionId` → `dimensions.expansions` | Addon expansion dimension | Only a stable `skillLine:<id>` key is exposed as the canonical profession expansion |
 | `crafts[].outputItemId`, `outputQuantity`, `outputQuality` | Observed output | Mapped to the craft × item × quality grain |
 | schema-5 `crafts[].outputs` | Ordered callback observations on one logical attempt | Folded into craft × item × quality facts; ambiguous exact quantities remain null. Callback order, per-callback measurements/returns, timestamps and legacy IDs remain attached as source evidence |
-| `reagents[]` → craft and item IDs | Per-craft allocated/returned materials | Duplicate slots fold to craft × item; allocation and return stay independently nullable |
+| `reagents[]` → craft and item IDs | Per-craft allocated/returned materials | Duplicate slots fold to craft × item; allocation and return stay independently nullable. A reagent's slot role comes from an explicit addon allocation `reagentType` or Companion `companionRole`, otherwise from the same craft's schematic candidates/fixed reagents (basic) or submitted finishing selections (finishing); conflicting reports stay unknown |
 | `craftSeries`, `reagentSeries`, `resourcefulnessSets`, other `*Series` | Derived historical rollups | Used only to detect aggregate-only coverage; never turned into craft facts |
 | session version/build/capabilities, `configurations` | Operational metadata | Configuration references/snapshots are attached as source evidence for round trips; session build metadata remains unavailable and is never invented |
 

@@ -1642,6 +1642,22 @@ test("one submission snapshot links only its observed batch results", function()
   assert(assert(ledger:RecordResult({ operationID = 4 })).requestId == nil)
 end)
 
+test("allocations record their schematic slot role", function()
+  local ledger = newLedger()
+  local request = assert(ledger:SubmitCraft(456, 1, false, nil, {
+    { dataSlotIndex = 1, quantity = 3, reagent = { itemID = 101 } },
+    { dataSlotIndex = 2, quantity = 1, reagent = { itemID = 102 } },
+    { dataSlotIndex = 3, quantity = 1, reagent = { itemID = 103 } },
+  }, { slotRoles = { [1] = "basic", [2] = "finishing", [3] = "unrecognized" } }))
+  assert(request.allocations[1].reagentType == "basic")
+  assert(request.allocations[2].reagentType == "finishing")
+  assert(request.allocations[3].reagentType == nil)
+  local reloaded = assert(Ledger.New(ledger.database, { wall = function() return 1800000000 end }))
+  assert(reloaded.database.requests[1].allocations[2].reagentType == "finishing")
+  ledger.database.requests[1].allocations[1].reagentType = "bogus"
+  assert(Ledger.New(ledger.database, { wall = function() return 1800000000 end }) == nil)
+end)
+
 test("allocation snapshots reject zero slot and item IDs", function()
   local ledger = newLedger()
   local request = assert(ledger:SubmitCraft(456, 1, false, nil, {
