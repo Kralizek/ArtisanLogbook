@@ -130,6 +130,7 @@ export function App() {
               aria-label="Toggle navigation"
             />
             <Text fw={700} className="shell-brand">
+              <BrandCrest />
               Artisan Logbook{" "}
               <Text component="span" fw={400} c="dimmed">
                 Companion
@@ -420,5 +421,39 @@ export function App() {
     </EntityPreferencesProvider>
   ) : (
     shell
+  );
+}
+
+/** An original emblem: an open logbook on a bronze-edged shield. */
+function BrandCrest() {
+  return (
+    <svg
+      className="shell-brand-crest"
+      width="26"
+      height="30"
+      viewBox="0 0 26 30"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <defs>
+        <linearGradient id="crest-field" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#a6271c" />
+          <stop offset="1" stopColor="#5c0e08" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M13 1 L24 5 V14 C24 21 19 26 13 29 C7 26 2 21 2 14 V5 Z"
+        fill="url(#crest-field)"
+        stroke="#c9a24a"
+        strokeWidth="1.6"
+      />
+      <path
+        d="M6.5 10.5 C9 9.5 11 9.8 13 11.2 C15 9.8 17 9.5 19.5 10.5 V19.5 C17 18.6 15 18.9 13 20.2 C11 18.9 9 18.6 6.5 19.5 Z"
+        fill="#f3e3b8"
+        stroke="#7a5418"
+        strokeWidth="0.8"
+      />
+      <path d="M13 11.2 V20.2" stroke="#7a5418" strokeWidth="0.8" />
+    </svg>
   );
 }

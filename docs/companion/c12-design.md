@@ -17,10 +17,14 @@ remain valid. No external artwork or fonts are fetched.
 | Settings | Is collection working? Installations, effective monitoring, manual imports | Browser-led discovered installation choice | Import receipts/warnings and diagnostics; explicit restart boundaries |
 
 Pinned recipes live in an independently scrolling sidebar section. Settings
-remains anchored outside it. The shell uses warm charcoal framing, parchment
-content, antique gold selection and muted green activity. Major headings use a
-local serif fallback; dense content retains the readable system sans-serif.
-No copyrighted game artwork is redistributed or inferred from absent metadata.
+remains anchored outside it. The shell evokes the game's interface mood with
+CSS alone: a dark, bronze-edged frame around parchment (light) or night-stone
+(dark) pages, gold headings, crimson gold-edged primary buttons, framed panels
+with corner rivets, status-bar activity fills, in-game-style dark tooltips in
+both themes, and metallic quality-tier pips. Major headings use a local serif
+fallback; dense content retains the readable system sans-serif. The emblem is
+original; no game artwork, logos or fonts are redistributed or fetched, and
+nothing is inferred from absent metadata. Text keeps at least 4.5:1 contrast.
 
 Recipe comparison starts from a question: characters, finishing reagent,
 recorded buff, before/after, or custom. Guided choices write the same independent

@@ -24,7 +24,8 @@ export function QualityBadge({ quality }: { quality?: number | null }) {
       component="span"
       size="xs"
       variant="outline"
-      color="yellow"
+      className="quality-tier"
+      data-tier={quality}
       ml={4}
       style={{ flexShrink: 0, overflow: "visible" }}
     >
@@ -62,7 +63,9 @@ function EntityHoverCard({
       withinPortal
     >
       <HoverCard.Target>{children}</HoverCard.Target>
-      <HoverCard.Dropdown aria-label={label}>{content()}</HoverCard.Dropdown>
+      <HoverCard.Dropdown aria-label={label} className="game-tooltip">
+        {content()}
+      </HoverCard.Dropdown>
     </HoverCard>
   );
 }
@@ -97,7 +100,7 @@ function ItemDetails({
   return (
     <Stack gap={4}>
       <Group gap={4} wrap="nowrap">
-        <Text fw={600} size="sm">
+        <Text fw={600} size="sm" className="tooltip-title">
           {item.name ?? `Item ${item.blizzardId}`}
         </Text>
         <QualityBadge quality={item.quality} />
@@ -176,7 +179,7 @@ function RecipeDetails({
   return (
     <Stack gap={6}>
       <div>
-        <Text fw={600} size="sm">
+        <Text fw={600} size="sm" className="tooltip-title">
           {recipe.name ?? `Recipe ${recipe.blizzardId}`}
         </Text>
         {context && (

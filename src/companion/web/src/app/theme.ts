@@ -43,8 +43,8 @@ export const theme = createTheme({
   components: {
     Table: {
       defaultProps: {
-        stripedColor: "var(--mantine-color-default-hover)",
-        highlightOnHoverColor: "var(--mantine-color-default-border)",
+        stripedColor: "var(--table-stripe)",
+        highlightOnHoverColor: "var(--table-hover)",
       },
     },
     TableScrollContainer: {

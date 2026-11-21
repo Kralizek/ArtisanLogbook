@@ -2,17 +2,91 @@ body {
   margin: 0;
 }
 
+/* Journal palette. Light is a parchment quest log; dark is a profession frame
+   at night. The navigation frame stays dark in both, like the game's window
+   chrome around its pages. Everything is local CSS: no images or web fonts. */
+:root {
+  --frame-bg: #17120e;
+  --frame-bg-raised: #221b15;
+  --frame-text: #ece3d1;
+  --frame-bronze: #6b5326;
+  --frame-gold: #c9a24a;
+  --frame-gold-bright: #ffd870;
+  --panel-rivet: #b8913f;
+}
 :root[data-mantine-color-scheme="light"] {
-  --mantine-color-body: #f6f1e7;
-  --mantine-color-text: #30291f;
-  --mantine-color-default: #fcf8f0;
-  --mantine-color-default-hover: #eee5d4;
-  --mantine-color-default-border: #d7cbb7;
-  --mantine-color-dimmed: #706452;
+  --mantine-color-body: #efe3c6;
+  --mantine-color-text: #2b1e10;
+  --mantine-color-default: #f8f0dc;
+  --mantine-color-default-hover: #e8d9b4;
+  --mantine-color-default-border: #c2a46a;
+  --mantine-color-dimmed: #67522f;
+  --panel-bg: linear-gradient(180deg, #fbf5e6 0%, #f2e5c6 100%);
+  --panel-border: #b99a5c;
+  --panel-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 3px rgba(84, 56, 18, 0.18);
+  --panel-rivet: #8f6c2b;
+  --heading: #6a2a10;
+  --subheading: #4f3313;
+  --eyebrow: #7a4510;
+}
+:root[data-mantine-color-scheme="dark"] {
+  --mantine-color-body: #15110d;
+  --mantine-color-text: #ebe1cb;
+  --mantine-color-default: #211b15;
+  --mantine-color-default-hover: #2c241b;
+  --mantine-color-default-border: #5c4824;
+  --mantine-color-dimmed: #ab9b7e;
+  --panel-bg: linear-gradient(180deg, #261f17 0%, #1b1611 100%);
+  --panel-border: #5c4824;
+  --panel-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 214, 140, 0.08), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --heading: #f4c542;
+  --subheading: #e6cf98;
+  --eyebrow: #d9aa45;
+  color-scheme: dark;
+  scrollbar-color: #6b5326 transparent;
+}
+/* Mantine injects its scheme variables after this sheet; raise specificity so
+   links stay at 4.5:1 on the darker parchment. */
+html:root[data-mantine-color-scheme="light"] {
+  --mantine-color-anchor: #6a4a12;
+}
+body {
+  background-color: var(--mantine-color-body);
+  background-image: radial-gradient(
+    ellipse at 50% 0%,
+    rgba(255, 236, 190, 0.35),
+    transparent 55%
+  );
+  background-attachment: fixed;
+}
+[data-mantine-color-scheme="dark"] body {
+  background-image:
+    radial-gradient(
+      ellipse at 50% -10%,
+      rgba(201, 146, 60, 0.13),
+      transparent 60%
+    ),
+    radial-gradient(ellipse at 50% 120%, rgba(0, 0, 0, 0.5), transparent 60%);
 }
 
 .mantine-AppShell-header {
-  background: var(--mantine-color-body);
+  background-color: #ecdfbd;
+  background-image: linear-gradient(180deg, #f3e8cd 0%, #e6d4a8 100%);
+  border-bottom: 1px solid #a98a4c;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.5) inset,
+    0 2px 8px rgba(84, 56, 18, 0.15);
+}
+[data-mantine-color-scheme="dark"] .mantine-AppShell-header {
+  background-color: #1d1712;
+  background-image: linear-gradient(180deg, #221b15 0%, #17120e 100%);
+  border-bottom: 1px solid var(--frame-bronze);
+  box-shadow:
+    0 1px 0 rgba(201, 162, 74, 0.25),
+    0 3px 10px rgba(0, 0, 0, 0.5);
 }
 .shell-header {
   display: flex;
@@ -23,12 +97,23 @@ body {
   padding: 14px 24px;
 }
 .shell-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+  color: var(--heading);
+}
+.shell-brand-crest {
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
 }
 .mantine-AppShell-navbar {
-  background: #27231f;
-  color: #ece3d1;
-  border-color: #514638;
+  background: linear-gradient(180deg, #1f1914 0%, var(--frame-bg) 100%);
+  color: var(--frame-text);
+  border-color: var(--frame-bronze);
+  box-shadow: inset -1px 0 rgba(201, 162, 74, 0.18);
   --mantine-color-dimmed: #bfb19a;
 }
 .mantine-AppShell-navbar .mantine-NavLink-root {
@@ -36,12 +121,17 @@ body {
   border-radius: 3px;
 }
 .mantine-AppShell-navbar .mantine-NavLink-root:hover {
-  background: #3a3228;
+  background: rgba(222, 176, 72, 0.1);
 }
 .mantine-AppShell-navbar .mantine-NavLink-root[data-active] {
-  color: #f1d78f;
-  background: #453b2a;
-  box-shadow: inset 3px 0 #bd9a49;
+  color: var(--frame-gold-bright);
+  background: linear-gradient(
+    90deg,
+    rgba(222, 176, 72, 0.3) 0%,
+    rgba(222, 176, 72, 0.04) 100%
+  );
+  box-shadow: inset 3px 0 #e0b54f;
+  text-shadow: 0 1px 0 #000;
 }
 .mantine-AppShell-navbar .mantine-NavLink-label {
   overflow: hidden;
@@ -58,7 +148,7 @@ body {
   overflow-y: auto;
 }
 .nav-section {
-  color: #b9a884;
+  color: var(--frame-gold);
   text-transform: uppercase;
   font-size: 0.66rem;
   letter-spacing: 0.12em;
@@ -68,16 +158,173 @@ body {
   margin-top: 6px;
 }
 h1 {
-  color: var(--mantine-color-gold-7);
+  color: var(--heading);
+  letter-spacing: 0.01em;
 }
 [data-mantine-color-scheme="dark"] h1 {
-  color: var(--mantine-color-gold-3);
+  text-shadow:
+    0 1px 0 #000,
+    0 0 18px rgba(244, 197, 66, 0.2);
 }
-[data-mantine-color-scheme="dark"] .eyebrow {
-  color: var(--mantine-color-gold-3);
+.content h2,
+.content h3 {
+  color: var(--subheading);
 }
-.mantine-Card-root {
-  background: var(--mantine-color-default);
+/* Framed panels: a bronze edge with small corner rivets. */
+.mantine-Card-root,
+.scope-controls {
+  background-color: var(--mantine-color-default);
+  background-image:
+    radial-gradient(
+      circle at 6px 6px,
+      var(--panel-rivet) 0 1.5px,
+      transparent 2.2px
+    ),
+    radial-gradient(
+      circle at calc(100% - 6px) 6px,
+      var(--panel-rivet) 0 1.5px,
+      transparent 2.2px
+    ),
+    radial-gradient(
+      circle at 6px calc(100% - 6px),
+      var(--panel-rivet) 0 1.5px,
+      transparent 2.2px
+    ),
+    radial-gradient(
+      circle at calc(100% - 6px) calc(100% - 6px),
+      var(--panel-rivet) 0 1.5px,
+      transparent 2.2px
+    ),
+    var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+}
+.mantine-Popover-dropdown {
+  border-color: var(--panel-border);
+}
+
+/* Buttons: the primary action is a crimson, gold-edged button; secondary
+   actions are framed plates that warm to gold on hover. */
+.mantine-Button-root:is([data-variant="filled"], :not([data-variant])):not(
+    :disabled,
+    [data-disabled]
+  ) {
+  background: linear-gradient(180deg, #a6271c 0%, #7a150e 55%, #5c0e08 100%);
+  border: 1px solid var(--frame-gold);
+  color: var(--frame-gold-bright);
+  text-shadow: 0 1px 0 #000;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 200, 150, 0.28),
+    0 1px 2px rgba(0, 0, 0, 0.45);
+}
+.mantine-Button-root:is([data-variant="filled"], :not([data-variant])):not(
+    :disabled,
+    [data-disabled]
+  ):hover {
+  background: linear-gradient(180deg, #c0342a 0%, #8e1b12 55%, #6a120b 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 200, 150, 0.35),
+    0 0 8px rgba(255, 190, 80, 0.35);
+}
+.mantine-Button-root:is([data-variant="default"], [data-variant="light"]):not(
+    :disabled,
+    [data-disabled]
+  ) {
+  background: linear-gradient(180deg, #fbf4e3 0%, #ead9b0 100%);
+  border: 1px solid #a98a4c;
+  color: #4a2c0e;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+[data-mantine-color-scheme="dark"]
+  .mantine-Button-root:is([data-variant="default"], [data-variant="light"]):not(
+    :disabled,
+    [data-disabled]
+  ) {
+  background: linear-gradient(180deg, #30271d 0%, #1f1914 100%);
+  border-color: var(--frame-bronze);
+  color: #f0d98a;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 214, 140, 0.1),
+    0 1px 2px rgba(0, 0, 0, 0.45);
+}
+.mantine-Button-root:is([data-variant="default"], [data-variant="light"]):not(
+    :disabled,
+    [data-disabled]
+  ):hover {
+  border-color: var(--frame-gold);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 0 7px rgba(201, 162, 74, 0.45);
+}
+
+/* Dark-scheme filled badges use light shade-3 fills; white text was unreadable. */
+[data-mantine-color-scheme="dark"]
+  .mantine-Badge-root:is([data-variant="filled"], :not([data-variant])) {
+  color: #1b1611;
+}
+
+/* Item and recipe tooltips read like in-game tooltips in both themes. */
+.game-tooltip {
+  --mantine-color-text: #f4f1ea;
+  --mantine-color-dimmed: #bdb6a4;
+  --mantine-color-anchor: #ffd100;
+  color: #f4f1ea;
+  background: linear-gradient(180deg, #12142c, #05070f);
+  border: 1px solid #9ea3b5;
+  border-radius: 5px;
+  box-shadow:
+    0 0 0 1px #000,
+    0 8px 22px rgba(0, 0, 0, 0.55);
+}
+.game-tooltip .tooltip-title {
+  color: #ffd100;
+}
+
+/* Reagent quality tiers carry a metallic pip; the text keeps body contrast. */
+.quality-tier {
+  --tier: #b98a3e;
+  border-color: var(--tier);
+  color: inherit;
+  text-transform: none;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.quality-tier .mantine-Badge-label::before {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin: 0 0.4em 0.1em 0.05em;
+  vertical-align: middle;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #fff8 0%, var(--tier) 45%, #0006 100%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.quality-tier[data-tier="1"] {
+  --tier: #b0703a;
+}
+.quality-tier[data-tier="2"] {
+  --tier: #a9b4c2;
+}
+.quality-tier[data-tier="3"] {
+  --tier: #e2b33a;
+}
+.quality-tier[data-tier="4"] {
+  --tier: #4fb38a;
+}
+.quality-tier[data-tier="5"] {
+  --tier: #c77dff;
+}
+
+.mantine-Tabs-tab[data-active] {
+  color: var(--heading);
+  border-color: var(--frame-gold);
+}
+[data-mantine-color-scheme="dark"] .mantine-Tabs-tab[data-active] {
+  text-shadow: 0 0 10px rgba(244, 197, 66, 0.35);
+}
+.mantine-Tabs-list::before {
+  border-color: var(--panel-border);
 }
 .mantine-Input-input::placeholder {
   color: var(--mantine-color-dimmed);
@@ -90,6 +337,19 @@ h1 {
 .mantine-Table-th {
   font-size: 0.76rem;
   color: var(--mantine-color-dimmed);
+}
+.mantine-Table-thead {
+  background: var(--table-head);
+}
+:root[data-mantine-color-scheme="light"] {
+  --table-head: rgba(143, 108, 43, 0.12);
+  --table-stripe: rgba(143, 108, 43, 0.06);
+  --table-hover: rgba(143, 108, 43, 0.16);
+}
+:root[data-mantine-color-scheme="dark"] {
+  --table-head: rgba(0, 0, 0, 0.3);
+  --table-stripe: rgba(222, 176, 72, 0.04);
+  --table-hover: rgba(222, 176, 72, 0.12);
 }
 .mantine-Tabs-list {
   margin-bottom: 20px;
@@ -108,7 +368,7 @@ h1 {
 }
 
 .eyebrow {
-  color: var(--mantine-color-gold-7);
+  color: var(--eyebrow);
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -168,17 +428,20 @@ h1 {
   bottom: 0;
   min-width: 2px;
   max-width: 36px;
-  background: #638369;
+  /* A status-bar fill with a lit top edge. */
+  background: linear-gradient(180deg, #86b864 0%, #4f8137 55%, #3a6327 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 0 0 1px rgba(0, 0, 0, 0.25);
   border-radius: 2px 2px 0 0;
 }
 .activity-bar:hover,
 .activity-bar:focus-visible {
-  background: #44674c;
+  background: linear-gradient(180deg, #e8c25a 0%, #b88a2c 60%, #8a6219 100%);
 }
 .scope-controls {
-  padding: 12px;
+  padding: 12px 14px;
   border-radius: var(--mantine-radius-md);
-  background: var(--mantine-color-default-hover);
 }
 .scope-controls .mantine-Accordion-control {
   padding: 6px 0;
