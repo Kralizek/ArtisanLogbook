@@ -6,12 +6,18 @@ export type LogbookCraft =
 type Highlight = { kind: string; label: string; detail: string };
 
 /**
- * The addon's per-craft proc highlights: Multicraft bonus, Ingenuity and
- * Resourcefulness returns. Concentration spent has its own column. Only recorded positive outcomes show;
+ * The addon's per-craft highlights: Concentration used, Multicraft bonus,
+ * Ingenuity and Resourcefulness returns. Each carries a hover explanation. Only recorded positive outcomes show;
  * an unknown or false outcome leaves no highlight rather than claiming zero.
  */
 export function craftHighlights(craft: LogbookCraft): Highlight[] {
   const highlights: Highlight[] = [];
+  if (craft.concentrationSpent && craft.concentrationSpent > 0)
+    highlights.push({
+      kind: "concentration",
+      label: `Concentration used ${craft.concentrationSpent.toLocaleString()}`,
+      detail: `Spent ${craft.concentrationSpent.toLocaleString()} Concentration on this craft. This is a cost, not a proc; an Ingenuity proc refunds part of it.`,
+    });
   if (craft.multicraftBonus && craft.multicraftBonus > 0)
     highlights.push({
       kind: "multicraft",
@@ -22,7 +28,7 @@ export function craftHighlights(craft: LogbookCraft): Highlight[] {
     const refund = craft.appliedIngenuityRefund;
     highlights.push({
       kind: "ingenuity",
-      label: refund ? `Ingenuity +${refund.toLocaleString()}` : "Ingenuity",
+      label: refund ? `Ingenuity ${refund.toLocaleString()}` : "Ingenuity",
       detail: refund
         ? `Ingenuity refunded ${refund.toLocaleString()} Concentration`
         : "Ingenuity proc",

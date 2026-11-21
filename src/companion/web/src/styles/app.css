@@ -554,6 +554,9 @@ h1 {
   letter-spacing: 0;
   background: color-mix(in srgb, var(--highlight) 14%, transparent);
 }
+.craft-highlight[data-kind="concentration"] {
+  --highlight: #4f8fd6;
+}
 .craft-highlight[data-kind="multicraft"] {
   --highlight: #d08a2e;
 }

@@ -110,9 +110,6 @@ export function LogbookTable({
             <Table.Th>Character</Table.Th>
             {showRecipe && <Table.Th>Profession</Table.Th>}
             <Table.Th className="logbook-quantity">Qty</Table.Th>
-            {highlights && (
-              <Table.Th className="logbook-quantity">Concentration</Table.Th>
-            )}
             {highlights && <Table.Th>Highlights</Table.Th>}
             <Table.Th>Timestamp</Table.Th>
           </Table.Tr>
@@ -198,28 +195,28 @@ export function LogbookTable({
                   )}
                 </Table.Td>
                 {highlights && (
-                  // Concentration is a resource spent, not a proc: its own
-                  // aligned number keeps it apart from the proc chips.
-                  <Table.Td className="logbook-quantity">
-                    {craft.concentrationSpent && craft.concentrationSpent > 0
-                      ? craft.concentrationSpent.toLocaleString()
-                      : null}
-                  </Table.Td>
-                )}
-                {highlights && (
                   <Table.Td>
                     <Group gap={4} wrap="wrap">
                       {craftHighlights(craft).map((highlight) => (
-                        <Badge
+                        <Tooltip
                           key={highlight.kind}
-                          size="sm"
-                          variant="outline"
-                          className="craft-highlight"
-                          data-kind={highlight.kind}
-                          title={highlight.detail}
+                          label={highlight.detail}
+                          multiline
+                          w={260}
+                          withArrow
+                          events={{ hover: true, focus: true, touch: true }}
                         >
-                          {highlight.label}
-                        </Badge>
+                          <Badge
+                            size="sm"
+                            variant="outline"
+                            className="craft-highlight"
+                            data-kind={highlight.kind}
+                            tabIndex={0}
+                            aria-label={`${highlight.label}: ${highlight.detail}`}
+                          >
+                            {highlight.label}
+                          </Badge>
+                        </Tooltip>
                       ))}
                     </Group>
                   </Table.Td>
