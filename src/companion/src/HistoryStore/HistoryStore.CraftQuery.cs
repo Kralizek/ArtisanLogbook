@@ -24,11 +24,24 @@ public sealed partial class HistoryStore
             throw new ArgumentOutOfRangeException(nameof(first));
         if (query.Game is null && (query.Character is not null || query.RecipeId is not null ||
             query.ProfessionId is not null || query.ProfessionExpansionKey is not null ||
-            query.InputItemId is not null || query.OutputItemId is not null))
+            query.GameExpansionGroupKey is not null ||
+            query.InputItemId is not null || query.OutputItemId is not null ||
+            query.ReturnedItemId is not null || query.ItemId is not null ||
+            query.ConfigurationSignature is not null || query.BuffSpellId is not null ||
+            query.FinishingItemId is not null || query.AbsentBuffSpellId is not null ||
+            query.AbsentFinishingItemId is not null || query.AbsentInputItemId is not null))
             throw new ArgumentException("Dimension criteria require a game context.", nameof(query));
         if (query.RecipeId is <= 0 || query.ProfessionId is <= 0 ||
             query.InputItemId is <= 0 || query.OutputItemId is <= 0 ||
+            query.ReturnedItemId is <= 0 || query.ItemId is <= 0 ||
+            query.BuffSpellId is <= 0 || query.FinishingItemId is <= 0 ||
+            query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 || query.AbsentInputItemId is <= 0 ||
+            (query.ConfigurationSignature is not null &&
+                (query.ConfigurationSignature.Length != 64 ||
+                query.ConfigurationSignature.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))) ||
             (query.ProfessionExpansionKey is not null && string.IsNullOrWhiteSpace(query.ProfessionExpansionKey)) ||
+            (query.GameExpansionGroupKey is not null &&
+                GameExpansionGroups.MemberKeys(query.Game!, query.GameExpansionGroupKey) is null) ||
             query.From > query.To)
             throw new ArgumentException("Craft query criteria are invalid.", nameof(query));
         if (after is not null && after.Identity is null)
@@ -70,8 +83,20 @@ public sealed partial class HistoryStore
         AddFilter(query.RecipeId, " AND c.RecipeId = $RecipeId", "RecipeId");
         AddFilter(query.ProfessionId, " AND c.ProfessionId = $ProfessionId", "ProfessionId");
         AddFilter(query.ProfessionExpansionKey, " AND c.ProfessionExpansionKey = $ExpansionKey", "ExpansionKey");
+        AppendGameExpansionGroupFilter(sql, parameters, query.Game!, query.GameExpansionGroupKey);
         AddFilter(query.InputItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $InputItemId)", "InputItemId");
+        AppendAbsentInputSelection(query, sql, parameters);
         AddFilter(query.OutputItemId, " AND EXISTS (SELECT 1 FROM CraftOutput o WHERE o.CraftKey = c.CraftKey AND o.ItemId = $OutputItemId)", "OutputItemId");
+        AddFilter(query.ReturnedItemId, " AND EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $ReturnedItemId AND TRY_CAST(r.ReturnedQuantity AS DOUBLE) > 0)", "ReturnedItemId");
+        if (query.ItemId is int itemId)
+        {
+            sql.Append("""
+                 AND (EXISTS (SELECT 1 FROM CraftOutput o WHERE o.CraftKey = c.CraftKey AND o.ItemId = $ItemId)
+                   OR EXISTS (SELECT 1 FROM CraftReagent r WHERE r.CraftKey = c.CraftKey AND r.ItemId = $ItemId))
+                """);
+            parameters.Add("ItemId", itemId);
+        }
+        AppendConfigurationSelection(query, sql, parameters);
         if (query.Identity is not null)
         {
             sql.Append(" AND i.IdentityOrigin = $IdentityOrigin AND i.IdentityObservation = $IdentityObservation");
@@ -135,9 +160,9 @@ public sealed partial class HistoryStore
         if (rows.Count == 0) return [];
         long[] keys = rows.Select(row => row.CraftKey).Distinct().ToArray();
         Dictionary<long, List<CraftReagent>> reagents = [];
-        foreach ((long CraftKey, int ItemId, long? Allocated, string? Returned) row in
-            transaction.Connection!.Query<(long, int, long?, string?)>("""
-                SELECT CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity FROM CraftReagent
+        foreach ((long CraftKey, int ItemId, long? Allocated, string? Returned, short? Role) row in
+            transaction.Connection!.Query<(long, int, long?, string?, short?)>("""
+                SELECT CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity, Role FROM CraftReagent
                 WHERE CraftKey IN $keys ORDER BY CraftKey, ItemId
                 """, new { keys }, transaction, buffered: false))
         {
@@ -145,7 +170,8 @@ public sealed partial class HistoryStore
             if (!reagents.TryGetValue(row.CraftKey, out List<CraftReagent>? items))
                 reagents.Add(row.CraftKey, items = []);
             items.Add(new(row.ItemId, row.Allocated, row.Returned is null
-                ? null : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture)));
+                ? null : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture),
+                row.Role is short role ? EnumValue<RecipeReagentType>(role, nameof(RecipeReagentType)) : null));
         }
         Dictionary<long, List<CraftOutput>> outputs = [];
         foreach ((long CraftKey, int ItemId, int? Quality, long? Quantity) row in

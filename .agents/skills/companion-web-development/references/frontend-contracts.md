@@ -16,16 +16,23 @@ all other contexts use the canonical ID as their alias. Context-scoped REST
 resources live under `/api/v1/games/{context}`, and the backend is authoritative
 for resolving the complete context.
 
-Apollo's existing `__typename:id` identity uses opaque canonical IDs. Do not
-decode IDs or cursors or introduce a parallel identity. Connections are
+Apollo's existing `__typename:id` identity uses opaque canonical IDs for
+entities. Analysis contribution, recipe and configuration rows embed scoped
+measures and must not be normalized by their entity ID: the same ID can have
+different values across populations and item roles. Do not decode IDs or cursors
+or introduce a parallel identity. Connections are
 forward-only `nodes`/`pageInfo`, not full Relay; replace pages on Next and reset
 on Newest. Cursors are not frozen snapshots across imports. Respect bounded
 queries, existing DataLoaders and the documented remaining per-parent queries.
 
-Long and Decimal exceed JavaScript number precision; current generated mappings
-are not lossless. Do not perform precision-sensitive calculations with them.
-Keep safe-integer warnings for REST counts and unknown metadata/measurements
-distinct from zero. Recent history fetches use `network-only` on visits, page
-changes and explicit refresh but still populate Apollo's cache. Status refreshes
-after completed requests while visible; preserve cancellation, serialization,
-retry and redacted errors. `no-store` does not invalidate Apollo's cache.
+Long and Decimal exceed JavaScript number precision; generated mappings are not
+lossless. Use exact string-valued analytical aggregates for precision-sensitive
+quantities and preserve safe-integer warnings for REST counts. Keep unknown
+metadata and measurements distinct from zero.
+
+Analytical destinations are context-qualified and keep investigation scope in
+the URL. A related link inherits compatible scope; context-wide search starts an
+independent investigation. Status updates independently. Detailed analysis
+retains results until explicit refresh, indicating relevant changes without
+claiming a durable snapshot. Preserve cancellation, context isolation, retry and
+redacted errors. `no-store` does not invalidate Apollo's cache.

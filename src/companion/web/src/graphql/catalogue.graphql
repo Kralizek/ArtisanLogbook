@@ -1,0 +1,96 @@
+query RecipeCatalogue(
+  $context: String!
+  $search: String
+  $after: String
+  $profession: ID
+  $craftedOnly: Boolean!
+) {
+  game(context: $context) {
+    recipes(
+      first: 50
+      search: $search
+      after: $after
+      profession: $profession
+      craftedOnly: $craftedOnly
+    ) {
+      nodes {
+        id
+        blizzardId
+        name
+        profession {
+          name
+        }
+        expansion {
+          name
+        }
+        activity {
+          craftCount
+          lastRecordedAt
+        }
+      }
+      pageInfo {
+        endCursor
+        hasNextPage
+      }
+    }
+  }
+}
+
+query ItemCatalogue($context: String!, $search: String, $after: String) {
+  game(context: $context) {
+    items(first: 50, search: $search, after: $after) {
+      nodes {
+        id
+        blizzardId
+        name
+        quality
+      }
+      pageInfo {
+        endCursor
+        hasNextPage
+      }
+    }
+  }
+}
+
+query InheritedRecipe($context: String!, $id: ID!) {
+  contextRecipe(context: $context, id: $id) {
+    id
+    name
+    blizzardId
+  }
+}
+
+query IdentityCatalogue($context: String!) {
+  game(context: $context) {
+    id
+    characters(first: 100) {
+      nodes {
+        id
+        name
+        classFile
+        activity {
+          craftCount
+          lastRecordedAt
+        }
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+    professions(first: 100) {
+      nodes {
+        id
+        name
+        blizzardId
+        activity {
+          craftCount
+          lastRecordedAt
+        }
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+  }
+}

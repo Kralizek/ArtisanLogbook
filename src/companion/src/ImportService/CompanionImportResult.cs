@@ -36,4 +36,10 @@ public sealed record CompanionImportResult(
 
     /// <summary>Committed outcomes keyed by canonical observation identity, never source-local ID.</summary>
     public IReadOnlyList<CraftWriteResult> Observations { get; init; } = [];
+
+    /// <summary>Distinct context-qualified recipe IDs in the accepted source crafts; null unless the import succeeded.</summary>
+    public int? DistinctRecipeCount { get; init; }
+
+    /// <summary>Contexts represented by accepted source crafts; null unless the import succeeded.</summary>
+    public IReadOnlyList<GameContext>? GameContexts { get; init; }
 }

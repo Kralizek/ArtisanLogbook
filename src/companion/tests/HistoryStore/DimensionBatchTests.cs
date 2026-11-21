@@ -79,6 +79,12 @@ public sealed class DimensionBatchTests
                     Is.EqualTo(new[] { dimensions.Items[0] }));
                 Assert.That(store.QueryItems(new(retail, Search: "%_")).Items,
                     Is.EqualTo(new[] { dimensions.Items[1] }));
+                Assert.That(store.QueryItems(new(retail, Search: " #11 ")).Items,
+                    Is.EqualTo(new[] { new ItemDimension(retail, 11) }));
+                Assert.That(store.QueryRecipes(new(retail, Search: "1")).Items,
+                    Is.EqualTo(new[] { dimensions.Recipes[0] }));
+                Assert.That(store.QueryItems(new(retail, Search: "99999999999")).Items, Is.Empty);
+                Assert.That(store.QueryRecipes(new(retail, CraftedOnly: true)).Items, Is.Empty);
                 Assert.That(store.QueryExpansions(retail).Items, Is.EqualTo(dimensions.Expansions));
                 Assert.That(store.ReadGameContexts([retail, forever, new(GameProject.MistsClassic)]),
                     Is.EquivalentTo(new[] { retail, forever }));

@@ -97,7 +97,7 @@ public sealed class CompanionSettingsTests
         {
             Assert.That(CompanionSettings.CurrentVersion, Is.EqualTo(1));
             Assert.That(settings.Monitoring.Enabled, Is.True);
-            Assert.That(settings.Monitoring.ReconciliationIntervalSeconds, Is.EqualTo(60));
+            Assert.That(settings.Monitoring.ReconciliationIntervalSeconds, Is.EqualTo(3600));
             Assert.That(settings.Http.PreferredPort, Is.EqualTo(48721));
             Assert.That(File.ReadAllText(_store.FilePath), Is.EqualTo(json));
         });

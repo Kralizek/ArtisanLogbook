@@ -34,6 +34,9 @@ internal static class CompanionApiHosting
         services.AddDataLoader<ExpansionLoader>();
         services.AddDataLoader<ItemLoader>();
         services.AddDataLoader<RecipeSlotLoader>();
+        services.AddDataLoader<RecipeActivityLoader>();
+        services.AddDataLoader<ProfessionActivityLoader>();
+        services.AddDataLoader<CharacterActivityLoader>();
         services.AddGraphQLServer(maxAllowedRequestSize: LocalApiSecurityMiddleware.MaxGraphQLBodyBytes)
             .AddQueryType<HistoryQuery>()
             .AddErrorFilter<HistoryErrorFilter>(provider => new(

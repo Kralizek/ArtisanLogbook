@@ -225,6 +225,7 @@ public static class SavedVariablesReader
         List<RecipeDimension> recipeDimensions = [];
         List<ProfessionDimension> professionDimensions = [];
         List<ItemDimension> itemDimensions = [];
+        IReadOnlyDictionary<int, int> itemQualities = ReadItemQualities(itemRows, requestRows, reagentRows, diagnostics);
         List<ExpansionDimension> canonicalExpansions = [];
         HashSet<(GameContext, string)> seenCharacters = [];
         HashSet<(GameContext, int)> seenRecipes = [];
@@ -238,7 +239,7 @@ public static class SavedVariablesReader
         void AddRecipeReagentSlot(RecipeReagentSlot slot, string location)
         {
             foreach (int candidateItemId in slot.CandidateItemIds ?? [])
-                AddItemDimension(slot.Game, candidateItemId, itemRows, itemDimensions, seenItems);
+                AddItemDimension(slot.Game, candidateItemId, itemRows, itemQualities, itemDimensions, seenItems);
             var key = (slot.Game, slot.RecipeId, slot.DataSlotType, slot.DataSlotIndex);
             if (recipeReagentSlots.TryGetValue(key, out List<RecipeReagentSlot>? observations))
             {
@@ -455,19 +456,40 @@ public static class SavedVariablesReader
                 (observedOutputs?.Any(output => output.Quantity is null) == true ? false : null);
 
             Dictionary<int, (long? Allocated, decimal? Returned, bool AllocatedSeen, bool ReturnedSeen)> reagentFacts = [];
+            // Explicitly recorded slot roles; contradictory reports for one item leave it unknown.
+            Dictionary<int, RecipeReagentType?> recordedRoles = [];
+            void RecordRole(LuaTable source, string field)
+            {
+                if (Integer(source.Get("itemId")) is not int itemId ||
+                    CraftReagentRoles.Parse(source.Get(field)) is not RecipeReagentType role)
+                    return;
+                recordedRoles[itemId] = recordedRoles.TryGetValue(itemId, out RecipeReagentType? existing) &&
+                    existing != role ? null : role;
+            }
             foreach (LuaTable groupCraft in group)
             {
                 long? sourceCraftId = Long(groupCraft.Get("id"));
                 if (sourceCraftId is not null && reagentsByCraft.TryGetValue(sourceCraftId.Value, out List<LuaTable>? sourceReagents))
                 {
                     foreach (LuaTable reagent in sourceReagents)
+                    {
                         AddReagent(reagentFacts, reagent, "allocatedQuantity", "returnedQuantity", diagnostics, location);
+                        RecordRole(reagent, "companionRole");
+                    }
+                    // The submitted request's allocations record which slot role each item filled.
+                    if (Long(groupCraft.Get("requestId")) is long roleRequestId &&
+                        requests.TryGetValue(roleRequestId, out LuaTable? roleRequest))
+                        foreach (LuaTable allocation in Rows(roleRequest.Get("allocations")))
+                            RecordRole(allocation, "reagentType");
                 }
                 else if (Long(groupCraft.Get("requestId")) is long linkedRequestId &&
                     requests.TryGetValue(linkedRequestId, out LuaTable? linkedRequest))
                 {
                     foreach (LuaTable allocation in Rows(linkedRequest.Get("allocations")))
+                    {
                         AddReagent(reagentFacts, allocation, "allocatedQuantity", "returnedQuantity", diagnostics, location);
+                        RecordRole(allocation, "reagentType");
+                    }
                     foreach (LuaTable fixedReagent in Rows(linkedRequest.Get("fixedReagents")))
                         AddReagent(reagentFacts, fixedReagent, "requiredQuantity", "returnedQuantity", diagnostics, location);
                 }
@@ -623,14 +645,14 @@ public static class SavedVariablesReader
 
             List<CraftReagent> normalizedReagents = observedReagents?.ToList() ?? [];
             foreach (CraftReagent reagent in normalizedReagents)
-                AddItemDimension(game, reagent.ItemId, itemRows, itemDimensions, seenItems);
+                AddItemDimension(game, reagent.ItemId, itemRows, itemQualities, itemDimensions, seenItems);
             foreach (CraftOutput output in observedOutputs ?? [])
-                AddItemDimension(game, output.ItemId, itemRows, itemDimensions, seenItems);
+                AddItemDimension(game, output.ItemId, itemRows, itemQualities, itemDimensions, seenItems);
             foreach (CraftOutputObservation observation in outputEvidenceCallbacks ?? [])
             {
-                AddItemDimension(game, observation.Output.ItemId, itemRows, itemDimensions, seenItems);
+                AddItemDimension(game, observation.Output.ItemId, itemRows, itemQualities, itemDimensions, seenItems);
                 foreach (CraftReagent returned in observation.Returns)
-                    AddItemDimension(game, returned.ItemId, itemRows, itemDimensions, seenItems);
+                    AddItemDimension(game, returned.ItemId, itemRows, itemQualities, itemDimensions, seenItems);
             }
             if (recipeId is > 0)
             {
@@ -746,7 +768,7 @@ public static class SavedVariablesReader
                 ? null
                 : new CraftProvenance(sourceId, provenanceCraftId, operationId, requestId, sourceSessionId,
                     resourcefulnessEvidence);
-            crafts.Add(new CraftObservation(
+            crafts.Add(CraftReagentRoles.Assign(new CraftObservation(
                 craftIdentity,
                 game,
                 recordedAt,
@@ -768,7 +790,7 @@ public static class SavedVariablesReader
                 outputsComplete,
                 outputEvidence is null ? null : [outputEvidence],
                 configurationEvidence is null ? null : [configurationEvidence],
-                schematicEvidence));
+                schematicEvidence), recordedRoles));
             // Attribute only after the complete grouped observation has a canonical identity.
             for (int index = diagnosticStart; index < diagnostics.Count; index++)
                 if (diagnostics[index].Scope == SavedVariablesDiagnosticScope.Unattributed)
@@ -913,11 +935,51 @@ public static class SavedVariablesReader
         GameContext game,
         int itemId,
         IReadOnlyList<LuaTable> source,
+        IReadOnlyDictionary<int, int> qualities,
         ICollection<ItemDimension> result,
         ISet<(GameContext, int)> seen)
     {
         if (seen.Add((game, itemId)))
-            result.Add(new(game, itemId, FindNatural(source, itemId)?.Get("name") as string));
+            result.Add(new(game, itemId, FindNatural(source, itemId)?.Get("name") as string,
+                qualities.TryGetValue(itemId, out int quality) ? quality : null));
+    }
+
+    // The client reports reagent quality per item ID on allocations and on addon item rows; a restored ledger
+    // carries it on the item row. Contradictory reports leave the quality unknown rather than choosing one.
+    private static IReadOnlyDictionary<int, int> ReadItemQualities(
+        IReadOnlyList<LuaTable> items,
+        IReadOnlyList<LuaTable> requests,
+        IReadOnlyList<LuaTable> reagents,
+        ICollection<SavedVariablesDiagnostic> diagnostics)
+    {
+        Dictionary<int, HashSet<int>> reported = [];
+        void Report(object? itemId, object? quality)
+        {
+            if (Integer(itemId) is not int id || id <= 0 || Integer(quality) is not int value || value <= 0) return;
+            if (!reported.TryGetValue(id, out HashSet<int>? values)) reported.Add(id, values = []);
+            values.Add(value);
+        }
+        foreach (LuaTable item in items)
+        {
+            // The addon records the client-reported tier on item rows, including schematic candidates that
+            // were never allocated; a Companion-written ledger carries it as companionQuality.
+            Report(item.Get("id"), item.Get("reagentQuality"));
+            Report(item.Get("id"), item.Get("companionQuality"));
+        }
+        foreach (LuaTable request in requests)
+            foreach (LuaTable allocation in Rows(request.Get("allocations")))
+                Report(allocation.Get("itemId"), allocation.Get("quality"));
+        foreach (LuaTable reagent in reagents) Report(reagent.Get("itemId"), reagent.Get("quality"));
+
+        Dictionary<int, int> result = [];
+        foreach ((int itemId, HashSet<int> values) in reported)
+        {
+            if (values.Count == 1) result.Add(itemId, values.Single());
+            else diagnostics.Add(new(SavedVariablesDiagnosticSeverity.Warning, "conflicting-item-quality",
+                "ArtisanLogbookDB.requests.allocations.quality",
+                $"Item {itemId} was reported with different reagent qualities; its quality remains unknown."));
+        }
+        return result;
     }
 
     private static void AddRecipeDimension(

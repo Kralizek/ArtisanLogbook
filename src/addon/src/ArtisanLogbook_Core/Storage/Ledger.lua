@@ -333,6 +333,9 @@ end
 Ledger.GrainKey = grainKey
 Ledger.CopyObservation = copyValue
 
+-- Recipe slot roles an allocation may record (Enum.CraftingReagentType names).
+local reagentRoles = { basic = true, modifying = true, finishing = true, automatic = true }
+
 local references = {
   series = { characterDimensionId = "character", recipeId = "recipe" },
   returnedReagent = { characterDimensionId = "character", recipeId = "recipe", itemId = "item" },
@@ -782,7 +785,8 @@ local function validateDatabase(data, version)
           (allocation.inputTotalComplete ~= nil and (not v2 or
             (not v3 and allocation.inputTotalComplete ~= true) or
             (v3 and type(allocation.inputTotalComplete) ~= "boolean"))) or
-          (allocation.quality ~= nil and not isGameId(allocation.quality)) then
+          (allocation.quality ~= nil and not isGameId(allocation.quality)) or
+          (allocation.reagentType ~= nil and not reagentRoles[allocation.reagentType]) then
         return nil, "request allocation is invalid"
       end
       ok, reason = validateReferences("allocation", allocation, ids)
@@ -2131,6 +2135,8 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
     request[field] = quote and observedNumber(quote[field]) or nil
   end
   local allocations, selectionsComplete = {}, true
+  local slotRoles = type(snapshot.inputs) == "table" and type(snapshot.inputs.slotRoles) == "table" and
+    snapshot.inputs.slotRoles or {}
   for _, selection in ipairs(snapshot.selections or {}) do
     local itemId = type(selection) == "table" and type(selection.reagent) == "table" and selection.reagent.itemID or nil
     if type(selection) == "table" and isInteger(selection.dataSlotIndex) and isGameId(itemId) and itemId > 0 and
@@ -2143,6 +2149,7 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
         itemId = observedItemId,
         allocatedQuantity = selection.quantity,
         quality = isGameId(selection.quality) and selection.quality or nil,
+        reagentType = reagentRoles[slotRoles[selection.dataSlotIndex]] and slotRoles[selection.dataSlotIndex] or nil,
       }
     elseif type(selection) ~= "table" or selection.quantity ~= 0 then
       selectionsComplete = false

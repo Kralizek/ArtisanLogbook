@@ -42,6 +42,7 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
     private readonly CancellationDisposable _shutdown = new();
     private readonly CancellationDisposable _persistenceDeadline = new();
     private readonly CompanionSettingsStore _settings;
+    private readonly CompanionSettingsMutationGate _mutations;
     private readonly SourceChangeFeed _feed;
     private readonly SourceReconciler _reconciler;
     private readonly MonitoringCheckpoints _checkpoints;
@@ -52,13 +53,14 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
 
     public SourceMonitor(
         CompanionRuntimeConfiguration configuration, CompanionSettingsStore settings, SourceChangeFeed feed,
-        SourceReconciler reconciler, MonitoringCheckpoints checkpoints, IHostApplicationLifetime lifetime,
+        SourceReconciler reconciler, MonitoringCheckpoints checkpoints, CompanionSettingsMutationGate mutations, IHostApplicationLifetime lifetime,
         IScheduler scheduler, ILogger<SourceMonitor> logger)
     {
         _state = new(configuration, configuration.EffectiveSettings.Monitoring.Enabled
             ? MonitoringPhase.Starting : MonitoringPhase.Disabled, null, ImmutableHashSet<string>.Empty);
         (_settings, _feed, _reconciler, _checkpoints, _lifetime, _scheduler, _logger) =
             (settings, feed, reconciler, checkpoints, lifetime, scheduler, logger);
+        _mutations = mutations;
     }
 
     public MonitoringStatus Read()
@@ -87,29 +89,30 @@ internal sealed class SourceMonitor : IHostedLifecycleService, IDisposable
 
     public void UpdatePreferences(MonitoringSettings preferences, CancellationToken cancellationToken)
     {
-        lock (_gate)
-        {
-            State current = _state;
-            if (_lifetime.ApplicationStopping.IsCancellationRequested || current.Phase is MonitoringPhase.Stopping or MonitoringPhase.Stopped)
-                throw new InvalidOperationException("The Companion is stopping.");
-            SettingsLoadResult loaded = _settings.Load();
-            if (!loaded.CanSave) throw new CompanionSettingsException(loaded.Diagnostic!);
-            CompanionSettings saved = (loaded.Settings ?? CompanionSettings.ForRoots()) with { Monitoring = preferences };
-            _settings.Save(saved, cancellationToken, loaded);
-            CompanionSettings runningPreferences = (current.Configuration.PersistedPreferences ?? CompanionSettings.ForRoots())
-                with
-            { Monitoring = preferences };
-            CompanionRuntimeConfiguration resolved = current.Configuration.WithPersistedPreferences(runningPreferences);
-            bool changed = !SameOptions(Options(current), Options(current with { Configuration = resolved }));
-            _state = current with
+        lock (_mutations.Gate)
+            lock (_gate)
             {
-                Configuration = resolved,
-                Phase = !resolved.EffectiveSettings.Monitoring.Enabled ? MonitoringPhase.Disabled :
-                    changed ? MonitoringPhase.Starting : current.Phase,
-                UnavailableWatchers = changed ? ImmutableHashSet<string>.Empty : current.UnavailableWatchers,
-                Failure = changed ? null : current.Failure
-            };
-        }
+                State current = _state;
+                if (_lifetime.ApplicationStopping.IsCancellationRequested || current.Phase is MonitoringPhase.Stopping or MonitoringPhase.Stopped)
+                    throw new InvalidOperationException("The Companion is stopping.");
+                SettingsLoadResult loaded = _settings.Load();
+                if (!loaded.CanSave) throw new CompanionSettingsException(loaded.Diagnostic!);
+                CompanionSettings saved = (loaded.Settings ?? CompanionSettings.ForRoots()) with { Monitoring = preferences };
+                _settings.Save(saved, cancellationToken, loaded);
+                CompanionSettings runningPreferences = (current.Configuration.PersistedPreferences ?? CompanionSettings.ForRoots())
+                    with
+                { Monitoring = preferences };
+                CompanionRuntimeConfiguration resolved = current.Configuration.WithPersistedPreferences(runningPreferences);
+                bool changed = !SameOptions(Options(current), Options(current with { Configuration = resolved }));
+                _state = current with
+                {
+                    Configuration = resolved,
+                    Phase = !resolved.EffectiveSettings.Monitoring.Enabled ? MonitoringPhase.Disabled :
+                        changed ? MonitoringPhase.Starting : current.Phase,
+                    UnavailableWatchers = changed ? ImmutableHashSet<string>.Empty : current.UnavailableWatchers,
+                    Failure = changed ? null : current.Failure
+                };
+            }
         _configurations.OnNext(Unit.Default);
     }
 

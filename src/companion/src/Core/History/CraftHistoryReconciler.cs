@@ -62,7 +62,12 @@ public static class CraftHistoryReconciler
 
         IReadOnlyList<ItemDimension> items = Join(
             "Item", left.Dimensions.Items, right.Dimensions.Items,
-            i => (i.Game, i.Id), (a, b) => a with { Name = Name(a.Name, b.Name) });
+            i => (i.Game, i.Id), (a, b) =>
+            {
+                if (a.Quality is not null && b.Quality is not null && a.Quality != b.Quality)
+                    Conflict("Item", a.Id.ToString(), nameof(ItemDimension.Quality));
+                return a with { Name = Name(a.Name, b.Name), Quality = a.Quality ?? b.Quality };
+            });
 
         IReadOnlyList<RecipeDimension> recipes = Join(
             "Recipe", left.Dimensions.Recipes, right.Dimensions.Recipes,

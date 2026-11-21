@@ -8,7 +8,7 @@ The existing CLI is the sole application entry point: only `serve` builds a host
   settings path, application-state path, and working-directory-relative explicit
   path resolution.
 - `CompanionSettings`: schema version 1, multiple absolute installation roots,
-  optional monitoring preferences (enabled, 60 seconds), and HTTP preferences
+  optional monitoring preferences (enabled, 3600-second periodic fallback), and HTTP preferences
   (port 48721). Older version-1 files load without migration or writes.
 - `CompanionSettingsStore.Load()`: structured `Loaded`, `Missing`, `Invalid`,
   `Unsupported`, or `Unreadable` result, diagnostic, and opaque revision.
@@ -79,6 +79,14 @@ claim that effective monitoring was enabled. The opposite override is symmetric.
 invocation configuration remains the startup snapshot. No general-purpose
 mutable configuration framework is introduced.
 
+The browser installation selector exposes only opaque tokens for the current
+bounded discovery hints and already configured roots. It saves the selected
+roots through the revision-checked settings store; it cannot browse or submit
+arbitrary paths. Saved installation roots remain startup-only: `SourceMonitor`,
+`SourceCatalog`, and import admission use the original invocation roots until
+the host restarts. Monitoring preference writes and installation-selection
+writes serialize through one settings mutation gate.
+
 Registration provides paths, invocation configuration, settings access,
 installation discovery, one singleton C03 writer, singleton C07 importer, and
 `CompanionApplicationStatus`. Duplicate history ownership registration is rejected.
@@ -136,9 +144,12 @@ contract](../../../../docs/companion/api.md#application-state).
 The same host also serves the embedded browser application. Runtime references
 the dedicated `WebAssets` assembly, not frontend source files or Aspire.
 `LocalApiSecurityMiddleware` runs before exception handling, embedded static
-files, routing and API endpoints. Only GET/HEAD `/`, `/history` and `/history/`
-are rewritten to the embedded document; unknown server routes and missing
-assets retain problem responses. All responses keep the existing `no-store`
+files, routing and API endpoints. Only GET/HEAD known browser destinations
+are rewritten to the embedded document: `/`, `/history`, `/companion`,
+context-qualified activity, library, crafts, recipe/item details and the
+recipes/items/characters/professions catalogues, plus valid saved-investigation
+links. Unknown server routes and missing assets retain problem responses.
+All responses keep the existing `no-store`
 and `nosniff` policy. Browser clients consume the public REST/GraphQL contracts,
 never Runtime services or repositories.
 See [web architecture and development](../../../../docs/companion/web.md).

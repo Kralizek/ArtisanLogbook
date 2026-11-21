@@ -7,6 +7,8 @@ using HotChocolate;
 using HotChocolate.CostAnalysis.Types;
 using HotChocolate.Types;
 
+using Store = ArtisanLogbook.HistoryStore.HistoryStore;
+
 namespace ArtisanLogbook.Runtime.GraphQL;
 
 [GraphQLName("Craft")]
@@ -18,6 +20,7 @@ public sealed class CraftGraph(CraftObservation value)
     public GameContextGraph Game => new(value.Game);
     public int? ConcentrationSpent => value.ConcentrationSpent;
     public int? IngenuityRefund => value.IngenuityRefund;
+    public int? AppliedIngenuityRefund => value.AppliedIngenuityRefund;
     public int? ConcentrationCurrencyId => value.ConcentrationCurrencyId;
     public bool? HasIngenuityProc => value.HasIngenuityProc;
     public bool? HasResourcefulnessProc => value.HasResourcefulnessProc;
@@ -27,6 +30,16 @@ public sealed class CraftGraph(CraftObservation value)
     public bool? OutputsComplete => value.OutputsComplete;
     public IReadOnlyList<CraftReagentGraph>? Reagents => value.Reagents?.Select(x => new CraftReagentGraph(value.Game, x)).ToArray();
     public IReadOnlyList<CraftOutputGraph>? Outputs => value.Outputs?.Select(x => new CraftOutputGraph(value.Game, x)).ToArray();
+
+    [Cost(100)]
+    public RecordedCraftConfigurations GetRecordedConfigurations(ICraftConfigurationRepository repository, CancellationToken token)
+    {
+        IReadOnlyList<CraftConfigurationEvidence>? evidence = repository.Read(value.Identity, token)?.ConfigurationEvidence;
+        string[] payloads = (evidence ?? [])
+            .Select(evidence => evidence.Payload).Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal).Take(Store.MaximumAnalysisRows + 1).ToArray();
+        return new(value.Game, payloads, evidence is not null);
+    }
 
     [Cost(1)]
     public async Task<CharacterGraph> GetCharacterAsync(CharacterLoader loader, CancellationToken token) =>
@@ -62,6 +75,11 @@ public sealed class CharacterGraph(CharacterDimension value)
     public string? Name => value.Name;
     public string? ClassFile => value.ClassFile;
     public GameContextGraph Game => new(value.Game);
+
+    /// <summary>All-history recorded activity; null when no craft is recorded.</summary>
+    [Cost(1)]
+    public async Task<DimensionActivityGraph?> GetActivityAsync(CharacterActivityLoader loader, CancellationToken token) =>
+        DimensionActivityGraph.From(await loader.LoadAsync(new DimensionIdentity<CharacterIdentity>(value.Game, value.Identity), token));
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     [Cost(1)]
     public async Task<CraftConnection> GetCraftsAsync(CharacterCraftPageLoader loader, int first = 20, string? after = null,
@@ -85,6 +103,11 @@ public sealed class RecipeGraph(RecipeDimension value)
     public string? Name => value.Name;
     public int? MaxQuality => value.MaxQuality;
     public GameContextGraph Game => new(value.Game);
+
+    /// <summary>All-history recorded activity; null when no craft is recorded.</summary>
+    [Cost(1)]
+    public async Task<DimensionActivityGraph?> GetActivityAsync(RecipeActivityLoader loader, CancellationToken token) =>
+        DimensionActivityGraph.From(await loader.LoadAsync(new DimensionIdentity<int>(value.Game, value.Id), token));
 
     [Cost(1)]
     public async Task<ProfessionGraph?> GetProfessionAsync(ProfessionLoader loader, CancellationToken token)
@@ -120,6 +143,11 @@ public sealed class ProfessionGraph(ProfessionDimension value)
     public string? Name => value.Name;
     public GameContextGraph Game => new(value.Game);
 
+    /// <summary>All-history recorded activity; null when no craft is recorded.</summary>
+    [Cost(1)]
+    public async Task<DimensionActivityGraph?> GetActivityAsync(ProfessionActivityLoader loader, CancellationToken token) =>
+        DimensionActivityGraph.From(await loader.LoadAsync(new DimensionIdentity<int>(value.Game, value.Id), token));
+
     [Cost(1)]
     public async Task<ProfessionGraph?> GetParentAsync(ProfessionLoader loader, CancellationToken token)
     {
@@ -144,6 +172,17 @@ public sealed class ProfessionGraph(ProfessionDimension value)
         HistoryConnections.Crafts(repository, new(Game: value.Game, ProfessionId: value.Id), first, after, token);
 }
 
+[GraphQLName("DimensionActivity")]
+public sealed class DimensionActivityGraph(long craftCount, DateTimeOffset lastRecordedAt)
+{
+    /// <summary>Exact count of recorded completed attempts across all history.</summary>
+    public string CraftCount => craftCount.ToString(CultureInfo.InvariantCulture);
+    public DateTimeOffset LastRecordedAt => lastRecordedAt;
+
+    internal static DimensionActivityGraph? From<TKey>(DimensionActivity<TKey>? activity) where TKey : notnull =>
+        activity is null ? null : new(activity.CraftCount, activity.LastRecordedAt);
+}
+
 [GraphQLName("Expansion")]
 public sealed class ExpansionGraph(ExpansionDimension value)
 {
@@ -164,6 +203,21 @@ public sealed class ExpansionGraph(ExpansionDimension value)
         HistoryConnections.Crafts(repository, new(Game: value.Game, ProfessionExpansionKey: value.Key), first, after, token);
 }
 
+[GraphQLName("GameExpansionGroup")]
+public sealed class GameExpansionGroupGraph(GameExpansionGroup value)
+{
+    [GraphQLType(typeof(NonNullType<IdType>))]
+    public string Id => HistoryTokens.Dimension("game-expansion", value.Game, value.Key);
+    public string Key => value.Key;
+    public string? Name => value.Name;
+    public GameContextGraph Game => new(value.Game);
+    public IReadOnlyList<string> ProfessionExpansionKeys => value.ProfessionExpansionKeys;
+}
+
+[GraphQLName("GameExpansionGroups")]
+public sealed record GameExpansionGroupsGraph(
+    [property: ListSize(AssumedSize = 100)] IReadOnlyList<GameExpansionGroupGraph> Nodes, bool Truncated);
+
 [GraphQLName("Item")]
 public sealed class ItemGraph(ItemDimension value)
 {
@@ -171,6 +225,7 @@ public sealed class ItemGraph(ItemDimension value)
     public string Id => HistoryTokens.Dimension("item", value.Game, value.Id.ToString(CultureInfo.InvariantCulture));
     public int BlizzardId => value.Id;
     public string? Name => value.Name;
+    public int? Quality => value.Quality;
     public GameContextGraph Game => new(value.Game);
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
@@ -195,6 +250,44 @@ public sealed class GameContextGraph(GameContext value)
     public int Project => (int)value.Project;
     public string? ProgressionTrack => value.ProgressionTrack;
     [Cost(1_000)]
+    public GameExpansionGroupsGraph GetExpansionGroups(IHistoryDimensionRepository repository, CancellationToken token)
+    {
+        (IReadOnlyList<GameExpansionGroup> groups, bool truncated) = repository.ExpansionGroups(value, token);
+        return new(groups.Select(group => new GameExpansionGroupGraph(group)).ToArray(), truncated);
+    }
+    [Cost(100)]
+    [ListSize(AssumedSize = 100)]
+    public IReadOnlyList<RecipeGraph> GetRecipesByBlizzardIds(
+        IReadOnlyList<int> ids, IHistoryDimensionRepository repository, CancellationToken token)
+    {
+        ValidateIds(ids);
+        IReadOnlyDictionary<int, RecipeDimension> found = repository.Recipes(
+            ids.Distinct().Select(id => new DimensionIdentity<int>(value, id)).ToArray(), token)
+            .ToDictionary(recipe => recipe.Id);
+        return ids.Select(id => new RecipeGraph(found.TryGetValue(id, out RecipeDimension? recipe)
+            ? recipe : new RecipeDimension(value, id))).ToArray();
+    }
+
+    [Cost(100)]
+    [ListSize(AssumedSize = 100)]
+    public IReadOnlyList<ItemGraph> GetItemsByBlizzardIds(
+        IReadOnlyList<int> ids, IHistoryDimensionRepository repository, CancellationToken token)
+    {
+        ValidateIds(ids);
+        IReadOnlyDictionary<int, ItemDimension> found = repository.Items(
+            ids.Distinct().Select(id => new DimensionIdentity<int>(value, id)).ToArray(), token)
+            .ToDictionary(item => item.Id);
+        return ids.Select(id => new ItemGraph(found.TryGetValue(id, out ItemDimension? item)
+            ? item : new ItemDimension(value, id))).ToArray();
+    }
+
+    private static void ValidateIds(IReadOnlyList<int> ids)
+    {
+        if (ids.Count <= 100 && ids.All(id => id > 0)) return;
+        throw new GraphQLException(ErrorBuilder.New().SetMessage("The dimension lookup is invalid or too large.")
+            .SetCode("INVALID_FILTER").Build());
+    }
+    [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public CharacterConnection GetCharacters(IHistoryDimensionRepository repository, int first = 20, string? after = null,
         CancellationToken token = default) => HistoryConnections.Characters(repository, value, first, after, token);
@@ -205,8 +298,21 @@ public sealed class GameContextGraph(GameContext value)
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public RecipeConnection GetRecipes(IHistoryDimensionRepository repository, int first = 20, string? after = null,
-        string? search = null, CancellationToken token = default) =>
-        HistoryConnections.Recipes(repository, new(value, Search: search), first, after, token);
+        string? search = null, [GraphQLType(typeof(IdType))] string? profession = null, bool craftedOnly = false,
+        CancellationToken token = default)
+    {
+        int? professionId = null;
+        if (profession is not null)
+        {
+            DimensionIdentity<int> parsed = HistoryTokens.ParseIntegerDimension(profession, "profession");
+            if (parsed.Game != value)
+                throw new GraphQLException(ErrorBuilder.New()
+                    .SetMessage("The profession belongs to a different game context.").SetCode("INVALID_FILTER").Build());
+            professionId = parsed.Key;
+        }
+        return HistoryConnections.Recipes(repository,
+            new(value, professionId, Search: search, CraftedOnly: craftedOnly), first, after, token);
+    }
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public ExpansionConnection GetExpansions(IHistoryDimensionRepository repository, int first = 20, string? after = null,
@@ -226,7 +332,9 @@ public sealed class GameContextGraph(GameContext value)
 public sealed class CraftReagentGraph(GameContext game, CraftReagent value)
 {
     public long? AllocatedQuantity => value.AllocatedQuantity;
+    public string? AllocatedQuantityExact => value.AllocatedQuantity?.ToString(CultureInfo.InvariantCulture);
     public decimal? ReturnedQuantity => value.ReturnedQuantity;
+    public string? ReturnedQuantityExact => value.ReturnedQuantity?.ToString(CultureInfo.InvariantCulture);
     [Cost(1)]
     public async Task<ItemGraph> GetItemAsync(ItemLoader loader, CancellationToken token) =>
         new(await loader.LoadAsync(new DimensionIdentity<int>(game, value.ItemId), token) ?? new(game, value.ItemId));
@@ -237,6 +345,7 @@ public sealed class CraftOutputGraph(GameContext game, CraftOutput value)
 {
     public int? Quality => value.Quality;
     public long? Quantity => value.Quantity;
+    public string? QuantityExact => value.Quantity?.ToString(CultureInfo.InvariantCulture);
     [Cost(1)]
     public async Task<ItemGraph> GetItemAsync(ItemLoader loader, CancellationToken token) =>
         new(await loader.LoadAsync(new DimensionIdentity<int>(game, value.ItemId), token) ?? new(game, value.ItemId));

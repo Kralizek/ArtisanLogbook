@@ -307,6 +307,104 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /api/v1/installations:
+    get:
+      operationId: getInstallationOptions
+      summary: List bounded, server-discovered installation candidates
+      description: Returns opaque candidate tokens and safe labels, never filesystem paths. Configured offline roots remain selectable.
+      tags: [Sources]
+      responses:
+        "200":
+          description: Saved selection and startup-only effective root count.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstallationSelection"
+        "403":
+          description: Local security checks failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Settings were externally damaged or became unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    put:
+      operationId: updateInstallationRoots
+      summary: Save the selected server-known installation roots
+      description: >
+        Candidates come only from the bounded discovery hints or existing saved roots.
+        No client path is accepted. Saved roots become effective after restarting the Companion.
+        The revision rejects stale browser selections; monitoring and HTTP preferences are preserved.
+      tags: [Sources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [revision, candidateTokens]
+              properties:
+                revision:
+                  type: string
+                candidateTokens:
+                  type: array
+                  maxItems: 32
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Settings saved; restartRequired indicates the running host still uses old roots.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstallationSelection"
+        "400":
+          description: Invalid, duplicate or unrecognized candidate token.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Local security checks failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Stale revision, invalid settings or candidate no longer valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "411":
+          description: Content-Length is required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: Request body too large.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: Content-Type is not application/json.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Settings could not be persisted or the application is stopping.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/imports:
     get:
       operationId: listImports
@@ -1037,6 +1135,34 @@ components:
           format: int32
           minimum: 1
           maximum: 86400
+    InstallationSelection:
+      type: object
+      required: [revision, candidates, configuredRoots, activeRoots, restartRequired]
+      properties:
+        revision:
+          type: string
+          description: Opaque settings revision. Pass it unchanged when saving a selection.
+        candidates:
+          type: array
+          items:
+            type: object
+            required: [token, label, configured]
+            properties:
+              token:
+                type: string
+                description: Opaque server-known candidate identifier, never a path.
+              label:
+                type: string
+              configured:
+                type: boolean
+        configuredRoots:
+          type: integer
+          format: int32
+        activeRoots:
+          type: integer
+          format: int32
+        restartRequired:
+          type: boolean
     MonitoringStatus:
       type: object
       description: Public monitoring projection shared by status and control responses; never exposes runtime configuration internals.
@@ -1167,10 +1293,16 @@ components:
           type: string
     ImportSourceResult:
       type: object
-      required: [sourceId, status, outcome, counts, diagnostics, diagnosticsTruncated]
+      required: [sourceId, status, outcome, counts, gameContexts, diagnostics, diagnosticsTruncated]
       properties:
         sourceId:
           type: string
+        gameContexts:
+          type: array
+          nullable: true
+          description: Canonical context IDs represented by accepted source crafts; null before a successful import, empty for an accepted source with no crafts. Not inferred from the source path.
+          items:
+            type: string
         status:
           type: string
           enum: [Queued, Running, Completed, Failed, Cancelled]
@@ -1182,7 +1314,7 @@ components:
         counts:
           type: object
           nullable: true
-          required: [observations, inserted, alreadyPresent, enriched, rejectedOrConflicting, dimensionsInserted, dimensionsEnriched]
+          required: [observations, inserted, alreadyPresent, enriched, rejectedOrConflicting, dimensionsInserted, dimensionsEnriched, distinctRecipeCount]
           properties:
             observations:
               type: integer
@@ -1205,6 +1337,11 @@ components:
             dimensionsEnriched:
               type: integer
               format: int32
+            distinctRecipeCount:
+              type: integer
+              format: int32
+              nullable: true
+              description: Number of distinct (GameContext, recipe ID) pairs in successfully accepted source craft observations, including replays and enrichments; excludes unknown recipe IDs and rollups. Null when rejected, failed, or not yet available. Not newly inserted crafts or a catalog size.
         diagnostics:
           type: array
           items:

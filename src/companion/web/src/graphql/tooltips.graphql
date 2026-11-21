@@ -1,0 +1,37 @@
+query ItemTooltip($context: String!, $id: ID!) {
+  contextItem(context: $context, id: $id) {
+    id
+    blizzardId
+    name
+    quality
+  }
+}
+
+query RecipeTooltip($context: String!, $id: ID!) {
+  contextRecipe(context: $context, id: $id) {
+    id
+    blizzardId
+    name
+    maxQuality
+    profession {
+      id
+      name
+    }
+    expansion {
+      id
+      name
+    }
+    reagentSlots {
+      id
+      reagentType
+      isRequired
+      requiredQuantity
+      candidateItems {
+        id
+        blizzardId
+        name
+        quality
+      }
+    }
+  }
+}

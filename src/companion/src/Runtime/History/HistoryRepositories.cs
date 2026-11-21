@@ -12,8 +12,21 @@ public interface ICraftHistoryRepository
         IReadOnlyCollection<CharacterCraftPageRequest> requests, CancellationToken cancellationToken = default);
 }
 
+public interface ICraftConfigurationRepository
+{
+    CraftObservation? Read(CraftIdentity identity, CancellationToken cancellationToken = default);
+}
+
+public interface IHistoryAnalysisRepository
+{
+    CraftAnalysis Analyze(AnalysisQuery query, CancellationToken cancellationToken = default);
+    string Signature(CraftQuery query, CancellationToken cancellationToken = default);
+}
+
 public interface IHistoryDimensionRepository
 {
+    (IReadOnlyList<GameExpansionGroup> Groups, bool Truncated) ExpansionGroups(
+        GameContext game, CancellationToken cancellationToken);
     DimensionPage<CharacterDimension, CharacterIdentity> Characters(GameContext? game, int first,
         DimensionIdentity<CharacterIdentity>? after, CancellationToken cancellationToken);
     DimensionPage<RecipeDimension, int> Recipes(RecipeQuery query, int first,
@@ -32,6 +45,9 @@ public interface IHistoryDimensionRepository
     IReadOnlyList<ExpansionDimension> Expansions(IReadOnlyCollection<DimensionIdentity<string>> identities, CancellationToken cancellationToken);
     IReadOnlyList<RecipeReagentSlot> RecipeSlots(IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken cancellationToken);
     IReadOnlyList<GameContext> GameContexts(IReadOnlyCollection<GameContext> contexts, CancellationToken cancellationToken);
+    IReadOnlyList<DimensionActivity<int>> RecipeActivity(IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken cancellationToken);
+    IReadOnlyList<DimensionActivity<int>> ProfessionActivity(IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken cancellationToken);
+    IReadOnlyList<DimensionActivity<CharacterIdentity>> CharacterActivity(IReadOnlyCollection<DimensionIdentity<CharacterIdentity>> identities, CancellationToken cancellationToken);
 }
 
 internal sealed class CraftHistoryRepository(Store store) : ICraftHistoryRepository
@@ -43,8 +59,25 @@ internal sealed class CraftHistoryRepository(Store store) : ICraftHistoryReposit
         store.QueryCharacterCraftPages(requests, cancellationToken);
 }
 
+internal sealed class CraftConfigurationRepository(Store store) : ICraftConfigurationRepository
+{
+    public CraftObservation? Read(CraftIdentity identity, CancellationToken cancellationToken = default) =>
+        store.Read(identity, cancellationToken);
+}
+
+internal sealed class HistoryAnalysisRepository(Store store) : IHistoryAnalysisRepository
+{
+    public CraftAnalysis Analyze(AnalysisQuery query, CancellationToken cancellationToken = default) =>
+        store.Analyze(query, cancellationToken);
+    public string Signature(CraftQuery query, CancellationToken cancellationToken = default) =>
+        store.AnalysisSignature(query, cancellationToken);
+}
+
 internal sealed class HistoryDimensionRepository(Store store) : IHistoryDimensionRepository
 {
+    public (IReadOnlyList<GameExpansionGroup> Groups, bool Truncated) ExpansionGroups(
+        GameContext game, CancellationToken cancellationToken) =>
+        store.QueryGameExpansionGroups(game, cancellationToken);
     public DimensionPage<CharacterDimension, CharacterIdentity> Characters(GameContext? game, int first,
         DimensionIdentity<CharacterIdentity>? after, CancellationToken token) => store.QueryCharacters(game, first, after, token);
     public DimensionPage<RecipeDimension, int> Recipes(RecipeQuery query, int first,
@@ -71,4 +104,10 @@ internal sealed class HistoryDimensionRepository(Store store) : IHistoryDimensio
         store.ReadRecipeReagentSlots(identities, token);
     public IReadOnlyList<GameContext> GameContexts(IReadOnlyCollection<GameContext> contexts, CancellationToken token) =>
         store.ReadGameContexts(contexts, token);
+    public IReadOnlyList<DimensionActivity<int>> RecipeActivity(IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken token) =>
+        store.ReadRecipeActivity(identities, token);
+    public IReadOnlyList<DimensionActivity<int>> ProfessionActivity(IReadOnlyCollection<DimensionIdentity<int>> identities, CancellationToken token) =>
+        store.ReadProfessionActivity(identities, token);
+    public IReadOnlyList<DimensionActivity<CharacterIdentity>> CharacterActivity(IReadOnlyCollection<DimensionIdentity<CharacterIdentity>> identities, CancellationToken token) =>
+        store.ReadCharacterActivity(identities, token);
 }

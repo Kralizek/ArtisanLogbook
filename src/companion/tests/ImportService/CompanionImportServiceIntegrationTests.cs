@@ -51,6 +51,9 @@ public sealed class CompanionImportServiceIntegrationTests
             Assert.That(imported.TotalSourceCraftObservations, Is.EqualTo(expected.Crafts.Count));
             Assert.That(imported.InsertedCrafts, Is.EqualTo(expected.Crafts.Count));
             Assert.That(imported.AlreadyPresentCrafts, Is.Zero);
+            Assert.That(imported.DistinctRecipeCount, Is.EqualTo(expected.Crafts
+                .Where(craft => craft.RecipeId.HasValue)
+                .Select(craft => (craft.Game, craft.RecipeId)).Distinct().Count()));
             Assert.That(imported.Coverage!.AggregateOnlyCraftCount, Is.GreaterThan(0));
             Assert.That(imported.CoverageWarnings.Any(d => d.Code == "aggregate-only-history"), Is.True);
             Assert.That(_store.ReadAll(), Is.EquivalentTo(expected.Crafts));
@@ -83,6 +86,8 @@ public sealed class CompanionImportServiceIntegrationTests
             Assert.That(second.InsertedCrafts, Is.Zero);
             Assert.That(second.AlreadyPresentCrafts, Is.EqualTo(first.TotalSourceCraftObservations));
             Assert.That(second.EnrichedCrafts, Is.Zero);
+            Assert.That(second.DistinctRecipeCount, Is.EqualTo(first.DistinctRecipeCount));
+            Assert.That(second.GameContexts, Is.EquivalentTo(first.GameContexts!));
             Assert.That(_store.ReadAll(), Has.Count.EqualTo(first.TotalSourceCraftObservations));
         });
     }
@@ -107,6 +112,8 @@ public sealed class CompanionImportServiceIntegrationTests
         {
             Assert.That(rejected.Outcome, Is.EqualTo(CompanionImportOutcome.Rejected));
             Assert.That(rejected.ValidationErrors, Is.Not.Empty);
+            Assert.That(rejected.DistinctRecipeCount, Is.Null);
+            Assert.That(rejected.GameContexts, Is.Null);
             Assert.That(_store.ReadAll(), Is.Empty);
             Assert.That(_store.ReadDimensions().Characters, Is.Empty);
         });
@@ -157,6 +164,8 @@ public sealed class CompanionImportServiceIntegrationTests
         {
             Assert.That(rejected.Outcome, Is.EqualTo(CompanionImportOutcome.Rejected));
             Assert.That(rejected.CraftConflicts, Is.Not.Empty);
+            Assert.That(rejected.DistinctRecipeCount, Is.Null);
+            Assert.That(rejected.GameContexts, Is.Null);
             Assert.That(rejected.RejectedOrConflictingCrafts, Is.EqualTo(1));
             Assert.That(rejected.InsertedCrafts, Is.Zero);
             Assert.That(_store.ReadAll().Single(), Is.EqualTo(beforeCraft));
@@ -204,7 +213,10 @@ public sealed class CompanionImportServiceIntegrationTests
         {
             Assert.That(malformed.Outcome, Is.EqualTo(CompanionImportOutcome.Rejected));
             Assert.That(malformed.SourceDiagnostics.Any(d => d.Code == "malformed-lua"), Is.True);
+            Assert.That(malformed.DistinctRecipeCount, Is.Null);
+            Assert.That(malformed.GameContexts, Is.Null);
             Assert.That(unsupported.Outcome, Is.EqualTo(CompanionImportOutcome.Rejected));
+            Assert.That(unsupported.DistinctRecipeCount, Is.Null);
             Assert.That(unsupported.SourceDiagnostics.Any(d => d.Code == "unsupported-schema"), Is.True);
             Assert.That(_store.ReadAll(), Is.EqualTo(new[] { before }));
         });
@@ -218,7 +230,9 @@ public sealed class CompanionImportServiceIntegrationTests
               schemaIdentity = "ArtisanLogbookLedger", schemaVersion = 4,
               crafts = {
                 { id = 1, sessionId = 1, timestamp = 1800000000, recipeId = 77, outputItemId = 99, outputQuantity = 1 },
-                { id = 2, sessionId = 2, timestamp = 1800000001, recipeId = 77, outputItemId = 99, outputQuantity = 1 }
+                { id = 2, sessionId = 2, timestamp = 1800000001, recipeId = 77, outputItemId = 99, outputQuantity = 1 },
+                { id = 3, sessionId = 1, timestamp = 1800000002, recipeId = 77, outputItemId = 99, outputQuantity = 1 },
+                { id = 4, sessionId = 1, timestamp = 1800000003, recipeId = 88, outputItemId = 99, outputQuantity = 1 }
               },
               dimensions = {
                 sessions = {
@@ -229,7 +243,7 @@ public sealed class CompanionImportServiceIntegrationTests
                   { id = 1, key = "project:1:region:3:realm:1309:guid:Player-Retail" },
                   { id = 2, key = "project:19:region:3:realm:1309:guid:Player-Mists" }
                 },
-                recipes = { [77] = { id = 77 } },
+                recipes = { [77] = { id = 77 }, [88] = { id = 88 }, [99] = { id = 99 } },
                 items = { [99] = { id = 99 } }
               }
             }
@@ -242,7 +256,15 @@ public sealed class CompanionImportServiceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(imported.Outcome, Is.EqualTo(CompanionImportOutcome.Successful));
-            Assert.That(crafts, Has.Count.EqualTo(2));
+            Assert.That(imported.TotalSourceCraftObservations, Is.EqualTo(4));
+            Assert.That(imported.DistinctRecipeCount, Is.EqualTo(3),
+                "Retail recipe 77 counts once, Mists recipe 77 separately, and uncrafted recipe 99 not at all.");
+            Assert.That(imported.GameContexts, Is.EquivalentTo(new[]
+            {
+                new GameContext(GameProject.Retail),
+                new GameContext(GameProject.MistsClassic, "mists-progression")
+            }));
+            Assert.That(crafts, Has.Count.EqualTo(4));
             Assert.That(crafts.Select(craft => craft.Game.Project).Distinct(),
                 Is.EquivalentTo(new[] { GameProject.Retail, GameProject.MistsClassic }));
             Assert.That(dimensions.Recipes.Where(recipe => recipe.Id == 77)
@@ -251,6 +273,30 @@ public sealed class CompanionImportServiceIntegrationTests
                 .Select(item => item.Game).Distinct().Count(), Is.EqualTo(2));
             Assert.That(crafts.Single(craft => craft.Game.Project == GameProject.MistsClassic).Game.ProgressionTrack,
                 Is.EqualTo("mists-progression"));
+        });
+
+        CompanionImportResult replay = await Importer().ImportSavedVariablesAsync(source);
+        Assert.Multiple(() =>
+        {
+            Assert.That(replay.AlreadyPresentCrafts, Is.EqualTo(4));
+            Assert.That(replay.InsertedCrafts, Is.Zero);
+            Assert.That(replay.DistinctRecipeCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task UnknownRecipeDoesNotContributeToAcceptedRecipeCount()
+    {
+        string source = Snapshot(1, null).Replace("recipeId = 77, ", "", StringComparison.Ordinal);
+        CompanionImportResult imported = await Importer().ImportSavedVariablesAsync(source);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(imported.Outcome, Is.EqualTo(CompanionImportOutcome.Successful),
+                string.Join(Environment.NewLine, imported.SourceDiagnostics));
+            Assert.That(imported.TotalSourceCraftObservations, Is.EqualTo(1));
+            Assert.That(imported.DistinctRecipeCount, Is.Zero);
+            Assert.That(imported.GameContexts, Is.EqualTo(new[] { new GameContext(GameProject.Retail) }));
         });
     }
 
@@ -355,6 +401,8 @@ public sealed class CompanionImportServiceIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Outcome, Is.EqualTo(CompanionImportOutcome.Failed));
+            Assert.That(result.DistinctRecipeCount, Is.Null);
+            Assert.That(result.GameContexts, Is.Null);
             Assert.That(result.PersistenceDiagnostics.Single().Code, Is.EqualTo("history-store-failure"));
             Assert.That(_store.ReadAll(), Is.Empty);
             Assert.That(_store.ReadDimensions().Recipes, Is.Empty);
@@ -379,6 +427,8 @@ public sealed class CompanionImportServiceIntegrationTests
             Assert.That(imported.SourceFingerprint, Is.EqualTo(Convert.ToHexString(
                 System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)))));
             Assert.That(missing.Outcome, Is.EqualTo(CompanionImportOutcome.Failed));
+            Assert.That(missing.DistinctRecipeCount, Is.Null);
+            Assert.That(missing.GameContexts, Is.Null);
             Assert.That(missing.InputDiagnostics.Single().Code, Is.EqualTo("source-read-failed"));
         });
     }

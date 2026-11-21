@@ -119,7 +119,13 @@ function addon.CreateModernCraftAdapter(api, handleEvent, submitCraft, invalidat
       return nil
     end
     local inputs = { fixed = {}, requirements = {}, complete = true, grossRequirementsComplete = true,
-      evidenceVersion = 1, completeItemIDs = {} }
+      evidenceVersion = 1, completeItemIDs = {}, slotRoles = {} }
+    -- Each schematic slot's reagent role, so allocations record which role their slot filled.
+    local roleNames = {}
+    for name, key in pairs({ basic = "Basic", modifying = "Modifying", finishing = "Finishing",
+        automatic = "Automatic" }) do
+      if reagentTypes[key] ~= nil then roleNames[reagentTypes[key]] = name end
+    end
     local totals, blocked, slots, unknown = {}, {}, {}, false
     local selected = {}
     if not dense(selections) then unknown = true end
@@ -164,6 +170,9 @@ function addon.CreateModernCraftAdapter(api, handleEvent, submitCraft, invalidat
     end
     for _, slot in pairs(schematic.reagentSlotSchematics) do
       local slotType = type(slot) == "table" and readable(slot) and slot.dataSlotType
+      if slotType and isPositiveInteger(slot.dataSlotIndex) and roleNames[slot.reagentType] then
+        inputs.slotRoles[slot.dataSlotIndex] = roleNames[slot.reagentType]
+      end
       if slotType ~= slotTypes.Currency then
         local candidates, known = {}, slotType and dense(slot.reagents)
         if known then
