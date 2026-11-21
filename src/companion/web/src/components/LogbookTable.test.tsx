@@ -66,6 +66,7 @@ it("lays out columns like the addon logbook", () => {
     "Character",
     "Profession",
     "Qty",
+    "Concentration",
     "Highlights",
     "Timestamp",
   ]);
@@ -100,12 +101,7 @@ it("highlights only recorded positive outcomes", () => {
         ],
       }),
     ).map((highlight) => highlight.label),
-  ).toEqual([
-    "40 Concentration used",
-    "Multicraft +3",
-    "Ingenuity +20",
-    "Resourcefulness 3",
-  ]);
+  ).toEqual(["Multicraft +3", "Ingenuity +20", "Resourcefulness 3"]);
   expect(
     craftHighlights(craft({ hasIngenuityProc: false, concentrationSpent: 0 })),
   ).toEqual([]);
@@ -163,4 +159,11 @@ it("opens the craft from the row but leaves links to their own target", () => {
   onOpen.mockClear();
   fireEvent.click(within(row).getAllByRole("link")[0]);
   expect(onOpen).not.toHaveBeenCalled();
+});
+
+it("shows Concentration spent as its own number, not a highlight", () => {
+  renderTable([craft({ concentrationSpent: 294 }), craft({ id: "none" })]);
+  const [, spent, none] = screen.getAllByRole("row");
+  expect(within(spent).getAllByRole("cell")[5]).toHaveTextContent(/^294$/);
+  expect(within(none).getAllByRole("cell")[5]).toHaveTextContent(/^$/);
 });

@@ -554,10 +554,6 @@ h1 {
   letter-spacing: 0;
   background: color-mix(in srgb, var(--highlight) 14%, transparent);
 }
-.craft-concentration {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
 .craft-highlight[data-kind="multicraft"] {
   --highlight: #d08a2e;
 }

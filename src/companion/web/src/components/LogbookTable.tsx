@@ -110,6 +110,9 @@ export function LogbookTable({
             <Table.Th>Character</Table.Th>
             {showRecipe && <Table.Th>Profession</Table.Th>}
             <Table.Th className="logbook-quantity">Qty</Table.Th>
+            {highlights && (
+              <Table.Th className="logbook-quantity">Concentration</Table.Th>
+            )}
             {highlights && <Table.Th>Highlights</Table.Th>}
             <Table.Th>Timestamp</Table.Th>
           </Table.Tr>
@@ -195,35 +198,29 @@ export function LogbookTable({
                   )}
                 </Table.Td>
                 {highlights && (
+                  // Concentration is a resource spent, not a proc: its own
+                  // aligned number keeps it apart from the proc chips.
+                  <Table.Td className="logbook-quantity">
+                    {craft.concentrationSpent && craft.concentrationSpent > 0
+                      ? craft.concentrationSpent.toLocaleString()
+                      : null}
+                  </Table.Td>
+                )}
+                {highlights && (
                   <Table.Td>
                     <Group gap={4} wrap="wrap">
-                      {craftHighlights(craft).map((highlight) =>
-                        // Concentration is a cost the player chose, not a
-                        // proc, so it reads as plain text beside proc chips.
-                        highlight.kind === "concentration" ? (
-                          <Text
-                            key={highlight.kind}
-                            span
-                            size="xs"
-                            c="dimmed"
-                            className="craft-concentration"
-                            title={highlight.detail}
-                          >
-                            {highlight.label}
-                          </Text>
-                        ) : (
-                          <Badge
-                            key={highlight.kind}
-                            size="sm"
-                            variant="outline"
-                            className="craft-highlight"
-                            data-kind={highlight.kind}
-                            title={highlight.detail}
-                          >
-                            {highlight.label}
-                          </Badge>
-                        ),
-                      )}
+                      {craftHighlights(craft).map((highlight) => (
+                        <Badge
+                          key={highlight.kind}
+                          size="sm"
+                          variant="outline"
+                          className="craft-highlight"
+                          data-kind={highlight.kind}
+                          title={highlight.detail}
+                        >
+                          {highlight.label}
+                        </Badge>
+                      ))}
                     </Group>
                   </Table.Td>
                 )}
