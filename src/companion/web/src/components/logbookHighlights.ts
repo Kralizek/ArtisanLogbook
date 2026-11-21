@@ -47,3 +47,19 @@ export function craftHighlights(craft: LogbookCraft): Highlight[] {
     });
   return highlights;
 }
+
+/** "21 Nov 18:40", the addon's 24-hour day-month format; full time on hover. */
+export function shortTime(value: string) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date(value))
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.day} ${parts.month} ${parts.hour}:${parts.minute}`;
+}

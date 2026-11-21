@@ -3,7 +3,11 @@ import type { ReactNode } from "react";
 import { rawQuantity } from "./analysisFormat";
 import { CharacterName } from "./CharacterName";
 import { QualityBadge } from "./EntityTooltip";
-import { craftHighlights, type LogbookCraft } from "./logbookHighlights";
+import {
+  craftHighlights,
+  shortTime,
+  type LogbookCraft,
+} from "./logbookHighlights";
 
 /**
  * Total of the known output quantities, exact for integers. An output whose
@@ -20,16 +24,6 @@ function outputTotal(craft: LogbookCraft) {
     ? values.reduce((sum, value) => sum + BigInt(value), 0n).toString()
     : String(values.reduce((sum, value) => sum + Number(value), 0));
   return { total, missing };
-}
-
-/** "21 Nov 13:37", like the addon; the full timestamp is on hover. */
-function shortTime(value: string) {
-  return new Date(value).toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function Result({
@@ -86,15 +80,18 @@ export function LogbookTable({
   showRecipe = true,
   highlights,
   linkTo,
+  onOpen,
 }: {
   crafts: LogbookCraft[];
   showRecipe?: boolean;
   highlights: boolean;
   linkTo: (destination: string, children: ReactNode) => ReactNode;
+  /** Opens a craft when its row is clicked outside a link, as in the addon. */
+  onOpen?: (craft: LogbookCraft) => void;
 }) {
   return (
     <Table.ScrollContainer minWidth={showRecipe ? 900 : 700}>
-      <Table striped highlightOnHover withTableBorder className="logbook-table">
+      <Table highlightOnHover className="logbook-table">
         <Table.Thead>
           <Table.Tr>
             {showRecipe && <Table.Th>Recipe</Table.Th>}
@@ -103,7 +100,7 @@ export function LogbookTable({
             {showRecipe && <Table.Th>Profession</Table.Th>}
             <Table.Th className="logbook-quantity">Qty</Table.Th>
             {highlights && <Table.Th>Highlights</Table.Th>}
-            <Table.Th>Time</Table.Th>
+            <Table.Th>Timestamp</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -113,7 +110,18 @@ export function LogbookTable({
             const partial =
               craft.outputsComplete === false || Boolean(measured?.missing);
             return (
-              <Table.Tr key={craft.id}>
+              <Table.Tr
+                key={craft.id}
+                data-openable={onOpen ? true : undefined}
+                onClick={(event) => {
+                  // Links and controls inside the row keep their own action.
+                  if (
+                    onOpen &&
+                    !(event.target as HTMLElement).closest("a, button")
+                  )
+                    onOpen(craft);
+                }}
+              >
                 {showRecipe && (
                   <Table.Td className="logbook-recipe">
                     {craft.recipe?.id ? (

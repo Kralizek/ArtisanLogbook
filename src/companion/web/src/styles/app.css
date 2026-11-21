@@ -514,10 +514,23 @@ h1 {
 .logbook-table th {
   vertical-align: middle;
 }
+/* Like the addon, entries read as ink with thin dividers; links reveal
+   themselves on hover and keyboard focus, and the whole row opens the craft. */
+.logbook-table tbody tr[data-openable] {
+  cursor: pointer;
+}
+.logbook-table a {
+  color: inherit;
+  font-weight: 400;
+}
+.logbook-table a:hover,
+.logbook-table a:focus-visible {
+  color: var(--mantine-color-anchor);
+  text-decoration: underline;
+}
 .logbook-table .logbook-quantity {
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
   white-space: nowrap;
 }
 .logbook-output,

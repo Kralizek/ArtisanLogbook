@@ -17,7 +17,7 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import type { ActiveGame } from "../app/game";
 import {
   analysisFilter,
@@ -2343,6 +2343,7 @@ function Crafts({
   refreshBounds: () => void;
 }) {
   const [search, setSearch] = useSearchParams();
+  const navigate = useNavigate();
   const after = params.get("after");
   const { data, loading, error } = useQuery(InvestigationCraftsDocument, {
     variables: { context: game.canonicalId, filter, after },
@@ -2395,6 +2396,15 @@ function Crafts({
               crafts={page.nodes}
               showRecipe={!embedded}
               highlights={game.project === 1}
+              onOpen={(craft) =>
+                navigate(
+                  investigationLink(
+                    game,
+                    `crafts/${encodeURIComponent(craft.id)}`,
+                    primaryScopeParams(params),
+                  ),
+                )
+              }
               linkTo={(destination, children) => (
                 <LinkTo game={game} destination={destination} params={params}>
                   {children}

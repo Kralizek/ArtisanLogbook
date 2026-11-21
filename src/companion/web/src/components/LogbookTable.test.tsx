@@ -1,9 +1,13 @@
 import { MantineProvider } from "@mantine/core";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { LogbookTable } from "./LogbookTable";
-import { craftHighlights, type LogbookCraft } from "./logbookHighlights";
+import {
+  craftHighlights,
+  shortTime,
+  type LogbookCraft,
+} from "./logbookHighlights";
 
 function craft(overrides: Partial<LogbookCraft> = {}): LogbookCraft {
   return {
@@ -34,7 +38,11 @@ const linkTo = (destination: string, children: ReactNode) => (
   <a href={`/${destination}`}>{children}</a>
 );
 
-function renderTable(crafts: LogbookCraft[], showRecipe = true) {
+function renderTable(
+  crafts: LogbookCraft[],
+  showRecipe = true,
+  onOpen?: (craft: LogbookCraft) => void,
+) {
   render(
     <MantineProvider>
       <LogbookTable
@@ -42,6 +50,7 @@ function renderTable(crafts: LogbookCraft[], showRecipe = true) {
         showRecipe={showRecipe}
         highlights
         linkTo={linkTo}
+        onOpen={onOpen}
       />
     </MantineProvider>,
   );
@@ -58,7 +67,7 @@ it("lays out columns like the addon logbook", () => {
     "Profession",
     "Qty",
     "Highlights",
-    "Time",
+    "Timestamp",
   ]);
   const row = screen.getAllByRole("row")[1];
   expect(within(row).getByText("Quality 2")).toBeInTheDocument();
@@ -134,4 +143,22 @@ it("totals outputs and marks a partial or unrecorded quantity", () => {
   expect(
     within(unrecorded).getByLabelText("Quantity not recorded"),
   ).toBeInTheDocument();
+});
+
+it("uses the addon's 24-hour day-month timestamp", () => {
+  const value = new Date(2026, 10, 21, 18, 40).toISOString();
+  expect(shortTime(value)).toBe("21 Nov 18:40");
+});
+
+it("opens the craft from the row but leaves links to their own target", () => {
+  const onOpen = vi.fn();
+  renderTable([craft()], true, onOpen);
+  const row = screen.getAllByRole("row")[1];
+  fireEvent.click(within(row).getByText("Alchemy"));
+  expect(onOpen).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "craft-1" }),
+  );
+  onOpen.mockClear();
+  fireEvent.click(within(row).getAllByRole("link")[0]);
+  expect(onOpen).not.toHaveBeenCalled();
 });
