@@ -6,7 +6,7 @@ import {
   ItemTooltipDocument,
   RecipeTooltipDocument,
 } from "../graphql/generated/graphql";
-import { ItemTooltip, RecipeTooltip } from "./EntityTooltip";
+import { ItemTooltip, QualityBadge, RecipeTooltip } from "./EntityTooltip";
 
 const query = vi.hoisted(() => vi.fn());
 vi.mock("@apollo/client/react", () => ({ useQuery: query }));
@@ -93,4 +93,17 @@ it("summarizes recipe reagents and merges same-named quality variants", async ()
   expect(screen.getByText("Alchemy · Midnight")).toBeInTheDocument();
   expect(screen.getByText("Finishing")).toBeInTheDocument();
   expect(screen.getByText("1 × Catalyst")).toBeInTheDocument();
+});
+
+it("renders the quality badge inline so it can sit inside a text paragraph", () => {
+  render(
+    <MantineProvider>
+      <p>
+        Item #236761
+        <QualityBadge quality={1} />
+      </p>
+    </MantineProvider>,
+  );
+  const badge = screen.getByText("Quality 1").closest(".mantine-Badge-root");
+  expect(badge?.tagName).toBe("SPAN");
 });

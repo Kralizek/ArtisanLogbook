@@ -19,7 +19,9 @@ import {
 export function QualityBadge({ quality }: { quality?: number | null }) {
   if (quality == null) return null;
   return (
+    // Rendered inline: callers place it inside text paragraphs.
     <Badge
+      component="span"
       size="xs"
       variant="outline"
       color="yellow"

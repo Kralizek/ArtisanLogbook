@@ -151,14 +151,6 @@ h1 {
 .analysis-table td:not(:first-child) {
   text-align: right;
 }
-.quantity-evidence {
-  font-size: 0.72rem;
-  color: var(--mantine-color-dimmed);
-  max-width: 24rem;
-}
-.quantity-evidence summary {
-  cursor: pointer;
-}
 .activity-bars {
   position: relative;
   height: 150px;
@@ -212,4 +204,19 @@ h1 {
   .content {
     width: 100%;
   }
+}
+.quantity-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  border-radius: 2px;
+}
+.quantity-value:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+.partial-mark {
+  font-size: 0.75em;
+  color: var(--mantine-color-dimmed);
+  cursor: help;
 }

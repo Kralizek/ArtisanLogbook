@@ -83,6 +83,33 @@ export function measuredCraftAverage(measure: Measure): string {
   }`;
 }
 
+/**
+ * A display average rounded to two decimals, or null when no average is measurable.
+ * Use measuredCraftAverage for the exact value.
+ */
+export function roundedCraftAverage(measure: Measure): string | null {
+  if (
+    BigInt(measure.incompleteAttempts) > 0n ||
+    measure.quantity == null ||
+    BigInt(measure.measuredAttempts) === 0n
+  )
+    return null;
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(measure.quantity);
+  if (!match) return null;
+  const numerator = BigInt(match[2] + (match[3] ?? ""));
+  const denominator =
+    BigInt(measure.measuredAttempts) * 10n ** BigInt(match[3]?.length ?? 0);
+  const rounded = (numerator * 100n + denominator / 2n) / denominator;
+  const approximate = (numerator * 100n) % denominator !== 0n;
+  if (rounded === 0n && numerator !== 0n)
+    return `${match[1] ? ">−" : "<"}0.01 per measured craft`;
+  const fraction = String(rounded % 100n)
+    .padStart(2, "0")
+    .replace(/0+$/, "");
+  const value = `${match[1]}${(rounded / 100n).toLocaleString()}${fraction ? `.${fraction}` : ""}`;
+  return `${approximate ? "≈ " : ""}${value} per measured craft`;
+}
+
 export function rate(outcome: Outcome): string | undefined {
   const denominator = BigInt(outcome.observedAttempts);
   if (denominator === 0n) return undefined;

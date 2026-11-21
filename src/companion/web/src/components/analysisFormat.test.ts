@@ -7,6 +7,7 @@ import {
   outcomeRows,
   rate,
   rawQuantity,
+  roundedCraftAverage,
 } from "./analysisFormat";
 
 it("preserves exact large analytical quantities and refuses imprecise raw observations", () => {
@@ -185,4 +186,27 @@ it("keeps same-named item quality variants distinguishable", () => {
   expect(itemLabel({ ...bloom, quality: null })).toBe(
     "Tranquility Bloom · #236761",
   );
+});
+
+it("rounds display averages to two decimals and withholds unmeasurable ones", () => {
+  const complete = (quantity: string, attempts: string) => ({
+    attempts,
+    measuredAttempts: attempts,
+    incompleteAttempts: "0",
+    quantity,
+  });
+  expect(roundedCraftAverage(complete("7", "199"))).toBe(
+    "≈ 0.04 per measured craft",
+  );
+  expect(roundedCraftAverage(complete("5", "4"))).toBe(
+    "1.25 per measured craft",
+  );
+  expect(roundedCraftAverage(complete("1", "1000"))).toBe(
+    "<0.01 per measured craft",
+  );
+  expect(roundedCraftAverage(complete("0", "3"))).toBe("0 per measured craft");
+  expect(
+    roundedCraftAverage({ ...complete("12", "3"), incompleteAttempts: "1" }),
+  ).toBeNull();
+  expect(roundedCraftAverage(complete("0", "0"))).toBeNull();
 });

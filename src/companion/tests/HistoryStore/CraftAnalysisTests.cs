@@ -25,6 +25,29 @@ public sealed class CraftAnalysisTests
     public void TearDown() => Directory.Delete(_directory, recursive: true);
 
     [Test]
+    public void OutputContributionQualityRequiresEveryContributingRowToAgree()
+    {
+        using Store store = new(Path.Combine(_directory, "history.duckdb"));
+        DateTimeOffset time = DateTimeOffset.Parse("2026-02-01T12:00:00Z");
+        foreach (CraftObservation craft in new[]
+        {
+            Craft("q1", Retail, time) with { Outputs = [new(70, 1, 1), new(71, 2, 1)] },
+            Craft("q2", Retail, time.AddMinutes(1)) with { Outputs = [new(70, 2, 1), new(71, 2, 1)] },
+            Craft("unknown", Retail, time.AddMinutes(2)) with { Outputs = [new(72, 3, 1)] },
+            Craft("unknown-2", Retail, time.AddMinutes(3)) with { Outputs = [new(72, null, 1)] }
+        })
+            Assert.That(store.Write(craft).IsSuccessful, Is.True);
+
+        IReadOnlyList<AnalysisContribution> outputs = store.Analyze(new(new(Game: Retail))).Outputs.Nodes;
+        Assert.Multiple(() =>
+        {
+            Assert.That(outputs.Single(x => x.Key == "70").Quality, Is.Null);
+            Assert.That(outputs.Single(x => x.Key == "71").Quality, Is.EqualTo(2));
+            Assert.That(outputs.Single(x => x.Key == "72").Quality, Is.Null);
+        });
+    }
+
+    [Test]
     public void ActualOutputsGrossAllocationsReturnsAndCoverageAreIndependent()
     {
         using Store store = new(Path.Combine(_directory, "history.duckdb"));
@@ -50,6 +73,7 @@ public sealed class CraftAnalysisTests
         };
         foreach (CraftObservation craft in new[] { first, incomplete, Craft("other", Forever, time) })
             Assert.That(store.Write(craft).IsSuccessful, Is.True);
+        Assert.That(store.WriteDimensions(new([], [], [], [new(Retail, 60, "Reagent", 1)], [])).IsSuccessful, Is.True);
 
         CraftAnalysis result = store.Analyze(new(new(Game: Retail)));
         Assert.Multiple(() =>
@@ -60,6 +84,11 @@ public sealed class CraftAnalysisTests
             Assert.That(result.Outputs.Nodes.Single(x => x.Key == "50").Measure.Quantity, Is.EqualTo("4"));
             Assert.That(result.Outputs.Nodes.Single(x => x.Key == "50").Measure.IncompleteAttempts, Is.EqualTo("1"));
             Assert.That(result.Outputs.Nodes.Single(x => x.Key == "51").Measure.Quantity, Is.EqualTo("2"));
+            Assert.That(result.Outputs.Nodes.Single(x => x.Key == "50").Quality, Is.EqualTo(2));
+            Assert.That(result.Outputs.Nodes.Single(x => x.Key == "51").Quality, Is.Null);
+            Assert.That(result.Inputs.Nodes.Single(x => x.Key == "50").Quality, Is.Null);
+            Assert.That(result.Inputs.Nodes.Single(x => x.Key == "60").Quality, Is.EqualTo(1));
+            Assert.That(result.Returns.Nodes.Single(x => x.Key == "60").Quality, Is.EqualTo(1));
             Assert.That(result.Inputs.Nodes.Single(x => x.Key == "50").Measure.Quantity, Is.EqualTo("9"));
             Assert.That(result.Returns.Nodes.Single(x => x.Key == "50").Measure.Quantity, Is.EqualTo("1.2500000000000000000000000000"));
             Assert.That(result.Recipes.Nodes.Single().Multicraft.Total, Is.EqualTo("2"));

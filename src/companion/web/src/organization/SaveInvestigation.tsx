@@ -120,7 +120,7 @@ export function SaveInvestigation({ game }: { game: OrganizationGame }) {
   }
 
   return (
-    <Stack gap="xs">
+    <Stack gap="xs" align="flex-start">
       {invalid && (
         <Alert color="red" role="alert">
           {invalid.message} It was not saved.

@@ -920,6 +920,13 @@ it("compares measured production, return quantities and output quality without a
             incompleteAttempts: "1",
           },
         },
+        {
+          id: "reagent-zero",
+          name: "Spare reagent",
+          blizzardId: 103,
+          quality: 2,
+          measure: measure("2", "0"),
+        },
       ],
       truncated: false,
     },
@@ -951,6 +958,13 @@ it("compares measured production, return quantities and output quality without a
             measuredAttempts: "2",
             incompleteAttempts: "1",
           },
+        },
+        {
+          id: "reagent-zero",
+          name: "Spare reagent",
+          blizzardId: 103,
+          quality: 2,
+          measure: measure("3", "0.000"),
         },
       ],
       truncated: false,
@@ -1039,6 +1053,16 @@ it("compares measured production, return quantities and output quality without a
     </MantineProvider>,
   );
   await screen.findByRole("tab", { name: "Reagents" });
+  for (const tile of [
+    "Concentration spent",
+    "Ingenuity",
+    "Multicraft bonus output",
+    "Resourcefulness",
+  ])
+    expect(
+      screen.getByText(tile, { selector: ".mantine-Card-root p" }),
+    ).toBeInTheDocument();
+  expect(screen.getAllByText("1 proc").length).toBeGreaterThan(0);
   await userEvent.click(screen.getByRole("tab", { name: "Reagents" }));
   expect(
     await screen.findByText("Returned material quantities"),
@@ -1047,11 +1071,13 @@ it("compares measured production, return quantities and output quality without a
   expect(screen.getByText("Item #101")).toBeInTheDocument();
   expect(screen.getByText("Item #102")).toBeInTheDocument();
   expect(screen.getByText("Quantity not recorded")).toBeInTheDocument();
-  expect(
-    screen.getAllByText(
-      "Per-craft average unavailable: incomplete observations contribute partial quantities",
-    ),
-  ).toHaveLength(2);
+  expect(screen.queryAllByText(/Per-craft average unavailable/)).toHaveLength(
+    0,
+  );
+  expect(screen.getByText(/Recorded with zero returns:/)).toHaveTextContent(
+    "Recorded with zero returns: Spare reagent · Quality 2 (#103)",
+  );
+  expect(screen.queryByText("Item #103")).not.toBeInTheDocument();
   expect(
     screen.queryByText("B − A observed rate: −16.7 percentage points"),
   ).not.toBeInTheDocument();
@@ -1125,6 +1151,131 @@ it("keeps hidden recipe contributions in totals without displaying their discove
   expect(
     screen.queryByRole("link", { name: "Test recipe" }),
   ).not.toBeInTheDocument();
+});
+
+it("does not report the ranking cap beneath bounded overview previews", async () => {
+  organization.preferences = [];
+  const summary = analysis("2", "sig");
+  summary.recipes.truncated = true;
+  summary.outputs.truncated = true;
+  const client = new ApolloClient({
+    cache: new InMemoryCache(),
+    dataMasking: false,
+    link: new MockLink([
+      {
+        request: {
+          query: ActivityInvestigationDocument,
+          variables: { context: "1", filter: {}, granularity: "DAY" },
+        },
+        result: { data: { analysis: summary } },
+      },
+    ]),
+  });
+  render(
+    <MantineProvider>
+      <ApolloProvider client={client}>
+        <MemoryRouter initialEntries={["/retail/activity?period=all"]}>
+          <Routes>
+            <Route
+              path="/retail/activity"
+              element={<Investigation game={game} kind="activity" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </ApolloProvider>
+    </MantineProvider>,
+  );
+  expect(
+    await screen.findByRole("link", { name: "Test recipe" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText(/Only the first 100 ranked results are shown/),
+  ).not.toBeInTheDocument();
+});
+
+it("reports recipes without Concentration attempts as not eligible for Ingenuity", async () => {
+  organization.preferences = [];
+  const summary = analysis("2", "sig");
+  summary.recipes.nodes[0].ingenuity = outcome("0", "0");
+  const client = new ApolloClient({
+    cache: new InMemoryCache(),
+    dataMasking: false,
+    link: new MockLink([
+      {
+        request: {
+          query: ActivityInvestigationDocument,
+          variables: { context: "1", filter: {}, granularity: "DAY" },
+        },
+        result: { data: { analysis: summary } },
+      },
+    ]),
+  });
+  render(
+    <MantineProvider>
+      <ApolloProvider client={client}>
+        <MemoryRouter initialEntries={["/retail/activity?period=all"]}>
+          <Routes>
+            <Route
+              path="/retail/activity"
+              element={<Investigation game={game} kind="activity" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </ApolloProvider>
+    </MantineProvider>,
+  );
+  expect(await screen.findByText("Not eligible")).toBeInTheDocument();
+  expect(screen.getByText("No Concentration attempts")).toBeInTheDocument();
+  expect(screen.queryByText(/Rate unknown/)).not.toBeInTheDocument();
+});
+
+it("marks only partial quantities, keeps their coverage accessible and labels recorded output quality", async () => {
+  organization.preferences = [];
+  const summary = analysis("2", "sig");
+  summary.outputs.nodes[0] = {
+    ...summary.outputs.nodes[0],
+    quality: 2,
+    measure: {
+      ...measure("2", "1"),
+      measuredAttempts: "1",
+      incompleteAttempts: "1",
+    },
+  } as (typeof summary.outputs.nodes)[number];
+  const client = new ApolloClient({
+    cache: new InMemoryCache(),
+    dataMasking: false,
+    link: new MockLink([
+      {
+        request: {
+          query: ActivityInvestigationDocument,
+          variables: { context: "1", filter: {}, granularity: "DAY" },
+        },
+        result: { data: { analysis: summary } },
+      },
+    ]),
+  });
+  const { container } = render(
+    <MantineProvider>
+      <ApolloProvider client={client}>
+        <MemoryRouter initialEntries={["/retail/activity?period=all"]}>
+          <Routes>
+            <Route
+              path="/retail/activity"
+              element={<Investigation game={game} kind="activity" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </ApolloProvider>
+    </MantineProvider>,
+  );
+  const partial = await screen.findByLabelText(/^Partial evidence: /);
+  expect(partial).toHaveTextContent("1");
+  expect(container.querySelectorAll(".partial-mark")).toHaveLength(1);
+  expect(
+    screen.getAllByLabelText(/^Measured evidence: /).length,
+  ).toBeGreaterThan(0);
+  expect(screen.queryByText("Partial evidence")).not.toBeInTheDocument();
+  expect(screen.getByText("Quality 2")).toBeInTheDocument();
 });
 
 it("keeps item output, gross commitment and returns independently scoped", async () => {
@@ -1291,7 +1442,7 @@ it("keeps item output, gross commitment and returns independently scoped", async
   );
 });
 
-it("keeps unknown-project item history without requesting unsupported return analysis", async () => {
+it("keeps unknown-project item history without requesting unsupported return analysis or linking an empty role", async () => {
   organization.preferences = [];
   const other: ActiveGame = {
     ...game,
@@ -1340,11 +1491,8 @@ it("keeps unknown-project item history without requesting unsupported return ana
             committed: {
               signature: "input-sig",
               inputMeasureLabel: "Recorded input quantities",
-              attempts: measure("1", null),
-              inputs: {
-                nodes: [{ id, measure: measure("1", "3") }],
-                truncated: false,
-              },
+              attempts: measure("0", null),
+              inputs: { nodes: [], truncated: false },
             },
           },
         },
@@ -1380,7 +1528,10 @@ it("keeps unknown-project item history without requesting unsupported return ana
   ).toBeGreaterThan(0);
   expect(
     screen.getAllByRole("link", { name: "Inspect contributing crafts" }),
-  ).toHaveLength(2);
+  ).toHaveLength(1);
+  expect(
+    screen.getByRole("button", { name: "No contributing crafts" }),
+  ).toBeDisabled();
   expect(screen.queryByText("Recorded returns")).not.toBeInTheDocument();
   expect(screen.queryByText("Attributed schematic requirements")).toBeNull();
   expect(
@@ -1549,12 +1700,14 @@ it("labels Forever craft inputs as attributed and omits unsupported Retail outco
 });
 
 it.each([
-  [true, 147, "147"],
-  [false, 0, "0"],
-  [null, null, "Unknown"],
+  [true, 147, 294, "147", "Yes"],
+  [false, 0, 294, "0", "No"],
+  [null, null, 294, "Unknown", "Unknown"],
+  [false, 0, 0, "Not eligible", "Not eligible"],
+  [null, null, 0, "Not eligible", "Not eligible"],
 ] as const)(
-  "shows applied rather than potential Ingenuity refund for proc=%s",
-  async (proc, applied, label) => {
+  "shows applied rather than potential Ingenuity refund for proc=%s, concentration=%s",
+  async (proc, applied, concentration, label, procLabel) => {
     const client = new ApolloClient({
       cache: new InMemoryCache(),
       dataMasking: false,
@@ -1573,7 +1726,7 @@ it.each([
                 recipe: null,
                 profession: null,
                 professionExpansion: null,
-                concentrationSpent: 294,
+                concentrationSpent: concentration,
                 ingenuityRefund: 147,
                 appliedIngenuityRefund: applied,
                 concentrationCurrencyId: null,
@@ -1616,5 +1769,8 @@ it.each([
     expect(heading.parentElement).toHaveTextContent(label);
     if (proc !== true)
       expect(heading.parentElement).not.toHaveTextContent("147");
+    expect(screen.getByText("Ingenuity proc").parentElement).toHaveTextContent(
+      procLabel,
+    );
   },
 );

@@ -53,6 +53,7 @@ fragment InvestigationItemContributions on AnalysisContributions {
     id
     name
     blizzardId
+    quality
     measure {
       ...InvestigationMeasure
     }
@@ -133,6 +134,8 @@ query ActivityInvestigation(
   }
 }
 
+# Returns are null exactly when the game does not support them; this request
+# stays within the API field limit by not repeating that as supportsReturns.
 query RecipeInvestigation(
   $context: String!
   $id: ID!
@@ -152,7 +155,6 @@ query RecipeInvestigation(
   analysis(context: $context, filter: $filter) {
     signature
     inputMeasureLabel
-    supportsReturns
     attempts {
       ...InvestigationMeasure
     }

@@ -15,6 +15,7 @@ import {
   Tabs,
   Text,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
@@ -38,6 +39,7 @@ import {
   coverage,
   exact,
   measuredCraftAverage,
+  roundedCraftAverage,
   outcomeRows,
   rate,
   rawQuantity,
@@ -163,25 +165,34 @@ function Quantity({
     incompleteAttempts: string;
   };
 }) {
+  const partial = BigInt(measure.incompleteAttempts) > 0n;
+  const detail = `${partial ? "Partial evidence" : "Measured evidence"}: ${coverage(measure)}. Known quantities are included even when the collection is incomplete; incomplete averages remain unavailable.`;
+  // Only partial evidence is marked: a mark on every cell would carry no signal.
   return (
-    <>
-      {measure.quantity == null ? (
-        <Text c="dimmed">Quantity not recorded</Text>
-      ) : (
-        <Text fw={600}>{exact(measure.quantity)}</Text>
-      )}
-      <details className="quantity-evidence">
-        <summary>
-          {BigInt(measure.incompleteAttempts) > 0n
-            ? "Partial evidence"
-            : "Measured evidence"}
-        </summary>
-        <Text size="xs" c="dimmed">
-          {coverage(measure)}. Known quantities are included even when the
-          collection is incomplete; incomplete averages remain unavailable.
-        </Text>
-      </details>
-    </>
+    <Tooltip
+      label={detail}
+      multiline
+      w={300}
+      withArrow
+      events={{ hover: true, focus: true, touch: true }}
+    >
+      <span className="quantity-value" tabIndex={0} aria-label={detail}>
+        {measure.quantity == null ? (
+          <Text span c="dimmed">
+            Quantity not recorded
+          </Text>
+        ) : (
+          <Text span fw={600}>
+            {exact(measure.quantity)}
+          </Text>
+        )}
+        {partial && (
+          <span className="partial-mark" aria-hidden>
+            ◐
+          </span>
+        )}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -301,6 +312,7 @@ function Ranking({
       id?: string | null;
       name?: string | null;
       blizzardId?: number | null;
+      quality?: number | null;
       measure: {
         quantity?: string | null;
         attempts: string;
@@ -351,6 +363,7 @@ function Ranking({
                     ) : (
                       (row.name ?? "Unknown")
                     )}
+                    <QualityBadge quality={row.quality} />
                     {row.name && row.blizzardId != null && (
                       <Text size="xs" c="dimmed">
                         Item #{row.blizzardId}
@@ -395,6 +408,7 @@ type BreakdownEntry = {
   label: string;
   itemId?: string;
   blizzardId?: number;
+  quality?: number | null;
   measure: BreakdownMeasure;
 };
 
@@ -405,6 +419,7 @@ function MeasuredBreakdown({
   left,
   right,
   detail,
+  zeroSummary,
 }: {
   game: ActiveGame;
   params: URLSearchParams;
@@ -412,10 +427,29 @@ function MeasuredBreakdown({
   left: { nodes: BreakdownEntry[]; truncated: boolean };
   right?: { nodes: BreakdownEntry[]; truncated: boolean };
   detail: string;
+  /** When set, rows measured completely as zero in every population are listed on one line with this label. */
+  zeroSummary?: string;
 }) {
-  const rows = new Map(
+  const all = new Map(
     [...left.nodes, ...(right?.nodes ?? [])].map((row) => [row.key, row]),
   );
+  const populations = right ? [left, right] : [left];
+  const zero = zeroSummary
+    ? [...all.values()].filter((row) =>
+        populations.every((population) => {
+          const measure = population.nodes.find(
+            (entry) => entry.key === row.key,
+          )?.measure;
+          // Only a completely measured zero: partial coverage is not a recorded zero.
+          return (
+            measure != null &&
+            measure.incompleteAttempts === "0" &&
+            /^0+(\.0+)?$/.test(measure.quantity ?? "")
+          );
+        }),
+      )
+    : [];
+  const rows = [...all.values()].filter((row) => !zero.includes(row));
   function cell(row: BreakdownEntry | undefined, truncated: boolean) {
     if (!row)
       return (
@@ -425,10 +459,22 @@ function MeasuredBreakdown({
             : "No recorded row for this population"}
         </Text>
       );
+    const average = roundedCraftAverage(row.measure);
     return (
       <>
         <Quantity measure={row.measure} />
-        <Text size="sm">{measuredCraftAverage(row.measure)}</Text>
+        {average && (
+          <Tooltip
+            label={measuredCraftAverage(row.measure)}
+            multiline
+            w={300}
+            events={{ hover: true, focus: true, touch: true }}
+          >
+            <Text size="sm" tabIndex={0}>
+              {average}
+            </Text>
+          </Tooltip>
+        )}
       </>
     );
   }
@@ -440,60 +486,86 @@ function MeasuredBreakdown({
         measure is complete; known partial quantities are not divided by
         complete-attempt counts.
       </Text>
-      {!rows.size ? (
+      {!all.size ? (
         <Text c="dimmed">No recorded evidence in this population.</Text>
       ) : (
-        <Table.ScrollContainer minWidth={right ? 700 : 480}>
-          <Table striped withTableBorder>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Recorded group</Table.Th>
-                <Table.Th>
-                  {right ? "Population A" : "Selected population"}
-                </Table.Th>
-                {right && <Table.Th>Population B</Table.Th>}
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {[...rows.values()].map((row) => (
-                <Table.Tr key={row.key}>
-                  <Table.Td>
-                    {row.itemId ? (
-                      <LinkTo
-                        game={game}
-                        destination={`items/${encodeURIComponent(row.itemId)}`}
-                        params={params}
-                      >
-                        {row.label}
-                      </LinkTo>
-                    ) : (
-                      row.label
-                    )}
-                    {row.blizzardId != null && (
-                      <Text size="xs" c="dimmed">
-                        Item #{row.blizzardId}
-                      </Text>
-                    )}
-                  </Table.Td>
-                  <Table.Td>
-                    {cell(
-                      left.nodes.find((entry) => entry.key === row.key),
-                      left.truncated,
-                    )}
-                  </Table.Td>
-                  {right && (
+        rows.length > 0 && (
+          <Table.ScrollContainer minWidth={right ? 700 : 480}>
+            <Table striped withTableBorder>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Recorded group</Table.Th>
+                  <Table.Th>
+                    {right ? "Population A" : "Selected population"}
+                  </Table.Th>
+                  {right && <Table.Th>Population B</Table.Th>}
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {rows.map((row) => (
+                  <Table.Tr key={row.key}>
                     <Table.Td>
-                      {cell(
-                        right.nodes.find((entry) => entry.key === row.key),
-                        right.truncated,
+                      {row.itemId ? (
+                        <LinkTo
+                          game={game}
+                          destination={`items/${encodeURIComponent(row.itemId)}`}
+                          params={params}
+                        >
+                          {row.label}
+                        </LinkTo>
+                      ) : (
+                        row.label
+                      )}
+                      <QualityBadge quality={row.quality} />
+                      {row.blizzardId != null && (
+                        <Text size="xs" c="dimmed">
+                          Item #{row.blizzardId}
+                        </Text>
                       )}
                     </Table.Td>
-                  )}
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
+                    <Table.Td>
+                      {cell(
+                        left.nodes.find((entry) => entry.key === row.key),
+                        left.truncated,
+                      )}
+                    </Table.Td>
+                    {right && (
+                      <Table.Td>
+                        {cell(
+                          right.nodes.find((entry) => entry.key === row.key),
+                          right.truncated,
+                        )}
+                      </Table.Td>
+                    )}
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
+        )
+      )}
+      {zero.length > 0 && (
+        <Text size="sm" c="dimmed">
+          {zeroSummary}:{" "}
+          {zero.map((row, i) => (
+            <span key={row.key}>
+              {i > 0 && ", "}
+              {row.itemId ? (
+                <LinkTo
+                  game={game}
+                  destination={`items/${encodeURIComponent(row.itemId)}`}
+                  params={params}
+                >
+                  {row.label}
+                </LinkTo>
+              ) : (
+                row.label
+              )}
+              {row.quality != null && ` · Quality ${row.quality}`}
+              {row.blizzardId != null && ` (#${row.blizzardId})`}
+            </span>
+          ))}
+        </Text>
       )}
       {(left.truncated || right?.truncated) && <Truncated value />}
     </Stack>
@@ -721,7 +793,19 @@ function Activity({
                           </Table.Td>
                           {game.project === 1 && result.supportsReturns && (
                             <Table.Td>
-                              {row.ingenuity ? (
+                              {row.ingenuity &&
+                              row.ingenuity.observedAttempts === "0" &&
+                              row.ingenuity.unknownAttempts === "0" ? (
+                                // Ingenuity is only possible on Concentration attempts.
+                                <>
+                                  <Text c="dimmed" size="sm">
+                                    Not eligible
+                                  </Text>
+                                  <Text size="xs" c="dimmed">
+                                    No Concentration attempts
+                                  </Text>
+                                </>
+                              ) : row.ingenuity ? (
                                 <>
                                   {exact(row.ingenuity.positiveAttempts)}{" "}
                                   positive /{" "}
@@ -755,7 +839,8 @@ function Activity({
                     remain in analytical totals.
                   </Text>
                 )}
-              <Truncated value={result.recipes.truncated} />
+              {/* A bounded preview of the top ranks: the server's ranking cap
+                  does not limit these rows, and "View all recipes" leads on. */}
             </>
           )}
           <SimpleGrid cols={{ base: 1, lg: 2 }}>
@@ -1182,15 +1267,15 @@ function Recipe({
         >
           Refresh investigation
         </Button>
+        {params.has("after") ? (
+          <Text size="sm" c="dimmed">
+            Return to the newest craft page to save this scope without a
+            transient page cursor.
+          </Text>
+        ) : (
+          <SaveInvestigation game={game} />
+        )}
       </Group>
-      {params.has("after") ? (
-        <Text size="sm" c="dimmed">
-          Return to the newest craft page to save this scope without a transient
-          page cursor.
-        </Text>
-      ) : (
-        <SaveInvestigation game={game} />
-      )}
       {first.error && <RequestError error={first.error} retry={refresh} />}
       {other.error && <RequestError error={other.error} retry={refresh} />}
       {configsFirst.error && (
@@ -1236,25 +1321,11 @@ function Recipe({
               refresh={refresh}
             />
           )}
-          <SimpleGrid cols={{ base: 2, sm: 3 }}>
-            <Card withBorder>
-              <Text size="sm">Completed crafts</Text>
-              <Text className="metric-value">
-                {exact(left.attempts.attempts)}
-              </Text>
-            </Card>
-            <Card withBorder>
-              <Text size="sm">Actual output</Text>
-              <Quantity
-                measure={
-                  left.recipes.nodes.find((row) => row.id === id)?.outputs ?? {
-                    ...left.attempts,
-                    quantity: null,
-                  }
-                }
-              />
-            </Card>
-          </SimpleGrid>
+          <RecipeMetrics
+            attempts={left.attempts}
+            recipe={left.recipes.nodes.find((row) => row.id === id)}
+            retail={game.project === 1 && left.returns != null}
+          />
           <Tabs
             defaultValue={compare ? "compare" : "overview"}
             keepMounted={false}
@@ -1333,7 +1404,7 @@ function Recipe({
               </Stack>
             </Tabs.Panel>
             <Tabs.Panel value="reagents">
-              <SimpleGrid cols={{ base: 1, lg: 2 }}>
+              <Stack gap="xl">
                 <Ranking
                   game={game}
                   params={withFilters(params, { recipe: id })}
@@ -1350,12 +1421,13 @@ function Recipe({
                   destination="items"
                   role="input"
                 />
-                {game.project === 1 && left.supportsReturns && left.returns && (
+                {game.project === 1 && left.returns && (
                   <MeasuredBreakdown
                     game={game}
                     params={withFilters(params, { recipe: id })}
                     title="Returned material quantities"
                     detail="Each row covers attempts containing this reagent; returns remain separate from gross allocation."
+                    zeroSummary="Recorded with zero returns"
                     left={{
                       nodes: left.returns.nodes.map((row, i) => ({
                         key: row.id ?? `unidentified-${i}`,
@@ -1368,6 +1440,7 @@ function Recipe({
                         blizzardId: row.name
                           ? (row.blizzardId ?? undefined)
                           : undefined,
+                        quality: row.quality,
                         measure: row.measure,
                       })),
                       truncated: left.returns.truncated,
@@ -1386,6 +1459,7 @@ function Recipe({
                               blizzardId: row.name
                                 ? (row.blizzardId ?? undefined)
                                 : undefined,
+                              quality: row.quality,
                               measure: row.measure,
                             })),
                             truncated: right.returns.truncated,
@@ -1394,7 +1468,7 @@ function Recipe({
                     }
                   />
                 )}
-              </SimpleGrid>
+              </Stack>
             </Tabs.Panel>
             <Tabs.Panel value="compare">
               <Stack gap="lg">
@@ -1518,7 +1592,7 @@ function Recipe({
                         <Table.Th>Character</Table.Th>
                         <Table.Th>Attempts</Table.Th>
                         <Table.Th>Actual production</Table.Th>
-                        {game.project === 1 && left.supportsReturns && (
+                        {game.project === 1 && left.returns != null && (
                           <Table.Th>Ingenuity rate</Table.Th>
                         )}
                         <Table.Th>Evidence</Table.Th>
@@ -1536,7 +1610,7 @@ function Recipe({
                               "Not measured"
                             )}
                           </Table.Td>
-                          {game.project === 1 && left.supportsReturns && (
+                          {game.project === 1 && left.returns != null && (
                             <Table.Td>
                               {row.metrics?.ingenuity
                                 ? (rate(row.metrics.ingenuity) ??
@@ -1613,7 +1687,7 @@ function Recipe({
                     right={right.characters}
                     attributedRequirements={game.project === 18}
                     includeRetailOutcomes={
-                      game.project === 1 && left.supportsReturns
+                      game.project === 1 && left.returns != null
                     }
                     metric={
                       isCharacterOutcome(selectedCharacterOutcome)
@@ -1683,7 +1757,7 @@ function Recipe({
                             <Table.Th>Character</Table.Th>
                             <Table.Th>Attempts</Table.Th>
                             <Table.Th>Production coverage</Table.Th>
-                            {game.project === 1 && right.supportsReturns && (
+                            {game.project === 1 && right.returns != null && (
                               <Table.Th>Ingenuity observed rate</Table.Th>
                             )}
                             <Table.Th>Evidence</Table.Th>
@@ -1701,7 +1775,7 @@ function Recipe({
                                   ? coverage(row.metrics.production)
                                   : "Unknown"}
                               </Table.Td>
-                              {game.project === 1 && right.supportsReturns && (
+                              {game.project === 1 && right.returns != null && (
                                 <Table.Td>
                                   {row.metrics?.ingenuity
                                     ? (rate(row.metrics.ingenuity) ??
@@ -1752,6 +1826,82 @@ function Recipe({
   );
 }
 
+function procs(count: string) {
+  return `${exact(count)} ${count === "1" ? "proc" : "procs"}`;
+}
+
+function RecipeMetrics({
+  attempts,
+  recipe,
+  retail,
+}: {
+  attempts: RecipeInvestigationQuery["analysis"]["attempts"];
+  recipe?: RecipeInvestigationQuery["analysis"]["recipes"]["nodes"][number];
+  retail: boolean;
+}) {
+  const tiles: { label: string; value: string; detail?: string }[] = [];
+  if (retail && recipe) {
+    const { concentration, ingenuity, multicraft, resourcefulness } = recipe;
+    if (concentration)
+      tiles.push({
+        label: "Concentration spent",
+        value: exact(concentration.total ?? "0"),
+        detail: `${exact(concentration.positiveAttempts)} of ${exact(concentration.observedAttempts)} observed attempts`,
+      });
+    if (ingenuity)
+      tiles.push(
+        ingenuity.observedAttempts === "0" && ingenuity.unknownAttempts === "0"
+          ? {
+              label: "Ingenuity",
+              value: "Not eligible",
+              detail: "No Concentration attempts",
+            }
+          : {
+              label: "Ingenuity",
+              value: procs(ingenuity.positiveAttempts),
+              detail: rate(ingenuity) ?? "Rate unknown",
+            },
+      );
+    if (multicraft)
+      tiles.push({
+        label: "Multicraft bonus output",
+        value: exact(multicraft.total ?? "0"),
+        detail: rate(multicraft) ?? "Rate unknown",
+      });
+    if (resourcefulness)
+      tiles.push({
+        label: "Resourcefulness",
+        value: procs(resourcefulness.positiveAttempts),
+        detail: rate(resourcefulness) ?? "Rate unknown",
+      });
+  }
+  return (
+    <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }}>
+      <Card withBorder>
+        <Text size="sm">Completed crafts</Text>
+        <Text className="metric-value">{exact(attempts.attempts)}</Text>
+      </Card>
+      <Card withBorder>
+        <Text size="sm">Actual output</Text>
+        <Quantity
+          measure={recipe?.outputs ?? { ...attempts, quantity: null }}
+        />
+      </Card>
+      {tiles.map((tile) => (
+        <Card withBorder key={tile.label}>
+          <Text size="sm">{tile.label}</Text>
+          <Text fw={600}>{tile.value}</Text>
+          {tile.detail && (
+            <Text size="xs" c="dimmed">
+              {tile.detail}
+            </Text>
+          )}
+        </Card>
+      ))}
+    </SimpleGrid>
+  );
+}
+
 function RecipeOutcomes({
   id,
   left,
@@ -1778,7 +1928,7 @@ function RecipeOutcomes({
               concentration: recipe.concentration,
               refund: recipe.refund,
             },
-            retail && result.supportsReturns,
+            retail && result.returns != null,
           )
         : []),
     ];
@@ -1792,7 +1942,7 @@ function RecipeOutcomes({
       {(left.recipes.truncated || right?.recipes.truncated) && (
         <Truncated value />
       )}
-      {retail && left.supportsReturns && (
+      {retail && left.returns != null && (
         <Text size="sm" c="dimmed">
           Rates use observed denominators, not all attempts. Unknown evidence is
           not a zero outcome. Actual output quantities already include any
@@ -1987,17 +2137,23 @@ function Item({
                           : "No recorded quantity for this item in the selected role"}
                       </Text>
                     )}
-                    <Button
-                      component={Link}
-                      to={investigationLink(
-                        game,
-                        "crafts",
-                        roleLinkParams(params, id, role),
-                      )}
-                      variant="light"
-                    >
-                      Inspect contributing crafts
-                    </Button>
+                    {analysis?.attempts.attempts === "0" ? (
+                      <Button variant="light" disabled>
+                        No contributing crafts
+                      </Button>
+                    ) : (
+                      <Button
+                        component={Link}
+                        to={investigationLink(
+                          game,
+                          "crafts",
+                          roleLinkParams(params, id, role),
+                        )}
+                        variant="light"
+                      >
+                        Inspect contributing crafts
+                      </Button>
+                    )}
                   </Stack>
                 </Card>
               );
@@ -2297,6 +2453,8 @@ function Craft({
     },
   );
   const craft = data?.contextCraft;
+  // Ingenuity can trigger only when Concentration is spent; unknown spending stays unknown.
+  const noConcentration = craft?.concentrationSpent === 0;
   return (
     <Stack gap="lg">
       <header>
@@ -2375,15 +2533,22 @@ function Craft({
                   <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }}>
                     {[
                       ["Concentration spent", craft.concentrationSpent],
-                      ["Ingenuity refunded", craft.appliedIngenuityRefund],
+                      [
+                        "Ingenuity refunded",
+                        noConcentration && !craft.appliedIngenuityRefund
+                          ? "Not eligible"
+                          : craft.appliedIngenuityRefund,
+                      ],
                       ["Multicraft bonus", craft.multicraftBonus],
                       [
                         "Ingenuity proc",
-                        craft.hasIngenuityProc == null
-                          ? null
-                          : craft.hasIngenuityProc
-                            ? "Yes"
-                            : "No",
+                        craft.hasIngenuityProc
+                          ? "Yes"
+                          : noConcentration
+                            ? "Not eligible"
+                            : craft.hasIngenuityProc == null
+                              ? null
+                              : "No",
                       ],
                       [
                         "Resourcefulness proc",
@@ -2543,7 +2708,10 @@ function Craft({
                     <Text size="sm" c="dimmed">
                       Recorded potential Ingenuity refund:{" "}
                       {craft.ingenuityRefund}. This configured amount is not an
-                      applied refund unless Ingenuity triggered.
+                      applied refund unless Ingenuity triggered, which requires
+                      spending Concentration.
+                      {noConcentration &&
+                        " No Concentration was spent on this craft."}
                     </Text>
                   )}
                   {!craft.recordedConfigurations.observed && (

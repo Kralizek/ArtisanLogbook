@@ -14,6 +14,12 @@ public sealed partial class HistoryStore
 {
     public const int MaximumAnalysisRows = 100;
 
+    // Recorded output quality, only when every contributing output row reports the same one.
+    private const string OutputQuality = """
+        , CASE WHEN COUNT(o.Quality) = COUNT(*) AND COUNT(DISTINCT o.Quality) = 1
+            THEN CAST(MIN(o.Quality) AS INTEGER) END Quality
+        """;
+
     public CraftAnalysis Analyze(AnalysisQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -456,11 +462,12 @@ public sealed partial class HistoryStore
                 CAST(COUNT(DISTINCT c.CraftKey) FILTER (WHERE {quantity} IS NULL OR
                     c.{(production ? "OutputsComplete" : "InputsComplete")} IS DISTINCT FROM TRUE) AS VARCHAR) IncompleteAttempts,
                 CAST(SUM(CAST({quantity} AS HUGEINT)) AS VARCHAR) Quantity
+                {(production ? OutputQuality : ", MAX(d.Quality) Quality")}
             FROM selected c JOIN {table} o USING (CraftKey)
             LEFT JOIN Item d ON d.ContextKey = c.ContextKey AND d.ItemId = o.ItemId
             GROUP BY o.ItemId ORDER BY SUM(CAST({quantity} AS HUGEINT)) DESC NULLS LAST, o.ItemId
             LIMIT $Limit
-            """, r => new(r.Key!, r.Measure(), r.Name));
+            """, r => new(r.Key!, r.Measure(), r.Name, r.Quality));
 
         AnalysisCollection<AnalysisContribution> ReturnContributions() =>
             Page<ContributionRow, AnalysisContribution>("""
@@ -471,7 +478,7 @@ public sealed partial class HistoryStore
                     CAST(rpad(split_part(o.ReturnedQuantity, '.', 2), 28, '0') AS HUGEINT) Fraction
                 FROM selected c JOIN CraftReagent o USING (CraftKey)
             ), grouped AS (
-                SELECT a.ItemId, MAX(d.Name) "Name",
+                SELECT a.ItemId, MAX(d.Name) "Name", MAX(d.Quality) Quality,
                     CAST(COUNT(*) AS VARCHAR) Attempts,
                     CAST(COUNT(a.ReturnedQuantity) AS VARCHAR) MeasuredAttempts,
                     CAST(COUNT(*) FILTER (WHERE a.ReturnedQuantity IS NULL OR
@@ -484,7 +491,7 @@ public sealed partial class HistoryStore
                     Fraction % 10000000000000000000000000000 TotalFraction
                 FROM grouped
             )
-            SELECT CAST(ItemId AS VARCHAR) "Key", "Name", Attempts, MeasuredAttempts,
+            SELECT CAST(ItemId AS VARCHAR) "Key", "Name", Quality, Attempts, MeasuredAttempts,
                 IncompleteAttempts,
                 CASE WHEN TotalWhole IS NULL THEN NULL ELSE
                     CAST(TotalWhole AS VARCHAR) || '.' ||
@@ -492,7 +499,7 @@ public sealed partial class HistoryStore
                 END Quantity
             FROM normalized ORDER BY TotalWhole DESC NULLS LAST, TotalFraction DESC NULLS LAST, ItemId
             LIMIT $Limit
-            """, r => new(r.Key!, r.Measure(), r.Name));
+            """, r => new(r.Key!, r.Measure(), r.Name, r.Quality));
 
         AnalysisCollection<AnalysisItemRelation> Relations(string table, string quantity, bool production) =>
             Page<RelationRow, AnalysisItemRelation>($"""
