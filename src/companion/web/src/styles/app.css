@@ -494,3 +494,58 @@ h1 {
     color: var(--mantine-color-dimmed);
   }
 }
+
+/* Logbook rows follow the addon's layout: class swatch beside the character,
+   right-aligned quantity, highlight chips and a compact timestamp. */
+.character-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.class-swatch {
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  flex-shrink: 0;
+}
+.logbook-table td,
+.logbook-table th {
+  vertical-align: middle;
+}
+.logbook-table .logbook-quantity {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.logbook-output,
+.logbook-recipe {
+  white-space: nowrap;
+}
+.logbook-table .logbook-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.craft-highlight {
+  --highlight: #9a7a3a;
+  border-color: var(--highlight);
+  color: inherit;
+  text-transform: none;
+  font-weight: 600;
+  letter-spacing: 0;
+  background: color-mix(in srgb, var(--highlight) 14%, transparent);
+}
+.craft-highlight[data-kind="concentration"] {
+  --highlight: #4f8fd6;
+}
+.craft-highlight[data-kind="multicraft"] {
+  --highlight: #d08a2e;
+}
+.craft-highlight[data-kind="ingenuity"] {
+  --highlight: #b06ad8;
+}
+.craft-highlight[data-kind="resourcefulness"] {
+  --highlight: #4f9f5a;
+}

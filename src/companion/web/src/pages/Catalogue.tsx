@@ -30,6 +30,7 @@ import {
   QualityBadge,
   RecipeTooltip,
 } from "../components/EntityTooltip";
+import { className } from "../components/characterClass";
 
 type CatalogueRow = {
   id: string;
@@ -412,17 +413,5 @@ function ActivityCells({ row }: { row: CatalogueRow }) {
       </Table.Td>
       <Table.Td />
     </>
-  );
-}
-
-/** Readable class label from the client's class file token (e.g. DEATHKNIGHT). */
-function className(classFile?: string | null) {
-  if (!classFile) return "";
-  const known: Record<string, string> = {
-    DEATHKNIGHT: "Death Knight",
-    DEMONHUNTER: "Demon Hunter",
-  };
-  return (
-    known[classFile] ?? classFile.charAt(0) + classFile.slice(1).toLowerCase()
   );
 }

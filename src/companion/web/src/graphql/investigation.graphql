@@ -423,6 +423,7 @@ query InvestigationCrafts(
       character {
         id
         name
+        classFile
       }
       recipe {
         id
@@ -435,6 +436,13 @@ query InvestigationCrafts(
       }
       outputsComplete
       inputsComplete
+      concentrationSpent
+      multicraftBonus
+      hasIngenuityProc
+      appliedIngenuityRefund
+      reagents {
+        returnedQuantityExact
+      }
       outputs {
         item {
           id

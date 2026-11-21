@@ -3,7 +3,6 @@ import {
   Accordion,
   Alert,
   Anchor,
-  Badge,
   Button,
   Card,
   Group,
@@ -44,6 +43,7 @@ import {
   rate,
   rawQuantity,
 } from "../components/analysisFormat";
+import { LogbookTable } from "../components/LogbookTable";
 import { OutcomeComparison } from "../components/OutcomeComparison";
 import { RequestError } from "../components/RequestError";
 import {
@@ -2391,69 +2391,16 @@ function Crafts({
           </Text>
           {!page.nodes.length && <Text>No matching recorded crafts.</Text>}
           {!!page.nodes.length && (
-            <Table.ScrollContainer minWidth={650}>
-              <Table striped highlightOnHover withTableBorder>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Recorded</Table.Th>
-                    <Table.Th>Character</Table.Th>
-                    <Table.Th>Recipe</Table.Th>
-                    <Table.Th>Observed output</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {page.nodes.map((craft) => (
-                    <Table.Tr key={craft.id}>
-                      <Table.Td>
-                        <LinkTo
-                          game={game}
-                          destination={`crafts/${encodeURIComponent(craft.id)}`}
-                          params={params}
-                        >
-                          <time dateTime={craft.recordedAt}>
-                            {new Date(craft.recordedAt).toLocaleString()}
-                          </time>
-                        </LinkTo>
-                      </Table.Td>
-                      <Table.Td>
-                        {craft.character.name ?? "Unknown character"}
-                      </Table.Td>
-                      <Table.Td>
-                        {craft.recipe?.id ? (
-                          <LinkTo
-                            game={game}
-                            destination={`recipes/${encodeURIComponent(craft.recipe.id)}`}
-                            params={params}
-                          >
-                            {craft.recipe.name ??
-                              `Recipe ${craft.recipe.blizzardId}`}
-                          </LinkTo>
-                        ) : (
-                          "Unknown recipe"
-                        )}
-                      </Table.Td>
-                      <Table.Td>
-                        {craft.outputs == null
-                          ? "Not observed"
-                          : !craft.outputs.length
-                            ? "Observed empty"
-                            : craft.outputs
-                                .map(
-                                  (output) =>
-                                    `${output.item.name ?? `Item ${output.item.blizzardId}`} × ${rawQuantity(output.quantityExact)}`,
-                                )
-                                .join(" · ")}
-                        {craft.outputsComplete === false && (
-                          <Badge size="xs" ml="xs" color="yellow">
-                            Incomplete
-                          </Badge>
-                        )}
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
+            <LogbookTable
+              crafts={page.nodes}
+              showRecipe={!embedded}
+              highlights={game.project === 1}
+              linkTo={(destination, children) => (
+                <LinkTo game={game} destination={destination} params={params}>
+                  {children}
+                </LinkTo>
+              )}
+            />
           )}
           <Group>
             <Button
