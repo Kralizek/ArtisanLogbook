@@ -82,12 +82,12 @@ public sealed class CharacterGraph(CharacterDimension value)
         DimensionActivityGraph.From(await loader.LoadAsync(new DimensionIdentity<CharacterIdentity>(value.Game, value.Identity), token));
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     [Cost(1)]
-    public async Task<CraftConnection> GetCraftsAsync(CharacterCraftPageLoader loader, int first = 20, string? after = null,
-        CancellationToken token = default)
+    public async Task<CraftConnection> GetCraftsAsync(CharacterCraftPageLoader loader, ICraftHistoryRepository repository,
+        int first = 20, string? after = null, CancellationToken token = default)
     {
         HistoryConnections.ValidatePageSize(first);
         CharacterCraftPageRequest request = new(new(value.Game, value.Identity), first,
-            after is null ? null : HistoryTokens.ParseCraftCursor(after));
+            HistoryConnections.CraftCursor(repository, after, token));
         CraftPage page = await loader.LoadAsync(request, token)
             ?? throw new InvalidOperationException("The character craft page was not returned by the repository.");
         return HistoryConnections.Crafts(page);

@@ -37,8 +37,9 @@ public sealed partial class HistoryStore
             query.BuffSpellId is <= 0 || query.FinishingItemId is <= 0 ||
             query.AbsentBuffSpellId is <= 0 || query.AbsentFinishingItemId is <= 0 || query.AbsentInputItemId is <= 0 ||
             (query.ConfigurationSignature is not null &&
-                (query.ConfigurationSignature.Length != 64 ||
+                (query.ConfigurationSignature.Length != 16 ||
                 query.ConfigurationSignature.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))) ||
+            (query.CraftShortId is not null && !CraftShortIds.IsValid(query.CraftShortId)) ||
             (query.ProfessionExpansionKey is not null && string.IsNullOrWhiteSpace(query.ProfessionExpansionKey)) ||
             (query.GameExpansionGroupKey is not null &&
                 GameExpansionGroups.MemberKeys(query.Game!, query.GameExpansionGroupKey) is null) ||
@@ -97,6 +98,11 @@ public sealed partial class HistoryStore
             parameters.Add("ItemId", itemId);
         }
         AppendConfigurationSelection(query, sql, parameters);
+        if (query.CraftShortId is string shortId)
+        {
+            sql.Append(" AND c.CraftKey = (SELECT s.CraftKey FROM CraftShortId s WHERE s.ShortId = $CraftShortId)");
+            parameters.Add("CraftShortId", shortId);
+        }
         if (query.Identity is not null)
         {
             sql.Append(" AND i.IdentityOrigin = $IdentityOrigin AND i.IdentityObservation = $IdentityObservation");

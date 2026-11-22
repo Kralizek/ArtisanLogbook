@@ -8,15 +8,13 @@ using HotChocolate;
 namespace ArtisanLogbook.Runtime.GraphQL;
 
 /// <summary>
-/// Opaque, URL-friendly IDs and cursors. A token is <c>{kind code}{project}[.{track}]-{key}</c>, for example
-/// <c>r1-1230868</c> for a Retail recipe; craft tokens carry their origin and observation instead of a context.
-/// Fields are written with <see cref="Escape"/>, so tokens need no percent-encoding in paths or query strings.
+/// Opaque, URL-friendly IDs and cursors. A dimension token is <c>{kind code}{project}[.{track}]-{key}</c>, for
+/// example <c>r1-1230868</c> for a Retail recipe; keys are written with <see cref="Escape"/>, so tokens need no
+/// percent-encoding. A craft is <c>k-{short ID}</c> (see <see cref="CraftIdentity.ShortId"/>), and a craft cursor
+/// <c>nk-{UTC ticks}*{offset minutes}*{short ID}</c>. Only the exact spelling the encoder produces is accepted.
 /// </summary>
 internal static class HistoryTokens
 {
-    private sealed record Payload(string Kind, int? Project, string? Track, string? Key,
-        string? Origin, string? Observation, DateTimeOffset? RecordedAt);
-
     private static readonly IReadOnlyDictionary<string, string> Codes = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["context"] = "x",
@@ -34,15 +32,16 @@ internal static class HistoryTokens
     private static readonly IReadOnlyDictionary<string, string> Kinds =
         Codes.ToDictionary(pair => pair.Value, pair => pair.Key, StringComparer.Ordinal);
 
-    public static string Craft(CraftIdentity identity) =>
-        Code("craft") + "-" + Escape(identity.Origin) + "*" + Escape(identity.Observation);
+    public static string Craft(CraftIdentity identity) => Code("craft") + "-" + identity.ShortId;
 
-    public static CraftIdentity ParseCraft(string value)
+    /// <summary>The craft short ID a craft token names; the caller resolves the craft.</summary>
+    public static string ParseCraft(string value)
     {
-        Payload payload = Decode(value, "craft");
-        if (string.IsNullOrWhiteSpace(payload.Origin) || string.IsNullOrWhiteSpace(payload.Observation))
-            throw InvalidToken();
-        return new(payload.Origin, payload.Observation);
+        string prefix = Code("craft") + "-";
+        return value is not null && value.StartsWith(prefix, StringComparison.Ordinal) &&
+            CraftShortIds.IsValid(value[prefix.Length..])
+            ? value[prefix.Length..]
+            : throw InvalidToken();
     }
 
     public static string Dimension(string kind, GameContext game, string key) =>
@@ -54,12 +53,10 @@ internal static class HistoryTokens
 
     public static (GameContext Game, string Key) ParseDimension(string token, string kind)
     {
-        Payload payload = Decode(token, kind);
-        if (payload.Project is null or <= 0 || payload.Key is null ||
-            (kind is not ("context" or "cursor:context") && string.IsNullOrWhiteSpace(payload.Key)) ||
-            (payload.Track is not null && string.IsNullOrWhiteSpace(payload.Track)))
+        (GameContext game, string key) = DecodeDimension(token, kind);
+        if (kind is not ("context" or "cursor:context") && string.IsNullOrWhiteSpace(key))
             throw InvalidToken();
-        return (new((GameProject)payload.Project.Value, payload.Track), payload.Key);
+        return (game, key);
     }
 
     public static GameContext ParseContext(string token) => ParseDimension(token, "context").Game;
@@ -80,18 +77,37 @@ internal static class HistoryTokens
 
     // The recorded instant keeps its 100 ns precision and its original offset.
     public static string CraftCursor(CraftPagePosition position) =>
-        Code("cursor:craft") + "-" + position.RecordedAt.UtcTicks.ToString(CultureInfo.InvariantCulture) + "*" +
-        ((int)position.RecordedAt.Offset.TotalMinutes).ToString(CultureInfo.InvariantCulture) + "*" +
-        Escape(position.Identity.Origin) + "*" + Escape(position.Identity.Observation);
+        CraftCursor(position.RecordedAt, position.Identity.ShortId);
 
-    public static CraftPagePosition ParseCraftCursor(string value)
+    private static string CraftCursor(DateTimeOffset recordedAt, string shortId) =>
+        Code("cursor:craft") + "-" + recordedAt.UtcTicks.ToString(CultureInfo.InvariantCulture) + "*" +
+        ((int)recordedAt.Offset.TotalMinutes).ToString(CultureInfo.InvariantCulture) + "*" + shortId;
+
+    /// <summary>The recorded instant and craft short ID of a craft cursor; the caller resolves the craft.</summary>
+    public static (DateTimeOffset RecordedAt, string ShortId) ParseCraftCursor(string value)
     {
-        Payload payload = Decode(value, "cursor:craft");
-        if (payload.RecordedAt is null || string.IsNullOrWhiteSpace(payload.Origin) ||
-            string.IsNullOrWhiteSpace(payload.Observation))
+        string prefix = Code("cursor:craft") + "-";
+        string[] fields = value is not null && value.StartsWith(prefix, StringComparison.Ordinal)
+            ? value[prefix.Length..].Split('*')
+            : [];
+        if (fields.Length != 3 ||
+            !long.TryParse(fields[0], NumberStyles.None, CultureInfo.InvariantCulture, out long ticks) ||
+            !int.TryParse(fields[1], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int minutes) ||
+            !CraftShortIds.IsValid(fields[2]))
             throw InvalidToken();
-        return new(payload.RecordedAt.Value, new(payload.Origin, payload.Observation));
+        DateTimeOffset recordedAt;
+        try
+        {
+            recordedAt = new DateTimeOffset(ticks, TimeSpan.Zero).ToOffset(TimeSpan.FromMinutes(minutes));
+        }
+        catch (ArgumentException)
+        {
+            throw InvalidToken();
+        }
+        return CraftCursor(recordedAt, fields[2]) == value ? (recordedAt, fields[2]) : throw InvalidToken();
     }
+
+    public static GraphQLException InvalidCursor() => InvalidToken();
 
     private static string Code(string kind)
     {
@@ -152,61 +168,25 @@ internal static class HistoryTokens
         }
     }
 
-    private static Payload Decode(string value, string kind)
+    private static (GameContext Game, string Key) DecodeDimension(string value, string kind)
     {
         if (string.IsNullOrEmpty(value)) throw InvalidToken();
-        Payload payload = DecodeCompact(value);
-        // Only the exact spelling the encoder produces is accepted, so each entity has one compact ID.
-        string canonical = payload.Kind switch
-        {
-            "craft" => Craft(new(payload.Origin!, payload.Observation!)),
-            "cursor:craft" => CraftCursor(new(payload.RecordedAt!.Value, new(payload.Origin!, payload.Observation!))),
-            _ => Dimension(payload.Kind, new((GameProject)payload.Project!.Value, payload.Track), payload.Key!)
-        };
-        return payload.Kind == kind && canonical == value ? payload : throw InvalidToken();
-    }
-
-    private static Payload DecodeCompact(string value)
-    {
         int dash = value.IndexOf('-', StringComparison.Ordinal);
         if (dash <= 0) throw InvalidToken();
         string head = value[..dash], body = value[(dash + 1)..];
         int letters = 0;
         while (letters < head.Length && char.IsAsciiLetterLower(head[letters])) letters++;
-        string? kind = KindOf(head[..letters]);
-        if (kind is null) throw InvalidToken();
-        if (kind is "craft" or "cursor:craft")
-        {
-            if (letters != head.Length) throw InvalidToken();
-            string[] fields = body.Split('*');
-            if (kind == "craft")
-                return fields.Length == 2 && Unescape(fields[0]) is string origin && Unescape(fields[1]) is string observation
-                    ? new(kind, null, null, null, origin, observation, null)
-                    : throw InvalidToken();
-            if (fields.Length != 4 ||
-                !long.TryParse(fields[0], NumberStyles.None, CultureInfo.InvariantCulture, out long ticks) ||
-                !int.TryParse(fields[1], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int minutes) ||
-                Unescape(fields[2]) is not string cursorOrigin || Unescape(fields[3]) is not string cursorObservation)
-                throw InvalidToken();
-            try
-            {
-                TimeSpan offset = TimeSpan.FromMinutes(minutes);
-                DateTimeOffset recordedAt = new DateTimeOffset(ticks, TimeSpan.Zero).ToOffset(offset);
-                return new(kind, null, null, null, cursorOrigin, cursorObservation, recordedAt);
-            }
-            catch (ArgumentException)
-            {
-                throw InvalidToken();
-            }
-        }
+        if (KindOf(head[..letters]) != kind) throw InvalidToken();
         string rest = head[letters..];
         int dot = rest.IndexOf('.', StringComparison.Ordinal);
         string projectText = dot < 0 ? rest : rest[..dot];
         string? track = dot < 0 ? null : Unescape(rest[(dot + 1)..]);
         if (projectText.Length is 0 or > 9 || !projectText.All(char.IsAsciiDigit) || projectText[0] == '0' ||
-            (dot >= 0 && string.IsNullOrEmpty(track)) || Unescape(body) is not string key)
+            (dot >= 0 && string.IsNullOrWhiteSpace(track)) || Unescape(body) is not string key)
             throw InvalidToken();
-        return new(kind, int.Parse(projectText, CultureInfo.InvariantCulture), track, key, null, null, null);
+        GameContext game = new((GameProject)int.Parse(projectText, CultureInfo.InvariantCulture), track);
+        // Only the exact spelling the encoder produces is accepted, so each entity has one ID.
+        return Dimension(kind, game, key) == value ? (game, key) : throw InvalidToken();
     }
 
     private static GraphQLException InvalidToken() =>

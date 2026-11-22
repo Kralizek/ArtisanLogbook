@@ -104,6 +104,15 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             ["__HistoryStoreMigration"] = ["Version", "AppliedAt"]
         };
 
+    // The public short ID of each craft (see CraftIdentity.ShortId), derived from its identity at import. Databases
+    // created before it existed gain the table and its rows when a writer opens them.
+    private const string CraftShortIdTable = """
+        CREATE TABLE IF NOT EXISTS CraftShortId (
+            ShortId VARCHAR PRIMARY KEY,
+            CraftKey BIGINT NOT NULL UNIQUE
+        )
+        """;
+
     // Nullable columns added within the current schema version. A writer adds missing ones in place, so existing
     // history is kept; their rows read as not recorded.
     private static readonly (string Table, string Column, string Type)[] AdditiveColumns =
@@ -652,6 +661,23 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
 
         ValidateInitializedSchema(_writerConnection);
         AddMissingAdditiveColumns(_writerConnection);
+        AddMissingCraftShortIds(_writerConnection);
+    }
+
+    private static void AddMissingCraftShortIds(DuckDBConnection connection)
+    {
+        connection.Execute(CraftShortIdTable);
+        var missing = connection.Query<(long CraftKey, string Origin, string Observation)>("""
+            SELECT i.CraftKey, i.IdentityOrigin, i.IdentityObservation
+            FROM CraftIdentity i LEFT JOIN CraftShortId s USING (CraftKey)
+            WHERE s.CraftKey IS NULL
+            """).ToArray();
+        if (missing.Length == 0) return;
+        using DbTransaction transaction = connection.BeginTransaction();
+        connection.Execute("INSERT INTO CraftShortId (ShortId, CraftKey) VALUES ($ShortId, $CraftKey)",
+            missing.Select(row => new { ShortId = CraftShortIds.Of(row.Origin, row.Observation), row.CraftKey }),
+            transaction);
+        transaction.Commit();
     }
 
     private static void AddMissingAdditiveColumns(DuckDBConnection connection)
@@ -772,6 +798,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 PRIMARY KEY (IdentityOrigin, IdentityObservation)
             )
             """,
+            CraftShortIdTable,
             """
             CREATE TABLE Craft (
                 CraftKey BIGINT PRIMARY KEY,
@@ -1040,6 +1067,8 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 INSERT INTO CraftIdentity (IdentityOrigin, IdentityObservation, CraftKey)
                 VALUES ($Origin, $Observation, $CraftKey)
                 """, new { observation.Identity.Origin, observation.Identity.Observation, CraftKey = craftKey }, transaction);
+            transaction.Connection!.Execute("INSERT INTO CraftShortId (ShortId, CraftKey) VALUES ($ShortId, $CraftKey)",
+                new { observation.Identity.ShortId, CraftKey = craftKey }, transaction);
             transaction.Connection!.Execute("""
                 INSERT INTO Craft (
                     CraftKey, ContextKey, CharacterKey, RecordedAt,

@@ -65,7 +65,7 @@ public sealed class HistoryQuery
     public CraftGraph? GetContextCraft(string context, [GraphQLType(typeof(NonNullType<IdType>))] string id,
         ICraftHistoryRepository repository, CancellationToken token)
     {
-        CraftQuery query = ScopedQuery(context, null) with { Identity = HistoryTokens.ParseCraft(id) };
+        CraftQuery query = ScopedQuery(context, null) with { CraftShortId = HistoryTokens.ParseCraft(id) };
         CraftPage page = repository.Query(query, 1, cancellationToken: token);
         return page.Crafts.Count == 0 ? null : new(page.Crafts[0].Facts);
     }
@@ -99,7 +99,7 @@ public sealed class HistoryQuery
     public CraftGraph? GetCraft([GraphQLType(typeof(NonNullType<IdType>))] string id,
         ICraftHistoryRepository repository, CancellationToken token)
     {
-        CraftPage page = repository.Query(new(Identity: HistoryTokens.ParseCraft(id)), 1, cancellationToken: token);
+        CraftPage page = repository.Query(new(CraftShortId: HistoryTokens.ParseCraft(id)), 1, cancellationToken: token);
         return page.Crafts.Count == 0 ? null : new(page.Crafts[0].Facts);
     }
 
@@ -273,7 +273,7 @@ public sealed class HistoryQuery
         {
             (GameContext context, string signature) = HistoryTokens.ParseDimension(filter.ConfigurationId, "configuration");
             MergeContext(context);
-            if (signature.Length != 64 || signature.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+            if (signature.Length != 16 || signature.Any(c => c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
                 throw InvalidFilter();
             configuration = signature;
         }

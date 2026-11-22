@@ -944,7 +944,7 @@ public sealed class CompanionApiTests
     }
 
     [Test]
-    public async Task GraphQLLongCraftIdsAndCursorsRoundTrip()
+    public async Task GraphQLLongCraftIdentitiesGetShortIdsThatLookUpAndPage()
     {
         GameContext game = new(GameProject.Retail);
         string origin = new('o', 5000);
@@ -960,8 +960,8 @@ public sealed class CompanionApiTests
         JsonElement firstPage = first.GetProperty("data").GetProperty("crafts");
         string id = firstPage.GetProperty("nodes")[0].GetProperty("id").GetString()!;
         string cursor = firstPage.GetProperty("pageInfo").GetProperty("endCursor").GetString()!;
-        Assert.That(id.Length, Is.GreaterThan(4096));
-        Assert.That(cursor.Length, Is.GreaterThan(4096));
+        Assert.That(id, Is.EqualTo("k-" + crafts[0].Identity.ShortId));
+        Assert.That(cursor.Length, Is.LessThan(64));
 
         JsonElement lookup = await GraphQL(host, "query($id: ID!) { craft(id: $id) { id } }", new { id });
         JsonElement nextPage = await GraphQL(host,
@@ -2416,9 +2416,10 @@ public sealed class CompanionApiTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (query.Identity is not null)
+            if (query.Identity is not null || query.CraftShortId is not null)
             {
-                CraftObservation? match = crafts.FirstOrDefault(craft => craft.Identity == query.Identity);
+                CraftObservation? match = crafts.FirstOrDefault(craft =>
+                    craft.Identity == query.Identity || craft.Identity.ShortId == query.CraftShortId);
                 return new(match is null ? [] : [new(match)], false, null);
             }
 

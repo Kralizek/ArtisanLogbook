@@ -16,12 +16,13 @@ public sealed partial class HistoryStore
 
     // A recorded configuration's identity is the hash of its evidence payload. The payload is serialized with the
     // importing platform's line endings, so CRLF is normalized to LF: the same capture gets the same identity
-    // whether it was imported on Windows or elsewhere. Keep ConfigurationSignature in step with this SQL.
+    // whether it was imported on Windows or elsewhere. Only the first 16 hex digits (64 bits) are used, to keep
+    // links short. Keep ConfigurationSignature in step with this SQL.
     private const string PayloadSignatureSql =
-        "sha256(replace(json_extract_string(e.value, '$.payload'), chr(13) || chr(10), chr(10)))";
+        "left(sha256(replace(json_extract_string(e.value, '$.payload'), chr(13) || chr(10), chr(10))), 16)";
 
     public static string ConfigurationSignature(string payload) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload.Replace("\r\n", "\n", StringComparison.Ordinal))))
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload.Replace("\r\n", "\n", StringComparison.Ordinal))), 0, 8)
             .ToLowerInvariant();
 
     // Craft reagents of the selected crafts with their slot role: the role stored at import, otherwise derived from
@@ -85,7 +86,7 @@ public sealed partial class HistoryStore
     }
 
     private static bool IsSignature(string value) =>
-        value.Length == 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+        value.Length == 16 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static (string Sql, DynamicParameters Parameters) Selection(CraftQuery query)
     {

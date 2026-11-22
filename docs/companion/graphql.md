@@ -91,12 +91,16 @@ known zero is `"0"`.
 
 ## IDs, filters and pagination
 
-IDs are opaque, compact and URL-safe: a kind code, the game project, an
-optional progression track and the canonical key, such as `r1-1230868` for a
-Retail recipe. Craft IDs contain origin and observation instead of a context.
-Keys are escaped reversibly (`:` becomes `.`, other non-alphanumeric bytes
-`_XX`), so IDs need no percent-encoding, and only the canonical spelling is
-accepted. Clients must still treat them as opaque.
+IDs are opaque, compact and URL-safe. A dimension ID is a kind code, the game
+project, an optional progression track and the canonical key, such as
+`r1-1230868` for a Retail recipe; keys are escaped reversibly (`:` becomes
+`.`, other non-alphanumeric bytes `_XX`). A craft ID is `k-` and the craft's
+short ID: the first 16 hex digits of a SHA-256 of its origin and observation,
+derived at import and stored in `CraftShortId` (databases written before it
+existed are backfilled when a writer opens them). A recorded setup ID uses the
+first 16 hex digits of its payload hash. Being derived, these IDs are the same
+after a reimport and on every machine. Only the canonical spelling is accepted.
+Clients must still treat them as opaque.
 They are stable across restarts and metadata enrichment and do not use database
 surrogate keys. IDs are **not secrets**. Hot Chocolate's Relay/Node support was
 evaluated; the initial API uses explicit typed lookups and a versioned composite
@@ -137,7 +141,7 @@ output lists. Bounded recipe and character rows must not be summed for totals.
 
 Collections default to 20 items, with `first` from 1 to 100. Pass `endCursor`
 as `after` to continue. Cursors are opaque compact positions with
-a collection kind; invalid or wrong-kind cursors are rejected. Craft ordering
+a collection kind (craft cursors carry the recorded instant and the craft's short ID); invalid or wrong-kind cursors are rejected. Craft ordering
 is newest recorded instant first, preserving 100 ns precision across offsets,
 then origin and observation ascending. Dimensions order by canonical game-context
 key and entity identity. Cursor positions are not frozen snapshots: an import

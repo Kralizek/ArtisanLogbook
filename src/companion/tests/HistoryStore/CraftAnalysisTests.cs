@@ -294,6 +294,39 @@ public sealed class CraftAnalysisTests
     }
 
     [Test]
+    public void CraftsAreFoundByShortIdsDerivedAtImportOrBackfilledForOlderDatabases()
+    {
+        string path = Path.Combine(_directory, "short-ids.duckdb");
+        DateTimeOffset time = DateTimeOffset.Parse("2026-02-01T12:00:00Z");
+        CraftObservation first = Craft("first", Retail, time), second = Craft("second", Retail, time.AddMinutes(1));
+        using (Store store = new(path))
+        {
+            Assert.That(store.Write(first).IsSuccessful && store.Write(second).IsSuccessful, Is.True);
+            Assert.That(store.QueryCrafts(new(CraftShortId: second.Identity.ShortId)).Crafts.Single().Facts.Identity,
+                Is.EqualTo(second.Identity));
+        }
+        // A database written before short IDs existed has no CraftShortId table.
+        using (DuckDBConnection connection = new($"Data Source={path}"))
+        {
+            connection.Open();
+            using DuckDBCommand drop = connection.CreateCommand();
+            drop.CommandText = "DROP TABLE CraftShortId";
+            drop.ExecuteNonQuery();
+        }
+        using (Store store = new(path))
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(store.QueryCrafts(new(CraftShortId: first.Identity.ShortId)).Crafts.Single().Facts.Identity,
+                    Is.EqualTo(first.Identity));
+                Assert.That(store.QueryCrafts(new(CraftShortId: "0000000000000000")).Crafts, Is.Empty);
+                Assert.That(first.Identity.ShortId, Is.Not.EqualTo(second.Identity.ShortId));
+                Assert.That(new CraftIdentity("ab", "c").ShortId, Is.Not.EqualTo(new CraftIdentity("a", "bc").ShortId));
+            });
+        }
+    }
+
+    [Test]
     public void ConfigurationIdentityIgnoresTheImportingPlatformsLineEndings()
     {
         const string payload = "CraftConfigurationEvidence = { craftFields = { configurationScope = \"request\" } }\n";

@@ -36,15 +36,16 @@ public sealed class HistoryTokensTests
         (GameContext game, string key) = HistoryTokens.ParseDimension(HistoryTokens.Dimension("character", track, unusual), "character");
         CraftIdentity craft = new("legacy-ledger:1:project:1:guid:Player-1-2:7", "craft:42");
         DateTimeOffset recordedAt = new DateTimeOffset(2026, 11, 22, 14, 3, 7, TimeSpan.FromHours(-3)).AddTicks(1234567);
-        CraftPagePosition position = HistoryTokens.ParseCraftCursor(HistoryTokens.CraftCursor(new(recordedAt, craft)));
+        (DateTimeOffset cursorAt, string cursorCraft) = HistoryTokens.ParseCraftCursor(HistoryTokens.CraftCursor(new(recordedAt, craft)));
         Assert.Multiple(() =>
         {
             Assert.That((game, key), Is.EqualTo((track, unusual)));
-            Assert.That(HistoryTokens.ParseCraft(HistoryTokens.Craft(craft)), Is.EqualTo(craft));
-            Assert.That(position.Identity, Is.EqualTo(craft));
-            Assert.That(position.RecordedAt, Is.EqualTo(recordedAt));
-            Assert.That(position.RecordedAt.Offset, Is.EqualTo(recordedAt.Offset));
-            Assert.That(position.RecordedAt.Ticks, Is.EqualTo(recordedAt.Ticks));
+            Assert.That(HistoryTokens.Craft(craft), Is.EqualTo("k-" + craft.ShortId).And.Length.EqualTo(18));
+            Assert.That(HistoryTokens.ParseCraft(HistoryTokens.Craft(craft)), Is.EqualTo(craft.ShortId));
+            Assert.That(cursorCraft, Is.EqualTo(craft.ShortId));
+            Assert.That(cursorAt, Is.EqualTo(recordedAt));
+            Assert.That(cursorAt.Offset, Is.EqualTo(recordedAt.Offset));
+            Assert.That(cursorAt.Ticks, Is.EqualTo(recordedAt.Ticks));
         });
     }
 
@@ -63,8 +64,18 @@ public sealed class HistoryTokensTests
         Assert.That(() => HistoryTokens.ParseDimension(token, kind), Throws.TypeOf<GraphQLException>());
 
     [TestCase("k-origin")]
-    [TestCase("k1-origin*craft.1")]
-    [TestCase("nk-1*0*origin*craft.1")]
+    [TestCase("k-0123456789ABCDEF")]
+    [TestCase("k-0123456789abcde")]
+    [TestCase("k1-0123456789abcdef")]
+    [TestCase("nk-1*0*0123456789abcdef")]
     public void RejectsMalformedCraftTokens(string token) =>
         Assert.That(() => HistoryTokens.ParseCraft(token), Throws.TypeOf<GraphQLException>());
+
+    [TestCase("k-0123456789abcdef")]
+    [TestCase("nk-1*0*0123456789abcde")]
+    [TestCase("nk-01*0*0123456789abcdef")]
+    [TestCase("nk-1*+0*0123456789abcdef")]
+    [TestCase("nk-1*0*0123456789abcdef*x")]
+    public void RejectsMalformedCraftCursors(string token) =>
+        Assert.That(() => HistoryTokens.ParseCraftCursor(token), Throws.TypeOf<GraphQLException>());
 }
