@@ -665,7 +665,7 @@ async function run(base, output) {
       .getByRole("button", { name: "More filters", exact: true })
       .click();
     const variant = page.getByRole("combobox", {
-      name: "Recorded configuration",
+      name: "Recorded setup",
       exact: true,
     });
     await variant.click();
@@ -831,13 +831,11 @@ async function run(base, output) {
       .waitFor();
     await page.getByRole("button", { name: "More filters" }).click();
     assert.equal(
-      await page.getByRole("combobox", { name: "Returned item" }).count(),
+      await page.getByRole("combobox", { name: "Got back reagent" }).count(),
       0,
     );
     assert.equal(
-      await page
-        .getByRole("textbox", { name: "Recorded buff spell ID" })
-        .count(),
+      await page.getByRole("textbox", { name: "Buff active" }).count(),
       0,
     );
     assert.equal(

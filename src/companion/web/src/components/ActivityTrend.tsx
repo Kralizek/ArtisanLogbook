@@ -11,100 +11,152 @@ import { Link } from "react-router";
 import type { ActiveGame } from "../app/game";
 import { investigationLink } from "../app/scope";
 
+type Granularity = "day" | "week" | "month";
+
+const day = 86400000;
+
+// The UTC start of the day, ISO week (Monday) or month containing a time,
+// matching the backend's timeline buckets.
+function bucketStart(time: number, granularity: Granularity) {
+  const start = new Date(time);
+  start.setUTCHours(0, 0, 0, 0);
+  if (granularity === "week")
+    start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+  if (granularity === "month") start.setUTCDate(1);
+  return start.getTime();
+}
+
+function nextBucket(start: number, granularity: Granularity) {
+  const next = new Date(start);
+  if (granularity === "month") next.setUTCMonth(next.getUTCMonth() + 1);
+  else next.setUTCDate(next.getUTCDate() + (granularity === "week" ? 7 : 1));
+  return next.getTime();
+}
+
+const isoDate = (time: number) => new Date(time).toISOString().slice(0, 10);
+
+// Upper bound on generated columns, so an unbounded range cannot render an
+// unbounded chart; recorded buckets beyond it are still shown.
+const maximumColumns = 3660;
+
 export function ActivityTrend({
   game,
   params,
   points,
   granularity = "day",
+  from,
+  to,
+  now = new Date(),
 }: {
   game: ActiveGame;
   params: URLSearchParams;
   points: { date: string; craftCount: string }[];
-  granularity?: "day" | "week" | "month";
+  granularity?: Granularity;
+  /** The investigated period; without it the chart spans the recorded points through today. */
+  from?: string | null;
+  to?: string | null;
+  now?: Date;
 }) {
-  const ordered = [...points].sort((a, b) => a.date.localeCompare(b.date));
-  const counts = ordered.map((point) => BigInt(point.craftCount));
-  const maximum = counts.reduce(
+  const recorded = new Map(
+    points.map((point) => [point.date.slice(0, 10), BigInt(point.craftCount)]),
+  );
+  const recordedStarts = [...recorded.keys()].map((date) =>
+    Date.parse(`${date}T00:00:00Z`),
+  );
+  const rangeStart = from
+    ? Date.parse(`${from.slice(0, 10)}T00:00:00Z`)
+    : recordedStarts.length
+      ? Math.min(...recordedStarts)
+      : null;
+  const rangeEnd = to
+    ? Date.parse(`${to.slice(0, 10)}T00:00:00Z`)
+    : Math.max(now.getTime(), ...recordedStarts);
+  const columns = new Set<string>(recorded.keys());
+  if (rangeStart !== null && Number.isFinite(rangeStart)) {
+    const last = bucketStart(rangeEnd, granularity);
+    for (
+      let start = bucketStart(rangeStart, granularity), count = 0;
+      start <= last && count < maximumColumns;
+      start = nextBucket(start, granularity), count++
+    )
+      columns.add(isoDate(start));
+  }
+  const ordered = [...columns].sort();
+  const maximum = [...recorded.values()].reduce(
     (max, value) => (value > max ? value : max),
     0n,
   );
-  const starts = ordered.map((point) =>
-    Date.parse(`${point.date.slice(0, 10)}T00:00:00Z`),
-  );
-  function periodEnd(start: number) {
-    const end = new Date(start);
-    if (granularity === "month") end.setUTCMonth(end.getUTCMonth() + 1);
-    else end.setUTCDate(end.getUTCDate() + (granularity === "week" ? 7 : 1));
-    return end.getTime();
-  }
-  const first = starts[0] ?? 0;
-  const span = starts.length ? periodEnd(starts[starts.length - 1]) - first : 1;
+  const unit = granularity;
   return (
     <Stack gap="xs">
       <Group justify="space-between">
         <Title order={2}>Crafting activity</Title>
         <Text size="sm" c="dimmed">
-          Completed attempts · UTC
+          Completed attempts per UTC {unit}
         </Text>
       </Group>
-      {!ordered.length ? (
+      {!recorded.size ? (
         <Text c="dimmed">No recorded attempts in this scope.</Text>
       ) : (
         <>
           <Group justify="space-between">
             <Text size="xs" c="dimmed">
-              Peak: {maximum.toLocaleString()} attempts
+              Peak: {maximum.toLocaleString()} attempts · {ordered.length}{" "}
+              {unit}
+              {ordered.length === 1 ? "" : "s"}
             </Text>
             <Text size="xs" c="dimmed">
-              Open a whole UTC {granularity} to inspect its crafts
-              (relative-period edges may include other attempts)
+              Select a bar to inspect that {unit}&apos;s crafts. Empty columns
+              have no recorded attempts.
             </Text>
           </Group>
-          <Text size="xs" c="dimmed">
-            Calendar spacing · gaps mean no recorded period, not confirmed zero
-            activity.
-          </Text>
           <div
             className="activity-bars"
+            role="list"
             aria-label="Completed crafts over time"
+            style={{
+              gridTemplateColumns: `repeat(${ordered.length}, minmax(0, 1fr))`,
+              columnGap: ordered.length > 120 ? 0 : 2,
+            }}
           >
-            {ordered.map((point, index) => {
-              const date = point.date.slice(0, 10);
-              const end = new Date(`${date}T00:00:00Z`);
-              if (granularity === "week") end.setUTCDate(end.getUTCDate() + 6);
-              if (granularity === "month") {
-                end.setUTCMonth(end.getUTCMonth() + 1);
-                end.setUTCDate(end.getUTCDate() - 1);
-              }
-              const through = end.toISOString().slice(0, 10);
+            {ordered.map((date) => {
+              const start = Date.parse(`${date}T00:00:00Z`);
+              const through = isoDate(nextBucket(start, granularity) - day);
+              const range = date === through ? date : `${date} – ${through}`;
+              const count = recorded.get(date);
               return (
-                <Anchor
-                  component={Link}
-                  className="activity-bar"
-                  key={point.date}
-                  style={{
-                    left: `${((starts[index] - first) / span) * 100}%`,
-                    width: `${((periodEnd(starts[index]) - starts[index]) / span) * 80}%`,
-                    height: `${maximum ? Number((counts[index] * 1000n) / maximum) / 10 : 0}%`,
-                    minHeight: counts[index] > 0 ? 3 : 1,
-                  }}
-                  title={`${date} – ${through}: ${counts[index].toLocaleString()} completed crafts`}
-                  aria-label={`${date} – ${through}: ${counts[index].toLocaleString()} completed crafts`}
-                  to={investigationLink(game, "crafts", params, {
-                    period: "fixed",
-                    from: date,
-                    to: through,
-                  })}
-                />
+                <div className="activity-column" role="listitem" key={date}>
+                  {count === undefined ? (
+                    <span
+                      className="activity-empty"
+                      title={`${range}: no recorded attempts`}
+                    />
+                  ) : (
+                    <Anchor
+                      component={Link}
+                      className="activity-bar"
+                      style={{
+                        height: `${maximum ? Number((count * 1000n) / maximum) / 10 : 0}%`,
+                      }}
+                      title={`${range}: ${count.toLocaleString()} completed crafts`}
+                      aria-label={`${range}: ${count.toLocaleString()} completed crafts`}
+                      to={investigationLink(game, "crafts", params, {
+                        period: "fixed",
+                        from: date,
+                        to: through,
+                      })}
+                    />
+                  )}
+                </div>
               );
             })}
           </div>
           <Group justify="space-between">
             <Text size="xs" c="dimmed">
-              {ordered[0].date.slice(0, 10)}
+              {ordered[0]}
             </Text>
             <Text size="xs" c="dimmed">
-              {ordered[ordered.length - 1].date.slice(0, 10)}
+              {ordered[ordered.length - 1]}
             </Text>
           </Group>
           <Accordion>
@@ -119,16 +171,19 @@ export function ActivityTrend({
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
-                    {ordered.map((point) => (
-                      <Table.Tr key={point.date}>
-                        <Table.Td>{point.date.slice(0, 10)}</Table.Td>
-                        <Table.Td>
-                          {BigInt(point.craftCount).toLocaleString()}
-                        </Table.Td>
-                      </Table.Tr>
-                    ))}
+                    {[...recorded]
+                      .sort(([a], [b]) => a.localeCompare(b))
+                      .map(([date, count]) => (
+                        <Table.Tr key={date}>
+                          <Table.Td>{date}</Table.Td>
+                          <Table.Td>{count.toLocaleString()}</Table.Td>
+                        </Table.Tr>
+                      ))}
                   </Table.Tbody>
                 </Table>
+                <Text size="xs" c="dimmed">
+                  Only periods with recorded attempts are listed.
+                </Text>
               </Accordion.Panel>
             </Accordion.Item>
           </Accordion>

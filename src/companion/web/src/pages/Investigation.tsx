@@ -28,7 +28,12 @@ import {
   roleLinkParams,
   type ItemRole,
 } from "../app/analysisScope";
-import { comparisonFields, investigationLink, scopeLabel } from "../app/scope";
+import {
+  comparisonFields,
+  investigationLink,
+  isRelativePeriod,
+  scopeLabel,
+} from "../app/scope";
 import { ActivityTrend } from "../components/ActivityTrend";
 import { AnalysisEvidence } from "../components/AnalysisEvidence";
 import { configurationLabel } from "../components/analysisFormat";
@@ -719,9 +724,7 @@ function Activity({
       variables: { context: game.canonicalId, filter, granularity },
       fetchPolicy: "network-only",
       errorPolicy: "all",
-      pollInterval: ["30", "90"].includes(params.get("period") ?? "90")
-        ? 0
-        : 60000,
+      pollInterval: isRelativePeriod(params.get("period") ?? "90") ? 0 : 60000,
       notifyOnNetworkStatusChange: true,
     },
   );
@@ -785,6 +788,8 @@ function Activity({
             game={game}
             params={params}
             granularity={granularity.toLowerCase() as "day" | "week" | "month"}
+            from={filter.from}
+            to={filter.to}
             points={result.timeline.nodes.map((node) => ({
               date: node.start,
               craftCount: node.measure.attempts,
@@ -1280,6 +1285,16 @@ function Recipe({
       value: row.id,
       label: configurationLabel(row.id, row.evidence),
     }));
+  const recordedBuffIds = [
+    ...new Set(
+      configurations.flatMap(
+        (row) =>
+          row.evidence.buffs?.flatMap((entry) =>
+            entry.spellId == null ? [] : [entry.spellId],
+          ) ?? [],
+      ),
+    ),
+  ];
   const selectedCharacterOutcome = params.get("characterOutcome");
   const refresh = refreshBounds;
   return (
@@ -1311,7 +1326,12 @@ function Recipe({
           />
         )}
       </header>
-      <ScopeControls game={game} focusedRecipe configurations={choices} />
+      <ScopeControls
+        game={game}
+        focusedRecipe
+        configurations={choices}
+        buffIds={recordedBuffIds}
+      />
       <Group>
         <Button
           variant="default"
@@ -1418,6 +1438,8 @@ function Recipe({
                       params={withFilters(primaryScopeParams(params), {
                         recipe: id,
                       })}
+                      from={filter.from}
+                      to={filter.to}
                       points={left.timeline.nodes.map((node) => ({
                         date: node.start,
                         craftCount: node.measure.attempts,
@@ -1433,6 +1455,8 @@ function Recipe({
                         params={withFilters(populationParams(params, "b"), {
                           recipe: id,
                         })}
+                        from={second?.from}
+                        to={second?.to}
                         points={right.timeline.nodes.map((node) => ({
                           date: node.start,
                           craftCount: node.measure.attempts,
@@ -1540,16 +1564,7 @@ function Recipe({
                       ),
                     ),
                   ]}
-                  buffIds={[
-                    ...new Set(
-                      configurations.flatMap(
-                        (row) =>
-                          row.evidence.buffs?.flatMap((entry) =>
-                            entry.spellId == null ? [] : [entry.spellId],
-                          ) ?? [],
-                      ),
-                    ),
-                  ]}
+                  buffIds={recordedBuffIds}
                 />
                 {right && (
                   <RecipeOutcomes
@@ -2805,7 +2820,7 @@ function InvestigationEntry({
   const [now, setNow] = useState(() => new Date());
   const period = params.get("period") ?? "90";
   useEffect(() => {
-    if (kind !== "activity" || !["30", "90"].includes(period)) return;
+    if (kind !== "activity" || !isRelativePeriod(period)) return;
     const timer = window.setInterval(() => setNow(new Date()), 60000);
     return () => window.clearInterval(timer);
   }, [kind, period]);

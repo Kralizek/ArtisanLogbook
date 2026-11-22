@@ -26,7 +26,18 @@ it("evaluates independent relative comparison periods and preserves fixed dates"
     "period=30&bperiod=fixed&bfrom=2025-01-01&bto=2025-02-01",
   );
   const now = new Date("2026-11-15T12:00:00Z");
-  expect(periodBounds(params, "", now).from).toBe("2026-10-16T12:00:00.000Z");
+  expect(periodBounds(params, "", now)).toEqual({
+    from: "2026-10-17T00:00:00.000Z",
+    to: "2026-11-15T12:00:00.000Z",
+  });
+  for (const [period, from] of [
+    ["today", "2026-11-15T00:00:00.000Z"],
+    ["7", "2026-11-09T00:00:00.000Z"],
+    ["90", "2026-08-18T00:00:00.000Z"],
+  ])
+    expect(periodBounds(new URLSearchParams({ period }), "", now).from).toBe(
+      from,
+    );
   expect(periodBounds(params, "b", now)).toEqual({
     from: "2025-01-01T00:00:00.0000000Z",
     to: "2025-02-01T23:59:59.9999999Z",

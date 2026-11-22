@@ -244,6 +244,7 @@ export function ComparisonGuide({
                   game={game}
                   prefix="b"
                   configurations={configurations}
+                  buffIds={buffIds}
                   focusedRecipe
                 />
               </Stack>

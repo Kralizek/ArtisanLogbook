@@ -25,6 +25,29 @@ export const comparisonFields = [
   "absentFinishing",
 ] as const;
 
+// Rolling periods cover whole UTC calendar days ending today, so a chart of an
+// N-day period has exactly N daily columns. "today" is the current UTC day.
+export const relativePeriods = {
+  today: { days: 1, label: "Today (UTC)" },
+  "7": { days: 7, label: "Last 7 days" },
+  "30": { days: 30, label: "Last 30 days" },
+  "90": { days: 90, label: "Last 90 days" },
+} as const;
+export type RelativePeriod = keyof typeof relativePeriods;
+// Display order; numeric object keys would otherwise sort before "today".
+export const relativePeriodOrder: readonly RelativePeriod[] = [
+  "today",
+  "7",
+  "30",
+  "90",
+];
+
+export function isRelativePeriod(
+  period: string | null,
+): period is RelativePeriod {
+  return period !== null && Object.hasOwn(relativePeriods, period);
+}
+
 export function periodBounds(
   params: URLSearchParams,
   prefix = "",
@@ -54,12 +77,12 @@ export function periodBounds(
       to: `${to}T23:59:59.9999999Z`,
     };
   }
-  if (period !== "30" && period !== "90")
+  if (!isRelativePeriod(period))
     throw new Error("This investigation has an unsupported period.");
-  return {
-    from: new Date(now.getTime() - Number(period) * 86400000).toISOString(),
-    to: now.toISOString(),
-  };
+  const start = new Date(now);
+  start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - (relativePeriods[period].days - 1));
+  return { from: start.toISOString(), to: now.toISOString() };
 }
 
 export function investigationLink(
@@ -87,5 +110,7 @@ export function scopeLabel(params: URLSearchParams, prefix = "") {
     ? "All recorded history"
     : period === "fixed"
       ? `${params.get(`${prefix}from`)} – ${params.get(`${prefix}to`)}`
-      : `Last ${period} days`;
+      : isRelativePeriod(period)
+        ? relativePeriods[period].label
+        : `Period ${period}`;
 }

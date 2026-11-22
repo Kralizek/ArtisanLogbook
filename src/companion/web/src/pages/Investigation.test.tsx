@@ -272,7 +272,8 @@ it("advances rolling activity bounds automatically without changing the URL", as
     const initial = calls[0];
     act(() => vi.advanceTimersByTime(60000));
     await waitFor(() => expect(calls).toHaveLength(2));
-    expect(Date.parse(calls[1].from) - Date.parse(initial.from)).toBe(60000);
+    // The period starts at the first whole UTC day, so only its end advances.
+    expect(calls[1].from).toBe(initial.from);
     expect(Date.parse(calls[1].to) - Date.parse(initial.to)).toBe(60000);
     expect(screen.getByTestId("location")).toHaveTextContent("?period=30");
     const attemptsCard =
@@ -491,10 +492,10 @@ it("compares independently filtered recorded populations and retains detail when
   await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
   expect(screen.getByText("Recipe activity over time")).toBeInTheDocument();
   const firstBar = screen.getByRole("link", {
-    name: "2026-11-07 – 2026-11-07: 12 completed crafts",
+    name: "2026-11-07: 12 completed crafts",
   });
   const secondBar = screen.getByRole("link", {
-    name: "2026-11-07 – 2026-11-07: 3 completed crafts",
+    name: "2026-11-07: 3 completed crafts",
   });
   expect(firstBar.getAttribute("href")).toContain("recipe=recipe-opaque");
   expect(firstBar.getAttribute("href")).toContain("period=fixed");

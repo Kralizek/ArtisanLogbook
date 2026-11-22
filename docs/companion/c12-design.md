@@ -33,6 +33,14 @@ evidence as absence. Full filters and configuration variants remain accessible,
 but do not dominate ordinary exploration. Saves are explicit, progressively
 disclosed actions. Changing a relative period removes inactive fixed bounds.
 
+Rolling periods (today, 7, 30 and 90 days) cover whole UTC days ending today,
+so activity charts draw exactly one column per day, week or month of the
+period; empty columns mean no recorded attempts and are not listed as zero
+observations. More filters are grouped by question (expansion, reagents and
+results, crafting setup), each with a one-line meaning. Buffs are offered from
+the recorded setups in scope when known, otherwise entered as a validated spell
+ID, because buff names are not captured.
+
 Review F01–F17 is tracked in the PR with measured validation, not implied by
 moving components. Canonical expansion grouping and applied-refund semantics
 are corrected at the backend boundary; visual simplification does not change

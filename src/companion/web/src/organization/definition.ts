@@ -2,9 +2,10 @@ import {
   isCharacterOutcome,
   type CharacterOutcome,
 } from "../app/analysisScope";
+import { isRelativePeriod, type RelativePeriod } from "../app/scope";
 
 export type Destination = "activity" | "recipe" | "item" | "crafts";
-export type Period = "30" | "90" | "all" | "fixed";
+export type Period = RelativePeriod | "all" | "fixed";
 export type Scope = {
   period: Period;
   from?: string;
@@ -86,7 +87,10 @@ function scope(value: unknown): Scope {
   keys(record, fields);
   if (
     typeof record.period !== "string" ||
-    !["30", "90", "all", "fixed"].includes(record.period)
+    !(
+      isRelativePeriod(record.period) ||
+      ["all", "fixed"].includes(record.period)
+    )
   )
     throw new Error("This investigation has an unsupported period.");
   if (record.period === "fixed") {

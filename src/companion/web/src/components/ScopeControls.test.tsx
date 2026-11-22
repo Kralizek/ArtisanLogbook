@@ -81,11 +81,11 @@ it("offers advanced Retail filters progressively", async () => {
     </MantineProvider>,
   );
   expect(
-    screen.queryByRole("combobox", { name: "Returned item" }),
+    screen.queryByRole("combobox", { name: "Got back reagent" }),
   ).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "More filters" }));
   expect(
-    await screen.findByRole("combobox", { name: "Returned item" }),
+    await screen.findByRole("combobox", { name: "Got back reagent" }),
   ).toBeVisible();
 });
 
@@ -117,7 +117,7 @@ it("resolves a restored item filter to its recorded name", () => {
       </MantineProvider>,
     );
     expect(
-      screen.getByRole("combobox", { name: "Absent submitted finishing item" }),
+      screen.getByRole("combobox", { name: "Finishing reagent not used" }),
     ).toHaveValue("Test reagent · #7");
   } finally {
     query.mockReset();
@@ -213,15 +213,93 @@ it.each([
   );
   await userEvent.click(screen.getByRole("button", { name: "More filters" }));
   expect(
-    await screen.findByRole("combobox", { name: "Input item" }),
+    await screen.findByRole("combobox", { name: "Used reagent" }),
   ).toBeVisible();
   expect(
-    screen.queryByRole("combobox", { name: "Returned item" }),
+    screen.queryByRole("combobox", { name: "Got back reagent" }),
   ).not.toBeInTheDocument();
   expect(
-    screen.queryByRole("textbox", { name: "Recorded buff spell ID" }),
+    screen.queryByRole("textbox", { name: "Buff active" }),
   ).not.toBeInTheDocument();
   expect(
-    screen.queryByRole("combobox", { name: "Finishing item" }),
+    screen.queryByRole("combobox", { name: "Finishing reagent used" }),
   ).not.toBeInTheDocument();
+});
+
+const retail = {
+  canonicalId: "1",
+  routeAlias: "retail",
+  displayName: "Retail",
+  project: 1,
+  progressionTrack: null,
+};
+
+it("offers today and the last 7 days as rolling periods", async () => {
+  const user = userEvent.setup();
+  render(
+    <MantineProvider env="test">
+      <MemoryRouter>
+        <ScopeControls game={retail} />
+        <Address />
+      </MemoryRouter>
+    </MantineProvider>,
+  );
+  await user.click(screen.getByRole("combobox", { name: "Period" }));
+  expect(
+    screen.getAllByRole("option").map((option) => option.textContent),
+  ).toEqual([
+    "Today (UTC)",
+    "Last 7 days",
+    "Last 30 days",
+    "Last 90 days",
+    "All history",
+    "Fixed dates",
+  ]);
+  await user.click(screen.getByRole("option", { name: "Last 7 days" }));
+  expect(screen.getByTestId("scope-address")).toHaveTextContent("period=7");
+});
+
+it("offers recorded buffs by spell and validates a typed spell ID", async () => {
+  const user = userEvent.setup();
+  const { unmount } = render(
+    <MantineProvider env="test">
+      <MemoryRouter>
+        <ScopeControls game={retail} buffIds={[9002, 9001]} />
+        <Address />
+      </MemoryRouter>
+    </MantineProvider>,
+  );
+  await user.click(screen.getByRole("button", { name: "More filters" }));
+  await user.click(
+    await screen.findByRole("combobox", { name: "Buff active" }),
+  );
+  expect(
+    screen.getAllByRole("option").map((option) => option.textContent),
+  ).toEqual(["Spell 9001", "Spell 9002"]);
+  await user.click(screen.getByRole("option", { name: "Spell 9002" }));
+  expect(screen.getByTestId("scope-address")).toHaveTextContent("buff=9002");
+  unmount();
+
+  render(
+    <MantineProvider env="test">
+      <MemoryRouter>
+        <ScopeControls game={retail} />
+        <Address />
+      </MemoryRouter>
+    </MantineProvider>,
+  );
+  await user.click(screen.getByRole("button", { name: "More filters" }));
+  const typed = await screen.findByRole("textbox", { name: "Buff not active" });
+  await user.type(typed, "abc");
+  await user.tab();
+  expect(screen.getByText("Enter a whole spell ID number")).toBeVisible();
+  expect(screen.getByTestId("scope-address")).not.toHaveTextContent(
+    "absentBuff",
+  );
+  await user.clear(typed);
+  await user.type(typed, "1234");
+  await user.tab();
+  expect(screen.getByTestId("scope-address")).toHaveTextContent(
+    "absentBuff=1234",
+  );
 });

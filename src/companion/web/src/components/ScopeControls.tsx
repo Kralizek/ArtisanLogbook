@@ -10,9 +10,10 @@ import {
   TextInput,
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import type { ActiveGame } from "../app/game";
+import { relativePeriodOrder, relativePeriods } from "../app/scope";
 import { itemLabel } from "./analysisFormat";
 import {
   WorkspaceFacetsDocument,
@@ -76,11 +77,13 @@ function FixedDates({
 export function ItemFilter({
   game,
   label,
+  description,
   value,
   onChange,
 }: {
   game: ActiveGame;
   label: string;
+  description?: string;
   value: string | null;
   onChange: (value: string | null) => void;
 }) {
@@ -118,7 +121,11 @@ export function ItemFilter({
     <Select
       label={label}
       aria-label={label}
-      placeholder="Search item name"
+      description={description}
+      placeholder="Item name or #number"
+      nothingFoundMessage={
+        term.trim().length < 2 ? "Type at least 2 letters" : "No recorded item"
+      }
       error={
         error || selectedError
           ? "Items could not be loaded. Try searching again."
@@ -135,7 +142,90 @@ export function ItemFilter({
         setSearch("");
       }}
       data={options}
-      w={205}
+      w={230}
+    />
+  );
+}
+
+function FilterSection({
+  title,
+  note,
+  children,
+}: {
+  title: string;
+  note?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Stack gap={6}>
+      <Text size="sm" fw={700}>
+        {title}
+      </Text>
+      <Group align="start" gap="sm">
+        {children}
+      </Group>
+      {note && (
+        <Text size="xs" c="dimmed">
+          {note}
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+// Buff names are not captured, so buffs are identified by spell ID. Offer the
+// buffs recorded in this scope when known; otherwise accept a typed spell ID.
+function BuffFilter({
+  label,
+  description,
+  buffIds,
+  value,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  buffIds: number[];
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+  const valid = draft === "" || /^[1-9]\d{0,9}$/.test(draft.trim());
+  if (buffIds.length)
+    return (
+      <Select
+        label={label}
+        aria-label={label}
+        description={description}
+        placeholder="Any buff"
+        clearable
+        searchable
+        clearButtonProps={{ "aria-label": `Clear ${label}` }}
+        value={value}
+        onChange={onChange}
+        data={retainSelection(
+          [...buffIds]
+            .sort((a, b) => a - b)
+            .map((id) => ({ value: String(id), label: `Spell ${id}` })),
+          value,
+          "buff",
+        )}
+        w={230}
+      />
+    );
+  return (
+    <TextInput
+      label={label}
+      aria-label={label}
+      description={`${description}. Enter the buff's spell ID number.`}
+      placeholder="Any buff"
+      inputMode="numeric"
+      value={draft}
+      error={valid ? undefined : "Enter a whole spell ID number"}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={() => {
+        if (valid) onChange(draft.trim() || null);
+      }}
+      w={230}
     />
   );
 }
@@ -144,16 +234,20 @@ export function ScopeControls({
   game,
   prefix = "",
   configurations,
+  buffIds = [],
   hideRoleItems = false,
   focusedRecipe = false,
 }: {
   game: ActiveGame;
   prefix?: string;
   configurations?: { value: string; label: string }[];
+  /** Spell IDs of buffs recorded in this scope, offered as buff choices. */
+  buffIds?: number[];
   hideRoleItems?: boolean;
   focusedRecipe?: boolean;
 }) {
   const [params, setParams] = useSearchParams();
+  const label = prefix ? "Population B " : "";
   const { data, error } = useQuery(WorkspaceFacetsDocument, {
     variables: { context: game.canonicalId },
     fetchPolicy: "no-cache",
@@ -194,8 +288,10 @@ export function ScopeControls({
           value={params.get(prefix + "period") ?? "90"}
           onChange={(value) => set("period", value)}
           data={[
-            { value: "30", label: "Last 30 days" },
-            { value: "90", label: "Last 90 days" },
+            ...relativePeriodOrder.map((value) => ({
+              value,
+              label: relativePeriods[value].label,
+            })),
             { value: "all", label: "All history" },
             { value: "fixed", label: "Fixed dates" },
           ]}
@@ -278,176 +374,188 @@ export function ScopeControls({
               More filters{hasAdvancedFilters ? " · active" : ""}
             </Accordion.Control>
             <Accordion.Panel>
-              <Stack gap="xs">
-                <Group align="end" gap="sm">
-                  {(!focusedRecipe || params.has(prefix + "gameExpansion")) &&
-                    !!data?.game.expansionGroups.nodes.length && (
+              <Stack gap="md">
+                <Text size="sm" c="dimmed">
+                  Narrow which crafts are counted. A craft must match every
+                  filter you set; leave a filter empty to ignore it.
+                </Text>
+                {((!focusedRecipe || params.has(prefix + "gameExpansion")) &&
+                  !!data?.game.expansionGroups.nodes.length) ||
+                params.has(prefix + "expansion") ? (
+                  <FilterSection title="Expansion">
+                    {(!focusedRecipe || params.has(prefix + "gameExpansion")) &&
+                      !!data?.game.expansionGroups.nodes.length && (
+                        <Select
+                          label={`${label}Game expansion`}
+                          aria-label={`${label}Game expansion`}
+                          description="Crafts from that expansion's professions"
+                          placeholder="All expansions"
+                          clearable
+                          clearButtonProps={{
+                            "aria-label": `Clear ${label}Game expansion`,
+                          }}
+                          value={params.get(prefix + "gameExpansion")}
+                          onChange={(value) => set("gameExpansion", value)}
+                          data={data.game.expansionGroups.nodes.map((e) => ({
+                            value: e.id,
+                            label: e.name ?? "Unknown expansion",
+                          }))}
+                          w={230}
+                        />
+                      )}
+                    {params.has(prefix + "expansion") && (
                       <Select
-                        label="Game expansion"
-                        aria-label={`${prefix ? "Population B " : ""}Game expansion`}
+                        label={`${label}Legacy profession expansion`}
+                        aria-label={`${label}Legacy profession expansion`}
+                        description="From an older link: one profession's expansion only. Clear it to use Game expansion."
                         placeholder="All expansions"
                         clearable
                         clearButtonProps={{
-                          "aria-label": `Clear ${prefix ? "Population B " : ""}Game expansion`,
+                          "aria-label": `Clear ${label}Legacy profession expansion`,
                         }}
-                        value={params.get(prefix + "gameExpansion")}
-                        onChange={(value) => set("gameExpansion", value)}
-                        data={data.game.expansionGroups.nodes.map((e) => ({
-                          value: e.id,
-                          label: e.name ?? "Unknown expansion",
-                        }))}
-                        w={180}
+                        value={params.get(prefix + "expansion")}
+                        onChange={(value) => set("expansion", value)}
+                        data={
+                          data?.game.expansions.nodes.map((e) => ({
+                            value: e.id,
+                            label: e.name ?? e.key,
+                          })) ?? [
+                            {
+                              value: params.get(prefix + "expansion")!,
+                              label: "Retained exact profession expansion",
+                            },
+                          ]
+                        }
+                        w={260}
                       />
                     )}
-                  {params.has(prefix + "expansion") && (
-                    <Select
-                      label="Legacy profession expansion"
-                      aria-label={`${prefix ? "Population B " : ""}Legacy profession expansion`}
-                      placeholder="All expansions"
-                      clearable
-                      clearButtonProps={{
-                        "aria-label": `Clear ${prefix ? "Population B " : ""}Legacy profession expansion`,
-                      }}
-                      value={params.get(prefix + "expansion")}
-                      onChange={(value) => set("expansion", value)}
-                      data={
-                        data?.game.expansions.nodes.map((e) => ({
-                          value: e.id,
-                          label: e.name ?? e.key,
-                        })) ?? [
-                          {
-                            value: params.get(prefix + "expansion")!,
-                            label: "Retained exact profession expansion",
-                          },
-                        ]
-                      }
-                      w={180}
-                    />
-                  )}
-                  {params.has(prefix + "expansion") && (
-                    <Text size="xs" c="dimmed">
-                      This older link retains one exact profession-expansion
-                      identity. Clear it to explore a whole game expansion.
-                    </Text>
-                  )}
-                  {(!!configurations?.length ||
-                    !!params.get(prefix + "configuration")) && (
-                    <Select
-                      label="Recorded configuration"
-                      aria-label={`${prefix ? "Population B " : ""}Recorded configuration`}
-                      placeholder="All recorded / unknown setups"
-                      clearable
-                      clearButtonProps={{
-                        "aria-label": `Clear ${prefix ? "Population B " : ""}Recorded configuration`,
-                      }}
-                      value={params.get(prefix + "configuration")}
-                      onChange={(value) => set("configuration", value)}
-                      data={
-                        params.get(prefix + "configuration") &&
-                        !configurations?.some(
-                          (choice) =>
-                            choice.value ===
-                            params.get(prefix + "configuration"),
-                        )
-                          ? [
-                              {
-                                value: params.get(prefix + "configuration")!,
-                                label:
-                                  "Selected variant (not in current results)",
-                              },
-                              ...(configurations ?? []),
-                            ]
-                          : (configurations ?? [])
-                      }
-                      w={250}
-                    />
-                  )}
-                </Group>
+                  </FilterSection>
+                ) : null}
                 {!hideRoleItems && (
-                  <Group align="end" gap="sm">
+                  <FilterSection
+                    title="Reagents and results"
+                    note={`"Didn't use" only matches crafts whose reagents were fully recorded; crafts with missing records are left out rather than assumed not to use it.`}
+                  >
                     <ItemFilter
                       game={game}
-                      label={`${prefix ? "Population B " : ""}Input item`}
+                      label={`${label}Used reagent`}
+                      description="Crafts that used this item as a reagent"
                       value={params.get(prefix + "input")}
                       onChange={(value) => set("input", value)}
                     />
                     <ItemFilter
                       game={game}
-                      label={`${prefix ? "Population B " : ""}Absent recorded input`}
+                      label={`${label}Didn't use reagent`}
+                      description={
+                        game.project === 18
+                          ? "Crafts whose recipe didn't require this item"
+                          : "Crafts recorded without this reagent"
+                      }
                       value={params.get(prefix + "absentInput")}
                       onChange={(value) => set("absentInput", value)}
                     />
                     <ItemFilter
                       game={game}
-                      label={`${prefix ? "Population B " : ""}Output item`}
+                      label={`${label}Produced item`}
+                      description="Crafts whose result included this item"
                       value={params.get(prefix + "output")}
                       onChange={(value) => set("output", value)}
                     />
                     {supportsRetailOptions && (
                       <ItemFilter
                         game={game}
-                        label={`${prefix ? "Population B " : ""}Returned item`}
+                        label={`${label}Got back reagent`}
+                        description="Crafts that returned this item (Resourcefulness)"
                         value={params.get(prefix + "returned")}
                         onChange={(value) => set("returned", value)}
                       />
                     )}
                     <ItemFilter
                       game={game}
-                      label={`${prefix ? "Population B " : ""}Any-role item`}
+                      label={`${label}Involves item`}
+                      description="Used, produced or returned in any role"
                       value={params.get(prefix + "item")}
                       onChange={(value) => set("item", value)}
                     />
-                  </Group>
+                  </FilterSection>
                 )}
-                {!hideRoleItems && (
-                  <Text size="xs" c="dimmed">
-                    Absent input requires a complete input record and a known
-                    zero or no{" "}
-                    {game.project === 18
-                      ? "attributed requirement"
-                      : "allocation"}{" "}
-                    for that item.
-                  </Text>
-                )}
-                {supportsRetailOptions && (
-                  <>
-                    <Group align="end" gap="sm">
-                      <TextInput
-                        label={`${prefix ? "Population B " : ""}Recorded buff spell ID`}
-                        placeholder="Any"
-                        defaultValue={params.get(prefix + "buff") ?? ""}
-                        onBlur={(event) =>
-                          set("buff", event.currentTarget.value)
+                {(supportsRetailOptions ||
+                  !!configurations?.length ||
+                  !!params.get(prefix + "configuration")) && (
+                  <FilterSection
+                    title="Crafting setup"
+                    note={
+                      supportsRetailOptions
+                        ? `"Not used" and "not active" only match crafts whose selections were fully recorded; missing evidence never counts as absent.`
+                        : undefined
+                    }
+                  >
+                    {(!!configurations?.length ||
+                      !!params.get(prefix + "configuration")) && (
+                      <Select
+                        label={`${label}Recorded setup`}
+                        aria-label={`${label}Recorded setup`}
+                        description="One exact recorded combination of skill, stats, equipment, buffs and finishing reagents"
+                        placeholder="Any setup"
+                        clearable
+                        clearButtonProps={{
+                          "aria-label": `Clear ${label}Recorded setup`,
+                        }}
+                        value={params.get(prefix + "configuration")}
+                        onChange={(value) => set("configuration", value)}
+                        data={
+                          params.get(prefix + "configuration") &&
+                          !configurations?.some(
+                            (choice) =>
+                              choice.value ===
+                              params.get(prefix + "configuration"),
+                          )
+                            ? [
+                                {
+                                  value: params.get(prefix + "configuration")!,
+                                  label:
+                                    "Selected setup (not in current results)",
+                                },
+                                ...(configurations ?? []),
+                              ]
+                            : (configurations ?? [])
                         }
-                        w={180}
+                        w={300}
                       />
-                      <TextInput
-                        label={`${prefix ? "Population B " : ""}Absent supported buff spell ID`}
-                        placeholder="Any"
-                        defaultValue={params.get(prefix + "absentBuff") ?? ""}
-                        onBlur={(event) =>
-                          set("absentBuff", event.currentTarget.value)
-                        }
-                        w={225}
-                      />
-                      <ItemFilter
-                        game={game}
-                        label={`${prefix ? "Population B " : ""}Finishing item`}
-                        value={params.get(prefix + "finishing")}
-                        onChange={(value) => set("finishing", value)}
-                      />
-                      <ItemFilter
-                        game={game}
-                        label={`${prefix ? "Population B " : ""}Absent submitted finishing item`}
-                        value={params.get(prefix + "absentFinishing")}
-                        onChange={(value) => set("absentFinishing", value)}
-                      />
-                    </Group>
-                    <Text size="xs" c="dimmed">
-                      Recorded absence requires a complete supported selection
-                      list; missing evidence is never treated as absent.
-                    </Text>
-                  </>
+                    )}
+                    {supportsRetailOptions && (
+                      <>
+                        <ItemFilter
+                          game={game}
+                          label={`${label}Finishing reagent used`}
+                          description="Crafts that submitted this finishing reagent"
+                          value={params.get(prefix + "finishing")}
+                          onChange={(value) => set("finishing", value)}
+                        />
+                        <ItemFilter
+                          game={game}
+                          label={`${label}Finishing reagent not used`}
+                          description="Crafts recorded without this finishing reagent"
+                          value={params.get(prefix + "absentFinishing")}
+                          onChange={(value) => set("absentFinishing", value)}
+                        />
+                        <BuffFilter
+                          label={`${label}Buff active`}
+                          description="Crafts made with this buff recorded"
+                          buffIds={buffIds}
+                          value={params.get(prefix + "buff")}
+                          onChange={(value) => set("buff", value)}
+                        />
+                        <BuffFilter
+                          label={`${label}Buff not active`}
+                          description="Crafts recorded without this buff"
+                          buffIds={buffIds}
+                          value={params.get(prefix + "absentBuff")}
+                          onChange={(value) => set("absentBuff", value)}
+                        />
+                      </>
+                    )}
+                  </FilterSection>
                 )}
               </Stack>
             </Accordion.Panel>
