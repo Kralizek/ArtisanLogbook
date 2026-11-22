@@ -303,3 +303,50 @@ it("offers recorded buffs by spell and validates a typed spell ID", async () => 
     "absentBuff=1234",
   );
 });
+
+it("offers game expansions only in Retail", async () => {
+  query.mockReturnValue({
+    data: {
+      game: {
+        characters: { nodes: [], pageInfo: { hasNextPage: false } },
+        professions: { nodes: [], pageInfo: { hasNextPage: false } },
+        items: { nodes: [] },
+        expansions: { nodes: [], pageInfo: { hasNextPage: false } },
+        expansionGroups: {
+          nodes: [
+            { id: "alchemy-line", key: "skillLine:171", name: "Alchemy" },
+          ],
+          truncated: false,
+        },
+      },
+    },
+    error: undefined,
+  });
+  try {
+    for (const [game, offered] of [
+      [retail, true],
+      [
+        { ...retail, canonicalId: "18", routeAlias: "forever", project: 18 },
+        false,
+      ],
+    ] as const) {
+      const { unmount } = render(
+        <MantineProvider env="test">
+          <MemoryRouter>
+            <ScopeControls game={game} />
+          </MemoryRouter>
+        </MantineProvider>,
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "More filters" }),
+      );
+      await screen.findByText("Reagents and results");
+      expect(
+        screen.queryByRole("combobox", { name: "Game expansion" }) !== null,
+      ).toBe(offered);
+      unmount();
+    }
+  } finally {
+    query.mockReturnValue({ data: undefined, error: undefined });
+  }
+});

@@ -253,6 +253,11 @@ export function ScopeControls({
     fetchPolicy: "no-cache",
   });
   const supportsRetailOptions = game.project === 1;
+  // Game expansions exist only in Retail; elsewhere the recorded skill lines
+  // are per profession. An explicit filter stays visible so it can be cleared.
+  const showGameExpansion =
+    params.has(prefix + "gameExpansion") ||
+    (supportsRetailOptions && !focusedRecipe);
   const hasAdvancedFilters = [
     "input",
     "absentInput",
@@ -379,11 +384,11 @@ export function ScopeControls({
                   Narrow which crafts are counted. A craft must match every
                   filter you set; leave a filter empty to ignore it.
                 </Text>
-                {((!focusedRecipe || params.has(prefix + "gameExpansion")) &&
+                {(showGameExpansion &&
                   !!data?.game.expansionGroups.nodes.length) ||
                 params.has(prefix + "expansion") ? (
                   <FilterSection title="Expansion">
-                    {(!focusedRecipe || params.has(prefix + "gameExpansion")) &&
+                    {showGameExpansion &&
                       !!data?.game.expansionGroups.nodes.length && (
                         <Select
                           label={`${label}Game expansion`}

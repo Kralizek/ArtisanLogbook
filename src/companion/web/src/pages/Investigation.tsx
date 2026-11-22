@@ -745,23 +745,25 @@ function Activity({
         <Button variant="default" disabled={loading} onClick={refreshBounds}>
           Refresh activity
         </Button>
-        <Select
-          label="Time grouping"
-          aria-label="Time grouping"
-          w={180}
-          value={granularity.toLowerCase()}
-          data={[
-            { value: "day", label: "Day" },
-            { value: "week", label: "Week" },
-            { value: "month", label: "Month" },
-          ]}
-          onChange={(value) => {
-            if (!value) return;
-            const next = new URLSearchParams(search);
-            next.set("granularity", value);
-            setSearch(next, { replace: true });
-          }}
-        />
+        {params.get("period") !== "today" && (
+          <Select
+            label="Time grouping"
+            aria-label="Time grouping"
+            w={180}
+            value={granularity.toLowerCase()}
+            data={[
+              { value: "day", label: "Day" },
+              { value: "week", label: "Week" },
+              { value: "month", label: "Month" },
+            ]}
+            onChange={(value) => {
+              if (!value) return;
+              const next = new URLSearchParams(search);
+              next.set("granularity", value);
+              setSearch(next, { replace: true });
+            }}
+          />
+        )}
       </Group>
       {error && <RequestError error={error} retry={refreshBounds} />}
       {loading && !result && <Loader aria-label="Loading activity" />}
@@ -784,18 +786,24 @@ function Activity({
               refresh={refreshBounds}
             />
           </SimpleGrid>
-          <ActivityTrend
-            game={game}
-            params={params}
-            granularity={granularity.toLowerCase() as "day" | "week" | "month"}
-            from={filter.from}
-            to={filter.to}
-            points={result.timeline.nodes.map((node) => ({
-              date: node.start,
-              craftCount: node.measure.attempts,
-            }))}
-          />
-          <Truncated value={result.timeline.truncated} />
+          {params.get("period") !== "today" && (
+            <ActivityTrend
+              game={game}
+              params={params}
+              granularity={
+                granularity.toLowerCase() as "day" | "week" | "month"
+              }
+              from={filter.from}
+              to={filter.to}
+              points={result.timeline.nodes.map((node) => ({
+                date: node.start,
+                craftCount: node.measure.attempts,
+              }))}
+            />
+          )}
+          {params.get("period") !== "today" && (
+            <Truncated value={result.timeline.truncated} />
+          )}
           <Group justify="space-between">
             <Title order={2}>Most-crafted recipes</Title>
             <Anchor
@@ -1285,6 +1293,9 @@ function Recipe({
       value: row.id,
       label: configurationLabel(row.id, row.evidence),
     }));
+  // A single day needs no activity chart.
+  const chartA = params.get("period") !== "today";
+  const chartB = !!right && params.get("bperiod") !== "today";
   const recordedBuffIds = [
     ...new Set(
       configurations.flatMap(
@@ -1427,45 +1438,51 @@ function Recipe({
             </Tabs.Panel>
             <Tabs.Panel value="overview">
               <Stack gap="lg">
-                <Title order={2}>Recipe activity over time</Title>
-                <SimpleGrid cols={{ base: 1, lg: right ? 2 : 1 }}>
-                  <Stack gap="xs">
-                    {right && (
-                      <Title order={3}>Population A recipe activity</Title>
+                {(chartA || chartB) && (
+                  <Title order={2}>Recipe activity over time</Title>
+                )}
+                {(chartA || chartB) && (
+                  <SimpleGrid cols={{ base: 1, lg: chartA && chartB ? 2 : 1 }}>
+                    {chartA && (
+                      <Stack gap="xs">
+                        {right && (
+                          <Title order={3}>Population A recipe activity</Title>
+                        )}
+                        <ActivityTrend
+                          game={game}
+                          params={withFilters(primaryScopeParams(params), {
+                            recipe: id,
+                          })}
+                          from={filter.from}
+                          to={filter.to}
+                          points={left.timeline.nodes.map((node) => ({
+                            date: node.start,
+                            craftCount: node.measure.attempts,
+                          }))}
+                        />
+                        <Truncated value={left.timeline.truncated} />
+                      </Stack>
                     )}
-                    <ActivityTrend
-                      game={game}
-                      params={withFilters(primaryScopeParams(params), {
-                        recipe: id,
-                      })}
-                      from={filter.from}
-                      to={filter.to}
-                      points={left.timeline.nodes.map((node) => ({
-                        date: node.start,
-                        craftCount: node.measure.attempts,
-                      }))}
-                    />
-                    <Truncated value={left.timeline.truncated} />
-                  </Stack>
-                  {right && (
-                    <Stack gap="xs">
-                      <Title order={3}>Population B recipe activity</Title>
-                      <ActivityTrend
-                        game={game}
-                        params={withFilters(populationParams(params, "b"), {
-                          recipe: id,
-                        })}
-                        from={second?.from}
-                        to={second?.to}
-                        points={right.timeline.nodes.map((node) => ({
-                          date: node.start,
-                          craftCount: node.measure.attempts,
-                        }))}
-                      />
-                      <Truncated value={right.timeline.truncated} />
-                    </Stack>
-                  )}
-                </SimpleGrid>
+                    {chartB && right && (
+                      <Stack gap="xs">
+                        <Title order={3}>Population B recipe activity</Title>
+                        <ActivityTrend
+                          game={game}
+                          params={withFilters(populationParams(params, "b"), {
+                            recipe: id,
+                          })}
+                          from={second?.from}
+                          to={second?.to}
+                          points={right.timeline.nodes.map((node) => ({
+                            date: node.start,
+                            craftCount: node.measure.attempts,
+                          }))}
+                        />
+                        <Truncated value={right.timeline.truncated} />
+                      </Stack>
+                    )}
+                  </SimpleGrid>
+                )}
                 <Ranking
                   game={game}
                   params={withFilters(params, { recipe: id })}
