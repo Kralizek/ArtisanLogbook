@@ -337,6 +337,8 @@ type GameContext {
     search: String
     profession: ID
     craftedOnly: Boolean! = false
+    orderBy: CatalogueOrder! = NAME
+    descending: Boolean! = false
   ): RecipeConnection!
     @cost(weight: "1000")
     @listSize(
@@ -353,7 +355,13 @@ type GameContext {
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-  items(first: Int! = 20, after: String, search: String): ItemConnection!
+  items(
+    first: Int! = 20
+    after: String
+    search: String
+    orderBy: CatalogueOrder! = NAME
+    descending: Boolean! = false
+  ): ItemConnection!
     @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
@@ -591,6 +599,14 @@ enum AnalysisGranularity {
   DAY
   WEEK
   MONTH
+}
+
+enum CatalogueOrder {
+  NAME
+  NUMBER
+  PROFESSION
+  CRAFTS
+  LAST_CRAFTED
 }
 
 enum RecipeReagentDataSlotType {

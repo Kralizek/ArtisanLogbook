@@ -299,7 +299,7 @@ public sealed class GameContextGraph(GameContext value)
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public RecipeConnection GetRecipes(IHistoryDimensionRepository repository, int first = 20, string? after = null,
         string? search = null, [GraphQLType(typeof(IdType))] string? profession = null, bool craftedOnly = false,
-        CancellationToken token = default)
+        CatalogueOrder orderBy = CatalogueOrder.Name, bool descending = false, CancellationToken token = default)
     {
         int? professionId = null;
         if (profession is not null)
@@ -311,7 +311,8 @@ public sealed class GameContextGraph(GameContext value)
             professionId = parsed.Key;
         }
         return HistoryConnections.Recipes(repository,
-            new(value, professionId, Search: search, CraftedOnly: craftedOnly), first, after, token);
+            new(value, professionId, Search: search, CraftedOnly: craftedOnly, Order: orderBy, Descending: descending),
+            first, after, token);
     }
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
@@ -320,8 +321,12 @@ public sealed class GameContextGraph(GameContext value)
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public ItemConnection GetItems(IHistoryDimensionRepository repository, int first = 20, string? after = null,
-        string? search = null, CancellationToken token = default) =>
-        HistoryConnections.Items(repository, new(value, search), first, after, token);
+        string? search = null, CatalogueOrder orderBy = CatalogueOrder.Name, bool descending = false,
+        CancellationToken token = default) =>
+        orderBy is CatalogueOrder.Name or CatalogueOrder.Number
+            ? HistoryConnections.Items(repository, new(value, search, orderBy, descending), first, after, token)
+            : throw new GraphQLException(ErrorBuilder.New()
+                .SetMessage("Items can be ordered by name or number only.").SetCode("INVALID_FILTER").Build());
     [Cost(1_000)]
     [ListSize(SlicingArguments = ["first"], SizedFields = ["nodes"], SlicingArgumentDefaultValue = 20, RequireOneSlicingArgument = false)]
     public CraftConnection GetCrafts(ICraftHistoryRepository repository, int first = 20, string? after = null,

@@ -583,3 +583,21 @@ h1 {
 .craft-highlight[data-kind="resourcefulness"] {
   --highlight: #4f9f5a;
 }
+.sortable-header {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font: inherit;
+  color: inherit;
+}
+.sortable-header .sort-mark {
+  font-size: 0.7em;
+  opacity: 0.45;
+}
+.sortable-header[data-active] .sort-mark {
+  opacity: 1;
+}
+.sortable-header:hover,
+.sortable-header:focus-visible {
+  text-decoration: underline;
+}

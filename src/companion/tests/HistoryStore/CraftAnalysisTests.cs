@@ -293,6 +293,38 @@ public sealed class CraftAnalysisTests
         });
     }
 
+    [TestCase(CatalogueOrder.Name, false, new[] { 2, 1, 4, 3 })]
+    [TestCase(CatalogueOrder.Name, true, new[] { 3, 4, 1, 2 })]
+    [TestCase(CatalogueOrder.Number, true, new[] { 4, 3, 2, 1 })]
+    [TestCase(CatalogueOrder.Profession, false, new[] { 1, 3, 2, 4 })]
+    [TestCase(CatalogueOrder.Crafts, true, new[] { 2, 4, 1, 3 })]
+    [TestCase(CatalogueOrder.LastCrafted, true, new[] { 4, 2, 1, 3 })]
+    [TestCase(CatalogueOrder.LastCrafted, false, new[] { 3, 1, 2, 4 })]
+    public void RecipeCataloguesSortAndPageInEveryOrder(CatalogueOrder order, bool descending, int[] expected)
+    {
+        using Store store = new(Path.Combine(_directory, "catalogue.duckdb"));
+        Assert.That(store.WriteDimensions(new([], [
+            new(Retail, 1, "beta", 171), new(Retail, 2, "Alpha", 164), new(Retail, 3, null, 171), new(Retail, 4, "gamma")
+        ], [new(Retail, 171, "Alchemy"), new(Retail, 164, "Blacksmithing")], [], [])).IsSuccessful, Is.True);
+        DateTimeOffset time = DateTimeOffset.Parse("2026-02-01T12:00:00Z");
+        foreach ((string id, int recipe, int days) in new[] { ("a", 1, 0), ("b", 2, 1), ("c", 2, 2), ("d", 2, 3), ("e", 4, 4), ("f", 4, 5) })
+            Assert.That(store.Write(Craft(id, Retail, time.AddDays(days)) with { RecipeId = recipe }).IsSuccessful, Is.True);
+
+        RecipeQuery query = new(Retail, Order: order, Descending: descending);
+        List<int> paged = [];
+        DimensionPage<RecipeDimension, int>? page = null;
+        do
+        {
+            page = store.QueryRecipes(query, 1, page?.EndPosition);
+            paged.AddRange(page.Items.Select(recipe => recipe.Id));
+        } while (page.HasNextPage);
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.QueryRecipes(query, 10).Items.Select(recipe => recipe.Id), Is.EqualTo(expected));
+            Assert.That(paged, Is.EqualTo(expected));
+        });
+    }
+
     [Test]
     public void CraftsAreFoundByShortIdsDerivedAtImportOrBackfilledForOlderDatabases()
     {

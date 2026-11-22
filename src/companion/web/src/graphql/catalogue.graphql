@@ -4,6 +4,8 @@ query RecipeCatalogue(
   $after: String
   $profession: ID
   $craftedOnly: Boolean!
+  $orderBy: CatalogueOrder!
+  $descending: Boolean!
 ) {
   game(context: $context) {
     recipes(
@@ -12,6 +14,8 @@ query RecipeCatalogue(
       after: $after
       profession: $profession
       craftedOnly: $craftedOnly
+      orderBy: $orderBy
+      descending: $descending
     ) {
       nodes {
         id
@@ -36,9 +40,21 @@ query RecipeCatalogue(
   }
 }
 
-query ItemCatalogue($context: String!, $search: String, $after: String) {
+query ItemCatalogue(
+  $context: String!
+  $search: String
+  $after: String
+  $orderBy: CatalogueOrder!
+  $descending: Boolean!
+) {
   game(context: $context) {
-    items(first: 50, search: $search, after: $after) {
+    items(
+      first: 50
+      search: $search
+      after: $after
+      orderBy: $orderBy
+      descending: $descending
+    ) {
       nodes {
         id
         blizzardId

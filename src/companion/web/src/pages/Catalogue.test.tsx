@@ -1,5 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { ActiveGame } from "../app/game";
@@ -129,7 +130,7 @@ function renderAt(url: string) {
 }
 
 function recipeVariables() {
-  const call = query.mock.calls.find(
+  const call = query.mock.calls.findLast(
     ([document]) => document === RecipeCatalogueDocument,
   );
   return (call?.[1] as { variables: Record<string, unknown> }).variables;
@@ -159,7 +160,34 @@ it("includes never-crafted recipes only on request", () => {
   ).toBeChecked();
 });
 
-it("orders characters by recent activity and shows their class", () => {
+it("sorts recipes on the server by name by default and by a chosen column", async () => {
+  renderAt("/retail/recipes");
+  expect(recipeVariables()).toMatchObject({
+    orderBy: "NAME",
+    descending: false,
+  });
+  expect(screen.getByRole("columnheader", { name: /^Name/ })).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+  await userEvent.click(screen.getByRole("button", { name: /^Crafts/ }));
+  expect(recipeVariables()).toMatchObject({
+    orderBy: "CRAFTS",
+    descending: true,
+  });
+  await userEvent.click(screen.getByRole("button", { name: /^Crafts/ }));
+  expect(recipeVariables()).toMatchObject({
+    orderBy: "CRAFTS",
+    descending: false,
+  });
+  await userEvent.click(screen.getByRole("button", { name: /^Number/ }));
+  expect(recipeVariables()).toMatchObject({
+    orderBy: "NUMBER",
+    descending: false,
+  });
+});
+
+it("lists characters alphabetically, sortable by any column, and shows their class", async () => {
   render(
     <MantineProvider>
       <MemoryRouter initialEntries={["/retail/characters"]}>
@@ -167,11 +195,21 @@ it("orders characters by recent activity and shows their class", () => {
       </MemoryRouter>
     </MantineProvider>,
   );
-  const names = screen
-    .getAllByRole("row")
-    .slice(1)
-    .map((row) => row.querySelector("td")?.textContent);
-  expect(names).toEqual(["Falluja", "Kiraani", "Ogrim"]);
+  const names = () =>
+    screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => row.querySelector("td")?.textContent);
+  expect(names()).toEqual(["Falluja", "Kiraani", "Ogrim"]);
+  await userEvent.click(screen.getByRole("button", { name: /^Crafts/ }));
+  expect(names()).toEqual(["Kiraani", "Falluja", "Ogrim"]);
+  await userEvent.click(screen.getByRole("button", { name: /^Last crafted/ }));
+  expect(names()).toEqual(["Falluja", "Kiraani", "Ogrim"]);
+  await userEvent.click(screen.getByRole("button", { name: /^Class/ }));
+  expect(names()).toEqual(["Falluja", "Kiraani", "Ogrim"]);
+  await userEvent.click(screen.getByRole("button", { name: /^Name/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Name/ }));
+  expect(names()).toEqual(["Ogrim", "Kiraani", "Falluja"]);
   expect(screen.getByText("Death Knight")).toBeInTheDocument();
   expect(screen.getByText("61")).toBeInTheDocument();
   expect(screen.getByText("Not crafted")).toBeInTheDocument();
