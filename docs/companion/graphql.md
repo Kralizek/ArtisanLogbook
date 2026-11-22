@@ -91,9 +91,12 @@ known zero is `"0"`.
 
 ## IDs, filters and pagination
 
-IDs are opaque, versioned base64url-encoded JSON containing an entity kind and
-its canonical identity; craft IDs contain origin and observation, while
-dimensions contain project, optional progression track, and canonical key.
+IDs are opaque, compact and URL-safe: a kind code, the game project, an
+optional progression track and the canonical key, such as `r1-1230868` for a
+Retail recipe. Craft IDs contain origin and observation instead of a context.
+Keys are escaped reversibly (`:` becomes `.`, other non-alphanumeric bytes
+`_XX`), so IDs need no percent-encoding, and only the canonical spelling is
+accepted. Clients must still treat them as opaque.
 They are stable across restarts and metadata enrichment and do not use database
 surrogate keys. IDs are **not secrets**. Hot Chocolate's Relay/Node support was
 evaluated; the initial API uses explicit typed lookups and a versioned composite
@@ -133,7 +136,7 @@ selected population: production sums known output rows, while
 output lists. Bounded recipe and character rows must not be summed for totals.
 
 Collections default to 20 items, with `first` from 1 to 100. Pass `endCursor`
-as `after` to continue. Cursors are opaque versioned base64url positions with
+as `after` to continue. Cursors are opaque compact positions with
 a collection kind; invalid or wrong-kind cursors are rejected. Craft ordering
 is newest recorded instant first, preserving 100 ns precision across offsets,
 then origin and observation ascending. Dimensions order by canonical game-context

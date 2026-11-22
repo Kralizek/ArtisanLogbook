@@ -670,8 +670,8 @@ async function run(base, output) {
     });
     await variant.click();
     await page
-      .getByRole("option", { name: /Recorded setup/ })
-      .first()
+      // The fixture's two Retail setups differ by skill; the skill-120 setup has two of A's attempts.
+      .getByRole("option", { name: /Recorded setup .* · skill 120/ })
       .click();
     assert(new URL(page.url()).searchParams.has("configuration"));
     await comparison(page, "2", "1");

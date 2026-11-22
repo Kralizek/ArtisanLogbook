@@ -947,7 +947,7 @@ public sealed class CompanionApiTests
     public async Task GraphQLLongCraftIdsAndCursorsRoundTrip()
     {
         GameContext game = new(GameProject.Retail);
-        string origin = new('o', 3000);
+        string origin = new('o', 5000);
         CraftObservation[] crafts =
         [
             new(new(origin, "one"), game, DateTimeOffset.Parse("2026-01-02T00:00:00Z"), null, new("player")),
