@@ -294,6 +294,31 @@ public sealed class CraftAnalysisTests
     }
 
     [Test]
+    public void ConfigurationIdentityIgnoresTheImportingPlatformsLineEndings()
+    {
+        const string payload = "CraftConfigurationEvidence = { craftFields = { configurationScope = \"request\" } }\n";
+        DateTimeOffset time = DateTimeOffset.Parse("2026-02-01T12:00:00Z");
+        string[] signatures = new[] { payload, payload.Replace("\n", "\r\n", StringComparison.Ordinal) }
+            .Select((text, index) =>
+            {
+                using Store store = new(Path.Combine(_directory, $"line-endings-{index}.duckdb"));
+                Assert.That(store.Write(Craft("craft", Retail, time) with
+                {
+                    ConfigurationEvidence = [new("source", 1, text)]
+                }).IsSuccessful, Is.True);
+                string signature = store.Analyze(new(new(Game: Retail))).Configurations.Nodes.Single().Signature;
+                Assert.Multiple(() =>
+                {
+                    Assert.That(signature, Is.EqualTo(Store.ConfigurationSignature(text)));
+                    Assert.That(store.QueryCrafts(new(Game: Retail, ConfigurationSignature: signature)).Crafts,
+                        Has.Count.EqualTo(1));
+                });
+                return signature;
+            }).ToArray();
+        Assert.That(signatures[1], Is.EqualTo(signatures[0]));
+    }
+
+    [Test]
     public void PopulationFiltersAndSignaturesChangeOnlyForRelevantEnrichment()
     {
         using Store store = new(Path.Combine(_directory, "history.duckdb"));

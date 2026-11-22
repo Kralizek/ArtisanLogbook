@@ -1,6 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
 
 using ArtisanLogbook.History;
 using ArtisanLogbook.SavedVariables;
@@ -159,8 +157,7 @@ public sealed class RecordedCraftConfigurations(GameContext game, IReadOnlyList<
 public sealed class RecordedCraftConfiguration(GameContext game, string payload)
 {
     [GraphQLType(typeof(NonNullType<IdType>))]
-    public string Id => HistoryTokens.Dimension("configuration", game,
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant());
+    public string Id => HistoryTokens.Dimension("configuration", game, Store.ConfigurationSignature(payload));
     public bool EvidenceAvailable => payload.Length <= 65536;
     public RecordedConfiguration Evidence => EvidenceAvailable
         ? RecordedConfiguration.FromPayload(payload) : new();

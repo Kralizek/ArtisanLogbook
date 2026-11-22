@@ -14,6 +14,16 @@ public sealed partial class HistoryStore
 {
     public const int MaximumAnalysisRows = 100;
 
+    // A recorded configuration's identity is the hash of its evidence payload. The payload is serialized with the
+    // importing platform's line endings, so CRLF is normalized to LF: the same capture gets the same identity
+    // whether it was imported on Windows or elsewhere. Keep ConfigurationSignature in step with this SQL.
+    private const string PayloadSignatureSql =
+        "sha256(replace(json_extract_string(e.value, '$.payload'), chr(13) || chr(10), chr(10)))";
+
+    public static string ConfigurationSignature(string payload) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload.Replace("\r\n", "\n", StringComparison.Ordinal))))
+            .ToLowerInvariant();
+
     // Craft reagents of the selected crafts with their slot role: the role stored at import, otherwise derived from
     // the same craft's retained evidence (crafts stored before roles were recorded). Submitted finishing
     // selections are finishing (2); schematic candidate lists and fixed reagents are basic (1); an item identified
@@ -165,7 +175,7 @@ public sealed partial class HistoryStore
             """);
         if (query.ConfigurationSignature is string signature)
         {
-            sql.Append(" AND sha256(json_extract_string(e.value, '$.payload')) = $ConfigurationSignature");
+            sql.Append($" AND {PayloadSignatureSql} = $ConfigurationSignature");
             parameters.Add("ConfigurationSignature", signature);
         }
         const string buffList = """(?:\["buffs"\]|buffs)\s*=\s*\{(?:\s*\[\d+\]\s*=\s*\{[^{}]*\}\s*,?)*\}""";
@@ -436,7 +446,7 @@ public sealed partial class HistoryStore
             """, r => new(r.Key ?? "unknown", r.Measure(), Quality: r.Quality));
         AnalysisCollection<ConfigurationAnalysis> configurations = Page<ConfigurationRow, ConfigurationAnalysis>($"""
             , evidence AS (
-                SELECT DISTINCT c.CraftKey, sha256(json_extract_string(e.value, '$.payload')) Signature,
+                SELECT DISTINCT c.CraftKey, {PayloadSignatureSql} Signature,
                     json_extract_string(e.value, '$.payload') Payload
                 FROM selected c, json_each(c.ConfigurationEvidenceJson) e
                 WHERE json_extract_string(e.value, '$.payload') IS NOT NULL
