@@ -51,7 +51,7 @@ public sealed class SourceCatalog(CompanionRuntimeConfiguration configuration, I
             .ToList();
         if (configuration.EffectiveSettings.InstallationRoots.Count == 0)
             diagnostics.Add(new(DiscoverySeverity.Warning, "no-installation-roots",
-                "No installation roots are configured; run `artisanlogbook init`."));
+                "No installations are active; choose a detected installation in Companion and restart, or run `artisanlogbook init`."));
         return new(SourceLogLabels.Apply(sources), diagnostics);
     }
 

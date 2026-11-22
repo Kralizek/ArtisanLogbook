@@ -20,7 +20,7 @@ public sealed class ServeSettings : DatabaseSettings
     public bool? Monitoring { get; init; }
 
     [CommandOption("--reconciliation-interval <SECONDS>")]
-    [Description("Override the reconciliation interval (1-86400 seconds; default 60).")]
+    [Description("Override the periodic reconciliation interval (1-86400 seconds; default 3600).")]
     public int? ReconciliationIntervalSeconds { get; init; }
 
     [CommandOption("--port <PORT>")]

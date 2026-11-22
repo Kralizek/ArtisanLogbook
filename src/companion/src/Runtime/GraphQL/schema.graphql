@@ -3,6 +3,31 @@ schema {
 }
 
 type Query {
+  game(context: String!): GameContext!
+  analysis(
+    context: String!
+    filter: CraftFilterInput
+    granularity: AnalysisGranularity! = DAY
+    returnItemId: ID
+  ): Analysis! @cost(weight: "10")
+  analysisSignature(context: String!, filter: CraftFilterInput): String!
+    @cost(weight: "10")
+  contextCrafts(
+    context: String!
+    filter: CraftFilterInput
+    first: Int! = 20
+    after: String
+  ): CraftConnection!
+    @listSize(
+      slicingArguments: ["first"]
+      slicingArgumentDefaultValue: 20
+      sizedFields: ["nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  contextCraft(context: String!, id: ID!): Craft @cost(weight: "10")
+  contextRecipe(context: String!, id: ID!): Recipe @cost(weight: "10")
+  contextItem(context: String!, id: ID!): Item @cost(weight: "10")
   craft(id: ID!): Craft @cost(weight: "10")
   crafts(first: Int! = 20, after: String, filter: CraftFilterInput): CraftConnection!
     @listSize(
@@ -68,7 +93,126 @@ type Query {
     @cost(weight: "10")
 }
 
+type Analysis {
+  timeline: AnalysisTimeline! @cost(weight: "100")
+  recipes: AnalysisRecipes! @cost(weight: "100")
+  outputs: AnalysisContributions! @cost(weight: "100")
+  inputs: AnalysisContributions! @cost(weight: "100")
+  returns: AnalysisContributions
+  characters: AnalysisContributions! @cost(weight: "100")
+  qualities: AnalysisContributions! @cost(weight: "100")
+  configurations: AnalysisConfigurations! @cost(weight: "100")
+  itemRelations: AnalysisItemRelationsGraph @cost(weight: "100")
+  signature: String!
+  configurationCoverage: AnalysisEvidenceCoverage!
+  inputMeasureLabel: String!
+  supportsReturns: Boolean!
+  attempts: AnalysisMeasure!
+  metrics: AnalysisPopulationMetricsGraph!
+}
+
+type AnalysisBucket {
+  start: String!
+  measure: AnalysisMeasure!
+}
+
+type AnalysisConfigurationGraph {
+  id: ID!
+  measure: AnalysisMeasure!
+  metrics: AnalysisPopulationMetricsGraph!
+  evidenceAvailable: Boolean!
+  evidence: RecordedConfiguration!
+}
+
+type AnalysisConfigurations {
+  nodes: [AnalysisConfigurationGraph!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
+}
+
+type AnalysisContributionGraph {
+  metrics: AnalysisPopulationMetricsGraph
+  id: ID
+  name: String
+  blizzardId: Int
+  quality: Int
+  role: RecipeReagentType
+  measure: AnalysisMeasure!
+  finishingAllocation: AnalysisMeasure
+  resourceAllocation: AnalysisMeasure
+  returnedItem: AnalysisMeasure
+}
+
+type AnalysisContributions {
+  nodes: [AnalysisContributionGraph!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
+}
+
+type AnalysisEvidenceCoverage {
+  recordedAttempts: String!
+  emptyAttempts: String!
+  unknownAttempts: String!
+}
+
+type AnalysisItemRelationsGraph {
+  outputs: AnalysisRelations!
+  inputs: AnalysisRelations!
+  returns: AnalysisRelations
+}
+
+type AnalysisMeasure {
+  attempts: String!
+  measuredAttempts: String!
+  incompleteAttempts: String!
+  quantity: String
+}
+
+type AnalysisOutcome {
+  observedAttempts: String!
+  positiveAttempts: String!
+  total: String
+  unknownAttempts: String!
+  ineligibleAttempts: String!
+}
+
+type AnalysisPopulationMetricsGraph {
+  production: AnalysisMeasure!
+  ingenuity: AnalysisOutcome
+  resourcefulness: AnalysisOutcome
+  multicraft: AnalysisOutcome
+  concentration: AnalysisOutcome
+  refund: AnalysisOutcome
+}
+
+type AnalysisRecipes {
+  nodes: [RecipeAnalysisGraph!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
+}
+
+type AnalysisRelationGraph {
+  recipeId: ID
+  recipeName: String
+  characterId: ID!
+  characterName: String
+  measure: AnalysisMeasure!
+}
+
+type AnalysisRelations {
+  nodes: [AnalysisRelationGraph!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
+}
+
+type AnalysisTimeline {
+  nodes: [AnalysisBucket!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
+}
+
 type Character {
+  activity: DimensionActivity
   crafts(first: Int! = 20, after: String): CraftConnection!
     @listSize(
       slicingArguments: ["first"]
@@ -88,6 +232,7 @@ type CharacterConnection {
 }
 
 type Craft {
+  recordedConfigurations: RecordedCraftConfigurations! @cost(weight: "100")
   character: Character!
   recipe: Recipe
   profession: Profession
@@ -97,6 +242,7 @@ type Craft {
   game: GameContext!
   concentrationSpent: Int
   ingenuityRefund: Int
+  appliedIngenuityRefund: Int
   concentrationCurrencyId: Int
   hasIngenuityProc: Boolean
   hasResourcefulnessProc: Boolean
@@ -117,12 +263,20 @@ type CraftOutput {
   item: Item!
   quality: Int
   quantity: Long
+  quantityExact: String
 }
 
 type CraftReagent {
   item: Item!
   allocatedQuantity: Long
+  allocatedQuantityExact: String
   returnedQuantity: Decimal
+  returnedQuantityExact: String
+}
+
+type DimensionActivity {
+  craftCount: String!
+  lastRecordedAt: DateTime!
 }
 
 type Expansion {
@@ -154,6 +308,13 @@ type ExpansionConnection {
 }
 
 type GameContext {
+  expansionGroups: GameExpansionGroups! @cost(weight: "1000")
+  recipesByBlizzardIds(ids: [Int!]!): [Recipe!]!
+    @cost(weight: "100")
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  itemsByBlizzardIds(ids: [Int!]!): [Item!]!
+    @cost(weight: "100")
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
   characters(first: Int! = 20, after: String): CharacterConnection!
     @cost(weight: "1000")
     @listSize(
@@ -170,7 +331,15 @@ type GameContext {
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-  recipes(first: Int! = 20, after: String, search: String): RecipeConnection!
+  recipes(
+    first: Int! = 20
+    after: String
+    search: String
+    profession: ID
+    craftedOnly: Boolean! = false
+    orderBy: CatalogueOrder! = NAME
+    descending: Boolean! = false
+  ): RecipeConnection!
     @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
@@ -186,7 +355,13 @@ type GameContext {
       sizedFields: ["nodes"]
       requireOneSlicingArgument: false
     )
-  items(first: Int! = 20, after: String, search: String): ItemConnection!
+  items(
+    first: Int! = 20
+    after: String
+    search: String
+    orderBy: CatalogueOrder! = NAME
+    descending: Boolean! = false
+  ): ItemConnection!
     @cost(weight: "1000")
     @listSize(
       slicingArguments: ["first"]
@@ -215,6 +390,20 @@ type GameContextConnection {
   pageInfo: HistoryPageInfo!
 }
 
+type GameExpansionGroup {
+  id: ID!
+  key: String!
+  name: String
+  game: GameContext!
+  professionExpansionKeys: [String!]!
+}
+
+type GameExpansionGroups {
+  nodes: [GameExpansionGroup!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
+}
+
 type HistoryPageInfo {
   hasNextPage: Boolean!
   endCursor: String
@@ -240,6 +429,7 @@ type Item {
   id: ID!
   blizzardId: Int!
   name: String
+  quality: Int
   game: GameContext!
 }
 
@@ -249,6 +439,7 @@ type ItemConnection {
 }
 
 type Profession {
+  activity: DimensionActivity
   parent: Profession
   children(first: Int! = 20, after: String): ProfessionConnection!
     @cost(weight: "1000")
@@ -286,6 +477,7 @@ type ProfessionConnection {
 }
 
 type Recipe {
+  activity: DimensionActivity
   profession: Profession
   expansion: Expansion
   reagentSlots: [RecipeReagentSlot!]!
@@ -302,6 +494,17 @@ type Recipe {
   name: String
   maxQuality: Int
   game: GameContext!
+}
+
+type RecipeAnalysisGraph {
+  id: ID!
+  name: String
+  outputs: AnalysisMeasure!
+  ingenuity: AnalysisOutcome
+  resourcefulness: AnalysisOutcome
+  multicraft: AnalysisOutcome
+  concentration: AnalysisOutcome
+  refund: AnalysisOutcome
 }
 
 type RecipeConnection {
@@ -321,6 +524,56 @@ type RecipeReagentSlot {
   requiredQuantity: Int
 }
 
+type RecordedBuff {
+  spellId: Int
+  applications: Int
+}
+
+type RecordedConfiguration {
+  scope: String
+  statsCoverage: String
+  equipmentCoverage: String
+  buffsCoverage: String
+  finishingCoverage: String
+  useConcentration: Boolean
+  statistics: [RecordedStatistic!]
+  equipment: [RecordedEquipment!]
+  buffs: [RecordedBuff!]
+  finishingReagents: [RecordedFinishingReagent!]
+  equipmentTruncated: Boolean!
+  buffsTruncated: Boolean!
+  finishingReagentsTruncated: Boolean!
+}
+
+type RecordedCraftConfiguration {
+  id: ID!
+  evidenceAvailable: Boolean!
+  evidence: RecordedConfiguration!
+}
+
+type RecordedCraftConfigurations {
+  observed: Boolean!
+  nodes: [RecordedCraftConfiguration!]!
+    @listSize(assumedSize: 100, requireOneSlicingArgument: false)
+  truncated: Boolean!
+}
+
+type RecordedEquipment {
+  slot: Int
+  itemId: Int
+  empty: Boolean
+}
+
+type RecordedFinishingReagent {
+  itemId: Int
+  quantity: Int
+}
+
+type RecordedStatistic {
+  label: String!
+  value: String!
+}
+
 input CraftFilterInput {
   gameId: ID
   characterId: ID
@@ -331,6 +584,29 @@ input CraftFilterInput {
   to: DateTime
   inputItemId: ID
   outputItemId: ID
+  returnedItemId: ID
+  itemId: ID
+  configurationId: ID
+  buffSpellId: Int
+  finishingItemId: ID
+  absentBuffSpellId: Int
+  absentFinishingItemId: ID
+  absentInputItemId: ID
+  gameExpansionId: ID
+}
+
+enum AnalysisGranularity {
+  DAY
+  WEEK
+  MONTH
+}
+
+enum CatalogueOrder {
+  NAME
+  NUMBER
+  PROFESSION
+  CRAFTS
+  LAST_CRAFTED
 }
 
 enum RecipeReagentDataSlotType {

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useElementSize } from "@mantine/hooks";
 import {
   AppShell,
   Badge,
@@ -9,26 +10,117 @@ import {
   Stack,
   Text,
   Title,
+  Select,
+  Loader,
+  Alert,
   useMantineColorScheme,
 } from "@mantine/core";
-import { Link, Route, Routes, useLocation } from "react-router";
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router";
 import { useStatus } from "../api/status";
-import { Home } from "../pages/Home";
-import { RecentCrafts } from "../pages/RecentCrafts";
+import { useManagement } from "../api/management";
+import { Companion } from "../pages/Companion";
+import { ContextSearch } from "../components/ContextSearch";
+import { RequestError } from "../components/RequestError";
+import {
+  rememberGame,
+  rememberedGame,
+  resolveGame,
+  useGame,
+  type ActiveGame,
+} from "./game";
+import { Investigation } from "../pages/Investigation";
+import { Catalogue } from "../pages/Catalogue";
+import { PinnedNavigation } from "../components/PinnedNavigation";
+import {
+  EntityPreferencesProvider,
+  Library,
+  SavedInvestigationEntry,
+} from "../organization";
 
 export function App() {
   const [opened, setOpened] = useState(false);
+  const { ref: headerRef, height: headerHeight } = useElementSize();
   const { toggleColorScheme } = useMantineColorScheme();
   const location = useLocation();
+  const navigate = useNavigate();
   const state = useStatus();
-  return (
+  const management = useManagement();
+  const [startup] = useState(rememberedGame);
+  const [lastAnalysis, setLastAnalysis] = useState<string>();
+  const [lastLocator, setLastLocator] = useState<string>();
+  const [baseGames, setBaseGames] = useState<ActiveGame[]>([]);
+  const [metadataError, setMetadataError] = useState(false);
+  const routeContext = location.pathname.split("/")[1];
+  const analytical =
+    routeContext && !["companion", "saved", "history"].includes(routeContext);
+  const recordedGames = [
+    ...(state.status?.history?.gameContexts.map((g) => g.context) ?? []),
+  ].sort((a, b) => a.canonicalId.localeCompare(b.canonicalId));
+  const startupGame = [...recordedGames, ...baseGames].find(
+    (g) => g.canonicalId === startup || g.routeAlias === startup,
+  );
+  const locator = analytical
+    ? routeContext
+    : (lastLocator ??
+      startupGame?.canonicalId ??
+      (startup && !baseGames.length && !metadataError
+        ? undefined
+        : recordedGames[0]?.canonicalId));
+  const context = useGame(locator);
+  useEffect(() => {
+    const controller = new AbortController();
+    Promise.all([
+      resolveGame("retail", controller.signal),
+      resolveGame("forever", controller.signal),
+    ]).then(
+      (games) => {
+        if (!controller.signal.aborted) setBaseGames(games);
+      },
+      () => {
+        if (!controller.signal.aborted) setMetadataError(true);
+      },
+    );
+    return () => controller.abort();
+  }, []);
+  const destination = location.pathname + location.search;
+  if (
+    analytical &&
+    context.game &&
+    (lastLocator !== context.game.canonicalId || lastAnalysis !== destination)
+  ) {
+    setLastLocator(context.game.canonicalId);
+    setLastAnalysis(destination);
+  }
+  const games = [
+    ...new Map(
+      [
+        ...baseGames,
+        ...(state.status?.history?.gameContexts.map((g) => g.context) ?? []),
+        ...(context.game ? [context.game] : []),
+      ].map((game) => [game.canonicalId, game]),
+    ).values(),
+  ];
+  const currentMonitoring = management.error
+    ? "Collection status unavailable"
+    : management.data?.monitoring.state;
+  const latest = management.data?.imports.find(
+    (operation) => operation.completedAt,
+  );
+  const shell = (
     <AppShell
-      header={{ height: 64 }}
-      navbar={{ width: 220, breakpoint: "sm", collapsed: { mobile: !opened } }}
-      padding="lg"
+      header={{ height: headerHeight || 96 }}
+      navbar={{ width: 238, breakpoint: "sm", collapsed: { mobile: !opened } }}
+      padding={{ base: "md", lg: "xl" }}
     >
       <AppShell.Header>
-        <Group h="100%" px="lg" justify="space-between">
+        <div ref={headerRef} className="shell-header">
           <Group>
             <Burger
               opened={opened}
@@ -37,15 +129,41 @@ export function App() {
               size="sm"
               aria-label="Toggle navigation"
             />
-            <Text fw={700}>
+            <Text fw={700} className="shell-brand">
+              <BrandCrest />
               Artisan Logbook{" "}
               <Text component="span" fw={400} c="dimmed">
                 Companion
               </Text>
             </Text>
           </Group>
+          <Select
+            label="Active game"
+            aria-label="Active game context"
+            value={context.game?.canonicalId ?? null}
+            placeholder="Choose a game"
+            data={games.map((game) => ({
+              value: game.canonicalId,
+              label: game.displayName,
+            }))}
+            onChange={(value) => {
+              const game = games.find((game) => game.canonicalId === value);
+              if (game) {
+                const activity = `/${game.routeAlias}/activity?period=90`;
+                if (location.pathname === "/companion") {
+                  rememberGame(game.canonicalId);
+                  setLastLocator(game.canonicalId);
+                  setLastAnalysis(activity);
+                } else navigate(activity);
+              }
+            }}
+            w={170}
+          />
+          {context.game && (
+            <ContextSearch key={context.game.canonicalId} game={context.game} />
+          )}
           <Group gap="sm">
-            <Badge variant="light" color={state.error ? "red" : "teal"}>
+            <Badge variant="light" color={state.error ? "red" : "green"}>
               {state.loading
                 ? "Connecting"
                 : state.error
@@ -56,29 +174,230 @@ export function App() {
               Light / dark
             </Button>
           </Group>
-        </Group>
+        </div>
       </AppShell.Header>
       <AppShell.Navbar p="sm">
+        <div className="sidebar-scroll">
+          <Text className="nav-section">Your logbook</Text>
+          {[
+            ["Overview", "activity"],
+            ["Logbook", "crafts"],
+            ["Recipes", "recipes"],
+            ["Reagents & items", "items"],
+          ].map(([label, path]) => (
+            <NavLink
+              key={path}
+              component={Link}
+              to={
+                context.game
+                  ? `/${context.game.routeAlias}/${path}?period=90`
+                  : "/"
+              }
+              label={label}
+              active={location.pathname.split("/")[2] === path}
+              onClick={() => setOpened(false)}
+            />
+          ))}
+          {context.game && (
+            <>
+              <PinnedNavigation
+                game={context.game}
+                close={() => setOpened(false)}
+              />
+              <Text className="nav-section">Browse by</Text>
+              {[
+                ["Characters", "characters"],
+                ["Professions", "professions"],
+              ].map(([label, path]) => (
+                <NavLink
+                  key={path}
+                  component={Link}
+                  to={`/${context.game!.routeAlias}/${path}`}
+                  label={label}
+                  active={location.pathname.endsWith(`/${path}`)}
+                  onClick={() => setOpened(false)}
+                />
+              ))}
+              <Text className="nav-section">Organize</Text>
+              <NavLink
+                component={Link}
+                to={`/${context.game.routeAlias}/library`}
+                label="Library"
+                description="Pinned items · saved investigations"
+                active={location.pathname.endsWith("/library")}
+                onClick={() => setOpened(false)}
+              />
+            </>
+          )}
+        </div>
         <NavLink
           component={Link}
-          to="/"
-          label="Overview"
-          active={location.pathname === "/"}
+          to="/companion"
+          label="Settings"
+          active={location.pathname === "/companion"}
           onClick={() => setOpened(false)}
         />
-        <NavLink
-          component={Link}
-          to="/history"
-          label="Recent crafts"
-          active={location.pathname === "/history"}
-          onClick={() => setOpened(false)}
-        />
+        {location.pathname === "/companion" && lastAnalysis && (
+          <NavLink
+            component={Link}
+            to={lastAnalysis}
+            label="Return to investigation"
+          />
+        )}
+        <Stack gap={4} mt="auto" p="sm">
+          <Text fw={600} size="sm">
+            {currentMonitoring ?? "Checking collection…"}
+          </Text>
+          <Text c="dimmed" size="xs">
+            {latest
+              ? latest.outcome === "Successful"
+                ? "Latest import succeeded"
+                : "Latest import needs attention"
+              : management.data
+                ? "No import this session"
+                : "Import status pending"}
+          </Text>
+          {context.game && (
+            <Text size="xs">Investigating {context.game.displayName}</Text>
+          )}
+        </Stack>
       </AppShell.Navbar>
       <AppShell.Main>
         <div className="content">
+          {metadataError && (
+            <Alert color="yellow" mb="md">
+              Game choices could not be loaded. Check the Companion connection
+              and reload; existing context-qualified links remain usable.
+            </Alert>
+          )}
           <Routes>
-            <Route path="/" element={<Home state={state} />} />
-            <Route path="/history" element={<RecentCrafts />} />
+            <Route
+              path="/"
+              element={
+                context.game ? (
+                  <Navigate
+                    replace
+                    to={`/${context.game.routeAlias}/activity?period=90`}
+                  />
+                ) : (
+                  <Stack>
+                    <Title>Explore your crafting history</Title>
+                    <Text c="dimmed">
+                      No recorded game context is available yet. Set up a World
+                      of Warcraft installation, then import your logbook.
+                    </Text>
+                    <Button component={Link} to="/companion">
+                      Set up collection
+                    </Button>
+                    {state.error && (
+                      <RequestError error={state.error} retry={state.retry} />
+                    )}
+                    {context.loading && (
+                      <Loader aria-label="Resolving remembered game" />
+                    )}
+                  </Stack>
+                )
+              }
+            />
+            <Route
+              path="/history"
+              element={
+                context.game ? (
+                  <Navigate
+                    replace
+                    to={`/${context.game.routeAlias}/crafts?period=all`}
+                  />
+                ) : (
+                  <Navigate replace to="/" />
+                )
+              }
+            />
+            <Route
+              path="/companion"
+              element={<Companion state={management} contexts={games} />}
+            />
+            <Route path="/saved/:id" element={<SavedInvestigationEntry />} />
+            <Route
+              path="/:context/*"
+              element={
+                context.error ? (
+                  <RequestError error={context.error} retry={context.retry} />
+                ) : context.loading || !context.game ? (
+                  <Loader aria-label="Resolving game context" />
+                ) : (
+                  <>
+                    {!state.status?.applicationState.available &&
+                      state.status && (
+                        <Alert color="yellow" mb="md">
+                          Personal organization is unavailable. History
+                          investigations remain available; pins and saved
+                          investigations cannot be loaded or saved.
+                        </Alert>
+                      )}
+                    <Routes>
+                      {(
+                        [
+                          "recipes",
+                          "items",
+                          "characters",
+                          "professions",
+                        ] as const
+                      ).map((kind) => (
+                        <Route
+                          key={kind}
+                          path={kind}
+                          element={
+                            <Catalogue
+                              key={`${context.game!.canonicalId}:${kind}`}
+                              game={context.game!}
+                              kind={kind}
+                            />
+                          }
+                        />
+                      ))}
+                      <Route
+                        path="library"
+                        element={<Library game={context.game} />}
+                      />
+                      <Route
+                        path="activity"
+                        element={
+                          <Investigation game={context.game} kind="activity" />
+                        }
+                      />
+                      <Route
+                        path="recipes/:id"
+                        element={
+                          <Investigation game={context.game} kind="recipe" />
+                        }
+                      />
+                      <Route
+                        path="items/:id"
+                        element={
+                          <Investigation game={context.game} kind="item" />
+                        }
+                      />
+                      <Route
+                        path="crafts"
+                        element={
+                          <Investigation game={context.game} kind="crafts" />
+                        }
+                      />
+                      <Route
+                        path="crafts/:id"
+                        element={
+                          <Investigation game={context.game} kind="craft" />
+                        }
+                      />
+                      <Route
+                        path="*"
+                        element={<Title>Investigation not found</Title>}
+                      />
+                    </Routes>
+                  </>
+                )
+              }
+            />
             <Route
               path="*"
               element={
@@ -92,5 +411,49 @@ export function App() {
         </div>
       </AppShell.Main>
     </AppShell>
+  );
+  return context.game ? (
+    <EntityPreferencesProvider
+      key={context.game.canonicalId}
+      game={context.game}
+    >
+      {shell}
+    </EntityPreferencesProvider>
+  ) : (
+    shell
+  );
+}
+
+/** An original emblem: an open logbook on a bronze-edged shield. */
+function BrandCrest() {
+  return (
+    <svg
+      className="shell-brand-crest"
+      width="26"
+      height="30"
+      viewBox="0 0 26 30"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <defs>
+        <linearGradient id="crest-field" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#a6271c" />
+          <stop offset="1" stopColor="#5c0e08" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M13 1 L24 5 V14 C24 21 19 26 13 29 C7 26 2 21 2 14 V5 Z"
+        fill="url(#crest-field)"
+        stroke="#c9a24a"
+        strokeWidth="1.6"
+      />
+      <path
+        d="M6.5 10.5 C9 9.5 11 9.8 13 11.2 C15 9.8 17 9.5 19.5 10.5 V19.5 C17 18.6 15 18.9 13 20.2 C11 18.9 9 18.6 6.5 19.5 Z"
+        fill="#f3e3b8"
+        stroke="#7a5418"
+        strokeWidth="0.8"
+      />
+      <path d="M13 11.2 V20.2" stroke="#7a5418" strokeWidth="0.8" />
+    </svg>
   );
 }

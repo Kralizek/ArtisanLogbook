@@ -90,10 +90,10 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             ],
             ["CraftIdentity"] = ["IdentityOrigin", "IdentityObservation", "CraftKey"],
             ["CraftOutput"] = ["CraftKey", "ItemId", "QualityKey", "Quality", "Quantity"],
-            ["CraftReagent"] = ["CraftKey", "ItemId", "AllocatedQuantity", "ReturnedQuantity"],
+            ["CraftReagent"] = ["CraftKey", "ItemId", "AllocatedQuantity", "ReturnedQuantity", "Role"],
             ["Expansion"] = ["ContextKey", "ExpansionKey", "Name"],
             ["GameContext"] = ["ContextKey", "ProjectId", "ProgressionTrack"],
-            ["Item"] = ["ContextKey", "ItemId", "Name"],
+            ["Item"] = ["ContextKey", "ItemId", "Name", "Quality"],
             ["Profession"] = ["ContextKey", "ProfessionId", "Name", "ParentId"],
             ["Recipe"] = ["ContextKey", "RecipeId", "Name", "ProfessionId", "ProfessionExpansionKey", "MaxQuality"],
             ["RecipeReagent"] =
@@ -103,6 +103,22 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             ],
             ["__HistoryStoreMigration"] = ["Version", "AppliedAt"]
         };
+
+    // The public short ID of each craft (see CraftIdentity.ShortId), derived from its identity at import. Databases
+    // created before it existed gain the table and its rows when a writer opens them.
+    private const string CraftShortIdTable = """
+        CREATE TABLE IF NOT EXISTS CraftShortId (
+            ShortId VARCHAR PRIMARY KEY,
+            CraftKey BIGINT NOT NULL UNIQUE
+        )
+        """;
+
+    // Nullable columns added within the current schema version. A writer adds missing ones in place, so existing
+    // history is kept; their rows read as not recorded.
+    private static readonly (string Table, string Column, string Type)[] AdditiveColumns =
+    [
+        ("CraftReagent", "Role", "SMALLINT")
+    ];
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -530,6 +546,10 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
     }
 
+    private const string IncompleteSchemaMessage =
+        "The existing DuckDB file does not contain the complete supported Artisan Logbook schema. " +
+        "Erase it (artisanlogbook erase) and reimport SavedVariables to rebuild history.";
+
     private static bool InspectExistingDatabase(string databasePath)
     {
         DbConnectionStringBuilder connectionString = new()
@@ -600,9 +620,10 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
             }
         }
         if (RequiredColumns.Any(pair => !columns.TryGetValue(pair.Key, out HashSet<string>? names) ||
-            pair.Value.Any(column => !names.Contains(column))))
+            pair.Value.Any(column => !names.Contains(column) &&
+                !AdditiveColumns.Any(additive => additive.Table == pair.Key && additive.Column == column))))
             throw new InvalidOperationException(
-                "The existing DuckDB file does not contain the complete supported Artisan Logbook schema.");
+                IncompleteSchemaMessage);
 
         bool hasSequence;
         using (DbCommand command = connection.CreateCommand())
@@ -615,7 +636,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         }
         if (!hasSequence)
             throw new InvalidOperationException(
-                "The existing DuckDB file does not contain the complete supported Artisan Logbook schema.");
+                IncompleteSchemaMessage);
     }
 
     private void InitializeSchema(bool initializeIfEmpty)
@@ -639,6 +660,37 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         }
 
         ValidateInitializedSchema(_writerConnection);
+        AddMissingAdditiveColumns(_writerConnection);
+        AddMissingCraftShortIds(_writerConnection);
+    }
+
+    private static void AddMissingCraftShortIds(DuckDBConnection connection)
+    {
+        connection.Execute(CraftShortIdTable);
+        var missing = connection.Query<(long CraftKey, string Origin, string Observation)>("""
+            SELECT i.CraftKey, i.IdentityOrigin, i.IdentityObservation
+            FROM CraftIdentity i LEFT JOIN CraftShortId s USING (CraftKey)
+            WHERE s.CraftKey IS NULL
+            """).ToArray();
+        if (missing.Length == 0) return;
+        using DbTransaction transaction = connection.BeginTransaction();
+        connection.Execute("INSERT INTO CraftShortId (ShortId, CraftKey) VALUES ($ShortId, $CraftKey)",
+            missing.Select(row => new { ShortId = CraftShortIds.Of(row.Origin, row.Observation), row.CraftKey }),
+            transaction);
+        transaction.Commit();
+    }
+
+    private static void AddMissingAdditiveColumns(DuckDBConnection connection)
+    {
+        foreach ((string table, string column, string type) in AdditiveColumns)
+        {
+            bool present = connection.ExecuteScalar<long>("""
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_schema = 'main' AND table_name = $table AND column_name = $column
+                """, new { table, column }) > 0;
+            if (!present)
+                connection.Execute($"ALTER TABLE {table} ADD COLUMN {column} {type}");
+        }
     }
 
     private static long UserObjectCount(DbConnection connection)
@@ -708,6 +760,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 ContextKey VARCHAR NOT NULL,
                 ItemId INTEGER NOT NULL,
                 Name VARCHAR,
+                Quality INTEGER,
                 PRIMARY KEY (ContextKey, ItemId),
                 FOREIGN KEY (ContextKey) REFERENCES GameContext(ContextKey)
             )
@@ -745,6 +798,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 PRIMARY KEY (IdentityOrigin, IdentityObservation)
             )
             """,
+            CraftShortIdTable,
             """
             CREATE TABLE Craft (
                 CraftKey BIGINT PRIMARY KEY,
@@ -780,6 +834,7 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 ItemId INTEGER NOT NULL,
                 AllocatedQuantity BIGINT,
                 ReturnedQuantity VARCHAR,
+                Role SMALLINT,
                 PRIMARY KEY (CraftKey, ItemId),
                 FOREIGN KEY (CraftKey) REFERENCES CraftIdentity(CraftKey)
             )
@@ -927,8 +982,9 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
     {
         List<CraftReagent> reagents = [];
         cancellationToken.ThrowIfCancellationRequested();
-        foreach ((int ItemId, long? Allocated, string? Returned) row in transaction.Connection!.Query<(int, long?, string?)>("""
-            SELECT ItemId, AllocatedQuantity, ReturnedQuantity
+        foreach ((int ItemId, long? Allocated, string? Returned, short? Role) row in
+            transaction.Connection!.Query<(int, long?, string?, short?)>("""
+            SELECT ItemId, AllocatedQuantity, ReturnedQuantity, Role
             FROM CraftReagent
             WHERE CraftKey = $craftKey
             ORDER BY ItemId
@@ -940,7 +996,8 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 row.Allocated,
                 row.Returned is null
                     ? null
-                    : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture)));
+                    : decimal.Parse(row.Returned, NumberStyles.Number, CultureInfo.InvariantCulture),
+                row.Role is short role ? EnumValue<RecipeReagentType>(role, nameof(RecipeReagentType)) : null));
             cancellationToken.ThrowIfCancellationRequested();
         }
         cancellationToken.ThrowIfCancellationRequested();
@@ -1010,6 +1067,8 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
                 INSERT INTO CraftIdentity (IdentityOrigin, IdentityObservation, CraftKey)
                 VALUES ($Origin, $Observation, $CraftKey)
                 """, new { observation.Identity.Origin, observation.Identity.Observation, CraftKey = craftKey }, transaction);
+            transaction.Connection!.Execute("INSERT INTO CraftShortId (ShortId, CraftKey) VALUES ($ShortId, $CraftKey)",
+                new { observation.Identity.ShortId, CraftKey = craftKey }, transaction);
             transaction.Connection!.Execute("""
                 INSERT INTO Craft (
                     CraftKey, ContextKey, CharacterKey, RecordedAt,
@@ -1030,14 +1089,15 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
         foreach (CraftReagent reagent in observation.Reagents ?? [])
             transaction.Connection!.Execute("""
                 INSERT INTO CraftReagent (
-                    CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity
-                ) VALUES ($craftKey, $ItemId, $AllocatedQuantity, $ReturnedQuantity)
+                    CraftKey, ItemId, AllocatedQuantity, ReturnedQuantity, Role
+                ) VALUES ($craftKey, $ItemId, $AllocatedQuantity, $ReturnedQuantity, $Role)
                 """, new
             {
                 craftKey,
                 reagent.ItemId,
                 reagent.AllocatedQuantity,
-                ReturnedQuantity = reagent.ReturnedQuantity?.ToString(CultureInfo.InvariantCulture)
+                ReturnedQuantity = reagent.ReturnedQuantity?.ToString(CultureInfo.InvariantCulture),
+                Role = reagent.Role is null ? (short?)null : (short)reagent.Role.Value
             }, transaction);
 
         foreach (CraftOutput output in observation.Outputs ?? [])
@@ -1116,13 +1176,13 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
         List<ItemDimension> items = [];
-        foreach ((string Context, int Id, string? Name) row in transaction.Connection!.Query<(string, int, string?)>("""
-            SELECT ContextKey, ItemId, Name FROM Item
+        foreach ((string Context, int Id, string? Name, int? Quality) row in transaction.Connection!.Query<(string, int, string?, int?)>("""
+            SELECT ContextKey, ItemId, Name, Quality FROM Item
             ORDER BY ContextKey, ItemId
             """, transaction: transaction, buffered: false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            items.Add(new(Game(row.Context), row.Id, row.Name));
+            items.Add(new(Game(row.Context), row.Id, row.Name, row.Quality));
             cancellationToken.ThrowIfCancellationRequested();
         }
 
@@ -1242,10 +1302,11 @@ public sealed partial class HistoryStore : IDisposable, IAsyncDisposable
 
         foreach (ItemDimension item in dimensions.Items)
             transaction.Connection!.Execute("""
-                INSERT INTO Item (ContextKey, ItemId, Name) VALUES ($ContextKey, $ItemId, $Name)
+                INSERT INTO Item (ContextKey, ItemId, Name, Quality) VALUES ($ContextKey, $ItemId, $Name, $Quality)
                 ON CONFLICT (ContextKey, ItemId) DO UPDATE SET
-                    Name = COALESCE(excluded.Name, Item.Name)
-                """, new { ContextKey = ContextKey(item.Game), ItemId = item.Id, item.Name }, transaction);
+                    Name = COALESCE(excluded.Name, Item.Name),
+                    Quality = COALESCE(excluded.Quality, Item.Quality)
+                """, new { ContextKey = ContextKey(item.Game), ItemId = item.Id, item.Name, item.Quality }, transaction);
 
         foreach (ExpansionDimension expansion in dimensions.Expansions)
             transaction.Connection!.Execute("""

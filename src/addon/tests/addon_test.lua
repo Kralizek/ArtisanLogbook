@@ -5680,6 +5680,8 @@ end)()
   environment.GetItemInfo = function(id) return resolvedNames[id] end
   database.dimensions.items[2454].name, database.dimensions.items[2452].name = nil, nil
   core = reload(database)
+  assert(itemRequests[2454] == 1 and itemRequests[2452] == 1, "Core requests unnamed item data at startup")
+  for id in pairs(itemRequests) do itemRequests[id] = nil end
   api = assert(environment.ArtisanLogbookAPI)
   local metadataFrameStart = #frames
   local loadedUI = loadUI()
@@ -6228,3 +6230,44 @@ end)()
   assert(#api.GetCrafts().crafts == 4 and core.ledger.database.schemaVersion == 5)
   print("PASS Forever schema-5 projections, fixed-input production UI, honest metrics, pages and fallbacks")
 end)()
+
+;(function()
+  -- Clients without the global GetItemInfo resolve names through C_Item; uncached names are requested.
+  local savedGetItemInfo, savedItemApi = environment.GetItemInfo, environment.C_Item
+  local requested = {}
+  environment.GetItemInfo = nil
+  environment.C_Item = {
+    GetItemNameByID = function(id) if id == 212347 then return "Linen Bandage" end end,
+    RequestLoadItemDataByID = function(id) requested[#requested + 1] = id end,
+  }
+  local named = reload(nil)
+  named.ledger:AddDimension("item", 212347)
+  named.ledger:AddDimension("item", 212348)
+  assert(named.EnrichUnnamedItems() == 2)
+  local items = named.ledger.database.dimensions.items
+  assert(items[212347].name == "Linen Bandage")
+  assert(items[212348].name == nil and #requested == 1 and requested[1] == 212348)
+  assert(named.EnrichUnnamedItems() == 1 and #requested == 2)
+
+  -- Reagent quality tiers are kept for allocated and never-allocated schematic candidates.
+  local savedQuality = environment.C_TradeSkillUI.GetItemReagentQualityByItemInfo
+  environment.C_TradeSkillUI.GetItemReagentQualityByItemInfo = function(id)
+    if id == 236761 or id == 212347 then return 1 end
+    if id == 236767 then return 2 end
+  end
+  named.ledger.database.reagentRequirementSeries[1] = {
+    candidateKey = "236761,236767", characterDimensionId = 1, bucketStart = 0,
+    recipeId = 1, requirementCraftCount = 1, requiredQuantity = 1,
+  }
+  named.EnrichUnnamedItems()
+  assert(items[236761].reagentQuality == 1 and items[236767].reagentQuality == 2)
+  assert(items[212347].reagentQuality == 1 and items[212347].name == "Linen Bandage")
+  assert(items[212348].reagentQuality == nil)
+  named.ledger.database.reagentRequirementSeries[1] = nil
+  local reloaded = reload(named.ledger.database)
+  assert(reloaded.ledger and reloaded.ledger.dimensionRows.item[236767].reagentQuality == 2,
+    "A ledger with recorded reagent qualities reloads: " .. tostring(reloaded.ledgerError))
+  environment.C_TradeSkillUI.GetItemReagentQualityByItemInfo = savedQuality
+  environment.GetItemInfo, environment.C_Item = savedGetItemInfo, savedItemApi
+end)()
+print("PASS item names and reagent qualities enrich item rows, including unallocated candidates")

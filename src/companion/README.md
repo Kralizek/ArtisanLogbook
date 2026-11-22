@@ -12,9 +12,10 @@ The Companion reads source files without modifying them. Importing a snapshot ag
 | `artisanlogbook import [source-file] [--verbose]` | Import one explicit snapshot, or discover snapshots using configured roots |
 | `artisanlogbook status` | Show database status and craft counts without modifying the database |
 | `artisanlogbook serve` | Run the local Companion host until Ctrl+C or termination |
+| `artisanlogbook erase [--yes]` | Permanently delete the history database (after confirmation) so SavedVariables can be reimported |
 | `artisanlogbook --help` | Show available help |
 
-`import`, `status`, and `serve` accept `--database <path>` to override the default database location.
+`import`, `status`, `serve`, and `erase` accept `--database <path>` to override the default database location.
 
 Normal imports show concise change summaries and relevant new diagnostics;
 unchanged successful reimports suppress known historical warnings. Use

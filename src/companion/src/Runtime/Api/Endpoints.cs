@@ -61,6 +61,7 @@ internal static class ApiMapping
     private static ImportSourceResult Map(ImportSourceSnapshot source) => new()
     {
         SourceId = source.SourceId,
+        GameContexts = source.GameContexts?.ToArray(),
         Status = (ImportSourceResultStatus)Enum.Parse(typeof(ImportSourceResultStatus), source.Status.ToString()),
         Outcome = source.Outcome switch
         {
@@ -77,7 +78,8 @@ internal static class ApiMapping
             Enriched = source.Counts.Enriched,
             RejectedOrConflicting = source.Counts.RejectedOrConflicting,
             DimensionsInserted = source.Counts.DimensionsInserted,
-            DimensionsEnriched = source.Counts.DimensionsEnriched
+            DimensionsEnriched = source.Counts.DimensionsEnriched,
+            DistinctRecipeCount = source.Counts.DistinctRecipeCount
         },
         Diagnostics = source.Diagnostics.Select(Map).ToArray(),
         DiagnosticsTruncated = source.DiagnosticsTruncated

@@ -271,6 +271,30 @@ public class CraftHistoryReconcilerTests
     }
 
     [Test]
+    public void ItemQualityEnrichesUnknownAndRejectsContradictions()
+    {
+        CraftHistory unknown = History(Craft("origin-a", "1", 123)) with
+        {
+            Dimensions = CraftDimensions.Empty with { Items = [new ItemDimension(Game, 44, "Bloom")] }
+        };
+        CraftHistory first = unknown with
+        {
+            Dimensions = CraftDimensions.Empty with { Items = [new ItemDimension(Game, 44, Quality: 1)] }
+        };
+        CraftHistory second = unknown with
+        {
+            Dimensions = CraftDimensions.Empty with { Items = [new ItemDimension(Game, 44, Quality: 2)] }
+        };
+
+        CraftHistoryMergeResult enriched = CraftHistoryReconciler.Merge(unknown, first);
+        CraftHistoryMergeResult contradictory = CraftHistoryReconciler.Merge(first, second);
+
+        Assert.That(enriched.History!.Dimensions.Items.Single(), Is.EqualTo(new ItemDimension(Game, 44, "Bloom", 1)));
+        Assert.That(contradictory.IsSuccessful, Is.False);
+        Assert.That(contradictory.DimensionConflicts.Select(x => x.Message), Has.Some.Contains("Quality"));
+    }
+
+    [Test]
     public void ContradictoryKnownRecipeQualityScaleIsAConflict()
     {
         CraftHistory a = History(Craft("origin-a", "1", 123)) with

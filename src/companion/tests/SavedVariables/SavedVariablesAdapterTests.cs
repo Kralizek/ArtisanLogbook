@@ -343,6 +343,31 @@ public class SavedVariablesAdapterTests
     }
 
     [Test]
+    public void PotentialRefundAndProcAreIndependentAcrossSavedVariablesRoundTrip()
+    {
+        CraftHistory source = History(
+            MakeCraft("refund", "confirmed") with { HasIngenuityProc = true, IngenuityRefund = 147 },
+            MakeCraft("refund", "failed") with { HasIngenuityProc = false, IngenuityRefund = 147 },
+            MakeCraft("refund", "unknown") with { IngenuityRefund = 147 });
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(source,
+            options: new(Now, GameContext: Retail));
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        SavedVariablesImportResult imported = SavedVariablesReader.Parse(written.Content!);
+        Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
+        IReadOnlyDictionary<string, CraftObservation> crafts = imported.History!.Crafts
+            .ToDictionary(craft => craft.Identity.Observation);
+        Assert.Multiple(() =>
+        {
+            Assert.That(crafts["confirmed"].IngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["confirmed"].AppliedIngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["failed"].IngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["failed"].AppliedIngenuityRefund, Is.Zero);
+            Assert.That(crafts["unknown"].IngenuityRefund, Is.EqualTo(147));
+            Assert.That(crafts["unknown"].AppliedIngenuityRefund, Is.Null);
+        });
+    }
+
+    [Test]
     public void CanonicalOnlyMultiOutputExportDoesNotClaimSyntheticCallbacksAsEvidence()
     {
         CraftObservation craft = MakeCraft("canonical", "multi", Retail, 123, 90) with
@@ -445,6 +470,54 @@ public class SavedVariablesAdapterTests
         Assert.That(written.IsSuccessful, Is.True);
         Assert.That(SavedVariablesReader.Parse(written.Content!).History!.Crafts.Single(), Is.EqualTo(craft));
         AssertLoaderAccepts(written);
+    }
+
+    [Test]
+    public void ItemReagentQualityRoundTripsAndContradictoryReportsStayUnknown()
+    {
+        CraftObservation craft = MakeCraft("quality", "1") with { Reagents = [new(44, 2, null), new(45, 1, null)] };
+        CraftHistory history = History(craft);
+        history = history with
+        {
+            Dimensions = history.Dimensions with
+            {
+                Items = history.Dimensions.Items
+                    .Select(item => item.Id == 44 ? item with { Name = "Bloom", Quality = 2 } : item).ToArray()
+            }
+        };
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(history, options: new(Now));
+        Assert.That(written.IsSuccessful, Is.True, string.Join(Environment.NewLine, written.Diagnostics));
+        AssertLoaderAccepts(written);
+        IReadOnlyList<ItemDimension> items = SavedVariablesReader.Parse(written.Content!).History!.Dimensions.Items;
+        Assert.That(items.Single(item => item.Id == 44).Quality, Is.EqualTo(2));
+        Assert.That(items.Single(item => item.Id == 45).Quality, Is.Null);
+
+        LuaDocument document = LuaDataParser.Parse(written.Content!);
+        LuaTable ledger = (LuaTable)document.Assignments["ArtisanLogbookDB"]!;
+        LuaTable reagent = ((LuaTable)ledger.Get("reagents")!).Values.OfType<LuaTable>()
+            .First(row => Equals(row.Get("itemId"), 44d));
+        reagent["quality"] = 1d;
+        SavedVariablesImportResult contradictory = SavedVariablesReader.Parse(LuaDataParser.Serialize(document));
+        Assert.That(contradictory.IsSuccessful, Is.True);
+        Assert.That(contradictory.History!.Dimensions.Items.Single(item => item.Id == 44).Quality, Is.Null);
+        Assert.That(contradictory.Diagnostics.Select(d => d.Code), Has.Member("conflicting-item-quality"));
+    }
+
+    [Test]
+    public void AddonItemRowReagentQualityIdentifiesAnUnallocatedTier()
+    {
+        CraftObservation craft = MakeCraft("tier", "1") with { Reagents = [new(44, 2, null), new(45, 1, null)] };
+        SavedVariablesWriteResult written = SavedVariablesWriter.Serialize(History(craft), options: new(Now));
+        Assert.That(written.IsSuccessful, Is.True);
+        LuaDocument document = LuaDataParser.Parse(written.Content!);
+        LuaTable items = (LuaTable)((LuaTable)((LuaTable)document.Assignments["ArtisanLogbookDB"]!)
+            .Get("dimensions")!).Get("items")!;
+        LuaTable item = items.Values.OfType<LuaTable>().First(row => Equals(row.Get("id"), 45d));
+        item["reagentQuality"] = 2d;
+
+        SavedVariablesImportResult parsed = SavedVariablesReader.Parse(LuaDataParser.Serialize(document));
+        Assert.That(parsed.IsSuccessful, Is.True, string.Join(Environment.NewLine, parsed.Diagnostics));
+        Assert.That(parsed.History!.Dimensions.Items.Single(row => row.Id == 45).Quality, Is.EqualTo(2));
     }
 
     [Test]
@@ -853,7 +926,37 @@ public class SavedVariablesAdapterTests
             }
             """);
         Assert.That(imported.IsSuccessful, Is.True);
-        Assert.That(imported.History!.Crafts.Single().Reagents, Is.EqualTo(new[] { new CraftReagent(44, 3, null) }));
+        Assert.That(imported.History!.Crafts.Single().Reagents, Is.EqualTo(new[] { new CraftReagent(44, 3, null, RecipeReagentType.Basic) }));
+    }
+
+    [Test]
+    public void AllocationReagentTypesSetCraftReagentRolesAlongsideReagentRows()
+    {
+        SavedVariablesImportResult imported = SavedVariablesReader.Parse("""
+            return { schemaVersion = 4, schemaIdentity = "ArtisanLogbookLedger",
+              crafts = { { id = 1, sessionId = 1, requestId = 7, recipeId = 123, timestamp = 1800000000 } },
+              reagents = {
+                { craftId = 1, itemId = 44, allocatedQuantity = 3 },
+                { craftId = 1, itemId = 45, allocatedQuantity = 1 },
+                { craftId = 1, itemId = 46, allocatedQuantity = 1 }
+              },
+              requests = { { id = 7, sessionId = 1, recipeId = 123, allocations = {
+                { dataSlotIndex = 1, itemId = 44, allocatedQuantity = 3, reagentType = "basic" },
+                { dataSlotIndex = 2, itemId = 45, allocatedQuantity = 1, reagentType = "finishing" },
+                { dataSlotIndex = 3, itemId = 46, allocatedQuantity = 1, reagentType = "unrecognized" }
+              } } },
+              dimensions = {
+                characters = { { id = 1, key = "project:1:region:3:realm:1309:guid:Player-A" } },
+                sessions = { { id = 1, key = "session", projectId = 1, characterDimensionId = 1 } }
+              }
+            }
+            """);
+        Assert.That(imported.IsSuccessful, Is.True, string.Join(Environment.NewLine, imported.Diagnostics));
+        Assert.That(imported.History!.Crafts.Single().Reagents!.Select(reagent => (reagent.ItemId, reagent.Role)),
+            Is.EqualTo(new (int, RecipeReagentType?)[]
+            {
+                (44, RecipeReagentType.Basic), (45, RecipeReagentType.Finishing), (46, null)
+            }));
     }
 
     [Test]

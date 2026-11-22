@@ -81,16 +81,26 @@ Unknown measurements and booleans are null, distinct from zero and false.
 Unobserved craft reagents and outputs are null, distinct from observed empty
 lists. Completeness fields are independent nullable observations. A known
 identity remains navigable if its display metadata is missing; names and
-other optional metadata are nullable. `Long` preserves 64-bit quantities,
-`Decimal` preserves canonical decimal quantities, and `DateTime` includes an
-offset. Clients using JavaScript numbers should use a lossless JSON parser for
-large integers and high-precision decimals.
+other optional metadata are nullable. Craft reagents expose
+`allocatedQuantityExact` and `returnedQuantityExact`; outputs expose
+`quantityExact`. These nullable, invariant decimal strings preserve large
+integers and fractional returns without JavaScript number coercion, while the
+original `Long` and `Decimal` fields remain available for compatibility.
+`DateTime` includes an offset. Null exact quantities remain unknown, whereas
+known zero is `"0"`.
 
 ## IDs, filters and pagination
 
-IDs are opaque, versioned base64url-encoded JSON containing an entity kind and
-its canonical identity; craft IDs contain origin and observation, while
-dimensions contain project, optional progression track, and canonical key.
+IDs are opaque, compact and URL-safe. A dimension ID is a kind code, the game
+project, an optional progression track and the canonical key, such as
+`r1-1230868` for a Retail recipe; keys are escaped reversibly (`:` becomes
+`.`, other non-alphanumeric bytes `_XX`). A craft ID is `k-` and the craft's
+short ID: the first 16 hex digits of a SHA-256 of its origin and observation,
+derived at import and stored in `CraftShortId` (databases written before it
+existed are backfilled when a writer opens them). A recorded setup ID uses the
+first 16 hex digits of its payload hash. Being derived, these IDs are the same
+after a reimport and on every machine. Only the canonical spelling is accepted.
+Clients must still treat them as opaque.
 They are stable across restarts and metadata enrichment and do not use database
 surrogate keys. IDs are **not secrets**. Hot Chocolate's Relay/Node support was
 evaluated; the initial API uses explicit typed lookups and a versioned composite
@@ -109,9 +119,29 @@ inverted time range are rejected. Item filters match actual reagent/output
 rows. Other collections can be scoped through a game context, profession or
 expansion relationship.
 
+`game(context: ...).expansionGroups { nodes { id key name
+professionExpansionKeys } truncated }` lists context-scoped game-expansion
+choices with recorded crafts (up to 500 profession keys). Use a group's opaque
+`id` as `CraftFilterInput.gameExpansionId` for all matching profession-specific
+skill lines in that context; combine with `professionId` to intersect. A group's
+`name` is only display metadata. `expansionId` remains an **exact single
+profession-expansion identity** for old URLs, saves and relationships; do not
+reinterpret it as a group. Unknown keys remain separate singleton groups and
+crafts with unknown expansion never enter a group. Group IDs also encode the
+selected GameContext.
+
+`Craft.ingenuityRefund` exposes the recorded potential refund (including
+positive values on failed procs); `Craft.appliedIngenuityRefund` is zero on
+confirmed failed procs, the recorded value on confirmed successful procs, and
+null if proc status or the successful refund is unknown. All analysis `refund`
+outcomes use the applied definition. `analysis.metrics` aggregates the full
+selected population: production sums known output rows, while
+`production.measuredAttempts` denotes crafts with complete, fully measured
+output lists. Bounded recipe and character rows must not be summed for totals.
+
 Collections default to 20 items, with `first` from 1 to 100. Pass `endCursor`
-as `after` to continue. Cursors are opaque versioned base64url positions with
-a collection kind; invalid or wrong-kind cursors are rejected. Craft ordering
+as `after` to continue. Cursors are opaque compact positions with
+a collection kind (craft cursors carry the recorded instant and the craft's short ID); invalid or wrong-kind cursors are rejected. Craft ordering
 is newest recorded instant first, preserving 100 ns precision across offsets,
 then origin and observation ascending. Dimensions order by canonical game-context
 key and entity identity. Cursor positions are not frozen snapshots: an import
@@ -170,6 +200,97 @@ the entire GraphQL request. Separate resolvers can observe different commits.
 Request cancellation flows through resolvers, loaders and repositories to
 HistoryStore's connection-local native interruption. The existing bounded
 shutdown and independent-reader/writer guarantees remain in effect.
+
+## Context-bound investigations
+
+`game(context: String!)` resolves a canonical public context identifier without
+requiring a history-specific opaque ID. It exposes the existing context-scoped
+search/facets and bounded `recipesByBlizzardIds(ids: [Int!]!)` and
+`itemsByBlizzardIds(ids: [Int!]!)` lookups (at most 100 positive IDs). These
+lookups retain input order and return unnamed entities for valid IDs whose
+display metadata is unavailable. Use them to resolve context-qualified saved
+preferences, not to infer historical activity.
+
+`analysis(context: String!, filter: CraftFilterInput, granularity:
+AnalysisGranularity)` selects exactly one context and a population of completed
+attempts. `analysisSignature(context:, filter:)` returns the same signature
+without downloading the aggregates; both are scoped to the complete filter,
+including its period and entity identities. A later import or enrichment of
+matching crafts, their child observations, supplementary evidence or selected
+dimension metadata changes the signature. Separate signature and analysis
+calls are separate snapshots; polling does not freeze a result. The UI may
+refresh Activity automatically but should retain detailed comparisons until
+the user requests refresh.
+
+The analysis result includes attempts, day/week/month buckets, recipe outcomes,
+actual output-item rankings, gross allocated input-item rankings, separate
+Resourcefulness return rankings, characters, output qualities and distinct
+recorded configuration populations. Arrays are capped at 100 and expose
+`truncated`; a truncated ranking is **not** a total of its displayed rows.
+`configurationCoverage` counts attempts with recorded configuration variants,
+an explicitly empty evidence collection, and unknown/unobserved configuration
+evidence separately. Craft `recordedConfigurations.observed` similarly
+distinguishes an unknown collection from a recorded empty collection.
+`attempts`, `measuredAttempts`, `incompleteAttempts`, `quantity`, and outcome
+counts/totals are invariant exact decimal strings. Null quantity means no
+measured quantity, not zero. Measured and incomplete counts can overlap: a
+partially observed collection can contain some known quantities. For recipe
+and configuration production metrics, `measuredAttempts` requires a complete
+observed output collection with known quantities, including an explicitly
+complete empty collection. The recipe/configuration/character outcome measures
+carry observed, positive and unknown attempt denominators; totals are null
+when no numeric outcome was observed. Actual production includes any Multicraft
+bonus already in recorded output quantities and never adds it again.
+
+`inputMeasureLabel` is **Gross allocated inputs** for Retail, **Attributed
+schematic requirements** for Forever, and the neutral **Recorded inputs** for
+other known or future game projects. Forever's schematic requirements are not
+measured consumption. Only Retail supports return rankings: `supportsReturns`
+is false and `returns` is null for every other project. Retail-specific recipe,
+character and configuration outcomes are also null outside Retail. An unknown
+allocation or return remains unknown, even when another measure for that item
+is known.
+An item can appear in both input and output roles, but no inventory provenance
+or net usage is inferred.
+
+When `filter.itemId` is supplied, `analysis.itemRelations` groups this item's
+output, input and (where supported) return contribution separately by recipe
+and character. Each role has at most 100 recipe × character rows with its own
+`truncated` flag and exact measure/coverage; unknown recipe IDs remain null.
+Other inherited filters such as recipe and period still restrict the contributing
+population. Without `itemId`, `itemRelations` is null; outside Retail the nested
+`returns` role is null.
+
+Use the context-qualified `contextCrafts`, `contextCraft`, `contextRecipe` and
+`contextItem` operations to drill into history. `CraftFilterInput` supports
+`itemId` (any output or reagent role), `inputItemId`, `outputItemId`,
+`returnedItemId` (positive recorded return), and `configurationId`, alongside
+character/recipe/profession/expansion and inclusive timestamps. All opaque
+filter IDs must match the canonical `context` argument or the operation fails
+with `INVALID_FILTER`; invalid tokens fail with `INVALID_ID_OR_CURSOR`.
+Configuration IDs identify an **exact recorded evidence payload variant**.
+Unrecorded configuration does not match an observed-empty list. In a recipe
+comparison, request two independently filtered `analysis` populations rather
+than treating a before/after difference as a causal estimate.
+
+Recorded configuration filters also include positive `buffSpellId` and
+`finishingItemId`, plus `absentBuffSpellId` and `absentFinishingItemId`.
+Positive matches require an explicitly recorded selection; absence requires a
+recorded complete supported-buff list or submitted finishing-reagent list,
+respectively, not merely a missing field. Combined conditions must agree in
+one evidence variant of the craft. An absent supported buff does not imply
+that other, untracked buffs were absent.
+
+Configuration inspection presents only supported recorded fields: observation
+scope, coverage, selected equipment, supported buff spell IDs, submitted
+finishing reagents, concentration selection and available skill/stat values.
+Absent or partial coverage leaves the corresponding selection list null rather
+than asserting none were selected. Explicitly observed empty lists stay empty.
+Craft `recordedConfigurations` has bounded `nodes` and `truncated`; configuration
+list fields are individually bounded and expose their own truncation flags.
+Payloads larger than 64 KiB remain counted as evidence but have
+`evidenceAvailable: false`; adapter-owned raw Lua payloads and private equipment
+identifiers are never returned to GraphQL clients.
 
 ## Exporting and verifying the schema
 

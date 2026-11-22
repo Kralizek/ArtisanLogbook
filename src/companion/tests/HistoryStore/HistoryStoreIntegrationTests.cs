@@ -197,7 +197,7 @@ public sealed class HistoryStoreIntegrationTests
             [new(retail, character, "Retail Crafter", "MAGE")],
             [new(retail, 123, "Retail Recipe", 171, "skillLine:2915", 5)],
             [new(retail, 171, "Retail Profession", 164)],
-            [new(retail, 100, "Retail Herb")],
+            [new(retail, 100, "Retail Herb", 2)],
             [new(retail, "skillLine:2915", "Retail Expansion")])
         {
             RecipeReagentSlots =
@@ -272,7 +272,12 @@ public sealed class HistoryStoreIntegrationTests
             Assert.That(restored.Recipes.Single(x => x.Game == forever).Name, Is.EqualTo("Forever Recipe"));
             Assert.That(restored.Professions.Single(x => x.Game == retail && x.Id == 171).ParentId,
                 Is.EqualTo(164));
-            Assert.That(restored.Items.Single(x => x.Game == retail && x.Id == 100).Name, Is.EqualTo("Retail Herb"));
+            Assert.That(restored.Items.Single(x => x.Game == retail && x.Id == 100),
+                Is.EqualTo(new ItemDimension(retail, 100, "Retail Herb", 2)));
+            Assert.That(reopened.WriteDimensions(CraftDimensions.Empty with
+            {
+                Items = [new ItemDimension(retail, 100, Quality: 3)]
+            }).Status, Is.EqualTo(DimensionWriteStatus.Conflict));
             Assert.That(restored.Expansions.Single(x => x.Game == forever).Name, Is.EqualTo("Forever Expansion"));
             Assert.That(restoredSlots, Has.Length.EqualTo(3));
             Assert.That(restoredSlots[0].CandidateItemIds, Is.EqualTo(new[] { 100, 101 }));

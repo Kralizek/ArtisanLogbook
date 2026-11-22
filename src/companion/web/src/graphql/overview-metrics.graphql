@@ -1,0 +1,9 @@
+query OverviewMetrics($context: String!, $filter: CraftFilterInput) {
+  analysis(context: $context, filter: $filter) {
+    signature
+    supportsReturns
+    metrics {
+      ...InvestigationMetrics
+    }
+  }
+}

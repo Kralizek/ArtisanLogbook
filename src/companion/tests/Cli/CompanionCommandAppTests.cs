@@ -277,6 +277,7 @@ public sealed class CompanionCommandAppTests
     [TestCase("status")]
     [TestCase("import")]
     [TestCase("serve")]
+    [TestCase("erase")]
     public async Task WriterLockInAnotherProcessProducesActionableFailure(string command)
     {
         using Store writer = new(_database);
@@ -290,6 +291,8 @@ public sealed class CompanionCommandAppTests
         start.ArgumentList.Add(command);
         if (command == "import")
             start.ArgumentList.Add(Fixture("v1-outcome1.lua"));
+        if (command == "erase")
+            start.ArgumentList.Add("--yes");
         start.ArgumentList.Add("--database");
         start.ArgumentList.Add(_database);
         using Process process = Process.Start(start)!;
@@ -310,6 +313,106 @@ public sealed class CompanionCommandAppTests
         Assert.That(process.ExitCode, Is.EqualTo(ExitCodes.Failed), output);
         Assert.That(output, Does.Contain("locked").And.Contain("close other").And.Contain("retry"));
         Assert.That(writer.ReadStatus().TotalCraftCount, Is.Zero);
+        Assert.That(File.Exists(_database), Is.True);
+    }
+
+    [Test]
+    public async Task EraseDeletesHistoryAndCheckpointsButKeepsApplicationStateForReimport()
+    {
+        string fixture = Fixture("v1-outcome1.lua");
+        Assert.That((await Run("import", fixture, "--database", _database)).Exit, Is.Zero);
+        string checkpoints = ApplicationPaths.MonitoringCheckpointFile(_database);
+        await File.WriteAllTextAsync(checkpoints, "{}");
+        Directory.CreateDirectory(_paths.DataDirectory);
+        await File.WriteAllTextAsync(_paths.ApplicationStateDatabase, "kept");
+        await File.WriteAllTextAsync(_paths.SettingsFile, "kept");
+
+        (int exit, string output) = await Run("erase", "--database", _database, "--yes");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exit, Is.EqualTo(ExitCodes.Success), output);
+            Assert.That(output, Does.Contain("erased"));
+            Assert.That(File.Exists(_database), Is.False);
+            Assert.That(File.Exists(_database + ".wal"), Is.False);
+            Assert.That(File.Exists(checkpoints), Is.False);
+            Assert.That(File.ReadAllText(_paths.ApplicationStateDatabase), Is.EqualTo("kept"));
+            Assert.That(File.ReadAllText(_paths.SettingsFile), Is.EqualTo("kept"));
+        });
+        Assert.That((await Run("import", fixture, "--database", _database)).Exit, Is.Zero);
+        using Store store = new(_database, readOnly: true);
+        Assert.That(store.ReadStatus().TotalCraftCount, Is.Positive);
+    }
+
+    [Test]
+    public async Task EraseAcceptsADatabaseWithAnUnsupportedSchema()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_database)!);
+        using (DuckDB.NET.Data.DuckDBConnection connection = new($"Data Source={_database}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE Item (Id INTEGER)";
+            command.ExecuteNonQuery();
+        }
+        (int exit, string output) = await Run("erase", "--database", _database, "--yes");
+        Assert.That(exit, Is.EqualTo(ExitCodes.Success), output);
+        Assert.That(File.Exists(_database), Is.False);
+    }
+
+    [Test]
+    public async Task EraseRefusesAFileThatIsNotADuckDbDatabase()
+    {
+        string source = Path.Combine(_directory, "ArtisanLogbook_Core.lua");
+        await File.WriteAllTextAsync(source, Snapshot(1, null, 1));
+        (int exit, string output) = await Run("erase", "--database", source, "--yes");
+        Assert.That(exit, Is.EqualTo(ExitCodes.Failed), output);
+        Assert.That(output, Does.Contain("not a DuckDB history database"));
+        Assert.That(await File.ReadAllTextAsync(source), Is.EqualTo(Snapshot(1, null, 1)));
+    }
+
+    [Test]
+    public async Task EraseOfAMissingDatabaseCreatesNothing()
+    {
+        (int exit, string output) = await Run("erase", "--database", _database);
+        Assert.That(exit, Is.EqualTo(ExitCodes.Success), output);
+        Assert.That(output, Does.Contain("Nothing to erase"));
+        Assert.That(Directory.Exists(Path.GetDirectoryName(_database)), Is.False);
+    }
+
+    [TestCase(false, true, ExitCodes.Usage, true)]
+    [TestCase(true, false, ExitCodes.Success, true)]
+    [TestCase(true, true, ExitCodes.Success, false)]
+    public async Task EraseWithoutYesRequiresInteractiveConfirmation(
+        bool interactive, bool confirm, int expectedExit, bool retained)
+    {
+        using (Store store = new(_database)) { }
+        EraseConfirmation prompts = new(interactive, confirm);
+        using TestConsole console = new();
+        console.Width(240);
+        int exit = await CompanionCommandApp.Create(console, _paths, prompts)
+            .RunAsync(["erase", "--database", _database]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(exit, Is.EqualTo(expectedExit), console.Output);
+            Assert.That(File.Exists(_database), Is.EqualTo(retained));
+            Assert.That(prompts.Asked, Is.EqualTo(interactive));
+        });
+    }
+
+    private sealed class EraseConfirmation(bool interactive, bool confirm) : IInitializationPrompts
+    {
+        public bool Asked { get; private set; }
+        public bool IsInteractive => interactive;
+        public RootSelection SelectRoot(IReadOnlyList<string> candidates, string? current) =>
+            throw new InvalidOperationException();
+        public string? EnterRoot(string? current) => throw new InvalidOperationException();
+        public bool Confirm(CompanionSettings proposed) => throw new InvalidOperationException();
+        public bool ConfirmErase(string database)
+        {
+            Asked = true;
+            return confirm;
+        }
     }
 
     private async Task<(int Exit, string Output)> Run(params string[] args)

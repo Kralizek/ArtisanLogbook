@@ -74,7 +74,14 @@ public sealed class CompanionImportService
                 enrichedCrafts: persisted.EnrichedCrafts,
                 dimensionsInserted: persisted.InsertedDimensions,
                 dimensionsEnriched: persisted.EnrichedDimensions) with
-            { Observations = persisted.Observations });
+            {
+                Observations = persisted.Observations,
+                DistinctRecipeCount = history.Crafts.Where(craft => craft.RecipeId.HasValue)
+                    .Select(craft => (craft.Game, craft.RecipeId))
+                    .Distinct().Count(),
+                GameContexts = history.Crafts.Select(craft => craft.Game).Distinct()
+                    .OrderBy(GameContextCodec.Encode, StringComparer.Ordinal).ToArray()
+            });
         }
         catch (OperationCanceledException)
         {

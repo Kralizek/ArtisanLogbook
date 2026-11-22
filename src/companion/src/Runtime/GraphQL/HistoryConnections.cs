@@ -21,8 +21,17 @@ internal static class HistoryConnections
     public static CraftConnection Crafts(ICraftHistoryRepository repository, CraftQuery query, int first, string? after, CancellationToken token)
     {
         ValidatePageSize(first);
-        CraftPage page = repository.Query(query, first, after is null ? null : HistoryTokens.ParseCraftCursor(after), token);
+        CraftPage page = repository.Query(query, first, CraftCursor(repository, after, token), token);
         return Crafts(page);
+    }
+
+    /// <summary>Resolves a craft cursor's short ID to the craft it continues after.</summary>
+    public static CraftPagePosition? CraftCursor(ICraftHistoryRepository repository, string? after, CancellationToken token)
+    {
+        if (after is null) return null;
+        (DateTimeOffset recordedAt, string shortId) = HistoryTokens.ParseCraftCursor(after);
+        CraftPage craft = repository.Query(new(CraftShortId: shortId), 1, cancellationToken: token);
+        return craft.Crafts.Count == 1 ? new(recordedAt, craft.Crafts[0].Facts.Identity) : throw HistoryTokens.InvalidCursor();
     }
 
     public static CraftConnection Crafts(CraftPage page)

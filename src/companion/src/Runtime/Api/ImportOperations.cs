@@ -1,6 +1,7 @@
 using System.Reactive.Concurrency;
 using System.Threading.Channels;
 
+using ArtisanLogbook.History;
 using ArtisanLogbook.ImportService;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -17,10 +18,10 @@ public enum ImportRejection { InvalidSourceId, UnknownSource, NoSources, SourceB
 public sealed record ImportDiagnosticInfo(string Category, string Code, string Message);
 public sealed record ImportCounts(
     int Observations, int Inserted, int AlreadyPresent, int Enriched, int RejectedOrConflicting,
-    int DimensionsInserted, int DimensionsEnriched);
+    int DimensionsInserted, int DimensionsEnriched, int? DistinctRecipeCount);
 public sealed record ImportSourceSnapshot(
     string SourceId, ImportOperationStatus Status, CompanionImportOutcome? Outcome, ImportCounts? Counts,
-    IReadOnlyList<ImportDiagnosticInfo> Diagnostics, bool DiagnosticsTruncated);
+    IReadOnlyList<ImportDiagnosticInfo> Diagnostics, bool DiagnosticsTruncated, IReadOnlyList<string>? GameContexts);
 public sealed record ImportOperationSnapshot(
     Guid Id, ImportOrigin Origin, ImportOperationStatus Status, ImportOperationOutcome? Outcome, string? RequestedSourceId,
     DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt,
@@ -419,6 +420,7 @@ public sealed class ImportOperations(
         public CompanionImportOutcome? Outcome { get; private set; }
         public string? Fingerprint { get; private set; }
         public ImportCounts? Counts { get; private set; }
+        public IReadOnlyList<string>? GameContexts { get; private set; }
         public List<ImportDiagnosticInfo> Diagnostics { get; } = [];
         public bool Truncated { get; private set; }
 
@@ -430,7 +432,8 @@ public sealed class ImportOperations(
                 ? ImportOperationStatus.Completed : ImportOperationStatus.Failed;
             Counts = new(result.TotalSourceCraftObservations, result.InsertedCrafts, result.AlreadyPresentCrafts,
                 result.EnrichedCrafts, result.RejectedOrConflictingCrafts, result.DimensionsInserted,
-                result.DimensionsEnriched);
+                result.DimensionsEnriched, result.DistinctRecipeCount);
+            GameContexts = result.GameContexts?.Select(GameContextCodec.Encode).ToArray();
             List<ImportDiagnosticInfo> all = ImportDiagnosticMapper.Map(result);
             Diagnostics.AddRange(all.Take(MaxDiagnosticsPerSource));
             Truncated = all.Count > MaxDiagnosticsPerSource;
@@ -450,7 +453,7 @@ public sealed class ImportOperations(
         }
 
         public ImportSourceSnapshot Snapshot() =>
-            new(Source.Id, Status, Outcome, Counts, Diagnostics.ToArray(), Truncated);
+            new(Source.Id, Status, Outcome, Counts, Diagnostics.ToArray(), Truncated, GameContexts);
     }
 
     private sealed class OperationState

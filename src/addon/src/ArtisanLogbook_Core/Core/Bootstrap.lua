@@ -232,17 +232,69 @@ function addon.OnRecipeOutputKnowledgeChanged(ledger, outputItemId, source, defe
   end
 end
 
-function addon.EnrichItem(itemId)
-  if not addon.ledger or not validId(itemId) then return end
-  local name = query(GetItemInfo, itemId)
-  if displayName(name) then
-    addon.ledger:AddDimension("item", itemId, { name = name })
-  end
-end
-
 local function tryEnrich(method, ...)
   pcall(method, ...)
 end
+
+-- Clients differ in which item-name APIs they expose (Forever records no names through the
+-- global GetItemInfo alone), so try each cached getter in turn.
+local function cachedItemName(itemId)
+  local itemApi = type(C_Item) == "table" and C_Item or {}
+  for _, getter in ipairs({ itemApi.GetItemInfo or false, itemApi.GetItemNameByID or false,
+      GetItemInfo or false }) do
+    local name = displayName(query(getter, itemId))
+    if name then return name end
+  end
+end
+
+-- The client-reported crafting-reagent quality tier of an item ID, when the client exposes it.
+local function reagentQuality(itemId)
+  local tradeSkill = type(C_TradeSkillUI) == "table" and C_TradeSkillUI or {}
+  local quality = query(tradeSkill.GetItemReagentQualityByItemInfo, itemId)
+  return validId(quality) and quality or nil
+end
+
+function addon.EnrichItem(itemId)
+  if not addon.ledger or not validId(itemId) then return end
+  local row = addon.ledger.dimensionRows.item[itemId]
+  local attributes = {}
+  local name = cachedItemName(itemId)
+  if name then attributes.name = name end
+  if not row or row.reagentQuality == nil then attributes.reagentQuality = reagentQuality(itemId) end
+  if next(attributes) ~= nil then addon.ledger:AddDimension("item", itemId, attributes) end
+  if not name and not (row and row.name) and type(C_Item) == "table" then
+    -- An uncached name arrives later through GET_ITEM_INFO_RECEIVED.
+    query(C_Item.RequestLoadItemDataByID, itemId)
+  end
+end
+
+local maximumStartupItemNameRequests = 200
+
+-- Rows recorded before a name or reagent quality was available are retried each session; name
+-- requests are bounded. Schematic candidates that were never allocated (e.g. another quality
+-- tier of a reagent) get item rows here, so their reported quality is kept.
+function addon.EnrichUnnamedItems()
+  if not addon.ledger then return 0 end
+  local attempted = 0
+  for itemId, item in pairs(addon.ledger.dimensionRows.item or {}) do
+    if not item.name and attempted < maximumStartupItemNameRequests then
+      attempted = attempted + 1
+      tryEnrich(addon.EnrichItem, itemId)
+    elseif item.reagentQuality == nil then
+      tryEnrich(addon.EnrichItem, itemId)
+    end
+  end
+  for _, series in ipairs(addon.ledger.database.reagentRequirementSeries or {}) do
+    for text in tostring(series.candidateKey or ""):gmatch("[^,]+") do
+      local itemId = tonumber(text)
+      if validId(itemId) and not addon.ledger.dimensionRows.item[itemId] then
+        tryEnrich(addon.EnrichItem, itemId)
+      end
+    end
+  end
+  return attempted
+end
+
 
 local function enrichProfession(event)
   local tradeSkill = C_TradeSkillUI
@@ -427,6 +479,11 @@ function addon.SubmitCraft(recipeId, count, concentration, quote, selections, in
       for _, fixed in ipairs(request.fixedReagents or {}) do
         tryEnrich(addon.EnrichItem, fixed.itemId)
       end
+      for _, requirement in ipairs(request.requirements or {}) do
+        for _, itemId in ipairs(requirement.candidateItemIDs or {}) do
+          tryEnrich(addon.EnrichItem, itemId)
+        end
+      end
     end
     return request, reason
   end
@@ -532,6 +589,7 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
       if not recoveryOk or not recovery then
         addon.lastRecoveryDiagnostic = "unknown-recipe discovery startup unavailable"
       end
+      pcall(addon.EnrichUnnamedItems)
     else
       addon.ledgerError = tostring(ok and reason or sessionId)
       addon.ledger = nil

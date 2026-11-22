@@ -14,6 +14,7 @@ public interface IInitializationPrompts
     RootSelection SelectRoot(IReadOnlyList<string> candidates, string? current);
     string? EnterRoot(string? current);
     bool Confirm(CompanionSettings proposed);
+    bool ConfirmErase(string database);
 }
 
 public sealed class SpectreInitializationPrompts(IAnsiConsole console) : IInitializationPrompts
@@ -53,4 +54,7 @@ public sealed class SpectreInitializationPrompts(IAnsiConsole console) : IInitia
 
     public bool Confirm(CompanionSettings proposed) =>
         console.Confirm("Save this configuration?", defaultValue: false);
+
+    public bool ConfirmErase(string database) =>
+        console.Confirm("Erase this history database?", defaultValue: false);
 }

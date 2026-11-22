@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import type { Plugin } from "vite";
+import { isBrowserRoute } from "./browser-routes.ts";
 
 export function isLocalRequest(request: IncomingMessage): boolean {
   const host = request.headers.host;
@@ -14,9 +15,7 @@ export function isLocalRequest(request: IncomingMessage): boolean {
   const site = request.headers["sec-fetch-site"];
   const documentNavigation =
     request.method === "GET" &&
-    ["/", "/history", "/history/"].includes(
-      (request.url ?? "").split("?")[0],
-    ) &&
+    isBrowserRoute((request.url ?? "").split("?")[0]) &&
     request.headers["sec-fetch-mode"] === "navigate" &&
     request.headers["sec-fetch-dest"] === "document" &&
     request.headers["sec-fetch-user"] === "?1";
@@ -45,6 +44,18 @@ export function localApiProxy(companionUrl: string | undefined): Plugin {
         if (!isLocalRequest(request)) {
           response.writeHead(403, { "Content-Type": "text/plain" });
           response.end("Cross-origin development requests are not allowed.");
+          return;
+        }
+        const path = (request.url ?? "").split("?")[0];
+        if (
+          request.method === "GET" &&
+          request.headers.accept?.includes("text/html") &&
+          path !== "/index.html" &&
+          !/^\/(?:graphql(?:\/|$)|api(?:\/|$))/.test(path) &&
+          !isBrowserRoute(path)
+        ) {
+          response.writeHead(404, { "Content-Type": "text/plain" });
+          response.end("Not found.");
           return;
         }
         if (/^\/(?:graphql(?:\?|$)|api(?:\/|\?|$))/.test(request.url ?? "")) {

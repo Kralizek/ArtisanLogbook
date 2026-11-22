@@ -449,6 +449,8 @@ test("automatic crafting captures ModifiedReagent basic quality families like Li
   assert(submitted.requirements[2].dataSlotIndex == 2 and submitted.requirements[2].requiredQuantity == 8)
   assert(#submitted.requirements[2].candidateItemIDs == 3 and submitted.requirements[2].candidateItemIDs[1] == 236761)
   assert(#submitted.completeItemIDs == 1 and submitted.completeItemIDs[1].itemID == 247724)
+  assert(submitted.slotRoles[1] == "basic" and submitted.slotRoles[2] == "basic" and
+    submitted.slotRoles[3] == "finishing")
 
   -- Missing schematic: requirements missing and grossRequirementsComplete is false
   api.C_TradeSkillUI.GetRecipeSchematic = function() return nil end

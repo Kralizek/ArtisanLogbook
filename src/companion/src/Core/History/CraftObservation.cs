@@ -25,6 +25,10 @@ public sealed record CraftObservation(
     IReadOnlyList<CraftConfigurationEvidence>? ConfigurationEvidence = null,
     IReadOnlyList<CraftRecipeSchematicEvidence>? RecipeSchematicEvidence = null)
 {
+    /// <summary>The reported refund is potential until a proc is confirmed; unknown proc is not zero.</summary>
+    public int? AppliedIngenuityRefund => HasIngenuityProc == true ? IngenuityRefund :
+        HasIngenuityProc == false ? 0 : null;
+
     // Craft output/reagent collections have value semantics, not array reference semantics.
     // Their row order is not significant: the canonical grains are keyed by item and quality.
     public bool Equals(CraftObservation? other)
@@ -119,7 +123,10 @@ public sealed record CraftProvenance(
     string? ResourcefulnessEvidence = null);
 
 /// <summary>Craft × reagent item grain. Allocated and returned quantities are independently nullable.</summary>
-public sealed record CraftReagent(int ItemId, long? AllocatedQuantity, decimal? ReturnedQuantity);
+/// <summary>Craft × reagent item grain. Role is the recipe slot role this item filled in this craft, taken from
+/// the craft's own recorded evidence; it is unknown when that evidence does not identify it.</summary>
+public sealed record CraftReagent(int ItemId, long? AllocatedQuantity, decimal? ReturnedQuantity,
+    RecipeReagentType? Role = null);
 
 /// <summary>Craft × output item × quality grain. Quality or exact quantity may be unavailable.</summary>
 public sealed record CraftOutput(int ItemId, int? Quality, long? Quantity);

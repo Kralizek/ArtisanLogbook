@@ -44,6 +44,7 @@ public sealed class MonitoringApiTests
         await MonitoringTestHost.Eventually(() => host.Checkpoints.Read().Document.Sources.Values.Any(source => source.Successful is not null));
         JsonElement state = JsonDocument.Parse(await host.Http.GetStringAsync("/api/v1/monitoring")).RootElement;
         Assert.That(state.GetProperty("preferences").GetProperty("enabled").GetBoolean(), Is.True);
+        Assert.That(state.GetProperty("preferences").GetProperty("reconciliationIntervalSeconds").GetInt32(), Is.EqualTo(3600));
         Assert.That(state.GetProperty("effective").GetProperty("enabled").GetBoolean(), Is.True);
         Assert.That(File.ReadAllBytes(host.Settings.FilePath), Is.EqualTo(before));
         host.Preferences(false);
@@ -52,6 +53,68 @@ public sealed class MonitoringApiTests
         Assert.That(state.GetProperty("preferences").GetProperty("enabled").GetBoolean(), Is.False);
         Assert.That(state.GetProperty("effective").GetProperty("enabled").GetBoolean(), Is.False);
         Assert.That(File.ReadAllText(host.Settings.FilePath), Does.Contain("\"enabled\": false"));
+    }
+
+    [Test]
+    public async Task BrowserDiscoverySelectsOnlyServerKnownRootsAndRequiresRestart()
+    {
+        await using MonitoringTestHost host = new();
+        string source = host.Ledger();
+        await host.StartAsync(noRoots: true, installationHints: [host.Root]);
+        JsonElement initial = JsonDocument.Parse(await host.Http.GetStringAsync("/api/v1/installations")).RootElement;
+        Assert.That(initial.GetProperty("configuredRoots").GetInt32(), Is.Zero);
+        Assert.That(initial.GetProperty("activeRoots").GetInt32(), Is.Zero);
+        Assert.That(initial.GetProperty("candidates").GetArrayLength(), Is.EqualTo(1));
+        string token = initial.GetProperty("candidates")[0].GetProperty("token").GetString()!;
+        string revision = initial.GetProperty("revision").GetString()!;
+        Assert.That(initial.ToString(), Does.Not.Contain(host.Root).And.Not.Contain("Account"));
+        Assert.That((await host.Http.GetStringAsync("/api/v1/sources")), Does.Not.Contain(SourceCatalog.IdFor(source)));
+
+        using HttpResponseMessage saved = await Send(host, HttpMethod.Put, "/api/v1/installations",
+            $$"""{"revision":"{{revision}}","candidateTokens":["{{token}}"]}""");
+        Assert.That(saved.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        JsonElement selection = await Json(saved);
+        Assert.That(selection.GetProperty("configuredRoots").GetInt32(), Is.EqualTo(1));
+        Assert.That(selection.GetProperty("activeRoots").GetInt32(), Is.Zero);
+        Assert.That(selection.GetProperty("restartRequired").GetBoolean(), Is.True);
+        Assert.That(host.Settings.Load().Settings!.InstallationRoots, Is.EqualTo(new[] { host.Root }));
+        Assert.That((await host.Http.GetStringAsync("/api/v1/sources")), Does.Not.Contain(SourceCatalog.IdFor(source)));
+        Assert.That(host.Settings.Load().Settings!.Monitoring.Enabled, Is.False);
+
+        using HttpResponseMessage stale = await Send(host, HttpMethod.Put, "/api/v1/installations",
+            $$"""{"revision":"{{revision}}","candidateTokens":[]}""");
+        await Problem(stale, HttpStatusCode.Conflict, "settings-conflict");
+    }
+
+    [Test]
+    public async Task BrowserCannotChooseClientPathsOrDuplicateCandidateTokens()
+    {
+        await using MonitoringTestHost host = new();
+        host.Ledger();
+        await host.StartAsync(installationHints: [host.Root]);
+        JsonElement current = JsonDocument.Parse(await host.Http.GetStringAsync("/api/v1/installations")).RootElement;
+        string revision = current.GetProperty("revision").GetString()!;
+        string token = current.GetProperty("candidates")[0].GetProperty("token").GetString()!;
+        byte[] before = File.ReadAllBytes(host.Settings.FilePath);
+        foreach (string tokens in new[]
+        {
+            $$"""["{{host.Root.Replace("\\", "\\\\")}}"]""",
+            $$"""["{{token}}","{{token}}"]"""
+        })
+        {
+            using HttpResponseMessage rejected = await Send(host, HttpMethod.Put, "/api/v1/installations",
+                $$"""{"revision":"{{revision}}","candidateTokens":{{tokens}}}""");
+            await Problem(rejected, HttpStatusCode.BadRequest, "invalid-installation-selection");
+        }
+        Assert.That(File.ReadAllBytes(host.Settings.FilePath), Is.EqualTo(before));
+        using HttpResponseMessage noHeader = await Send(host, HttpMethod.Put, "/api/v1/installations",
+            $$"""{"revision":"{{revision}}","candidateTokens":[]}""", clientHeader: false);
+        await Problem(noHeader, HttpStatusCode.Forbidden, "client-header-required");
+        using HttpRequestMessage foreign = Request(HttpMethod.Put, "/api/v1/installations",
+            $$"""{"revision":"{{revision}}","candidateTokens":[]}""");
+        foreign.Headers.Add("Origin", "http://untrusted.example");
+        using HttpResponseMessage crossOrigin = await host.Http.SendAsync(foreign);
+        await Problem(crossOrigin, HttpStatusCode.Forbidden, "origin-not-allowed");
     }
 
     [Test]

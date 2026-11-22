@@ -11,6 +11,18 @@ public sealed partial class HistoryStore
 {
     public const int MaximumDimensionPageSize = 100;
 
+    // A literal, case-insensitive name substring; a whole number (optionally "#"-prefixed) also matches that ID.
+    private static string SearchCondition(string keyColumn, string search, DynamicParameters filters)
+    {
+        filters.Add("Search", search);
+        string number = search.Trim().TrimStart('#');
+        if (number.Length == 0 || !number.All(char.IsAsciiDigit) ||
+            !int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out int id))
+            return " AND contains(lower(d.Name), lower($Search))";
+        filters.Add("SearchId", id);
+        return $" AND (contains(lower(d.Name), lower($Search)) OR d.{keyColumn} = $SearchId)";
+    }
+
     public DimensionPage<CharacterDimension, CharacterIdentity> QueryCharacters(
         GameContext? game = null, int first = 20, DimensionIdentity<CharacterIdentity>? after = null,
         CancellationToken cancellationToken = default) =>
@@ -40,16 +52,34 @@ public sealed partial class HistoryStore
             filters.Add("ExpansionKey", expansion);
         }
         if (!string.IsNullOrEmpty(query.Search))
-        {
-            conditions.Append(" AND contains(lower(d.Name), lower($Search))");
-            filters.Add("Search", query.Search);
-        }
+            conditions.Append(SearchCondition("RecipeId", query.Search, filters));
+        if (query.CraftedOnly)
+            conditions.Append(" AND EXISTS (SELECT 1 FROM Craft c WHERE c.ContextKey = d.ContextKey AND c.RecipeId = d.RecipeId)");
         return QueryDimensions(query.Game, first, after, "Recipe", "RecipeId",
             "d.Name, d.ProfessionId AS Number1, d.ProfessionExpansionKey AS Text1, d.MaxQuality AS Number2",
             conditions.ToString(), filters, key => key, row => int.Parse(row.Key, CultureInfo.InvariantCulture),
             (row, context) => new RecipeDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture),
-                row.Name, row.Number1, row.Text1, row.Number2), cancellationToken);
+                row.Name, row.Number1, row.Text1, row.Number2), cancellationToken,
+            RecipeOrder(query.Order), query.Descending);
     }
+
+    // Sort values for a recipe row with the given alias; null orders by recipe ID alone.
+    private static Func<string, string>? RecipeOrder(CatalogueOrder order) => order switch
+    {
+        CatalogueOrder.Name => NameOrder,
+        CatalogueOrder.Number => null,
+        CatalogueOrder.Profession => alias => $"""
+            COALESCE((SELECT {NameOrder("p")} FROM Profession p
+                WHERE p.ContextKey = {alias}.ContextKey AND p.ProfessionId = {alias}.ProfessionId), '2')
+            """,
+        CatalogueOrder.Crafts => alias =>
+            $"(SELECT COUNT(*) FROM Craft c WHERE c.ContextKey = {alias}.ContextKey AND c.RecipeId = {alias}.RecipeId)",
+        CatalogueOrder.LastCrafted => alias => $"""
+            COALESCE((SELECT MAX(CAST(c.RecordedAt AS TIMESTAMPTZ)) FROM Craft c
+                WHERE c.ContextKey = {alias}.ContextKey AND c.RecipeId = {alias}.RecipeId), TIMESTAMPTZ '0001-01-01 00:00:00+00')
+            """,
+        _ => throw new ArgumentOutOfRangeException(nameof(order))
+    };
 
     public DimensionPage<ProfessionDimension, int> QueryProfessions(
         ProfessionQuery query, int first = 20, DimensionIdentity<int>? after = null,
@@ -80,14 +110,18 @@ public sealed partial class HistoryStore
         string? conditions = null;
         if (!string.IsNullOrEmpty(query.Search))
         {
-            conditions = " AND contains(lower(d.Name), lower($Search))";
             filters = new();
-            filters.Add("Search", query.Search);
+            conditions = SearchCondition("ItemId", query.Search, filters);
         }
-        return QueryDimensions(query.Game, first, after, "Item", "ItemId", "d.Name", conditions, filters, key => key,
-            row => int.Parse(row.Key, CultureInfo.InvariantCulture),
-            (row, context) => new ItemDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name),
-            cancellationToken);
+        return QueryDimensions(query.Game, first, after, "Item", "ItemId", "d.Name, d.Quality AS Number1", conditions, filters,
+            key => key, row => int.Parse(row.Key, CultureInfo.InvariantCulture),
+            (row, context) => new ItemDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name, row.Number1),
+            cancellationToken, query.Order switch
+            {
+                CatalogueOrder.Name => NameOrder,
+                CatalogueOrder.Number => null,
+                _ => throw new ArgumentException("Items can be ordered by name or number only.", nameof(query))
+            }, query.Descending);
     }
 
     public DimensionPage<ExpansionDimension, string> QueryExpansions(
@@ -99,7 +133,9 @@ public sealed partial class HistoryStore
     private DimensionPage<TResult, TKey> QueryDimensions<TKey, TSqlKey, TResult>(
         GameContext? game, int first, DimensionIdentity<TKey>? after, string table, string keyColumn, string columns,
         string? conditions, DynamicParameters? filters, Func<TKey, TSqlKey> sqlKey, Func<DimensionPageRow, TKey> key,
-        Func<DimensionPageRow, GameContext, TResult> materialize, CancellationToken cancellationToken) where TKey : notnull
+        Func<DimensionPageRow, GameContext, TResult> materialize, CancellationToken cancellationToken,
+        Func<string, string>? sortValue = null, bool descending = false)
+        where TKey : notnull
     {
         if (first is < 1 or > MaximumDimensionPageSize)
             throw new ArgumentOutOfRangeException(nameof(first));
@@ -123,14 +159,28 @@ public sealed partial class HistoryStore
                 sql.Append(" AND d.ContextKey = $Game");
                 parameters.Add("Game", ContextKey(game));
             }
+            // Rows are ordered by context, then the sort value, then the key, with the sort value and key in the
+            // requested direction. A continuation resumes after the position the last row currently sorts to, so the
+            // cursor stays the row's key; if that row no longer exists, the page ends.
+            string op = descending ? "<" : ">", direction = descending ? "DESC" : "ASC";
             if (after is not null)
             {
-                sql.Append($" AND (d.ContextKey > $AfterContext OR (d.ContextKey = $AfterContext AND d.{keyColumn} > $AfterKey))");
+                string tie = $"d.{keyColumn} {op} $AfterKey";
+                string within = tie;
+                if (sortValue is not null)
+                {
+                    string afterValue =
+                        $"(SELECT {sortValue("a")} FROM {table} a WHERE a.ContextKey = $AfterContext AND a.{keyColumn} = $AfterKey)";
+                    within = $"({sortValue("d")} {op} {afterValue} OR ({sortValue("d")} = {afterValue} AND {tie}))";
+                }
+                sql.Append($" AND (d.ContextKey > $AfterContext OR (d.ContextKey = $AfterContext AND {within}))");
                 parameters.Add("AfterContext", ContextKey(after.Game));
                 parameters.Add("AfterKey", sqlKey(after.Key));
             }
             sql.Append(conditions);
-            sql.Append($" ORDER BY d.ContextKey, d.{keyColumn} LIMIT $Limit");
+            sql.Append(sortValue is null
+                ? $" ORDER BY d.ContextKey, d.{keyColumn} {direction} LIMIT $Limit"
+                : $" ORDER BY d.ContextKey, {sortValue("d")} {direction}, d.{keyColumn} {direction} LIMIT $Limit");
             List<DimensionPageRow> rows = [];
             foreach (DimensionPageRow row in transaction.Connection!.Query<DimensionPageRow>(
                 sql.ToString(), parameters, transaction, buffered: false))
@@ -152,6 +202,10 @@ public sealed partial class HistoryStore
             return new DimensionPage<TResult, TKey>(items, hasNext, end);
         }, cancellationToken);
     }
+
+    // A sortable name key: named rows first by lower-cased name, unnamed rows ("1") after them.
+    private static string NameOrder(string alias) =>
+        $"(CASE WHEN {alias}.Name IS NULL THEN '1' ELSE '0' || lower({alias}.Name) END)";
 
     private sealed class DimensionPageRow
     {
