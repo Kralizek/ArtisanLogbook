@@ -340,10 +340,19 @@ it("offers game expansions only in Retail", async () => {
       await userEvent.click(
         screen.getByRole("button", { name: "More filters" }),
       );
-      await screen.findByText("Reagents and results");
-      expect(
-        screen.queryByRole("combobox", { name: "Game expansion" }) !== null,
-      ).toBe(offered);
+      if (offered)
+        expect(
+          await screen.findByRole("combobox", { name: "Game expansion" }),
+        ).toBeVisible();
+      else {
+        await screen.findByRole("combobox", { name: "Used reagent" });
+        expect(
+          screen.queryByRole("combobox", {
+            name: "Game expansion",
+            hidden: true,
+          }),
+        ).toBeNull();
+      }
       unmount();
     }
   } finally {
