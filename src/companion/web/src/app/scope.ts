@@ -101,6 +101,8 @@ export function investigationLink(
     if (value === null) next.delete(key);
     else next.set(key, value);
   }
+  // A recipe page is already scoped to the recipe in its path.
+  if (destination.startsWith("recipes/")) next.delete("recipe");
   return `/${game.routeAlias}/${destination}${next.size ? `?${next}` : ""}`;
 }
 

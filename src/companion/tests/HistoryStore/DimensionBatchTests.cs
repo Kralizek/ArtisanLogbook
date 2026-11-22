@@ -11,6 +11,48 @@ namespace Tests.HistoryStore;
 public sealed class DimensionBatchTests
 {
     [Test]
+    public void ItemPagesFollowCaseInsensitiveNamesWithUnnamedItemsLast()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ArtisanLogbook.DimensionBatch", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            GameContext retail = new(GameProject.Retail);
+            GameContext forever = new(GameProject.Forever);
+            using Store store = new(Path.Combine(directory, "history.duckdb"));
+            ItemDimension[] items =
+            [
+                new(retail, 1, "beta"), new(retail, 2, null), new(retail, 3, "Alpha", 2), new(retail, 4, "alpha", 1),
+                new(retail, 5, "Gamma"), new(retail, 6, null), new(forever, 1, "Zeta"), new(forever, 2, "Eta")
+            ];
+            Assert.That(store.WriteDimensions(new([], [], [], items, [])).IsSuccessful, Is.True);
+
+            List<ItemDimension> paged = [];
+            DimensionPage<ItemDimension, int>? page = null;
+            do
+            {
+                page = store.QueryItems(new(), 1, page?.EndPosition);
+                paged.AddRange(page.Items);
+            } while (page.HasNextPage);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(paged.Select(item => (item.Game, item.Id)), Is.EqualTo(new[]
+                {
+                    (retail, 3), (retail, 4), (retail, 1), (retail, 5), (retail, 2), (retail, 6),
+                    (forever, 2), (forever, 1)
+                }));
+                Assert.That(store.QueryItems(new(retail), 2, new(retail, 1)).Items.Select(item => item.Id),
+                    Is.EqualTo(new[] { 5, 2 }));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void BatchedDimensionsUseExactContextAndKeyPairsAndPreserveSchematicFacts()
     {
         string directory = Path.Combine(Path.GetTempPath(), "ArtisanLogbook.DimensionBatch", Guid.NewGuid().ToString("N"));
@@ -73,8 +115,9 @@ public sealed class DimensionBatchTests
                     Is.EqualTo(new[] { dimensions.Recipes[2] }));
                 Assert.That(store.QueryCharacters(retail).Items, Is.EqualTo(dimensions.Characters));
                 Assert.That(store.QueryProfessions(new(retail, 11)).Items, Is.EqualTo(dimensions.Professions));
+                // Items are ordered by name; the schematic-only item without a name comes last.
                 Assert.That(store.QueryItems(new(retail)).Items,
-                    Is.EqualTo(new[] { dimensions.Items[0], new ItemDimension(retail, 11), dimensions.Items[1] }));
+                    Is.EqualTo(new[] { dimensions.Items[0], dimensions.Items[1], new ItemDimension(retail, 11) }));
                 Assert.That(store.QueryItems(new(retail, Search: "rEaG")).Items,
                     Is.EqualTo(new[] { dimensions.Items[0] }));
                 Assert.That(store.QueryItems(new(retail, Search: "%_")).Items,

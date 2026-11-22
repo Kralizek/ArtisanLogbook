@@ -21,6 +21,17 @@ it("inherits exploration without changing its originating scope or saved identit
   ).toBe("/retail/items/opaque?period=30&character=opaque&recipe=recipe-id");
   expect(overview.toString()).toBe("period=90&character=opaque");
 });
+it("does not repeat a recipe page's recipe in its query", () => {
+  const scoped = new URLSearchParams("period=90&recipe=r1-42&character=c1-a");
+  expect(investigationLink(game, "recipes/r1-42", scoped)).toBe(
+    "/retail/recipes/r1-42?period=90&character=c1-a",
+  );
+  expect(
+    investigationLink(game, "recipes/r1-7", new URLSearchParams("period=30"), {
+      recipe: "r1-7",
+    }),
+  ).toBe("/retail/recipes/r1-7?period=30");
+});
 it("evaluates independent relative comparison periods and preserves fixed dates", () => {
   const params = new URLSearchParams(
     "period=30&bperiod=fixed&bfrom=2025-01-01&bto=2025-02-01",

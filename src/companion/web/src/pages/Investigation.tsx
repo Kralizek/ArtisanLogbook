@@ -128,11 +128,6 @@ function LinkTo({
     destination.startsWith("items/") || destination.startsWith("crafts")
       ? primaryScopeParams(params)
       : new URLSearchParams(params);
-  if (destination.startsWith("recipes/"))
-    next.set(
-      "recipe",
-      decodeURIComponent(destination.slice("recipes/".length)),
-    );
   if (destination.startsWith("items/"))
     for (const key of ["item", "input", "output", "returned"]) next.delete(key);
   const link = (

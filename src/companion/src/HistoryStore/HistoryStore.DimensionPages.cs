@@ -97,7 +97,7 @@ public sealed partial class HistoryStore
         return QueryDimensions(query.Game, first, after, "Item", "ItemId", "d.Name, d.Quality AS Number1", conditions, filters,
             key => key, row => int.Parse(row.Key, CultureInfo.InvariantCulture),
             (row, context) => new ItemDimension(context, int.Parse(row.Key, CultureInfo.InvariantCulture), row.Name, row.Number1),
-            cancellationToken);
+            cancellationToken, sortName: true);
     }
 
     public DimensionPage<ExpansionDimension, string> QueryExpansions(
@@ -109,7 +109,8 @@ public sealed partial class HistoryStore
     private DimensionPage<TResult, TKey> QueryDimensions<TKey, TSqlKey, TResult>(
         GameContext? game, int first, DimensionIdentity<TKey>? after, string table, string keyColumn, string columns,
         string? conditions, DynamicParameters? filters, Func<TKey, TSqlKey> sqlKey, Func<DimensionPageRow, TKey> key,
-        Func<DimensionPageRow, GameContext, TResult> materialize, CancellationToken cancellationToken) where TKey : notnull
+        Func<DimensionPageRow, GameContext, TResult> materialize, CancellationToken cancellationToken, bool sortName = false)
+        where TKey : notnull
     {
         if (first is < 1 or > MaximumDimensionPageSize)
             throw new ArgumentOutOfRangeException(nameof(first));
@@ -133,14 +134,28 @@ public sealed partial class HistoryStore
                 sql.Append(" AND d.ContextKey = $Game");
                 parameters.Add("Game", ContextKey(game));
             }
+            // Name order is case-insensitive with unnamed rows last and the key breaking ties; a continuation
+            // resumes after the position the last row's current name sorts to.
+            string nameOrder = NameOrder("d");
             if (after is not null)
             {
-                sql.Append($" AND (d.ContextKey > $AfterContext OR (d.ContextKey = $AfterContext AND d.{keyColumn} > $AfterKey))");
+                sql.Append(sortName
+                    ? $"""
+                         AND (d.ContextKey > $AfterContext OR (d.ContextKey = $AfterContext AND (
+                            {nameOrder} > $AfterName OR ({nameOrder} = $AfterName AND d.{keyColumn} > $AfterKey))))
+                        """
+                    : $" AND (d.ContextKey > $AfterContext OR (d.ContextKey = $AfterContext AND d.{keyColumn} > $AfterKey))");
                 parameters.Add("AfterContext", ContextKey(after.Game));
                 parameters.Add("AfterKey", sqlKey(after.Key));
+                if (sortName)
+                    parameters.Add("AfterName", transaction.Connection!.ExecuteScalar<string?>(
+                        $"SELECT {NameOrder("a")} FROM {table} a WHERE a.ContextKey = $AfterContext AND a.{keyColumn} = $AfterKey",
+                        parameters, transaction) ?? NameOrder(null));
             }
             sql.Append(conditions);
-            sql.Append($" ORDER BY d.ContextKey, d.{keyColumn} LIMIT $Limit");
+            sql.Append(sortName
+                ? $" ORDER BY d.ContextKey, {nameOrder}, d.{keyColumn} LIMIT $Limit"
+                : $" ORDER BY d.ContextKey, d.{keyColumn} LIMIT $Limit");
             List<DimensionPageRow> rows = [];
             foreach (DimensionPageRow row in transaction.Connection!.Query<DimensionPageRow>(
                 sql.ToString(), parameters, transaction, buffered: false))
@@ -162,6 +177,12 @@ public sealed partial class HistoryStore
             return new DimensionPage<TResult, TKey>(items, hasNext, end);
         }, cancellationToken);
     }
+
+    // A sortable name key: named rows first by lower-cased name, unnamed rows ("1") after them. Without an alias,
+    // the key of a row that no longer exists, which sorts after every row so the page ends.
+    private static string NameOrder(string? alias) => alias is null
+        ? "2"
+        : $"(CASE WHEN {alias}.Name IS NULL THEN '1' ELSE '0' || lower({alias}.Name) END)";
 
     private sealed class DimensionPageRow
     {
