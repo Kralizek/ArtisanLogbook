@@ -92,15 +92,6 @@ jobs:
           node-version: "26.13.1"
           cache: npm
           cache-dependency-path: src/companion/web/package-lock.json
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y lua5.1
-
-      - name: Build and test
-        run: |
-          dotnet restore ArtisanLogbook.Companion.slnx -p:CompanionWebDevelopment=false
-          dotnet build ArtisanLogbook.Companion.slnx --no-restore -c Release -p:CompanionWebDevelopment=false -p:Version="$VERSION" -warnaserror
-          dotnet test ArtisanLogbook.Companion.slnx --no-build -c Release -p:CompanionWebDevelopment=false -p:Version="$VERSION"
-
       - name: Publish single executable
         run: |
           dotnet publish src/Cli/Cli.csproj -c Release -r ${{ matrix.rid }} --self-contained true \
@@ -109,18 +100,6 @@ jobs:
             -p:Version="$VERSION" -warnaserror -o "$PUBLISH_DIR"
           bash ../../.github/workflows/scripts/release-companion.sh verify-version \
             "$PUBLISH_DIR/${{ matrix.executable }}" --version
-
-      - name: Install browser
-        if: runner.os == 'Linux'
-        working-directory: src/companion/web
-        run: npx playwright install --with-deps --only-shell chromium
-
-      - name: Smoke test executable
-        env:
-          SMOKE_FLAGS: ${{ runner.os == 'Windows' && '--skip-browser' || '' }}
-        run: |
-          node tools/smoke-publish.mjs "$PUBLISH_DIR/${{ matrix.executable }}" \
-            ../addon/tests/fixtures/legacy/v1-outcome1.lua $SMOKE_FLAGS
 
       - name: Archive Linux executable
         if: runner.os == 'Linux'
@@ -139,6 +118,7 @@ jobs:
       - name: Pack and verify NuGet tool
         if: runner.os == 'Linux'
         run: |
+          dotnet build src/Cli/Cli.csproj -c Release -p:CompanionWebDevelopment=false -p:Version="$VERSION" -warnaserror
           dotnet pack src/Cli/Cli.csproj --no-build -c Release -p:CompanionWebDevelopment=false -p:Version="$VERSION" --output "$RELEASE_DIR"
           test -s "$RELEASE_DIR/ArtisanLogbook.Companion.$VERSION.nupkg"
           dotnet tool install ArtisanLogbook.Companion --version "$VERSION" --add-source "$RELEASE_DIR" --tool-path "$RUNNER_TEMP/tool"

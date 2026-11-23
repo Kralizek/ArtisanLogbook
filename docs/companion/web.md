@@ -513,10 +513,10 @@ with development or another build.
 The **Release companion** GitHub Actions workflow runs from `master` and
 accepts the version bump and release channel (`alpha`, `beta` or `stable`). It
 calculates a `companion-v<version>` tag independently of addon tags, stamps
-that version into every build, runs the Release build and test suite on Linux
-and Windows, publishes and smoke-tests the single executable for each
+that version into the builds, publishes the single executable for each
 supported target, and checks that the executable and packed NuGet tool report
-the release version. It then creates or reuses the GitHub release and attaches
+the release version. It does not rerun tests; normal CI already validates the
+commit being released. It then creates or reuses the GitHub release and attaches
 `artisanlogbook-companion-<version>-linux-x64.tar.gz`,
 `artisanlogbook-companion-<version>-win-x64.zip` and
 `ArtisanLogbook.Companion.<version>.nupkg`. Reruns preserve assets already
