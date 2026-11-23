@@ -7,6 +7,8 @@ on:
       - "scripts/Deploy-Companion.ps1"
       - "scripts/tests/Deploy-Companion.Tests.ps1"
       - ".github/workflows/ci-companion.yml"
+      - ".github/workflows/release-companion.yml"
+      - ".github/workflows/scripts/release-companion.sh"
   push:
     branches: [master]
     paths:
@@ -15,6 +17,9 @@ on:
       - "scripts/Deploy-Companion.ps1"
       - "scripts/tests/Deploy-Companion.Tests.ps1"
       - ".github/workflows/ci-companion.yml"
+      - ".github/workflows/release-companion.yml"
+      - ".github/workflows/scripts/release-companion.sh"
+  workflow_dispatch:
 concurrency:
   group: companion-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

@@ -515,8 +515,10 @@ accepts the version bump and release channel (`alpha`, `beta` or `stable`). It
 calculates a `companion-v<version>` tag independently of addon tags, stamps
 that version into the builds, publishes the single executable for each
 supported target, and checks that the executable and packed NuGet tool report
-the release version. It does not rerun tests; normal CI already validates the
-commit being released. It then creates or reuses the GitHub release and attaches
+the release version. It does not rerun tests. Instead it requires a successful
+**CI Companion** run (push or manual dispatch on `master`) for the exact
+release commit. CI is path-filtered, so for a commit that did not trigger it,
+run **CI Companion** manually on `master` first. It then creates or reuses the GitHub release and attaches
 `artisanlogbook-companion-<version>-linux-x64.tar.gz`,
 `artisanlogbook-companion-<version>-win-x64.zip` and
 `ArtisanLogbook.Companion.<version>.nupkg`. Reruns preserve assets already

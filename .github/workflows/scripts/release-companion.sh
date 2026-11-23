@@ -17,6 +17,21 @@ case "${1:-}" in
     if [[ "$CHANNEL" == stable ]]; then channel=''; else channel="$CHANNEL"; fi
     echo "channel=$channel" >> "$GITHUB_OUTPUT"
     ;;
+  require-ci)
+    # Path-filtered CI may not run for every commit; it can be dispatched manually on master.
+    required SHA; required GH_TOKEN
+    result=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci-companion.yml/runs?head_sha=$SHA&branch=master&per_page=100" \
+      --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] as $runs
+        | ([$runs[] | select(.conclusion == "success")][0].html_url) as $success
+        | if $success then "success \($success)"
+          elif any($runs[]; .status != "completed") then "pending"
+          else "none" end')
+    case "$result" in
+      success\ *) echo "CI Companion succeeded for $SHA: ${result#success }" ;;
+      pending) die "CI Companion is still running for $SHA. Rerun the release after it succeeds." ;;
+      *) die "No successful CI Companion run for $SHA on master. Run the CI Companion workflow on master for this commit, then rerun the release." ;;
+    esac
+    ;;
   verify-version)
     # Usage: verify-version <command...>; the command must print exactly VERSION.
     required VERSION
@@ -40,6 +55,6 @@ case "${1:-}" in
     done
     ;;
   *)
-    die "Usage: release-companion.sh {require-master|resolve-channel|verify-version|ensure-assets}"
+    die "Usage: release-companion.sh {require-master|require-ci|resolve-channel|verify-version|ensure-assets}"
     ;;
 esac

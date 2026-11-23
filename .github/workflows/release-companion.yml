@@ -31,6 +31,9 @@ permissions:
 jobs:
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -43,6 +46,12 @@ jobs:
 
       - name: Require master branch
         run: bash .github/workflows/scripts/release-companion.sh require-master
+
+      - name: Require successful Companion CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: bash .github/workflows/scripts/release-companion.sh require-ci
 
       - name: Resolve release channel
         id: release-inputs
