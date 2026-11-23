@@ -1,0 +1,203 @@
+name: Release companion
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version component to bump
+        required: true
+        type: choice
+        default: minor
+        options:
+          - patch
+          - minor
+          - major
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options:
+          - alpha
+          - beta
+          - stable
+
+concurrency:
+  group: companion-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      release-notes-start-tag: ${{ steps.version.outputs.release-notes-start-tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Require master branch
+        run: bash .github/workflows/scripts/release-companion.sh require-master
+
+      - name: Require successful Companion CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: bash .github/workflows/scripts/release-companion.sh require-ci
+
+      - name: Resolve release channel
+        id: release-inputs
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: bash .github/workflows/scripts/release-companion.sh resolve-channel
+
+      - name: Calculate version
+        id: version
+        uses: Kralizek/github-actions/actions/calculate-next-version@v0.4.0
+        with:
+          bump: ${{ inputs.bump }}
+          channel: ${{ steps.release-inputs.outputs.channel }}
+          tag-prefix: companion-v
+
+  build:
+    name: Build ${{ matrix.rid }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            executable: artisanlogbook
+          - os: windows-latest
+            rid: win-x64
+            executable: artisanlogbook.exe
+    env:
+      CompanionWebDevelopment: "false"
+      VERSION: ${{ needs.version.outputs.version }}
+      PUBLISH_DIR: .artifacts/publish/${{ matrix.rid }}
+      # Relative to src/companion; avoids drive-letter paths in Windows bash and tar.
+      RELEASE_DIR: ../../release-assets
+    defaults:
+      run:
+        shell: bash
+        working-directory: src/companion
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: src/companion/global.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26.13.1"
+          cache: npm
+          cache-dependency-path: src/companion/web/package-lock.json
+      - name: Publish single executable
+        run: |
+          dotnet publish src/Cli/Cli.csproj -c Release -r ${{ matrix.rid }} --self-contained true \
+            -p:CompanionWebDevelopment=false -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false \
+            -p:Version="$VERSION" -warnaserror -o "$PUBLISH_DIR"
+          bash ../../.github/workflows/scripts/release-companion.sh verify-version \
+            "$PUBLISH_DIR/${{ matrix.executable }}" --version
+
+      - name: Archive Linux executable
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RELEASE_DIR"
+          tar -C "$PUBLISH_DIR" -czf "$RELEASE_DIR/artisanlogbook-companion-$VERSION-${{ matrix.rid }}.tar.gz" ${{ matrix.executable }}
+
+      - name: Archive Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:RELEASE_DIR | Out-Null
+          Compress-Archive -Path (Join-Path $env:PUBLISH_DIR '${{ matrix.executable }}') `
+            -DestinationPath (Join-Path $env:RELEASE_DIR "artisanlogbook-companion-$env:VERSION-${{ matrix.rid }}.zip")
+
+      - name: Pack and verify NuGet tool
+        if: runner.os == 'Linux'
+        run: |
+          dotnet build src/Cli/Cli.csproj -c Release -p:CompanionWebDevelopment=false -p:Version="$VERSION" -warnaserror
+          dotnet pack src/Cli/Cli.csproj --no-build -c Release -p:CompanionWebDevelopment=false -p:Version="$VERSION" --output "$RELEASE_DIR"
+          test -s "$RELEASE_DIR/ArtisanLogbook.Companion.$VERSION.nupkg"
+          dotnet tool install ArtisanLogbook.Companion --version "$VERSION" --add-source "$RELEASE_DIR" --tool-path "$RUNNER_TEMP/tool"
+          bash ../../.github/workflows/scripts/release-companion.sh verify-version "$RUNNER_TEMP/tool/artisanlogbook" --version
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: companion-release-${{ matrix.rid }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: companion-release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Ensure GitHub release
+        uses: Kralizek/github-actions/actions/ensure-github-release@v0.5.0
+        with:
+          tag: ${{ needs.version.outputs.tag }}
+          target: ${{ github.sha }}
+          title: Artisan Logbook Companion ${{ needs.version.outputs.version }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          release-notes-start-tag: ${{ needs.version.outputs.release-notes-start-tag }}
+
+      - name: Ensure release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          ASSET_DIR: release-assets
+        run: bash .github/workflows/scripts/release-companion.sh ensure-assets
+
+  nuget:
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for nuget.org trusted publishing.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: companion-release-linux-x64
+          path: release-assets
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Log in to nuget.org
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: Kralizek
+
+      - name: Push tool package
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          PACKAGE: release-assets/ArtisanLogbook.Companion.${{ needs.version.outputs.version }}.nupkg
+        run: |
+          test -s "$PACKAGE"
+          dotnet nuget push "$PACKAGE" --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json --skip-duplicate

@@ -507,3 +507,22 @@ It uses a temporary installation and verifies missing tools and failed frontend
 build/restore leave that installation unchanged. It temporarily modifies
 `web/codegen.ts` and invalidates the npm restore, so do not run it concurrently
 with development or another build.
+
+## Release
+
+The **Release companion** GitHub Actions workflow runs from `master` and
+accepts the version bump and release channel (`alpha`, `beta` or `stable`). It
+calculates a `companion-v<version>` tag independently of addon tags, stamps
+that version into the builds, publishes the single executable for each
+supported target, and checks that the executable and packed NuGet tool report
+the release version. It does not rerun tests. Instead it requires a successful
+**CI Companion** run (push or manual dispatch on `master`) for the exact
+release commit. CI is path-filtered, so for a commit that did not trigger it,
+run **CI Companion** manually on `master` first. It then creates or reuses the GitHub release and attaches
+`artisanlogbook-companion-<version>-linux-x64.tar.gz`,
+`artisanlogbook-companion-<version>-win-x64.zip` and
+`ArtisanLogbook.Companion.<version>.nupkg`. Reruns preserve assets already
+attached to the release. The tool package is then pushed to nuget.org with
+trusted publishing (`NuGet/login`, owner `Kralizek`); the nuget.org policy is
+bound to this workflow file, so keep the `release-companion.yml` name. Reruns
+skip a version that is already on nuget.org.
