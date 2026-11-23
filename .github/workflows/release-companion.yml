@@ -160,3 +160,35 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ASSET_DIR: release-assets
         run: bash .github/workflows/scripts/release-companion.sh ensure-assets
+
+  nuget:
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for nuget.org trusted publishing.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: companion-release-linux-x64
+          path: release-assets
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Log in to nuget.org
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: Kralizek
+
+      - name: Push tool package
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          PACKAGE: release-assets/ArtisanLogbook.Companion.${{ needs.version.outputs.version }}.nupkg
+        run: |
+          test -s "$PACKAGE"
+          dotnet nuget push "$PACKAGE" --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json --skip-duplicate

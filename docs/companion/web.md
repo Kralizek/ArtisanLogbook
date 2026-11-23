@@ -520,4 +520,7 @@ commit being released. It then creates or reuses the GitHub release and attaches
 `artisanlogbook-companion-<version>-linux-x64.tar.gz`,
 `artisanlogbook-companion-<version>-win-x64.zip` and
 `ArtisanLogbook.Companion.<version>.nupkg`. Reruns preserve assets already
-attached to the release. The tool package is not pushed to nuget.org.
+attached to the release. The tool package is then pushed to nuget.org with
+trusted publishing (`NuGet/login`, owner `Kralizek`); the nuget.org policy is
+bound to this workflow file, so keep the `release-companion.yml` name. Reruns
+skip a version that is already on nuget.org.
