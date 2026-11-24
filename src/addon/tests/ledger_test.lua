@@ -1558,6 +1558,66 @@ test("temporarily unresolved realms reuse only one verified identity for the sam
   assert(Ledger.New(ledger.database))
 end)
 
+test("a session-scoped fallback identity is replaced at login only before anything is recorded", function()
+  local function unresolvedLedger()
+    local ledger = newLedger()
+    assert(ledger:CreateSession({ projectId = 18, regionId = 3, realmName = "",
+      characterGUID = "Player-6941-New", characterName = "Newcomer", characterClassFile = "DRUID" }))
+    return ledger
+  end
+  local resolved = { projectId = 18, regionId = 3, gameRealmId = 6941, realmName = "Realm",
+    characterGUID = "Player-6941-New", characterName = "Newcomer", characterClassFile = "DRUID" }
+  local ledger = unresolvedLedger()
+  local session = ledger.dimensionRows.session[ledger.currentSessionId]
+  local fallbackRealm, fallbackCharacter = session.realmDimensionId, session.characterDimensionId
+  assert(ledger.dimensionRows.realm[fallbackRealm].identityScope == "session")
+
+  -- Still unreadable: nothing changes and the caller may retry.
+  local changed, reason = ledger:ResolveSessionIdentity({ projectId = 18, regionId = 3, realmName = "",
+    characterGUID = "Player-6941-New", characterName = "Newcomer", characterClassFile = "DRUID" })
+  assert(changed == false and reason == nil and session.realmDimensionId == fallbackRealm)
+
+  assert(ledger:ResolveSessionIdentity(resolved) == true)
+  local realm = ledger.dimensionRows.realm[session.realmDimensionId]
+  local character = ledger.dimensionRows.character[session.characterDimensionId]
+  assert(realm.key == "project:18:region:3:realm:6941" and realm.identityScope == "runtime" and realm.name == "Realm")
+  assert(character.key == "project:18:region:3:realm:6941:guid:Player-6941-New" and character.realmDimensionId == realm.id)
+  assert(not ledger.dimensionRows.realm[fallbackRealm] and not ledger.dimensionRows.character[fallbackCharacter])
+  local fallbackKey = "unresolved:session:" .. session.key:match("%d+")
+  for _, row in ipairs(ledger.database.dimensions.realms) do assert(row.id ~= fallbackRealm and row.key ~= fallbackKey) end
+  for _, row in ipairs(ledger.database.dimensions.characters) do
+    assert(row.id ~= fallbackCharacter and row.key:sub(1, #fallbackKey) ~= fallbackKey)
+  end
+  changed, reason = ledger:ResolveSessionIdentity(resolved)
+  assert(changed == false and reason == "session identity is not session-scoped")
+  assert(ledger:SubmitCraft(123, 1, false))
+  local reloaded = assert(Ledger.New(ledger.database))
+  assert(reloaded.dimensionIndex.character["project:18:region:3:realm:6941:guid:Player-6941-New"] == character.id)
+
+  -- A later session of the same character reuses the identity resolved at login.
+  local later = ledger.dimensionRows.session[assert(ledger:CreateSession({ projectId = 18, regionId = 3,
+    realmName = "", characterGUID = "Player-6941-New", characterName = "Newcomer", characterClassFile = "DRUID" }))]
+  assert(later.characterDimensionId == character.id)
+
+  -- Once anything was recorded under the fallback, it is kept rather than rewritten.
+  ledger = unresolvedLedger()
+  assert(ledger:SubmitCraft(123, 1, false))
+  changed, reason = ledger:ResolveSessionIdentity(resolved)
+  assert(changed == nil and reason == "session identity cannot change while a craft is pending")
+  ledger:CancelCraft()
+  changed, reason = ledger:ResolveSessionIdentity(resolved)
+  assert(changed == nil and reason == "session identity cannot change after crafting evidence was recorded")
+  assert(ledger.dimensionRows.realm[ledger.dimensionRows.session[ledger.currentSessionId].realmDimensionId]
+    .identityScope == "session")
+
+  -- A session that already had a runtime identity is never touched.
+  ledger = newLedger()
+  assert(ledger:CreateSession(resolved))
+  changed, reason = ledger:ResolveSessionIdentity({ projectId = 18, regionId = 3, gameRealmId = 7000,
+    realmName = "Other", characterGUID = "Player-6941-New", characterName = "Newcomer", characterClassFile = "DRUID" })
+  assert(changed == false and reason == "session identity is not session-scoped")
+end)
+
 test("invalid result snapshots cannot partially persist a craft", function()
   local ledger = newLedger()
   local result = { operationID = 51, itemID = 100, resourcesReturned = {} }

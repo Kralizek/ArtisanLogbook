@@ -730,6 +730,15 @@ verified runtime realm and character of the same GUID, provided exactly one
 such realm exists in that project and region and no known realm name or class
 contradicts it. Otherwise the session-scoped fallback is kept.
 
+The session is created at `ADDON_LOADED`, when the realm can still be
+unreadable. At `PLAYER_LOGIN` and later `PLAYER_ENTERING_WORLD`, Core retries
+the same identity rules. If they now produce a runtime (or verified) realm, the
+current session is repointed to it and its own `unresolved:session:<id>` realm
+and character rows are removed. This happens only while nothing references them:
+no pending craft, request, craft, series or reward of that session or character.
+Once anything is recorded the fallback is kept; recorded history is never
+rewritten. Retries stop after the first replacement or refusal.
+
 Earlier PR #10 name-only realm rows and their references remain unchanged when
 loaded; new scoped identities are not merged with them. Region/environment
 history cannot be reconstructed from a name. Cross-client

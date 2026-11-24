@@ -86,8 +86,11 @@ local function createForeverAdapter(api, handleEvent, submitCraft, invalidateCra
       if unit == "player" and request and activeCast and activeCast.guid == guid and
           activeCast.recipeId == recipeId and not activeCast.succeeded then
         activeCast.succeeded = true
-        if tail >= head then
-          cancel("Multiple completed casts awaiting indistinguishable zero-ID results.")
+        -- A result can arrive after the next cast of the same request has succeeded. Every
+        -- queued cast shares this request's recipe and fixed output, so zero-ID results are
+        -- matched in order; more completed casts than remaining crafts stay ambiguous.
+        if tail - head + 1 >= request.remaining then
+          cancel("More completed casts than remaining requested crafts.")
           return
         end
         tail = tail + 1
