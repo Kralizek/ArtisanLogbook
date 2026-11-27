@@ -368,7 +368,9 @@ events or imply continuous observation while Tracer was not loaded.
 
 SavedVariables are written by **WoW on reload/logout**, not continuously streamed
 to disk. Unlimited recording means no addon-imposed session cap, **not unlimited
-memory or guaranteed crash persistence**. Very large files can increase memory
+memory or guaranteed crash persistence**. Saved records are packed to stay
+within the load limit of a Lua SavedVariables file; see
+[Debug Format and Limits](#debug-format-and-limits). Very large files can increase memory
 usage, startup/reload times and logout/save times, and can affect client stability.
 The displayed size is only an estimate, not exact Lua heap or on-disk size.
 Back up saved evidence periodically without clearing the active trace.
@@ -697,7 +699,26 @@ operation IDs are retained as representative game data.
 ## Debug Format and Limits
 
 `ArtisanLogbookTraceDB` holds `traceSchemaVersion`, `traceExportVersion`,
-`nextSequence`, `records`, `bytes`, and optional `stoppedReason`.
+`nextSequence`, `records`, `bytes`, and optional `stoppedReason`. Saved files
+also hold `recordChunks`.
+
+While the game runs, `records` is a list of record tables. At `PLAYER_LOGOUT`,
+which also precedes a reload, Tracer packs them into `recordChunks`: strings of
+up to 1,000 records each. Any record captured after packing stays in `records`.
+On load the chunks are unpacked ahead of those records, and `recordChunks` is
+removed. WoW loads a SavedVariables file as a single Lua 5.1 function, which can
+hold at most 262,143 unique constants. A record saved as a table adds about
+three. Schema 2 traces of roughly 130,000 records therefore failed to load with
+`constant table overflow`. The addon then saw no trace, started a new one, and
+the old file was overwritten at the next logout. Each chunk is one constant,
+so saved traces stay far below the limit.
+
+Each packed record is a header of comma-separated numbers ending in `;`:
+`sequence,timestamp,elapsed,#event,#payload,#warnings`. Its event, payload and
+warnings follow, using exactly those byte lengths. A warnings length of `-1`
+means the record has no warnings. Unpacking uses only string operations, not
+`loadstring`. If any chunk cannot be read, the load is refused and the saved
+data is left untouched.
 
 Each record contains a monotonic observation `sequence`, server `timestamp`,
 high-resolution client-uptime `elapsed`, event name, serialized argument
@@ -714,7 +735,7 @@ the original argument order.
 
 The debug export is a Lua table literal preceded by `return`, with argument
 tables exposed as `arguments` rather than strings. It has independent trace
-schema and debug export versions. The current trace schema is 2 and the current debug export version is 2; `totalRecords` is included for
+schema and debug export versions. The current trace schema is 3 and the current debug export version is 2; `totalRecords` is included for
 checking page completeness. This is **not** the final `AL1` ledger contract.
 There is no importer and no `loadstring` in the addon.
 
@@ -732,7 +753,11 @@ mode omits quote and high-volume probe observations; enable Verbose explicitly
 when investigating those paths. Existing trace schema-2 records are retained
 when loaded under the new Tracer owner if they are available to the loader; no
 automatic cross-addon SavedVariables migration is performed.
-Existing schema-2 databases need no schema/export version bump or history scan.
+Schema 3 changes only the saved form of records. A schema-2 database loads
+unchanged and is saved as schema 3 at the next logout. Earlier Tracer builds
+refuse schema 3 and leave it untouched. A schema-2 file that is already past
+the constant limit cannot be loaded by WoW at all. Keep such a file as an
+offline backup; don't restore it into SavedVariables.
 Missing recording settings are initialized to disabled intent and normal mode;
 existing records, sequence numbers, timestamps and payloads are unchanged.
 Repeated initialization does not reset history. Active persisted intent appends

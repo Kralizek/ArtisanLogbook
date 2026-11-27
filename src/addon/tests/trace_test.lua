@@ -72,11 +72,12 @@ test("schema 2 history defaults stopped and loads idempotently without loss", fu
       timestamp = 1799999900 + sequence, elapsed = sequence / 10,
       payload = '{["n"]=1,[1]=false}', warnings = "old-warning" }
   end
-  local database = { traceSchemaVersion = Trace.schemaVersion,
+  local database = { traceSchemaVersion = 2,
     traceExportVersion = Trace.exportVersion, nextSequence = 3,
     records = records, bytes = 1024, stoppedReason = "capacity" }
   local recorder = assert(Trace.New(database, clock))
   assert(not recorder.recording and not database.recordingEnabled)
+  assert(database.traceSchemaVersion == Trace.schemaVersion)
   assert(database.records == records and database.nextSequence == 3 and database.bytes == 1024)
   local again = assert(Trace.New(database, clock))
   assert(not again.recording and again.database == database)
@@ -213,6 +214,108 @@ test("unknown schemas are not overwritten", function()
   local database = { traceSchemaVersion = 99, evidence = "keep" }
   local recorder, reason = Trace.New(database, clock)
   assert(not recorder and reason and database.evidence == "keep")
+end)
+
+-- Writes a database the way WoW writes SavedVariables: one assignment of nested literals.
+local function savedVariablesSource(name, value)
+  local parts = { name, " = " }
+  local function write(current, indent)
+    local kind = type(current)
+    if kind == "string" then
+      parts[#parts + 1] = string.format("%q", current)
+    elseif kind == "number" then
+      parts[#parts + 1] = string.format("%.17g", current)
+    elseif kind ~= "table" then
+      parts[#parts + 1] = tostring(current)
+    else
+      parts[#parts + 1] = "{\n"
+      for key, child in pairs(current) do
+        parts[#parts + 1] = indent .. "[" .. (type(key) == "string" and string.format("%q", key) or tostring(key)) .. "] = "
+        write(child, indent .. "\t")
+        parts[#parts + 1] = ",\n"
+      end
+      parts[#parts + 1] = indent .. "}"
+    end
+  end
+  write(value, "")
+  return table.concat(parts) .. "\n"
+end
+
+local function loadSavedVariables(source)
+  local chunk, reason = loadstring(source)
+  if not chunk then return nil, reason end
+  local env = {}
+  setfenv(chunk, env)()
+  return env
+end
+
+test("packed records round-trip every field, order and later captures", function()
+  local recorder = assert(Trace.New(nil, clock))
+  assert(recorder:Start({ character = "First" }))
+  local awkward = { "", ";", ",", "1,2;3", "line\nbreak", "nul\000byte", "quote\"", "Kralïzek" }
+  for index = 1, 2499 do
+    assert(recorder:Capture(awkward[index % #awkward + 1], awkward[(index + 3) % #awkward + 1], index / 7))
+  end
+  recorder.database.records[5].warnings = ""
+  recorder.database.records[6].warnings = "secret,string-limit"
+  local expected = {}
+  for index, record in ipairs(recorder.database.records) do
+    expected[index] = { sequence = record.sequence, timestamp = record.timestamp, elapsed = record.elapsed,
+      event = record.event, payload = record.payload, warnings = record.warnings }
+  end
+  local database = recorder.database
+  assert(recorder:PrepareSave())
+  assert(#database.records == 0 and #database.recordChunks == 3)
+  -- Events captured after packing, such as other PLAYER_LOGOUT handlers, are saved as tables.
+  assert(recorder:Capture("AFTER_PACK", 1))
+  expected[#expected + 1] = database.records[1]
+  local loaded = assert(loadSavedVariables(savedVariablesSource("ArtisanLogbookTraceDB", database)))
+  local reloaded = assert(Trace.New(loaded.ArtisanLogbookTraceDB, clock, nil, { character = "Second" }))
+  local records = reloaded.database.records
+  assert(reloaded.database.recordChunks == nil and reloaded.database.traceSchemaVersion == Trace.schemaVersion)
+  assert(#records == #expected + 1 and records[#records].event == "TRACE_START")
+  for index, want in ipairs(expected) do
+    local got = records[index]
+    assert(got.sequence == want.sequence and got.timestamp == want.timestamp and got.elapsed == want.elapsed)
+    assert(got.event == want.event and got.payload == want.payload and got.warnings == want.warnings)
+  end
+  assert(records[5].warnings == "" and records[7].warnings == nil)
+  assert(reloaded.recording and records[#records].sequence == database.nextSequence)
+  assert(reloaded.database.nextSequence == database.nextSequence + 1)
+end)
+
+test("a trace past the Lua 5.1 constant limit still loads from SavedVariables", function()
+  -- About three unique constants per record: its sequence, elapsed time and payload.
+  local recorder = assert(Trace.New(nil, clock))
+  assert(recorder:Start({}))
+  for index = 1, 90000 do assert(recorder:Capture("EVENT", index)) end
+  local database = recorder.database
+  local unpacked, overflow = loadSavedVariables(savedVariablesSource("ArtisanLogbookTraceDB", database))
+  assert(not unpacked and overflow:find("constant table overflow", 1, true))
+  assert(recorder:PrepareSave())
+  local loaded = assert(loadSavedVariables(savedVariablesSource("ArtisanLogbookTraceDB", database)))
+  local reloaded = assert(Trace.New(loaded.ArtisanLogbookTraceDB, clock))
+  assert(#reloaded.database.records == 90002 and reloaded.database.records[90001].payload == '{["n"]=1,[1]=90000}')
+end)
+
+test("unreadable packed records refuse to load and leave saved data untouched", function()
+  local recorder = assert(Trace.New(nil, clock))
+  assert(recorder:Start({}))
+  assert(recorder:Capture("KEEP", 42))
+  assert(recorder:PrepareSave())
+  local database = recorder.database
+  local chunk = database.recordChunks[1]
+  for _, broken in ipairs({ chunk:sub(1, -2), chunk .. "x", "1,2,3,4,5;" .. chunk, 42 }) do
+    database.recordChunks[1] = broken
+    local refused, reason = Trace.New(database, clock)
+    assert(not refused and reason:find("left untouched", 1, true))
+    assert(database.recordChunks[1] == broken and #database.records == 0)
+  end
+  database.recordChunks[1] = chunk
+  database.traceSchemaVersion = 2
+  assert(not Trace.New(database, clock))
+  database.traceSchemaVersion = Trace.schemaVersion
+  assert(#assert(Trace.New(database, clock)).database.records == 3)
 end)
 
 test("unsafe or oversized payloads produce explicit diagnostics", function()

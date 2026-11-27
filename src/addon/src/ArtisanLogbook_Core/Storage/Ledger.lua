@@ -2340,9 +2340,37 @@ function Ledger:SubmitCraft(recipeId, requestedCount, useConcentration, quote, s
     self.nonpersonalOperationOutstanding = true
   else
     self.pendingOrderRequest = nil
-    self.pendingRequest = self.requestAmbiguous and nil or { id = request.id, remaining = requestedCount }
+    self.pendingRequest = self.requestAmbiguous and nil or
+      { id = request.id, remaining = requestedCount, succeededCasts = 0 }
   end
   return request
+end
+
+-- A matched player craft cast for the pending personal request succeeded.
+function Ledger:ObserveCastSucceeded()
+  local pending = self.pendingRequest
+  if pending and pending.succeededCasts then pending.succeededCasts = pending.succeededCasts + 1 end
+end
+
+-- A matched craft cast failed or was interrupted before it succeeded, as when concentration
+-- runs out mid-batch. That cast yields no result. If every earlier successful cast of the
+-- personal request already has its primary result, nothing is in flight, so the request
+-- ends as if the batch had completed. Otherwise ownership is uncertain, as with CancelCraft.
+function Ledger:EndFailedAttempt()
+  local pending = self.pendingRequest
+  local request = pending and self.requestById[pending.id]
+  if not request or not pending.succeededCasts or self.pendingOrderRequest or
+      self.nonpersonalOperationOutstanding or self.pendingSalvage or self.operationOwnershipUncertain or
+      self.requestAmbiguous or self.ambiguousRecipe or self.operationKind ~= "CraftRecipe" or
+      request.requestedCount - pending.remaining ~= pending.succeededCasts then
+    self:CancelCraft()
+    return false
+  end
+  self.pendingRequest = nil
+  self.pendingRecipeId = nil
+  self.attemptObservation, self.configurationChanged = nil, nil
+  self.operationObservation = nil
+  return true
 end
 
 function Ledger:CancelCraft()

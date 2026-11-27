@@ -171,6 +171,11 @@ local function registerEvents(api)
         reason = "PLAYER_LOGOUT",
       })
     end
+    -- Pack even while stopped: stored records are saved either way. On failure the records
+    -- stay as tables, which is how earlier versions saved them.
+    if event == "PLAYER_LOGOUT" and addon.recorder then
+      pcall(addon.recorder.PrepareSave, addon.recorder)
+    end
   end)
 end
 

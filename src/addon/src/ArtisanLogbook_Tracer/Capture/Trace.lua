@@ -3,11 +3,74 @@ local _, addon = ...
 local Trace = {}
 addon.Trace = Trace
 
-Trace.schemaVersion = 2
+Trace.schemaVersion = 3
 Trace.exportVersion = 2
 Trace.largeTraceBytes = 12 * 1024 * 1024
 Trace.maxExportRecords = 10
 Trace.maxPayloadBytes = 16384
+-- WoW loads SavedVariables as one Lua 5.1 function, which is limited to 262,143 unique
+-- constants. Saving each record as a table adds several unique constants per record, so a
+-- trace of roughly 130,000 records failed to load and was silently replaced. Records are
+-- therefore saved in packed strings, each a single constant, and unpacked again on load.
+Trace.recordsPerChunk = 1000
+
+local function isValidRecord(record)
+  return type(record) == "table" and type(record.sequence) == "number" and
+    type(record.timestamp) == "number" and type(record.elapsed) == "number" and
+    type(record.event) == "string" and type(record.payload) == "string" and
+    (record.warnings == nil or type(record.warnings) == "string")
+end
+
+-- Each record is a header of numbers, then its strings at the header's byte lengths:
+-- "sequence,timestamp,elapsed,#event,#payload,#warnings;" .. event .. payload .. warnings
+-- A warnings length of -1 means the record has no warnings.
+function Trace.PackRecords(records, first, last)
+  local parts = {}
+  for index = first, last do
+    local record = records[index]
+    if not isValidRecord(record) then return nil, "Invalid trace record at index " .. index .. "." end
+    local warnings = record.warnings or ""
+    parts[#parts + 1] = string.format("%.17g,%.17g,%.17g,%d,%d,%d;", record.sequence,
+      record.timestamp, record.elapsed, #record.event, #record.payload,
+      record.warnings and #warnings or -1)
+    parts[#parts + 1] = record.event
+    parts[#parts + 1] = record.payload
+    parts[#parts + 1] = warnings
+  end
+  return table.concat(parts)
+end
+
+function Trace.UnpackRecords(chunk, into)
+  if type(chunk) ~= "string" then return false end
+  local position, length = 1, #chunk
+  while position <= length do
+    local headerEnd = string.find(chunk, ";", position, true)
+    if not headerEnd then return false end
+    local sequence, timestamp, elapsed, eventLength, payloadLength, warningsLength =
+      string.match(string.sub(chunk, position, headerEnd - 1), "^([^,]+),([^,]+),([^,]+),(%d+),(%d+),(%-?%d+)$")
+    sequence, timestamp, elapsed = tonumber(sequence), tonumber(timestamp), tonumber(elapsed)
+    eventLength, payloadLength, warningsLength = tonumber(eventLength), tonumber(payloadLength), tonumber(warningsLength)
+    if not sequence or not timestamp or not elapsed or not eventLength or not payloadLength or
+        not warningsLength or warningsLength < -1 then
+      return false
+    end
+    local eventStart = headerEnd + 1
+    local payloadStart = eventStart + eventLength
+    local warningsStart = payloadStart + payloadLength
+    local nextPosition = warningsStart + math.max(warningsLength, 0)
+    if nextPosition - 1 > length then return false end
+    into[#into + 1] = {
+      sequence = sequence,
+      timestamp = timestamp,
+      elapsed = elapsed,
+      event = string.sub(chunk, eventStart, payloadStart - 1),
+      payload = string.sub(chunk, payloadStart, warningsStart - 1),
+      warnings = warningsLength >= 0 and string.sub(chunk, warningsStart, nextPosition - 1) or nil,
+    }
+    position = nextPosition
+  end
+  return true
+end
 
 function Trace.Serialize(value, isSecret)
   local visited, warnings = {}, {}
@@ -111,8 +174,12 @@ function Trace.New(database, clock, isSecret, metadata)
     migrated.exportContractVersion = nil
     database = migrated
   end
-  if type(database) ~= "table" or database.traceSchemaVersion ~= Trace.schemaVersion or
+  -- Schema 3 only changes how records are saved, so a schema-2 database loads unchanged.
+  if type(database) ~= "table" or
+      (database.traceSchemaVersion ~= Trace.schemaVersion and database.traceSchemaVersion ~= 2) or
       database.traceExportVersion ~= Trace.exportVersion or type(database.records) ~= "table" or
+      (database.recordChunks ~= nil and (database.traceSchemaVersion ~= Trace.schemaVersion or
+        type(database.recordChunks) ~= "table")) or
       type(database.nextSequence) ~= "number" or database.nextSequence < 1 or
       database.nextSequence % 1 ~= 0 or not isNonnegativeFinite(database.bytes) or
       database.bytes % 1 ~= 0 then
@@ -125,6 +192,25 @@ function Trace.New(database, clock, isSecret, metadata)
         database.logicalSessionID < 1 or database.logicalSessionID % 1 ~= 0)) then
     return nil, "Invalid trace recording settings; existing data was left untouched."
   end
+  if database.recordChunks then
+    -- Packed records precede any records captured after packing. Decode everything before
+    -- changing the database, so an unreadable chunk leaves the saved data as it was.
+    local records = {}
+    for index = 1, #database.recordChunks do
+      if not Trace.UnpackRecords(database.recordChunks[index], records) then
+        return nil, "Unreadable saved trace records; existing data was left untouched."
+      end
+    end
+    for index = 1, #database.records do
+      if not isValidRecord(database.records[index]) then
+        return nil, "Unreadable saved trace records; existing data was left untouched."
+      end
+      records[#records + 1] = database.records[index]
+    end
+    database.records = records
+    database.recordChunks = nil
+  end
+  database.traceSchemaVersion = Trace.schemaVersion
   if database.recordingEnabled == nil then database.recordingEnabled = false end
   if database.recordingMode == nil then database.recordingMode = "normal" end
 
@@ -212,10 +298,27 @@ function Trace.New(database, clock, isSecret, metadata)
       return false, "Stop recording before clearing."
     end
     database.records = {}
+    database.recordChunks = nil
     database.bytes = 0
     database.stoppedReason = nil
     database.captureError = nil
     database.logicalSessionID = nil
+    return true
+  end
+
+  -- Call immediately before WoW writes SavedVariables (PLAYER_LOGOUT, which also precedes a
+  -- reload). Records captured afterwards stay as tables and are loaded after the chunks.
+  function recorder:PrepareSave()
+    local records = database.records
+    local chunks = {}
+    for index = 1, #(database.recordChunks or {}) do chunks[index] = database.recordChunks[index] end
+    for first = 1, #records, Trace.recordsPerChunk do
+      local chunk, reason = Trace.PackRecords(records, first, math.min(first + Trace.recordsPerChunk - 1, #records))
+      if not chunk then return false, reason end
+      chunks[#chunks + 1] = chunk
+    end
+    database.recordChunks = chunks
+    database.records = {}
     return true
   end
 
@@ -236,10 +339,7 @@ function Trace.New(database, clock, isSecret, metadata)
     }
     for index = first, math.min(first + count - 1, #database.records) do
       local record = database.records[index]
-      if type(record) ~= "table" or type(record.sequence) ~= "number" or
-          type(record.timestamp) ~= "number" or type(record.elapsed) ~= "number" or
-          type(record.event) ~= "string" or type(record.payload) ~= "string" or
-          (record.warnings ~= nil and type(record.warnings) ~= "string") then
+      if not isValidRecord(record) then
         return nil, "Invalid trace record at index " .. index .. "."
       end
       lines[#lines + 1] = string.format(

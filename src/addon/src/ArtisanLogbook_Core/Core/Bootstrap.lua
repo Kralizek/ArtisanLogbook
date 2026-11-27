@@ -385,12 +385,31 @@ function addon.HandleCraftEvent(event, ...)
       local unit, castGUID, spellId = ...
       local pending = addon.ledger.pendingRequest or addon.ledger.pendingOrderRequest
       local request = pending and addon.ledger.requestById[pending.id] or addon.ledger.pendingSalvage
-      if unit == "player" and request and request.recipeId == spellId then addon.craftCastGUID = castGUID end
-    elseif event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
+      if unit == "player" and request and request.recipeId == spellId then
+        addon.craftCastGUID, addon.craftCastSucceeded = castGUID, nil
+      end
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
       local unit, castGUID = ...
+      if unit == "player" and castGUID ~= nil and castGUID == addon.craftCastGUID and not addon.craftCastSucceeded then
+        addon.craftCastSucceeded = true
+        addon.ledger:ObserveCastSucceeded()
+      end
+    elseif event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET" then
+      local unit, castGUID, spellId = ...
       if unit == "player" and castGUID ~= nil and castGUID == addon.craftCastGUID then
-        addon.ledger:CancelCraft()
-        addon.craftCastGUID = nil
+        local ended = false
+        if addon.craftCastSucceeded then
+          addon.ledger:CancelCraft()
+        else
+          ended = addon.ledger:EndFailedAttempt()
+        end
+        addon.craftCastGUID, addon.craftCastSucceeded = nil, nil
+        addon.ObserveDiagnostic("attempt-failed", {
+          recipeId = spellId,
+          event = event,
+          ended = ended,
+          correlationReason = not ended and addon.ledger.operationOwnershipUncertain and "ownership-uncertain" or nil,
+        })
       end
     elseif event == "TRADE_SKILL_ITEM_CRAFTED_RESULT" then
       local result, correlation = ...

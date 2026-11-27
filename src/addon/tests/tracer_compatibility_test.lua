@@ -80,7 +80,7 @@ test("standalone Forever records, marks, stops and exports without Core", functi
   addon.eventFrame.scripts.OnEvent(addon.eventFrame, "TRADE_SKILL_SHOW", nil, 42)
   env.SlashCmdList.ARTISANLOGBOOKTRACE("stop")
   local exported = assert(loadstring(assert(addon.recorder:Export())))()
-  assert(exported.traceSchemaVersion == 2 and exported.traceExportVersion == 2)
+  assert(exported.traceSchemaVersion == 3 and exported.traceExportVersion == 2)
   assert(#exported.records == 4)
   local metadata = exported.records[1].arguments[1]
   assert(metadata.capabilities.flavor == "forever" and not metadata.coreDiagnostics.available)
@@ -178,9 +178,12 @@ test("verbose intent resumes across login and character switches until explicitl
   assert(first.build == "70862" and first.addonVersion == "0.1.0")
   addon.eventFrame.scripts.OnEvent(addon.eventFrame, "PLAYER_LOGOUT")
   assert(database.recordingEnabled and addon.recorder.recording)
-  assert(database.records[2].event == "PLAYER_LOGOUT")
-  assert(database.records[3].event == "TRACE_SEGMENT_END")
-  assert(boundary(3).segmentID == first.segmentID)
+  -- Logout leaves the records packed for WoW to save; the next load unpacks them.
+  assert(#database.records == 0 and #database.recordChunks == 1)
+  local saved = {}
+  assert(addon.Trace.UnpackRecords(database.recordChunks[1], saved) and #saved == 3)
+  assert(saved[2].event == "PLAYER_LOGOUT" and saved[3].event == "TRACE_SEGMENT_END")
+  assert(assert(loadstring("return " .. saved[3].payload))()[1].segmentID == first.segmentID)
   for _, character in ipairs({ "First", "Second", "First" }) do
     addon, env = initialize({ database = database, character = character, guid = "GUID-" .. character })
     assert(addon.recorder.recording and addon.recorder.verbose and addon.verbose)
