@@ -1967,12 +1967,30 @@ uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity
   recipe = { name = "Potion recipe" } })
 assert(notices[#notices] ==
   "|cffffd100Artisan Logbook:|r Crafted |Hitem:123|h[Potion]|hx1 from Potion recipe")
+do
+local savedPopupShow = environment.StaticPopup_Show
+local popups = {}
+environment.StaticPopup_Show = function(name, text) popups[#popups + 1] = { name = name, text = text } end
 uiAddon.NotifyCraft({ outputItem = { id = 123, name = "Potion" }, outputQuantity = 1 })
+-- The first unknown craft opens a dialog; chat keeps only the ordinary craft line.
 assert(notices[#notices]:find("Unknown recipe", 1, true) and
-  notices[#notices]:find("if it remains unresolved, recovery will be attempted after /reload", 1, true))
-uiAddon.NotifyCraft({ outputItem = { id = 124, name = "Second unknown output" }, outputQuantity = 1 })
-assert(notices[#notices]:find("Second unknown output", 1, true) and
   not notices[#notices]:find("recovery will be attempted after /reload", 1, true))
+assert(#popups == 1 and popups[1].name == "ARTISANLOGBOOK_UNKNOWN_CRAFT" and
+  popups[1].text:find("couldn't identify the recipe", 1, true))
+local unknownDialog = environment.StaticPopupDialogs.ARTISANLOGBOOK_UNKNOWN_CRAFT
+assert(unknownDialog.text == "%s" and unknownDialog.button1 == "Reload now" and unknownDialog.button2 == "Later")
+local reloaded
+local savedReloadUI = environment.ReloadUI
+environment.ReloadUI = function() reloaded = true end
+unknownDialog.OnAccept()
+assert(reloaded)
+environment.ReloadUI = savedReloadUI
+uiAddon.NotifyCraft({ outputItem = { id = 124, name = "Second unknown output" }, outputQuantity = 1 })
+assert(notices[#notices]:find("Second unknown output", 1, true) and #popups == 1)
+assert(uiAddon.UnknownCraftMessage({ recipe = { name = "Potion recipe" },
+  requestCorrelationReason = "ownership-quarantine" }):find("Until you reload", 1, true))
+environment.StaticPopup_Show = savedPopupShow
+end
 environment.C_Item = nil
 uiWindow:Show()
 assert(displayedRow(logbook, function(item) return item.id == 15 end))
@@ -5288,11 +5306,71 @@ end)()
   assert(afterReload.productionWindow.pages.Overview.filters.craftType.value == false and
     afterReload.productionWindow.pages.Reagents.filters.craftType.value == false)
   initialSettings.craftType = previousLegacyCraftType
-  assert(ledger:SubmitCraft(16001, 2, false))
-  core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", "Craft-Test-GUID", 16001)
-  core.HandleRetailEvent("UNIT_SPELLCAST_INTERRUPTED", "player", "Craft-Test-GUID", 16001)
+  print("PASS page-local craft and period filters, defaults, embedded filter state and configuration inspection")
+end)()
+
+;(function()
+  -- Event order observed on Retail when concentration runs out mid-batch: two crafts
+  -- complete, then the next cast fails quietly without succeeding or producing a result.
+  local core = reload(nil)
+  local ledger = core.ledger
+  local decisions = {}
+  core.diagnosticObserver = function(event, context) decisions[#decisions + 1] = { event = event, context = context } end
+  local nextOperation = 81000
+  local function succeed(guid)
+    core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", guid, 16001)
+    core.HandleRetailEvent("UNIT_SPELLCAST_SUCCEEDED", "player", guid, 16001)
+  end
+  local function result()
+    nextOperation = nextOperation + 1
+    return core.HandleRetailEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+      { operationID = nextOperation, itemID = 456, quantity = 1 })
+  end
+  local batch = assert(ledger:SubmitCraft(16001, 4, true))
+  for index = 1, 2 do
+    succeed("Batch-" .. index)
+    assert(result().requestId == batch.id)
+  end
+  core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", "Batch-3", 16001)
+  core.HandleRetailEvent("UNIT_SPELLCAST_FAILED_QUIET", "player", "Batch-3", 16001)
+  core.HandleRetailEvent("UNIT_SPELLCAST_FAILED_QUIET", "player", "Batch-3", 16001)
+  core.HandleRetailEvent("UPDATE_TRADESKILL_CAST_STOPPED", false)
+  assert(ledger.pendingRequest == nil and not ledger.operationOwnershipUncertain)
+  local decision = decisions[#decisions]
+  assert(decision.event == "attempt-failed" and decision.context.ended == true and
+    decision.context.event == "UNIT_SPELLCAST_FAILED_QUIET")
+  core.HandleRetailEvent("TRADE_SKILL_CLOSE")
+  local next = assert(ledger:SubmitCraft(16001, 1, false))
+  succeed("Next-1")
+  local craft = result()
+  assert(craft.requestId == next.id and craft.requestCorrelationReason == nil)
+  assert(not ledger.operationOwnershipUncertain)
+
+  -- A cast that fails while an earlier successful cast still awaits its result stays
+  -- conservative: that result could still arrive and cannot be told apart.
+  assert(ledger:SubmitCraft(16001, 3, false))
+  succeed("Lagged-1")
+  core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", "Lagged-2", 16001)
+  core.HandleRetailEvent("UNIT_SPELLCAST_FAILED", "player", "Lagged-2", 16001)
   assert(ledger.pendingRequest == nil and ledger.operationOwnershipUncertain)
-  print("PASS page-local craft and period filters, defaults, embedded filter state, configuration inspection, and matched interruption")
+  assert(decisions[#decisions].context.ended == false and
+    decisions[#decisions].context.correlationReason == "ownership-uncertain")
+  assert(result().requestCorrelationReason == "ownership-quarantine")
+
+  -- A matched interruption after the cast succeeded also keeps the quarantine.
+  assert(ledger:CreateSession({}))
+  assert(ledger:SubmitCraft(16001, 2, false))
+  succeed("Succeeded-1")
+  core.HandleRetailEvent("UNIT_SPELLCAST_INTERRUPTED", "player", "Succeeded-1", 16001)
+  assert(ledger.pendingRequest == nil and ledger.operationOwnershipUncertain)
+
+  -- Unrelated failures still change nothing.
+  assert(ledger:CreateSession({}))
+  assert(ledger:SubmitCraft(16001, 2, false))
+  core.HandleRetailEvent("UNIT_SPELLCAST_START", "player", "Own-1", 16001)
+  core.HandleRetailEvent("UNIT_SPELLCAST_FAILED", "player", "Other-1", 16001)
+  assert(ledger.pendingRequest and ledger.pendingRequest.remaining == 2 and not ledger.operationOwnershipUncertain)
+  print("PASS a batch that runs out of concentration ends cleanly; uncertain failures still quarantine")
 end)()
 
 ;(function()

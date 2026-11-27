@@ -1,6 +1,6 @@
 local addonName, addon = ...
 local lifecycle = CreateFrame("Frame")
-local unknownRecipeRecoveryNotified
+local unknownCraftNotified
 local initialized
 local unavailableReason
 
@@ -22,13 +22,44 @@ function addon.NotifyCraft(craft)
   end
   if craft.outputQuantity ~= nil then output = output .. "x" .. craft.outputQuantity end
   local message = "Crafted " .. output .. " from " .. addon.UI.Name(craft.recipe, "Unknown recipe")
-  if not craft.recipe and not unknownRecipeRecoveryNotified then
-    unknownRecipeRecoveryNotified = true
+  local unknown = not craft.recipe or craft.requestCorrelationReason == "ownership-quarantine"
+  local dialog = unknown and not unknownCraftNotified and type(StaticPopupDialogs) == "table" and
+    type(StaticPopup_Show) == "function"
+  if unknown and not unknownCraftNotified and not dialog then
     message = message .. " (Recipe unknown; if it remains unresolved, recovery will be attempted after /reload.)"
   end
   local highlights = addon.UI.CraftHighlights(craft)
   if #highlights > 0 then message = message .. " (" .. table.concat(highlights, "; ") .. ")" end
   DEFAULT_CHAT_FRAME:AddMessage("|cffffd100Artisan Logbook:|r " .. message)
+  if unknown and not unknownCraftNotified then
+    unknownCraftNotified = true
+    if dialog then addon.ShowUnknownCraftDialog(craft) end
+  end
+end
+
+function addon.UnknownCraftMessage(craft)
+  if craft.requestCorrelationReason == "ownership-quarantine" then
+    return "Artisan Logbook couldn't match a craft to the request that made it, so it was recorded as " ..
+      "unknown. This can happen after an interrupted or replaced craft. Until you reload, this " ..
+      "character's crafts are recorded without verified recipe and outcome details.\n\nReload now?"
+  end
+  return "Artisan Logbook couldn't identify the recipe for a craft, so it was recorded as Unknown. " ..
+    "It will try to identify the recipe again after a reload.\n\nReload now?"
+end
+
+-- Shown once per UI session, for the first craft recorded as unknown.
+function addon.ShowUnknownCraftDialog(craft)
+  StaticPopupDialogs.ARTISANLOGBOOK_UNKNOWN_CRAFT = StaticPopupDialogs.ARTISANLOGBOOK_UNKNOWN_CRAFT or {
+    text = "%s",
+    button1 = "Reload now",
+    button2 = "Later",
+    OnAccept = function() ReloadUI() end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+  }
+  StaticPopup_Show("ARTISANLOGBOOK_UNKNOWN_CRAFT", addon.UnknownCraftMessage(craft))
 end
 
 lifecycle:RegisterEvent("ADDON_LOADED")

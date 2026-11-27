@@ -65,8 +65,13 @@ New API mocks follow these definitions; they are not claimed to be live traces.
   state is refreshed at begin and checked again after aura events.
 6. A spell failure/interruption cancels the pending operation only when its GUID
    matches a player craft cast observed at `UNIT_SPELLCAST_START`. Unrelated or
-   queued failures are not proof of interruption. Closing and replacing unfinished
-   work retain the existing session-long ownership quarantine. A stopped(false)
+   queued failures are not proof of interruption. A matched cast that fails
+   before succeeding ends a personal request cleanly when every earlier
+   successful cast already has its primary result. Retail build 70961 shows
+   this when concentration runs out mid-batch: two crafts complete, the next
+   cast emits two `UNIT_SPELLCAST_FAILED_QUIET` and `stopped(false)`, and no
+   result follows. Any other failure, closing and replacing unfinished work
+   retain the existing session-long ownership quarantine. A stopped(false)
    signal alone does not retire ownership; #32 demonstrates why that is unsafe.
 
 **Neither quote scope proves final effective statistics.** The operation-info

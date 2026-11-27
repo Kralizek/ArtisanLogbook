@@ -246,7 +246,14 @@ anything is staged:
   consumes exactly one position; only its return measurement is partial.
   Close/cancel of unfinished work, replacement of an unfinished request,
   invalidation of a live request, a contradictory begin, or transition away from
-  any outstanding nonpersonal call leaves operation ownership uncertain. Enchant,
+  any outstanding nonpersonal call leaves operation ownership uncertain. One
+  narrower case does not: a matched personal craft cast that fails or is
+  interrupted before succeeding, for example when concentration runs out
+  mid-batch. If every earlier successful cast of that request already has its
+  primary result, nothing is in flight. The request then ends as if its batch
+  had completed, and later crafts are attributed normally. A failure after the
+  cast succeeded, or while a successful cast still awaits its result, keeps the
+  uncertain state. Enchant,
   recraft, order and salvage contexts are tracked independently of personal
   `pendingRequest`; its absence does not establish completion. Call-backed
   salvage retires only after the submitted count of distinct operation IDs,

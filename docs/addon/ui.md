@@ -378,8 +378,13 @@ cached pages stale and reloads lists in bounded batches while retaining position
 Profession metadata events refresh safely on the next frame. Page selections are
 session state, not reload-persistent preferences.
 When a committed craft has no established recipe identity, its chat notification
-shows the recipe as Unknown. The recovery retry reminder appears once per addon
-session and explains that unresolved attribution will be retried after `/reload`.
+shows the recipe as Unknown. The first such craft in a UI session, or the first
+craft recorded under ownership quarantine, also opens a dialog explaining it.
+After a recipe identity failure, the dialog says attribution will be retried
+after a reload. After quarantine, it says the character's crafts are recorded
+without verified details until a reload. **Reload now** reloads the UI, and
+**Later** dismisses it. Without the popup API, a one-time reminder is added to
+the chat line instead.
 
 ## Global Reagents catalogue
 
