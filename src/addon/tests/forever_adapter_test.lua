@@ -304,12 +304,25 @@ test("cast completion is only correlation and no synthetic game operation ID is 
   assert(#addon.ledger.database.crafts == 0)
   env.fire("UNIT_SPELLCAST_START", "player", "second", 2331)
   env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "second", 2331)
+  assert(#addon.ledger.database.crafts == 0)
   env.result(2455)
-  assert(#addon.ledger.database.crafts == 0 and not addon.ledger.pendingRequest)
+  env.result(2455)
+  assert(#addon.ledger.database.crafts == 2 and not addon.ledger.pendingRequest)
+  for _, craft in ipairs(addon.ledger.database.crafts) do
+    assert(craft.gameOperationId == 0 and craft.castGUID == nil)
+  end
+  for _, observation in ipairs(diagnostics) do assert(observation.event ~= "craft-cancelled") end
+  env.call(2331)
+  env.fire("UNIT_SPELLCAST_START", "player", "third", 2331)
+  env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "third", 2331)
+  env.fire("UNIT_SPELLCAST_START", "player", "fourth", 2331)
+  env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "fourth", 2331)
+  env.result(2455)
+  assert(#addon.ledger.database.crafts == 2 and not addon.ledger.pendingRequest)
   local cancelled = false
   for _, observation in ipairs(diagnostics) do
     if observation.event == "craft-cancelled" and
-        observation.context.reason:find("Multiple completed casts", 1, true) then cancelled = true end
+        observation.context.reason:find("More completed casts than remaining", 1, true) then cancelled = true end
   end
   assert(cancelled)
 end)
@@ -330,6 +343,53 @@ test("next cast can start before previous result without losing interruption own
   env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "third", 2331)
   env.result(2455)
   assert(#addon.ledger.database.crafts == 2)
+end)
+
+test("results arriving after the next cast succeeds are matched in order within one request", function()
+  local addon, env = environment()
+  env.call(2331, 3)
+  for index, guid in ipairs({ "first", "second", "third" }) do
+    env.fire("UNIT_SPELLCAST_START", "player", guid, 2331)
+    env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", guid, 2331)
+    env.fire("UNIT_SPELLCAST_STOP", "player", guid, 2331)
+    env.fire("TRADE_SKILL_CRAFT_BEGIN", 2331)
+    -- Each result is delivered only after the following cast has already succeeded.
+    if index > 1 then env.result(2455) end
+  end
+  env.fire("UPDATE_TRADESKILL_CAST_STOPPED", false)
+  assert(#addon.ledger.database.crafts == 2 and addon.ledger.pendingRequest.remaining == 1)
+  env.result(2455)
+  assert(#addon.ledger.database.crafts == 3 and not addon.ledger.pendingRequest)
+  for _, craft in ipairs(addon.ledger.database.crafts) do
+    assert(craft.recipeId == 2331 and craft.outputQuantity == 1 and craft.requestId == 1)
+  end
+  env.result(2455)
+  assert(#addon.ledger.database.crafts == 3)
+end)
+
+test("lagged results keep interruption ownership and never exceed the requested count", function()
+  local addon, env = environment()
+  env.call(2331, 3)
+  env.fire("UNIT_SPELLCAST_START", "player", "first", 2331)
+  env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "first", 2331)
+  env.fire("UNIT_SPELLCAST_START", "player", "second", 2331)
+  env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "second", 2331)
+  env.fire("UNIT_SPELLCAST_START", "player", "third", 2331)
+  env.fire("UNIT_SPELLCAST_INTERRUPTED", "player", "third", 2331)
+  env.result(2455)
+  env.result(2455)
+  assert(#addon.ledger.database.crafts == 0 and not addon.ledger.pendingRequest)
+
+  addon, env = environment()
+  env.call(2331, 2)
+  for _, guid in ipairs({ "first", "second", "third" }) do
+    env.fire("UNIT_SPELLCAST_START", "player", guid, 2331)
+    env.fire("UNIT_SPELLCAST_SUCCEEDED", "player", guid, 2331)
+  end
+  env.result(2455)
+  env.result(2455)
+  env.result(2455)
+  assert(#addon.ledger.database.crafts == 0 and not addon.ledger.pendingRequest)
 end)
 
 test("overlapping requests and missing required events refuse unsafe capture", function()

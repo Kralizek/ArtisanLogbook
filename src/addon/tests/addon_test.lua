@@ -1077,6 +1077,28 @@ assert(tracer.recorder:Clear())
 assert(unknown.ledger.database == durableDatabase and #durableDatabase.crafts == 4)
 print("PASS unrelated spell failures, partial batch and independent Tracer clear")
 
+do
+  local frameStart = #frames
+  local late = reload(nil)
+  local lifecycleFrame = frames[frameStart + 1]
+  local session = late.ledger.dimensionRows.session[late.ledger.currentSessionId]
+  local fallbackRealm = session.realmDimensionId
+  assert(late.ledger.dimensionRows.realm[fallbackRealm].identityScope == "session")
+  -- Still unreadable at login: the fallback stays and the next world entry retries.
+  lifecycleFrame.scripts.OnEvent(lifecycleFrame, "PLAYER_LOGIN")
+  assert(session.realmDimensionId == fallbackRealm and lifecycleFrame.events.PLAYER_ENTERING_WORLD)
+  environment.GetCurrentRegion = function() return 3 end
+  environment.GetRealmID = function() return 12 end
+  lifecycleFrame.scripts.OnEvent(lifecycleFrame, "PLAYER_ENTERING_WORLD")
+  local realm = late.ledger.dimensionRows.realm[session.realmDimensionId]
+  assert(realm.identityScope == "runtime" and realm.gameRealmId == 12 and realm.regionId == 3)
+  assert(not late.ledger.dimensionRows.realm[fallbackRealm])
+  assert(not lifecycleFrame.events.PLAYER_LOGIN and not lifecycleFrame.events.PLAYER_ENTERING_WORLD)
+  environment.GetCurrentRegion = function() error("unavailable") end
+  environment.GetRealmID = nil
+end
+print("PASS a fallback session identity is resolved once the realm is readable after login")
+
 environment.GetCurrentRegion = function() return 3 end
 environment.GetRealmID = function() return 12 end
 environment.GetRealmName = function() return "TestRealm" end

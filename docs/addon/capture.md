@@ -51,8 +51,14 @@ independently usable, including when Core is disabled.
   failures for unrelated GUIDs/units cannot cancel a newer request.
   `UPDATE_TRADESKILL_CAST_STOPPED(false)` is **not** cancellation: it also occurs
   on normal completion before the final result.
-- Overlapping submitted requests, or two completed casts awaiting
-  indistinguishable zero-ID results, are quarantined rather than guessed.
+- A result may also arrive after the next cast of the same request has
+  succeeded. Completed casts of one request queue in order and zero-ID results
+  consume them in order: every queued cast shares that request's recipe and
+  fixed output, so ordering cannot change what is recorded, and the queue never
+  exceeds the remaining requested count. A matched interruption still cancels
+  the request, including results still owed to queued casts.
+- Overlapping submitted requests, or more completed casts than remaining
+  requested crafts, are quarantined rather than guessed.
   Arbitrarily delayed duplicate callbacks arriving after another matched
   success remain fundamentally indistinguishable without native operation
   identity. The capture validates the observed ordering, not every possible

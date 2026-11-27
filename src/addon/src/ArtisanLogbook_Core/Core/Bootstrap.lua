@@ -527,30 +527,46 @@ local function optionalIdentity(api)
   end
 end
 
-function addon.CreateCurrentSession(ledger, startedAt)
-  local version, build, buildDate, interface = GetBuildInfo()
-  local classFile = type(UnitClass) == "function" and select(2, UnitClass("player")) or nil
-  return ledger:CreateSession({
-    addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version"),
-    wowVersion = version,
-    wowBuild = build,
-    wowBuildDate = buildDate,
-    interface = interface,
+local function currentIdentity()
+  return {
     projectId = WOW_PROJECT_ID,
-    locale = GetLocale(),
     characterName = UnitName("player"),
     characterGUID = UnitGUID("player"),
-    characterClassFile = classFile,
+    characterClassFile = type(UnitClass) == "function" and select(2, UnitClass("player")) or nil,
     realmName = GetRealmName(),
     regionId = optionalIdentity(GetCurrentRegion),
     gameRealmId = optionalIdentity(GetRealmID),
-    startedAt = startedAt or GetServerTime(),
-    capabilities = addon.adapter.capabilities,
-  })
+  }
+end
+
+function addon.CreateCurrentSession(ledger, startedAt)
+  local version, build, buildDate, interface = GetBuildInfo()
+  local metadata = currentIdentity()
+  metadata.addonVersion = C_AddOns.GetAddOnMetadata(addonName, "Version")
+  metadata.wowVersion, metadata.wowBuild, metadata.wowBuildDate = version, build, buildDate
+  metadata.interface, metadata.locale = interface, GetLocale()
+  metadata.startedAt = startedAt or GetServerTime()
+  metadata.capabilities = addon.adapter.capabilities
+  return ledger:CreateSession(metadata)
+end
+
+-- A session created before the realm was readable is given its runtime identity at login.
+function addon.ResolveCurrentSessionIdentity()
+  if not addon.ledger then return nil, "not-ready" end
+  return addon.ledger:ResolveSessionIdentity(currentIdentity())
 end
 
 lifecycle:RegisterEvent("ADDON_LOADED")
-lifecycle:SetScript("OnEvent", function(_, _, loadedName)
+lifecycle:SetScript("OnEvent", function(_, event, loadedName)
+  if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
+    local ok, resolved, reason = pcall(addon.ResolveCurrentSessionIdentity)
+    -- Keep retrying only while the realm is still unreadable.
+    if not ok or resolved ~= false or reason ~= nil then
+      lifecycle:UnregisterEvent("PLAYER_LOGIN")
+      lifecycle:UnregisterEvent("PLAYER_ENTERING_WORLD")
+    end
+    return
+  end
   if loadedName ~= addonName then
     return
   end
@@ -564,6 +580,8 @@ lifecycle:SetScript("OnEvent", function(_, _, loadedName)
     local ok, sessionId, reason = pcall(addon.CreateCurrentSession, addon.ledger, loginStartedAt)
     if ok and sessionId then
       ArtisanLogbookDB = addon.ledger.database
+      lifecycle:RegisterEvent("PLAYER_LOGIN")
+      lifecycle:RegisterEvent("PLAYER_ENTERING_WORLD")
       addon.ledger.onCraftCommitted = addon.PublishCraftCommitted
       addon.ledger.onRecipeOutputKnowledgeChanged = addon.OnRecipeOutputKnowledgeChanged
       local bootstrapOk, knowledge, bootstrapReason = pcall(

@@ -1943,13 +1943,9 @@ local function verifiedRealmForCharacter(self, metadata)
   return match
 end
 
-local function createSession(self, metadata)
-  metadata = metadata or {}
-  if type(metadata) ~= "table" then return nil, "session metadata must be a table" end
-  local staged = dimensionStage(self)
-  local nextId = self.database.nextDimensionId.session
-  if not canAllocate(nextId) then return nil, "session ID capacity exhausted" end
-  local sessionKey = string.format("%.0f", nextId)
+-- Stages the realm and character a session records. Returns true, the realm and character IDs
+-- (each nil when the client supplied no identity) and the chosen realm key, or nil and a reason.
+local function stageSessionIdentity(self, staged, metadata, sessionKey)
   local realmKey = "unresolved:session:" .. sessionKey
   local identityScope = "session"
   if isGameId(metadata.projectId) and metadata.projectId > 0 and
@@ -1988,6 +1984,19 @@ local function createSession(self, metadata)
     })
     if not characterId then return nil, reason end
   end
+  return true, realmId, characterId, realmKey
+end
+
+local function createSession(self, metadata)
+  metadata = metadata or {}
+  if type(metadata) ~= "table" then return nil, "session metadata must be a table" end
+  local staged = dimensionStage(self)
+  local nextId = self.database.nextDimensionId.session
+  if not canAllocate(nextId) then return nil, "session ID capacity exhausted" end
+  local sessionKey = string.format("%.0f", nextId)
+  local identityStaged, realmId, characterId = stageSessionIdentity(self, staged, metadata, sessionKey)
+  if not identityStaged then return nil, realmId end
+  local reason
 
   local sessionId
   sessionId, reason = stageDimension(staged, "session", "session-" .. sessionKey, {
@@ -2028,6 +2037,72 @@ function Ledger:CreateSession(metadata)
   local ok, sessionId, reason = pcall(createSession, self, metadata)
   if not ok then return nil, tostring(sessionId) end
   return sessionId, reason
+end
+
+local function removeDimension(self, kind, id)
+  local rows = self.database.dimensions[dimensions[kind]]
+  for index = #rows, 1, -1 do
+    if rows[index].id == id then table.remove(rows, index) end
+  end
+  local row = self.dimensionRows[kind][id]
+  if row then self.dimensionIndex[kind][row.key] = nil end
+  self.dimensionRows[kind][id] = nil
+end
+
+-- The realm can be unavailable when the session is created at ADDON_LOADED. Once it is readable,
+-- the current session's session-scoped fallback identity is replaced, but only while nothing has
+-- been recorded under it; otherwise the fallback is kept rather than rewriting recorded history.
+-- Returns true when replaced, false without a reason while the realm is still unreadable, and
+-- false or nil with a reason when no replacement applies.
+local function resolveSessionIdentity(self, metadata)
+  if type(metadata) ~= "table" then return nil, "session metadata must be a table" end
+  local session = self.dimensionRows.session[self.currentSessionId]
+  if not session then return nil, "no ledger session is active" end
+  local sessionKey = type(session.key) == "string" and session.key:match("^session%-(%d+)$")
+  if not sessionKey then return nil, "session key is invalid" end
+  local fallbackKey = "unresolved:session:" .. sessionKey
+  local realm = session.realmDimensionId and self.dimensionRows.realm[session.realmDimensionId]
+  local character = session.characterDimensionId and self.dimensionRows.character[session.characterDimensionId]
+  if not character or (realm and realm.key ~= fallbackKey) or
+      character.key:sub(1, #fallbackKey + 1) ~= fallbackKey .. ":" then
+    return false, "session identity is not session-scoped"
+  end
+  if self.pendingRequest or self.pendingOrderRequest or self.pendingSalvage then
+    return nil, "session identity cannot change while a craft is pending"
+  end
+  for _, collection in ipairs({ "requests", "crafts" }) do
+    for _, row in ipairs(self.database[collection]) do
+      if row.sessionId == self.currentSessionId then
+        return nil, "session identity cannot change after crafting evidence was recorded"
+      end
+    end
+  end
+  for _, collection in ipairs({ "craftSeries", "resourcefulnessSets", "reagentSeries",
+      "reagentRequirementSeries", "firstCraftRewards" }) do
+    for _, row in ipairs(self.database[collection]) do
+      if row.characterDimensionId == character.id then
+        return nil, "session identity cannot change after crafting evidence was recorded"
+      end
+    end
+  end
+
+  local staged = dimensionStage(self)
+  local identityStaged, realmId, characterId, realmKey = stageSessionIdentity(self, staged, metadata, sessionKey)
+  if not identityStaged then return nil, realmId end
+  if realmKey == fallbackKey then return false end
+  if not characterId then return nil, "resolved session has no character identity" end
+  commitDimensions(self, staged)
+  session.realmDimensionId, session.characterDimensionId = realmId, characterId
+  removeDimension(self, "character", character.id)
+  if realm then removeDimension(self, "realm", realm.id) end
+  self:RebuildFilterIndexes()
+  return true
+end
+
+function Ledger:ResolveSessionIdentity(metadata)
+  local ok, resolved, reason = pcall(resolveSessionIdentity, self, metadata)
+  if not ok then return nil, tostring(resolved) end
+  return resolved, reason
 end
 
 function Ledger:BeginCraft(recipeId)
